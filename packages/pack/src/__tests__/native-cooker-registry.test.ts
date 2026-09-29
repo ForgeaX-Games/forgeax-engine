@@ -61,4 +61,20 @@ describe('NativeCookerRegistry artifact boundary', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.payload).toEqual({ source: 'module.wgsl', revision: 3 });
   });
+
+  it('retains structured diagnostics when a producer throws a non-Error value', async () => {
+    const registry = new NativeCookerRegistry();
+    registry.register({
+      key: 'structured-failure',
+      cook: () => {
+        throw { code: 'producer-schema-invalid', stage: 'cook', detail: 'missing field' };
+      },
+    });
+
+    const result = await registry.runDraft('structured-failure', {});
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected producer failure');
+    expect(result.error.detail.producer).toContain('producer-schema-invalid');
+    expect(result.error.detail.producer).not.toContain('[object Object]');
+  });
 });

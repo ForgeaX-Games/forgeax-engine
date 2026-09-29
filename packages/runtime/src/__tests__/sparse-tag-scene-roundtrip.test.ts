@@ -24,7 +24,7 @@ describe('sparse tag scene persistence', () => {
       .unwrap();
     const registry = {} as AssetRegistry;
     const collected = rootsToSceneAsset(registry, source, [entity]).unwrap();
-    const components = collected.entities[0]?.components as
+    const components = Object.values(collected.entities)[0]?.components as
       | Record<string, Record<string, unknown>>
       | undefined;
 

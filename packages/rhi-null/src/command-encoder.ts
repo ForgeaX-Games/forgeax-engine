@@ -1,8 +1,8 @@
 // @forgeax/engine-rhi-null/src/command-encoder - headless command encoder.
 //
 // RhiNullCommandEncoder is a no-op recorder: begin*Pass returns a fresh
-// pass-encoder bound to the same per-device ledger; copy* / clear* / debug* /
-// writeTimestamp are no-ops; resolveQuerySet / finish return ok. finish() mints
+// pass-encoder bound to the same per-device ledger; copy* / clear* / debug*
+// are no-ops; resolveQuerySet / finish return ok. finish() mints
 // a legal CommandBuffer brand through the ledger so submit-side bookkeeping
 // (AC-12) can read it back.
 //
@@ -15,6 +15,7 @@
 
 import type {
   Buffer,
+  BufferCopyDestination,
   CommandBuffer,
   ComputePassDescriptor,
   QuerySet,
@@ -24,8 +25,10 @@ import type {
   RhiComputePassEncoder,
   RhiError as RhiErrorType,
   RhiRenderPassEncoder,
+  TextureCopySource,
 } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-types';
+import { RhiError } from '@forgeax/engine-rhi';
+import { err, ok } from '@forgeax/engine-types';
 import type { Bookkeeper } from './bookkeeping';
 import type { RhiNullDevice } from './device';
 import {
@@ -78,6 +81,7 @@ function readPassLabel(desc: { readonly label?: string | undefined } | undefined
 export class RhiNullCommandEncoder implements RhiCommandEncoder {
   private readonly bookkeeper: Bookkeeper;
   private readonly counter: PassCounter;
+  private finished = false;
 
   constructor(bookkeeper: Bookkeeper, device: RhiNullDevice) {
     this.bookkeeper = bookkeeper;
@@ -92,6 +96,10 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
   beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder {
     const label = readPassLabel(desc);
     return new RhiNullComputePassEncoder(this.bookkeeper, this.counter, label);
+  }
+
+  encodeEmptyComputePass(desc: ComputePassDescriptor): void {
+    this.counter.recordPassName(readPassLabel(desc));
   }
 
   copyBufferToBuffer(
@@ -109,8 +117,8 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
   ): void {}
 
   copyTextureToBuffer(
-    _source: GPUTexelCopyTextureInfo,
-    _destination: GPUTexelCopyBufferInfo,
+    _source: GPUTexelCopyTextureInfo | TextureCopySource,
+    _destination: GPUTexelCopyBufferInfo | BufferCopyDestination,
     _copySize: GPUExtent3DStrict,
   ): void {}
 
@@ -132,8 +140,6 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
     return ok(undefined);
   }
 
-  writeTimestamp(_querySet: QuerySet, _queryIndex: number): void {}
-
   pushDebugGroup(_groupLabel: string): void {}
 
   popDebugGroup(): void {}
@@ -141,6 +147,15 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
   insertDebugMarker(_markerLabel: string): void {}
 
   finish(): Result<CommandBuffer, RhiErrorType> {
+    if (this.finished)
+      return err(
+        new RhiError({
+          code: 'command-encoder-finished',
+          expected: 'an unfinished command encoder',
+          hint: 'create a new command encoder via device.createCommandEncoder() for each submission',
+        }),
+      );
+    this.finished = true;
     return ok(this.bookkeeper.register('CommandBuffer') as unknown as CommandBuffer);
   }
 }

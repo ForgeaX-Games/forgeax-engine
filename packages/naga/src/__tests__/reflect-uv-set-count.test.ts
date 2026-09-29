@@ -116,6 +116,7 @@ describe('reflect-uv-set-count.test.ts', () => {
         alignment: number;
       }[];
       span?: number;
+      elementStride?: number;
     }[];
   }
 
@@ -205,6 +206,8 @@ struct MaterialBlock {
         expect.objectContaining({ name: 'roughness', type: 'f32' }),
       ]);
       expect(material?.span).toBeGreaterThan(0);
+      const storage = r.boundGlobals.find((global) => global.group === 1 && global.binding === 0);
+      expect(storage?.elementStride).toBe(4);
     });
 
     it('does not identify the material by global name', async () => {

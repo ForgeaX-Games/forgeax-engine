@@ -166,10 +166,10 @@ function wireFetch(
                 guid: GUID_TEX,
                 kind: 'texture',
                 payload: {
-                  width: W,
-                  height: H,
+                  shape: { viewDimension: '2d', extent: { width: W, height: H } },
                   format: fixture.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba16float',
                   colorSpace: fixture.colorSpace,
+                  mips: { kind: 'none' },
                 },
                 refs: [],
                 artifacts: {
@@ -238,10 +238,13 @@ describe.skipIf(!pkgBuilt)('Basis catalog dispatch round-trip (M6 fix)', () => {
     const result = await loadWith(true);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`load failed: ${result.error.code}`);
-    const tex = result.value as { kind: string; width: number; height: number; format: string };
+    const tex = result.value as {
+      kind: string;
+      shape: { viewDimension: string; extent: { width: number; height: number } };
+      format: string;
+    };
     expect(tex.kind).toBe('texture');
-    expect(tex.width).toBe(W);
-    expect(tex.height).toBe(H);
+    expect(tex.shape).toEqual({ viewDimension: '2d', extent: { width: W, height: H } });
     // NO_CAPS -> the transcode arm degrades to the uncompressed sRGB fallback
     // (section 8 P3), never a scheme=1 reject.
     expect(tex.format).toBe('rgba8unorm-srgb');
@@ -290,15 +293,13 @@ describe.skipIf(!pkgBuilt)('Basis catalog dispatch round-trip (M6 fix)', () => {
         if (!result.ok) continue;
         const texture = result.value as {
           kind: string;
-          width: number;
-          height: number;
+          shape: { viewDimension: string; extent: { width: number; height: number } };
           format: string;
           data: Uint8Array;
           colorSpace: string;
         };
         expect(texture.kind).toBe('texture');
-        expect(texture.width).toBe(W);
-        expect(texture.height).toBe(H);
+        expect(texture.shape).toEqual({ viewDimension: '2d', extent: { width: W, height: H } });
         expect(texture.data.byteLength).toBeGreaterThan(0);
         expect(texture.colorSpace).toBe(fixture.colorSpace);
         const expected =

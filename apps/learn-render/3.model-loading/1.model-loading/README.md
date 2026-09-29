@@ -122,7 +122,7 @@ pnpm --filter @forgeax/app-learn-render-3-model-loading-1-model-loading dev
 | OOS-11 | Cross-GPU pixel-parity baseline PNG | User Q7 decision |
 | OOS-12 | Inspector / Console extra fields for Sponza (mesh vertex stats, texture byte counts, etc.) | Existing base inspector |
 | OOS-13 | Asset compression (KTX2 / Basis) / texture re-encoding | Direct JPG + PNG consumption |
-| OOS-14 | Built-in transcode plugin bin (`forgeax-engine-console image transcode`) | `gltf-image-mime-unsupported` hint points to external toolchain |
+| OOS-14 | Built-in transcode plugin bin (`forgeax asset import transcode`) | `gltf-image-mime-unsupported` hint points to external toolchain |
 
 See `requirements.md` section 4 (out-of-scope) for the full rationale per item.
 

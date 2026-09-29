@@ -7,56 +7,56 @@ description: >-
 
 # forgeax-engine-math
 
-> 纯函数、out-param 优先、SoA 友好的数学库。所有函数第一参是 `out`（复用 buffer，零分配热路径）。聚合 `@forgeax/engine-math`。
+> Pure functions, out-parameter-first, SoA-friendly math. Functions take `out` first to reuse buffers on allocation-free hot paths. Covers `@forgeax/engine-math`.
 
-## 心智模型
+## Mental model
 
-数学库按 namespace 组织（`vec3` / `mat4` / `quat` / `color` …），全是**纯函数**且**第一参为 `out`**：`vec3.add(out, a, b)` 写进 `out` 并返回它。这是为了让热路径复用 buffer、零 GC。最常见的 AI 任务不是手算矩阵，而是**从一个实体的世界变换里读出 pose**：`Transform.world` 是引擎每帧派生的 16 floats 列主序 mat4（你写 local TRS，引擎写 world），用 `mat4.getTranslation/getForward/getUp/getRight` 把位置 / 朝向基向量拽出来，别自己拆矩阵。屏幕拾取则反过来：`screenToRay` 从屏幕坐标 + view/proj 造一条世界射线。
+Namespaces (`vec3` / `mat4` / `quat` / `color` ...) group pure functions with `out` first: `vec3.add(out, a, b)` writes and returns `out`, allowing buffer reuse without GC. A common task is reading an entity's world pose: `GlobalTransform.world` is a derived column-major mat4 of 16 floats, updated every frame. Author local TRS; let the engine derive world transforms. Read position and basis vectors with `mat4.getTranslation/getForward/getUp/getRight` instead of unpacking matrices. Conversely, `screenToRay` constructs a world ray from screen coordinates and view/projection matrices.
 
-## 核心 API 速查
+## Core API quick reference
 
-| Namespace / 函数 | 形态 | 用途 |
+| Namespace / function | Form | Purpose |
 |:--|:--|:--|
-| `vec3.add/sub/scale/dot/cross/normalize/lerp(out, ...)` | out-param | 向量运算（`vec2`/`vec4` 同构） |
-| `vec3.smoothDamp(out, current, target, decayRate, dt)` | `=> Vec3` | 便捷组合：帧率无关的指数衰减平滑（`lerp(current, target, 1−exp(−decayRate·dt))`；对标 Bevy `Vec3::smooth_nudge` / three.js `MathUtils.damp`；`vec2`/`vec4` 同构）。平滑追踪/缓动别手写 `lerp(p, target, rate·dt)`——那是帧率**相关**的（30 vs 60 fps 行为不同，`rate·dt>1` 会过冲） |
-| `vec3.catmullRom(out, p0, p1, p2, p3, t)` | `=> Vec3` | 便捷组合：过控制点的 Catmull-Rom 样条采样（张力 0.5，`t=0`→`p1`/`t=1`→`p2`；`p0`/`p3` 是设端点切线的邻居点；对标 Bevy `CubicCardinalSpline::new_catmull_rom` / three.js `CatmullRomCurve3`；`vec2` 同构）。相机路径/动画缓动路径/程序曲线别手搓三次系数矩阵。整条折线：滑动 4 点窗口 `[pts[i-1..i+2]]` 逐段循环 |
-| `mat4.multiply/invert/lookAt/perspective/compose(out, ...)` | out-param | 矩阵运算 |
-| `mat4.getTranslation(out, m)` | `=> Vec3` | 从 world mat4 取位置（col 3） |
-| `mat4.getForward/getUp/getRight(out, m)` | `=> Vec3` | 取朝向基向量（forward = -Z） |
-| `mat4.unproject(out, ndcPoint, invVP)` | `=> Vec3` | NDC → 世界坐标 |
-| `quat.fromEuler/slerp/multiply/transformVec3(out, ...)` | out-param | 旋转 |
-| `quat.fromLookAt(out, eye, target, up)` | `=> Quat` | 便捷组合：物体朝向四元数（local -Z 指向 target；替代 `lookAt→invert→mat3→fromRotationMatrix` 手接链） |
-| `quat.rotateAxis(out, q, axis, angleRadians)` | `=> Quat` | 便捷组合：在 `q` 基础上绕世界轴 `axis` 增量旋转 `angle` 弧度并**重新归一化**——每帧自旋/动画的正确写法（对标 Bevy `Transform::rotate_y`/`rotate_axis`；delta 前乘 = 世界轴序）。别手写 `multiply(q, fromAxisAngle(...))` 循环：不归一化会累积漂移成非单位四元数 |
-| `quat.right/up/forward(out, q)` | `=> Vec3` | 取旋转的局部基向量（世界方向）：right=q·+X / up=q·+Y / forward=q·−Z（对标 `mat4.getRight/getUp/getForward` 与 Bevy `Transform::local_x`/`local_y`/`forward`）。沿"自身朝向"移动/瞄准时用它，别手写 `transformVec3(out, q, [0,0,-1])` + 记 −Z 手性；单位 `q` 入 → 单位向量出 |
-| `color.srgbToLinear/linearToSrgb/fromHex/toHex` | out-param / 值 | 颜色空间转换 |
-| `easing.cubicInOut / smoothstep / smootherstep / elasticInOut(t)` | `=> number` | 标量时间重映射：`t` 夹到 [0,1]；`cubicInOut` / `smoothstep` / `smootherstep` 是慢进慢出，`elasticInOut` 保留弹性 overshoot（对标 Bevy `EaseFunction`）。动画/UI 过渡/相机缓动别手搓多项式；`easing` 是缓动族的可增长 namespace |
-| `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `=> Ray` | 屏幕坐标 → 世界射线 |
-| `worldToScreen(out, worldPos, viewProj, canvasW, canvasH)` | `=> { onScreen, behind }` | 世界坐标 → 屏幕像素（screenToRay 对偶） |
-| `rayAabbIntersects(ray, aabb)` | `=> RayAabbResult` | 射线 / 包围盒求交 |
-| `rayTriangleIntersects(r, a, b, c)` | `=> RayTriResult` | 射线 / 三角求交（Moller-Trumbore，double-sided） |
-| `mat4.computeViewProj(out, eye, target, up, fov, aspect, near, far)` | `=> Mat4` | 便捷组合：perspective * lookAt（plain 数值参数，零依赖） |
+| `vec3.add/sub/scale/dot/cross/normalize/lerp(out, ...)` | out-param | Vector operations (`vec2`/`vec4` follow the same pattern). |
+| `vec3.smoothDamp(out, current, target, decayRate, dt)` | `=> Vec3` | Frame-rate-independent exponential smoothing: `lerp(current, target, 1−exp(−decayRate·dt))`, equivalent to Bevy `Vec3::smooth_nudge` / Three.js `MathUtils.damp`; also available for `vec2`/`vec4`. Do not use `lerp(p, target, rate·dt)` for tracking: it varies between 30/60 fps and overshoots when `rate·dt>1`. |
+| `vec3.catmullRom(out, p0, p1, p2, p3, t)` | `=> Vec3` | Catmull-Rom spline sampling through control points, tension 0.5: `t=0` selects `p1`, `t=1` selects `p2`; `p0`/`p3` determine endpoint tangents. Equivalent to Bevy `CubicCardinalSpline::new_catmull_rom` / Three.js `CatmullRomCurve3`; also available for `vec2`. Use for camera/animation paths and procedural curves instead of hand-written cubic matrices. Slide a four-point window `[pts[i-1..i+2]]` along the polyline. |
+| `mat4.multiply/invert/lookAt/perspective/compose(out, ...)` | out-param | Matrix operations. |
+| `mat4.getTranslation(out, m)` | `=> Vec3` | Read position from world mat4 column 3. |
+| `mat4.getForward/getUp/getRight(out, m)` | `=> Vec3` | Read basis vectors; forward is -Z. |
+| `mat4.unproject(out, ndcPoint, invVP)` | `=> Vec3` | NDC to world coordinates. |
+| `quat.fromEuler/slerp/multiply/transformVec3(out, ...)` | out-param | Rotation. |
+| `quat.fromLookAt(out, eye, target, up)` | `=> Quat` | Orientation quaternion with local -Z toward target; replaces manual `lookAt→invert→mat3→fromRotationMatrix` composition. |
+| `quat.rotateAxis(out, q, axis, angleRadians)` | `=> Quat` | Incrementally rotate `q` around world `axis` by the angle in radians and renormalize. Use for per-frame spin/animation, like Bevy `Transform::rotate_y`/`rotate_axis`; premultiplying the delta uses world-axis order. Repeated manual `multiply(q, fromAxisAngle(...))` without normalization drifts away from a unit quaternion. |
+| `quat.right/up/forward(out, q)` | `=> Vec3` | Local basis vectors expressed in world space: right=q·+X / up=q·+Y / forward=q·−Z. Matches `mat4.getRight/getUp/getForward` and Bevy `Transform::local_x`/`local_y`/`forward`. Use for movement/aiming along local orientation instead of manual `transformVec3(out, q, [0,0,-1])`; unit quaternion input gives unit vectors. |
+| `color.srgbToLinear/linearToSrgb/fromHex/toHex` | out-param / value | Color-space conversion. |
+| `easing.cubicInOut / smoothstep / smootherstep / elasticInOut(t)` | `=> number` | Scalar time remapping, clamped to [0,1]. `cubicInOut` / `smoothstep` / `smootherstep` ease in/out; `elasticInOut` preserves elastic overshoot, like Bevy `EaseFunction`. Use for animation/UI/camera transitions instead of hand-written polynomials; `easing` is an extensible namespace. |
+| `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `=> Ray` | Screen coordinates to world ray. |
+| `worldToScreen(out, worldPos, viewProj, canvasW, canvasH)` | `=> { onScreen, behind }` | World coordinates to screen pixels; dual of `screenToRay`. |
+| `rayAabbIntersects(ray, aabb)` | `=> RayAabbResult` | Ray/bounding-box intersection. |
+| `rayTriangleIntersects(r, a, b, c)` | `=> RayTriResult` | Double-sided Moller-Trumbore ray/triangle intersection. |
+| `mat4.computeViewProj(out, eye, target, up, fov, aspect, near, far)` | `=> Mat4` | Convenience composition: perspective * lookAt, plain numeric parameters, no dependencies. |
 
 > [!NOTE]
-> 没有独立 `GlobalTransform` 组件（已删）。世界变换的唯一来源是 `Transform.world`，由引擎 `propagateTransforms` 每帧写；你只写 local TRS，读 world。
+> `Transform` stores authored local TRS only; transient `GlobalTransform.world` stores the resolved world matrix, written each frame by `propagateTransforms`. Raw `world.spawn` must attach both components; SceneAsset/mount helpers supply the pair automatically.
 
-## 规范用法：从实体读 pose
+## Read an entity pose
 
 ```mermaid
 flowchart LR
-  T["world.get(e, Transform).unwrap().world<br/>（16 floats 列主序 mat4）"] --> G["mat4.getTranslation / getForward / getUp / getRight"]
-  G --> P["拿到位置 / 朝向基向量，喂给逻辑"]
+  T["world.get(e, GlobalTransform).unwrap().world<br/>16 floats, column-major mat4"] --> G["mat4.getTranslation / getForward / getUp / getRight"]
+  G --> P["Use position and basis vectors in game logic"]
   S["screenX, screenY + view/proj"] --> R["screenToRay -> Ray"]
-  R --> H["rayAabbIntersects -> 命中判定"]
+  R --> H["rayAabbIntersects -> hit test"]
 ```
 
-## idiom 代码骨架
+## Usage skeleton
 
 ```ts
 import { mat4, vec3 } from '@forgeax/engine-math';
-import { Transform } from '@forgeax/engine-runtime';
+import { GlobalTransform } from '@forgeax/engine-scene';
 
-// read world-space pose off Transform.world (a live 16-float column-major Float32Array)
-const worldMat = world.get(entity, Transform).unwrap().world;
+// read world-space pose off GlobalTransform.world (a live 16-float column-major Float32Array)
+const worldMat = world.get(entity, GlobalTransform).unwrap().world;
 const pos = mat4.getTranslation(vec3.create(), worldMat); // m[12..14]
 const fwd = mat4.getForward(vec3.create(), worldMat);     // -Z basis
 const up = mat4.getUp(vec3.create(), worldMat);           // +Y basis
@@ -77,34 +77,34 @@ const hit = rayAabbIntersects(r, entityAabb); // hit.hit -> boolean
 ```ts
 import { ray, mat4, vec2 } from '@forgeax/engine-math';
 
-// world → screen: 3D 点投影到像素坐标（y-down top-left）
+// world -> screen: project a 3D point to pixels, y-down from top-left.
 const vp = mat4.computeViewProj(mat4.create(), eye, target, up, fovY, aspect, 0.1, 100);
 const out = vec2.create();
 const r = ray.worldToScreen(out, worldPos, vp, canvasW, canvasH);
 if (r.onScreen && !r.behind) {
-  // out[0], out[1] = 合法像素坐标，可做 DOM overlay 定位或 HUD 锚点
+  // out[0], out[1] are valid pixels for DOM overlays or HUD anchors.
 }
 ```
 
 ```ts
 import { pickVertexOnEntity, pickVertex } from '@forgeax/engine-picking';
 
-// propagateTransforms 必须已跑当前帧（D-9 前置契约）
+// propagateTransforms must have run for this frame (D-9 precondition).
 propagateTransforms(world);
 
-// 单 entity 最近顶点查询，不传 limit → VertexHit|undefined
+// Nearest vertex on one entity; omitted limit -> VertexHit|undefined.
 const hit = pickVertexOnEntity(world, cameraEntity, sx, sy, w, h, entity);
 if (hit) {
   // hit.worldPos / vertexIndex / screenDist / worldDist / deformed
 }
 
-// 全场景查询，传 limit → VertexHit[]（按 screenDist 升序）
+// Whole-scene query with limit -> VertexHit[], ascending screenDist.
 const candidates = pickVertex(world, cameraEntity, sx, sy, w, h, { limit: 5 });
 ```
 
-## worldToScreen：世界坐标 → 屏幕像素
+## worldToScreen: world coordinates to screen pixels
 
-`ray.worldToScreen` 是 `screenToRay` 的对偶——把世界空间的 3D 点投影回屏幕像素。内部自做 `mat4 * vec4` 取透视除前的 `w` 分量（`projectPoint` 丢 `w`，所以不能复用）。
+`ray.worldToScreen` is the dual of `screenToRay`: project a world-space 3D point back to screen pixels. It computes `mat4 * vec4` internally to preserve pre-division `w`; `projectPoint` discards `w` and cannot be reused.
 
 ```ts
 import { ray, mat4 } from '@forgeax/engine-math';
@@ -112,52 +112,52 @@ import { ray, mat4 } from '@forgeax/engine-math';
 const vp = mat4.computeViewProj(mat4.create(), eye, target, up, fovY, aspect, near, far);
 const out = vec2.create();
 const result = ray.worldToScreen(out, worldPos, vp, canvas.width, canvas.height);
-// result.onScreen  — NDC xyz 全在 clip-space 范围内
-// result.behind    — 相机后方（w < 0），此时 out 无意义
-// result.onScreen 为 false 但 behind 为 false → 视锥外但相机前方，out 仍为有效像素（可做屏幕边缘 clamp）
+// result.onScreen -- NDC xyz are all inside clip space.
+// result.behind -- behind the camera (w < 0); out is meaningless.
+// !onScreen && !behind: outside the frustum but in front; out remains valid for screen-edge clamping.
 ```
 
-- **out-param**：第一参是 `Vec2`，写入 y-down top-left 像素坐标（`px = (ndc.x * 0.5 + 0.5) * w`，`py = (1 - (ndc.y * 0.5 + 0.5)) * h`）
-- **返回纯数据标志**：`{ onScreen: boolean, behind: boolean }`，不分配对象
-- **退化画布**：`canvasW <= 0 || canvasH <= 0` 时返回 `{ onScreen: false, behind: false }`，`out` 不动
-- **barrel 导入**：`import { ray } from '@forgeax/engine-math'; ray.worldToScreen(...)`——命名空间对称于 `screenToRay`
+- **Out parameter**: the first argument is `Vec2`, written with y-down, top-left pixel coordinates: `px = (ndc.x * 0.5 + 0.5) * w`, `py = (1 - (ndc.y * 0.5 + 0.5)) * h`.
+- **Plain-data flags**: returns `{ onScreen: boolean, behind: boolean }`.
+- **Degenerate canvas**: `canvasW <= 0 || canvasH <= 0` returns `{ onScreen: false, behind: false }`, leaving `out` unchanged.
+- **Barrel import**: `import { ray } from '@forgeax/engine-math'; ray.worldToScreen(...)`; symmetric with the `screenToRay` namespace.
 
-## computeViewProj：透视 × 视图便捷组合
+## computeViewProj: perspective and view composition
 
-`mat4.computeViewProj` 一步完成 `mat4.perspective * mat4.lookAt`，收 plain 数值 / Vec3Like 参数（不依赖任何 runtime POD 类型，与 `lookAt` / `perspective` 同风格——charter P4 一致抽象）。
+`mat4.computeViewProj` composes `mat4.perspective * mat4.lookAt` using plain numbers and Vec3Like arguments. It has no runtime POD dependency and follows the abstraction of `lookAt` / `perspective` (charter P4).
 
 ```ts
 const vp = mat4.computeViewProj(mat4.create(), eye, target, up, fovY, aspect, near, far);
-// 等价于：
+// Equivalent to:
 // const view = mat4.lookAt(mat4.create(), eye, target, up);
 // const proj = mat4.perspective(mat4.create(), fovY, aspect, near, far);
 // const vp = mat4.multiply(mat4.create(), proj, view);
 ```
 
-- **签名**：`computeViewProj(out, eye, target, up, fovYRadians, aspect, near, far): Mat4`
-- **out-param 风格**：写入第一参，返回同一实例
-- **组合语义**：非本原操作（JSDoc 注明"便捷组合"），内部两步走 `lookAt` + `perspective` → `multiply`
-- **典型用途**：喂给 `worldToScreen` 做 3D → 2D 投影，不绑定任何引擎组件
+- **Signature**: `computeViewProj(out, eye, target, up, fovYRadians, aspect, near, far): Mat4`.
+- **Out-parameter style**: writes and returns the first argument.
+- **Composition**: a convenience operation, identified in JSDoc; internally `lookAt` + `perspective`, then `multiply`.
+- **Typical use**: supply `worldToScreen` for 3D-to-2D projection, without coupling to engine components.
 
-## 屏幕拾取：顶点查询（pickVertex / pickVertexOnEntity）
+## Screen picking: vertex queries (pickVertex / pickVertexOnEntity)
 
-> 顶点拾取只查询、不编辑。从 `@forgeax/engine-runtime` 导入；底层组合 `rayTriangleIntersects` 与 `screenToRay`。
+> Vertex picking queries without editing. Import from `@forgeax/engine-runtime`; it composes `rayTriangleIntersects` and `screenToRay`.
 
-| 函数 / 类型 | 形态 | 用途 |
+| Function / type | Form | Purpose |
 |:--|:--|:--|
-| `pickVertexOnEntity(w, cam, sx, sy, vpW, vpH, e)` | `=> VertexHit \| undefined` | 单 entity 最近顶点查询；不传 `options` 返回单 `hit` 或 `undefined` |
-| `pickVertexOnEntity(w, cam, sx, sy, vpW, vpH, e, { limit })` | `=> VertexHit[]` | 同上，传 `{ limit: N }` 返回前 N 个按 `screenDist` 升序的候选 |
-| `pickVertex(w, cam, sx, sy, vpW, vpH)` | `=> VertexHit \| undefined` | 全场景——AABB 粗筛 entity 后逐 entity 调 `pickVertexOnEntity`，返回全局最近 |
-| `pickVertex(w, cam, sx, sy, vpW, vpH, { limit })` | `=> VertexHit[]` | 全场景多候选模式 |
-| `VertexHit` | `{ entity: EntityHandle; vertexIndex: number; worldPos: Vec3Like; screenDist: number; worldDist: number; deformed: boolean }` | 命中顶点信息——`screenDist` 为屏幕像素距离、`worldDist` 为点到射线 3D 垂距、"屏幕 / 世界"正交对偶；`worldPos` 用 `Vec3Like` 避 brand-cast |
+| `pickVertexOnEntity(w, cam, sx, sy, vpW, vpH, e)` | `=> VertexHit \| undefined` | Nearest vertex on one entity; omitted `options` returns one hit or `undefined`. |
+| `pickVertexOnEntity(w, cam, sx, sy, vpW, vpH, e, { limit })` | `=> VertexHit[]` | With `{ limit: N }`, returns up to N candidates in ascending `screenDist`. |
+| `pickVertex(w, cam, sx, sy, vpW, vpH)` | `=> VertexHit \| undefined` | Whole scene: broad-phase AABB filtering, then per-entity `pickVertexOnEntity`; returns the globally nearest hit. |
+| `pickVertex(w, cam, sx, sy, vpW, vpH, { limit })` | `=> VertexHit[]` | Whole-scene multiple-candidate mode. |
+| `VertexHit` | `{ entity: EntityHandle; vertexIndex: number; worldPos: Vec3Like; screenDist: number; worldDist: number; deformed: boolean }` | `screenDist` is pixel distance; `worldDist` is perpendicular 3D distance to the ray. `worldPos` uses `Vec3Like` to avoid brand casts. |
 
-**三态返回契约**：不传 `limit` → `VertexHit | undefined`，if-hit narrowing 安全（`hit.worldPos` 直访免 `as`）；传 `limit` → `VertexHit[]`（空数组表 miss，`limit` 大于命中数返回全部候选）；TS 编译期判别，不许不传 `limit` 时访问 `hit[0]` 或 `.length`。
+**Return contract**: omitted `limit` returns `VertexHit | undefined`, supporting safe if-hit narrowing and direct `hit.worldPos` access without casts. With `limit`, returns `VertexHit[]`: empty means miss; a limit above the hit count returns all candidates. TypeScript distinguishes these forms; do not access `hit[0]` or `.length` when `limit` is omitted.
 
-**排序语义**：按 `screenDist` 升序——屏幕空间投影距离最小者排前；`worldDist` 为点到射线 3D 垂距，用于"世界空间"排序或加权。behind-camera 顶点（`worldToScreen` 返回 `behind=true`）**被排除**；屏幕外但相机前方顶点**纳入候选**（吸附可能想吸刚出屏的顶点）。
+**Ordering**: ascending `screenDist` puts the nearest screen projection first. Use `worldDist` for world-space ordering or weighting. Behind-camera vertices (`behind=true`) are excluded; off-screen vertices in front remain candidates for edge snapping.
 
-**退化策略**：triangle-strip / line / point 拓扑 submesh 跳过（仅 triangle-list 参与）；无 index buffer 按非索引三角序列（每 3 顶点一面）；Uint16Array position 跳过（照搬 `computeAABB` 三分支）；NaN/Inf 顶点排除；空网格 → `undefined` / `[]`。
+**Degenerate input**: skip triangle-strip, line, and point submeshes; only triangle-list participates. Without indices, use successive triples. Skip Uint16Array positions, matching `computeAABB`; exclude NaN/Inf vertices. Empty meshes return `undefined` / `[]`.
 
-**错误协议**：复用 `PickError` 零新 error code——唯一 throw 是 `camera-component-missing`；所有顶点缺失/空白/降级走 `undefined` / `[]`（可恢复 miss，不打断批量循环）。
+**Errors**: reuse `PickError`; the only thrown error is `camera-component-missing`. Missing/empty/degraded vertices return `undefined` / `[]` as recoverable misses without interrupting batch queries.
 
 ```ts
 import { pickVertexOnEntity, pickVertex, type VertexHit } from '@forgeax/engine-picking';
@@ -170,19 +170,19 @@ if (hit) {
 }
 ```
 
-## 踩坑
+## Pitfalls
 
-- **out-param 不是返回新值**：`vec3.add(out, a, b)` 把结果写进 `out`（并返回它）。`const c = vec3.add(a, a, b)` 会覆盖 `a`——想保留 `a` 就分配独立 `out`。
-- **列主序约定**：`Transform.world` 是列主序（GPU / WGSL `mat4x4<f32>` 布局），平移在 col 3（`world[12..14]`）。第一帧 propagate 前刚 spawn 的 `Transform`（`data: {}`）是单位阵，不是 stale 垃圾。
-- **退化静默回退**：库内非法输入（零长度归一化、`w'=0` 透视除）静默回退到安全值（如 `(0,0,0)`），不 throw——调用方需自带守卫判断（charter P3 在 thin 数学层让位于性能）。见 README 退化策略表。
-- **worldToScreen 的 `behind` 标志不可忽略**：当 `behind === true` 时 `out` 无意义——调用方必须先查该位再做屏幕边缘 clamp，否则相机后方点的像素坐标会凭空"飞"到对角象限。
-- **pickVertex*/pickVertexOnEntity 调用前须 propagateTransforms**：与 `pick()` 同契约——函数直接读 `Transform.world` 列主序 mat4，不触发重新传布。请在调用前跑 `propagateTransforms(world)` 当前帧，否则读到 stale unit matrix（刚 spawn 无任何 Write 时为 identity，非 crash 但 worldPos 全错）。
-- **`deformed: true` 时 worldPos 是 rest-pose**：skinned mesh（skinIndex + skinWeight 双属性存在）的 `VertexHit.worldPos` 是 rest-pose 经 `Transform.world` 变换的位置——**不反映 GPU skinning 变形结果**。引擎不做 GPU 变形回读，吸附操作需自行承担变形偏移。
-- 渲染 / 拾取相关的更高层症状见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md)。
+- **Out parameters overwrite buffers**: `vec3.add(out, a, b)` writes and returns `out`. `const c = vec3.add(a, a, b)` overwrites `a`; use a separate buffer to preserve it.
+- **Column-major layout**: `GlobalTransform.world` matches GPU/WGSL `mat4x4<f32>`; translation is column 3 (`world[12..14]`). A newly spawned `GlobalTransform` with `data: {}` is identity before its first propagation, not uninitialized data.
+- **Silent degenerate fallback**: invalid math input (zero-length normalization, perspective division with `w'=0`) falls back to safe values such as `(0,0,0)` without throwing. Callers own guards; this thin math layer prioritizes performance over charter P3. See the README's degenerate-input table.
+- **Check `worldToScreen.behind`** before screen-edge clamping: when true, `out` is meaningless and can project behind-camera points into an opposite quadrant.
+- **Run `propagateTransforms` before vertex picking**, as with `pick()`. Queries read `GlobalTransform.world` directly without propagation; newly spawned entities otherwise retain identity and yield incorrect `worldPos` without crashing.
+- **`deformed: true` still uses rest-pose `worldPos`**: meshes with both skinIndex and skinWeight report rest-pose positions transformed by `GlobalTransform.world`, not GPU skinning results. There is no GPU deformation readback; snapping must account for that offset.
+- For higher-level rendering/picking symptoms, see [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md).
 
-## 深入
+## Further reading
 
-- 15 namespace × 168 函数 quick-ref / 命名风格 / 退化策略表 / 三档 NDC 投影：见 `packages/math/README.md` §quick-ref · §退化策略 · §三档 NDC 投影示例（函数计数 SSOT 在 README + `count-math-exports.mjs`，本行随之更新）
-- pose 读取助手（`getTranslation/getForward/getUp/getRight`）：源码 SSOT `packages/math/src/mat4.ts`
-- 拾取（`screenToRay` / `rayAabbIntersects` / `rayTriangleIntersects` / `mat4.unproject` / `worldToScreen`）：源码 `packages/math/src/ray.ts` + `packages/math/src/mat4.ts`；runtime 侧封装 `pick(...)` 见 `packages/runtime/README.md` §Picking、`pickVertexOnEntity` / `pickVertex` 见 §Vertex Picking
-- `Transform.world` 派生契约：见 `packages/runtime/README.md` §Transform: local TRS + world mat4
+- Namespace/function quick reference, naming, degenerate-input policy, and three NDC projection modes: `packages/math/README.md`; README and `count-math-exports.mjs` own export counts.
+- Pose helpers (`getTranslation/getForward/getUp/getRight`): `packages/math/src/mat4.ts`.
+- Picking (`screenToRay` / `rayAabbIntersects` / `rayTriangleIntersects` / `mat4.unproject` / `worldToScreen`): `packages/math/src/ray.ts` and `packages/math/src/mat4.ts`; runtime `pick(...)`: `packages/runtime/README.md` Picking; vertex helpers: Vertex Picking.
+- Derived `GlobalTransform.world` contract: `packages/runtime/README.md`, Transform: local TRS + world mat4.

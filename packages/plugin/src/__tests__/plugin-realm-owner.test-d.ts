@@ -1,8 +1,8 @@
 import type { ToolRealm } from '@forgeax/engine-tool-runtime';
+import type { PluginBuildTarget as PluginRealm } from '@forgeax/engine-types';
 import { expectTypeOf, it } from 'vitest';
-import type { PluginRealm } from '../loader.js';
 
-const expectedPluginRealms = ['build', 'host', 'engine'] as const;
+const expectedPluginRealms = ['build', 'host', 'engine', 'frontend'] as const;
 type ExpectedPluginRealm = (typeof expectedPluginRealms)[number];
 
 it('derives PluginRealm from the public ToolRealm vocabulary', () => {

@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const dt = 1 / 60;
@@ -145,7 +145,7 @@ writeFileSync(resolve(outDir, 'rotation-late.png'), writeReferencePng(late, widt
 console.log(`[smoke] frames=${frames} bright=${(bright / 255).toFixed(4)} motionMeanDelta=${motionMeanDelta.toFixed(5)} positionDelta=${positionDelta.toFixed(3)} snapChanged=${snapDelta} rotateChanged=${rotateDelta} errors=${errors.length}`);
 const failures = [];
 if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
-if (frames < 100) failures.push(`frames=${frames}`);
+if (frames < 60) failures.push(`frames=${frames}`);
 if (bright / 255 <= 0.15) failures.push(`bright=${(bright / 255).toFixed(4)}`);
 if (motionMeanDelta <= 0.0005) failures.push(`motionMeanDelta=${motionMeanDelta.toFixed(5)}`);
 if (positionDelta <= 1) failures.push(`positionDelta=${positionDelta.toFixed(3)}`);

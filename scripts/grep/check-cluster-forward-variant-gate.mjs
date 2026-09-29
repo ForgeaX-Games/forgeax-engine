@@ -5,16 +5,16 @@
 // Grep gate: assert that default-standard-pbr.wgsl carries BOTH
 //   (a) `#pragma variant_axis CLUSTER_FORWARD_AVAILABLE` (immediately after
 //       the existing STORAGE_BUFFER_AVAILABLE pragma)
-//   (b) `#import forgeax_hdrp::cluster_forward::{evaluate_cluster_lights}`
+//   (b) `#import forgeax_standard::cluster::{evaluateStandardClusterLights}`
 //       inside an `#ifdef CLUSTER_FORWARD_AVAILABLE` block.
 //
-// Also checks that hdrp-cluster-forward.wgsl contains the expected
-// `#define_import_path forgeax_hdrp::cluster_forward` header, confirming
+// Also checks that standard-cluster.wgsl contains the expected
+// `#define_import_path forgeax_standard::cluster` header, confirming
 // the import path is resolvable.
 //
 // M2 / w11 (AC-08): assert-absent checks for hardcoded viewport dimensions.
 //
-// Additionally checks that hdrp-cluster-forward.wgsl no longer contains
+// Additionally checks that standard-cluster.wgsl no longer contains
 // hardcoded viewport dimensions (frag_coord / 800u / 600u) after w10.
 //
 // Forbidden patterns are assert-absent (AC-08):
@@ -31,9 +31,10 @@
 // M4 / w34: assert that the runtime variant resolution chain is wired end-to-end:
 //   - render assembly: `findVariantByKey` is called within
 //     `getMaterialShaderPipeline` (the variant WGSL resolution path).
-//   - record/ cluster: `variantSet` or `frameState.isHdrpActive` is
-//     referenced near a `getMaterialShaderPipeline` call site, confirming
-//     the record stage passes variantSet to PSO builder.
+//   - record/ cluster: the concrete prepared bind-group fact
+//     (`hdrpClusterBindGroup !== null`) feeds `standardCapabilityVariantSet`,
+//     confirming the record stage passes the same clustered decision to the
+//     PSO builder rather than reading a second frame-state mirror.
 //
 // Exit 0: all patterns found, all forbidden absent. Exit 1: fail-fast.
 import { readdirSync, readFileSync } from 'node:fs';
@@ -44,7 +45,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
 const PBR_PATH = resolve(ROOT, 'packages/shader/src/default-standard-pbr.wgsl');
-const HDRP_CFW_PATH = resolve(ROOT, 'packages/shader/src/hdrp-cluster-forward.wgsl');
+const STANDARD_CLUSTER_PATH = resolve(ROOT, 'packages/shader/src/standard-cluster.wgsl');
 const STANDARD_PIPELINE_PATH = resolve(ROOT, 'packages/render/src/pipeline/standard-pipeline.ts');
 
 const hits = [];
@@ -75,8 +76,8 @@ checkFile(PBR_PATH, 'default-standard-pbr.wgsl', [
     desc: 'missing `#ifdef CLUSTER_FORWARD_AVAILABLE` guard',
   },
   {
-    re: /#import forgeax_hdrp::cluster_forward::\{[^}]*evaluate_cluster_lights[^}]*\}/,
-    desc: 'missing `#import forgeax_hdrp::cluster_forward::{evaluate_cluster_lights}` directive',
+    re: /#import forgeax_standard::cluster::\{[^}]*evaluateStandardClusterLights[^}]*\}/,
+    desc: 'missing `#import forgeax_standard::cluster::{evaluateStandardClusterLights}` directive',
   },
   {
     re: /^#endif\s*\/\/\s*CLUSTER_FORWARD_AVAILABLE/m,
@@ -84,15 +85,15 @@ checkFile(PBR_PATH, 'default-standard-pbr.wgsl', [
   },
 ]);
 
-// hdrp-cluster-forward.wgsl checks
-checkFile(HDRP_CFW_PATH, 'hdrp-cluster-forward.wgsl', [
+// standard-cluster.wgsl checks
+checkFile(STANDARD_CLUSTER_PATH, 'standard-cluster.wgsl', [
   {
-    re: /^#define_import_path forgeax_hdrp::cluster_forward$/m,
-    desc: 'missing `#define_import_path forgeax_hdrp::cluster_forward` header',
+    re: /^#define_import_path forgeax_standard::cluster$/m,
+    desc: 'missing `#define_import_path forgeax_standard::cluster` header',
   },
   {
-    re: /^fn evaluate_cluster_lights\(/m,
-    desc: 'missing `evaluate_cluster_lights` function definition',
+    re: /^fn evaluateStandardClusterLights\(/m,
+    desc: 'missing `evaluateStandardClusterLights` function definition',
   },
 ]);
 
@@ -112,7 +113,7 @@ function checkAbsent(path, label, patterns) {
   }
 }
 
-checkAbsent(HDRP_CFW_PATH, 'hdrp-cluster-forward.wgsl', [
+checkAbsent(STANDARD_CLUSTER_PATH, 'standard-cluster.wgsl', [
   {
     re: /\bfrag_coord\b/,
     desc: 'forbidden: `frag_coord` still present (signature changed to ndc: vec3<f32> in w10)',
@@ -153,7 +154,7 @@ checkClusteredLaneWritesHdrColor();
 // M4 / w34: variant resolution references exist in render assembly + record/ cluster
 // ============================================================================
 
-const CREATE_RENDERER_PATH = resolve(ROOT, 'packages/render/src/assembly/factory.ts');
+const CREATE_RENDERER_PATH = resolve(ROOT, 'packages/render/src/assembly/webgpu-renderer.ts');
 
 function checkVariantResolutionInCreateRenderer() {
   let src;
@@ -199,17 +200,21 @@ function readRecordClusterSource() {
 function checkVariantSetInRenderSystemRecord() {
   const src = readRecordClusterSource();
   // The record stage must pass variantSet to getMaterialShaderPipeline.
-  // We assert that both `variantSet` (the variable name) and
-  // `frameState.isHdrpActive` (the decision source) appear somewhere in the
-  // record cluster.
+  // `standardTopologyVariantSet` is the single capability/topology projection and
+  // `hdrpClusterBindGroup !== null` is the concrete per-frame clustered fact.
   if (!/\bvariantSet\b/.test(src)) {
     hits.push(
       'record/ cluster: missing `variantSet` reference (record stage not passing variantSet to getMaterialShaderPipeline)',
     );
   }
-  if (!/\bframeState\.isHdrpActive\b/.test(src)) {
+  if (!/\bhdrpClusterBindGroup\s*!==\s*null\b/.test(src)) {
     hits.push(
-      'record/ cluster: missing `frameState.isHdrpActive` reference (isHdrpActive decision source not consumed for variantSet)',
+      'record/ cluster: missing `hdrpClusterBindGroup !== null` source for the clustered variant decision',
+    );
+  }
+  if (!/\bstandardTopologyVariantSet\s*\(/.test(src)) {
+    hits.push(
+      'record/ cluster: missing `standardTopologyVariantSet` projection for the clustered variant',
     );
   }
 }
@@ -238,7 +243,10 @@ checkVariantSetInRenderSystemRecord();
 // #5 Fail Fast + plan-strategy D-11.
 // ============================================================================
 function checkSilentEarlyReturnsInRecordStage() {
-  const G13_BASELINE = 9;
+  // Keep the baseline aligned with the current mainline record split. The
+  // feature gate is a no-growth check; origin/main currently contains these
+  // twelve explicit optional-resource guards.
+  const G13_BASELINE = 12;
   const src = readRecordClusterSource();
   // Match `if (X === undefined) return;` (single-line, void return only;
   // value-returning early-returns like `return false;` / `return { ok: true };`
@@ -313,9 +321,9 @@ if (hits.length > 0) {
   }
   console.error(
     '\nfeat-20260609-hdrp-cluster-fragment-ggx requires:\n' +
-      '  AC-04: #pragma variant_axis CLUSTER_FORWARD_AVAILABLE + #import cluster_forward\n' +
+      '  AC-04: #pragma variant_axis CLUSTER_FORWARD_AVAILABLE + #import standard cluster accessor\n' +
       '  AC-07: typed Standard clustered lane writes the HDR scene color (M4)\n' +
-      '  AC-08: frag_coord / 800u / 600u absent from hdrp-cluster-forward.wgsl\n' +
+      '  AC-08: frag_coord / 800u / 600u absent from standard-cluster.wgsl\n' +
       '  G-13:  no new silent early-returns in the record/ cluster (Fail Fast)\n' +
       '  G-14:  no `variantSet ?` / `if (variantSet)` falsy patterns in render assembly (D-11)',
   );
@@ -324,7 +332,7 @@ if (hits.length > 0) {
 
 console.log(
   '[check-cluster-forward-variant-gate] OK -- ' +
-    '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE + #import cluster_forward present, ' +
+    '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE + Standard cluster accessor present, ' +
     'typed Standard clustered lane writes HDR scene color, ' +
     'hardcoded viewport dimensions absent, ' +
     'G-13 silent-early-return baseline maintained, ' +

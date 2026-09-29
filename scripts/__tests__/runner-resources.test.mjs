@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  appBuildConcurrency,
   coverageGroupConcurrency,
   coverageVitestWorkers,
+  readMemoryPressureDiagnostics,
   runnerResources,
   workspaceConcurrency,
 } from '../lib/runner-resources.mjs';
@@ -58,6 +60,20 @@ test('derives a conservative coverage worker budget from CPU and memory', () => 
 test('derives isolated coverage group concurrency from CPU and memory', () => {
   assert.equal(coverageGroupConcurrency({ cpus: 4, memoryBytes: 8_000_000_000 }), 1);
   assert.equal(coverageGroupConcurrency({ cpus: 8, memoryBytes: 16_000_000_000 }), 2);
-  assert.equal(coverageGroupConcurrency({ cpus: 16, memoryBytes: 32_000_000_000 }), 3);
-  assert.equal(coverageGroupConcurrency({ cpus: 64, memoryBytes: 256 * 1024 ** 3 }), 3);
+  assert.equal(coverageGroupConcurrency({ cpus: 16, memoryBytes: 32_000_000_000 }), 2);
+  assert.equal(coverageGroupConcurrency({ cpus: 64, memoryBytes: 256 * 1024 ** 3 }), 2);
+});
+
+test('bounds native Vite builds on constrained and large runners', () => {
+  assert.equal(appBuildConcurrency({ cpus: 8, memoryBytes: 16_000_000_000 }), 2);
+  assert.equal(appBuildConcurrency({ cpus: 4, memoryBytes: 8_000_000_000 }), 1);
+  assert.equal(appBuildConcurrency({ cpus: 32, memoryBytes: 64 * 1024 ** 3 }), 4);
+  assert.equal(appBuildConcurrency({ cpus: 1, memoryBytes: 2 * 1024 ** 3 }), 1);
+});
+
+test('memory-pressure diagnostics name the largest resident processes on Linux', (t) => {
+  if (process.platform !== 'linux') return t.skip('ps --sort is Linux-only');
+  const diagnostics = readMemoryPressureDiagnostics();
+  assert.ok(diagnostics.topRss.length > 1);
+  assert.match(diagnostics.topRss[0], /RSS/);
 });

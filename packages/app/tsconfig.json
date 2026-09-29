@@ -74,6 +74,12 @@
     },
     {
       "path": "../tool-runtime"
+    },
+    {
+      "path": "../picking"
+    },
+    {
+      "path": "../import"
     }
   ]
 }

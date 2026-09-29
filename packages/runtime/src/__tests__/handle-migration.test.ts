@@ -43,7 +43,6 @@ describe('M5 handle-migration', () => {
         iboBytes: 0,
         indexCount: 0,
         indexFormat: 'uint16' as const,
-        layout: '12F' as const,
         vertexCount: 0,
         indexed: false,
         topology: 'triangle-list' as const,

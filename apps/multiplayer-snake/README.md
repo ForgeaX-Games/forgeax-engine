@@ -55,7 +55,9 @@ http://localhost:5173/?server=ws://localhost:8787
 
 Each window is one player. After the renderer is ready, the client automatically sends `join`; after the authority sends the waiting baseline, it sends `ready`. The round starts when the second player has joined and both players are ready. Use Arrow keys or `WASD` to steer.
 
-The `server` query parameter is optional when the authority uses the default address `ws://<current-host>:8787`. Use `wss://...` when the page is served over HTTPS.
+The `server` query parameter is optional when the authority uses the default address `ws://<current-host>:8787`; the paired host control channel defaults to `ws://<current-host>:8788`. Pass `host=...` when a proxy or deployment supplies a separate control endpoint. The M17 chaos proxy publishes both URLs, so the browser never derives an unproxied host port from the game URL. Use `wss://...` when the page is served over HTTPS.
+
+The frontend host owns the paired host transport through the `snake:client` Cordis Fiber. Its effect closes that capability when the plugin unloads; the App and Net session retain their own domain cleanup boundaries.
 
 ### Automated proof
 
@@ -64,6 +66,12 @@ Run the full browser proof. It starts a temporary authority, a Vite dev server, 
 ```bash
 pnpm --filter @forgeax/multiplayer-snake e2e:browser
 ```
+
+The browser proof uses a bounded Vite/browser cold-start budget for the
+simulated CI lane. `FORGEAX_SNAKE_BROWSER_STARTUP_TIMEOUT_MS` overrides the
+budget in milliseconds and is clamped to `1..180000`; the default is `180000`
+(three minutes). This is a runner startup control only; it does not alter the
+Snake protocol, renderer, or WebGPU behavior.
 
 Run the real-socket process proof, including same-session reconnect and fresh-epoch resync:
 
@@ -366,7 +374,7 @@ Two identities are intentionally separate:
 
 ## The client: replica to rendering
 
-[`src/client.ts`](src/client.ts) assembles `createApp()`, installs the network plugin, attaches a replica coordinator, waits for renderer readiness, sends `join`, and installs keyboard input.
+[`src/client.ts`](src/client.ts) supplies the frontend host's `snake:app` and `snake:client` plugins. The host owns App and Fiber lifetime; those plugins attach the replica coordinator, wait for renderer readiness, send `join`, and install keyboard input.
 
 The `snake-replica-derivation` `Update` system then:
 

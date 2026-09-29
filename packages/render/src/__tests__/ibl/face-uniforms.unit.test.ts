@@ -38,9 +38,11 @@ describe('IBL face uniform RHI contract', () => {
     const badFace = writeFaceUniforms(device, bufferResult.value, 6, new Float32Array(16));
     const badMatrix = writeFaceUniforms(device, bufferResult.value, 0, new Float32Array(15));
     const badSubPass = writePrefilterUniforms(device, bufferResult.value, 30, 0.5, 128);
+    const badMipCount = writePrefilterUniforms(device, bufferResult.value, 0, 0.5, 128, 0);
 
     expect(badFace).toMatchObject({ ok: false, error: { code: 'webgpu-runtime-error' } });
     expect(badMatrix).toMatchObject({ ok: false, error: { code: 'webgpu-runtime-error' } });
     expect(badSubPass).toMatchObject({ ok: false, error: { code: 'webgpu-runtime-error' } });
+    expect(badMipCount).toMatchObject({ ok: false, error: { code: 'webgpu-runtime-error' } });
   });
 });

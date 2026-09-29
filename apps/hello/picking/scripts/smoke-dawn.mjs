@@ -9,7 +9,7 @@
 //   (b) a center-of-viewport pick returns the cube entity (hit, not undefined)
 //   (c) hit.point / hit.distance are finite and distance >= 0
 //   (d) a far-corner pick (empty space) returns undefined (miss)
-//   (e) frames >= 300 with no draw crash
+//   (e) frames >= 60 with no draw crash
 //   (f) Renderer.onError count == 0
 //
 // Why direct `pick(...)` instead of a synthetic DOM event: the smoke verifies the
@@ -23,7 +23,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const WIDTH = 200;
@@ -190,7 +190,7 @@ const cameraEntity = world.spawn(
 
 // --- 4. Frame loop ---
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 

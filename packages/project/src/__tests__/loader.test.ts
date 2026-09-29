@@ -16,14 +16,15 @@ function makeReadThrow(err: Error): (path: string) => Promise<string> {
 const VALID_FORGE_JSON = JSON.stringify({
   id: 'test-game',
   name: 'Test Game',
-  schemaVersion: '1.0.0',
+  schemaVersion: '3.0.0',
+  roots: {},
 });
 
 const VALID_WITH_DEFAULT_SCENE = JSON.stringify({
   id: 'test-game',
   name: 'Test Game',
-  schemaVersion: '1.0.0',
-  defaultScene: '15acc839-d847-527c-8284-bfb36d7c50de',
+  schemaVersion: '3.0.0',
+  roots: { engine: '15acc839-d847-527c-8284-bfb36d7c50de' },
 });
 
 const INVALID_JSON = '{id: broken';
@@ -31,27 +32,30 @@ const INVALID_JSON = '{id: broken';
 const WITH_SCENES_ARRAY = JSON.stringify({
   id: 'has-scenes',
   name: 'Has Scenes',
-  schemaVersion: '1.0.0',
+  schemaVersion: '3.0.0',
+  roots: {},
   scenes: [{ id: 'l1', name: 'Level 1', pack: 'scenes/level1.pack.json' }],
 });
 
 const WITH_BAD_GUID = JSON.stringify({
   id: 'bad-guid',
   name: 'Bad GUID',
-  schemaVersion: '1.0.0',
-  defaultScene: 'not-a-guid',
+  schemaVersion: '3.0.0',
+  roots: { engine: 'not-a-guid' },
 });
 
 const WITHOUT_DEFAULT_SCENE = JSON.stringify({
   id: 'no-default',
   name: 'No Default',
-  schemaVersion: '1.0.0',
+  schemaVersion: '3.0.0',
+  roots: {},
 });
 
-const WITH_NPC_POLICY = JSON.stringify({
+const WITH_LEGACY_POLICY = JSON.stringify({
   id: 'npc-game',
   name: 'NPC Game',
-  schemaVersion: '1.0.0',
+  schemaVersion: '3.0.0',
+  roots: {},
   npc: {
     model: 'deepseek-v4-flash-openai',
     maxTokens: 220,
@@ -104,7 +108,7 @@ describe('loadGameProject — return path 3: unknown fields', () => {
   });
 });
 
-// ── return path 4: defaultScene GUID format invalid ─────────────────────────
+// ── return path 4: engine root GUID format invalid ─────────────────────────
 describe('loadGameProject — return path 4: GUID malformed', () => {
   it('returns {ok:false} with code forge-guid-malformed for bad GUID', async () => {
     const result = await loadGameProject(makeRead(WITH_BAD_GUID));
@@ -124,34 +128,31 @@ describe('loadGameProject — return path 5: valid forge.json', () => {
       expect(result.value).toBeDefined();
       expect(result.value.id).toBe('test-game');
       expect(result.value.name).toBe('Test Game');
-      expect(result.value.schemaVersion).toBe('1.0.0');
+      expect(result.value.schemaVersion).toBe('3.0.0');
     }
   });
 
-  it('returns {ok:true} for valid forge.json with defaultScene', async () => {
+  it('returns {ok:true} for valid forge.json with engine root', async () => {
     const result = await loadGameProject(makeRead(VALID_WITH_DEFAULT_SCENE));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.defaultScene).toBeDefined();
+      expect(result.value.roots.engine).toBeDefined();
     }
   });
 
-  it('returns {ok:true} when defaultScene is absent (optional)', async () => {
+  it('returns {ok:true} when engine root is absent (optional)', async () => {
     const result = await loadGameProject(makeRead(WITHOUT_DEFAULT_SCENE));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.id).toBe('no-default');
-      expect(result.value.defaultScene).toBeUndefined();
+      expect(result.value.roots.engine).toBeUndefined();
     }
   });
 
-  it('accepts the Digital Life NPC policy in forge.json', async () => {
-    const result = await loadGameProject(makeRead(WITH_NPC_POLICY));
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.npc?.model).toBe('deepseek-v4-flash-openai');
-      expect(result.value.npc?.budget?.maxConcurrent).toBe(4);
-    }
+  it('rejects the removed NPC policy instead of dual-reading it', async () => {
+    const result = await loadGameProject(makeRead(WITH_LEGACY_POLICY));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forge-unknown-field');
   });
 
   it('is idempotent — same read returns same result', async () => {

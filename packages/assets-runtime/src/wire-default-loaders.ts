@@ -13,15 +13,17 @@
 // complete ordinary Asset vocabulary is registered once at this boundary;
 // host-specific loaders may extend the table through `extraLoaders`.
 //
-// Default set wired internally: the 16 ordinary Asset kinds plus the existing
-// UI consumer loader. Host-only execution remains separate from descriptor load.
+// Default set wired internally: every runtime Asset kind plus the existing UI
+// consumer loader. Host-only execution remains separate from descriptor load.
 //
 import { videoLoader } from '@forgeax/engine-graphics-extras';
 import type { Loader } from '@forgeax/engine-types';
 import { createUiLoader, type UiAsset } from '@forgeax/engine-ui';
 import { LoaderRegistry } from './loader-registry';
+import { iesProfileLoader } from './loaders/ies-profile';
 import { INLINE_PACK_LOADERS } from './loaders/inline-pack';
 import { PACK_ARTIFACT_LOADERS } from './loaders/pack-artifact';
+import { pluginAssetLoader } from './loaders/plugin.js';
 
 const uiPayloadLoader = createUiLoader();
 const uiLoader: Loader<UiAsset> = {
@@ -33,8 +35,7 @@ const uiLoader: Loader<UiAsset> = {
 };
 
 /**
- * Wire the engine's default loader set (16 ordinary kinds plus UI) plus any
- * `extraLoaders` onto `registry` in
+ * Wire the engine's default loader set plus any `extraLoaders` onto `registry` in
  * one call. Returns the same `registry` for chaining (so `wireDefaultLoaders(new
  * LoaderRegistry())` is a one-expression wired registry). The `extraLoaders` are
  * appended after the defaults and must use kinds outside the ordinary set.
@@ -53,7 +54,12 @@ export function wireDefaultLoaders(
 ): LoaderRegistry {
   const extraKinds = new Set(extraLoaders.map((loader) => loader.kind));
   const seeded = new Set<string>();
-  for (const loader of [...INLINE_PACK_LOADERS, ...PACK_ARTIFACT_LOADERS]) {
+  for (const loader of [
+    ...INLINE_PACK_LOADERS,
+    ...PACK_ARTIFACT_LOADERS,
+    iesProfileLoader,
+    pluginAssetLoader,
+  ]) {
     if (extraKinds.has(loader.kind)) continue;
     if (seeded.has(loader.kind)) continue;
     seeded.add(loader.kind);

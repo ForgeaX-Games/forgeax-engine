@@ -6,7 +6,12 @@
 
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
-import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
+import {
+  buildMeshAttributeMapForUvSets,
+  createBoxGeometry,
+  createEdgesGeometry,
+  createWireframeGeometry,
+} from '@forgeax/engine-geometry';
 import {
   Camera,
   Lines,
@@ -19,36 +24,11 @@ import {
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import type { AssetError, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const FLOATS_PER_VERTEX = 12;
 const FOCUSED_ROUTES = ['?evidenceLane=webgpu', '?evidenceLane=wgpu-webgl2'] as const;
-
-/** Build the legacy vertex-only line-list wireframe retained by this carrier. */
-export function buildWireframeBoxLineList(half = 0.8): MeshAsset {
-  const corners: readonly (readonly [number, number, number])[] = [
-    [-half, -half, -half], [half, -half, -half], [half, half, -half], [-half, half, -half],
-    [-half, -half, half], [half, -half, half], [half, half, half], [-half, half, half],
-  ];
-  const edges: readonly (readonly [number, number])[] = [
-    [0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4],
-    [0, 4], [1, 5], [2, 6], [3, 7],
-  ];
-  const vertices = new Float32Array(edges.length * 2 * FLOATS_PER_VERTEX);
-  const position = new Float32Array(edges.length * 2 * 3);
-  let vertex = 0;
-  for (const [first, second] of edges) {
-    for (const cornerIndex of [first, second]) {
-      const corner = corners[cornerIndex] as readonly [number, number, number];
-      const vertexOffset = vertex * FLOATS_PER_VERTEX;
-      vertices.set(corner, vertexOffset);
-      position.set(corner, vertex * 3);
-      vertex += 1;
-    }
-  }
-  return meshAsset('line-list', vertices, position, vertex);
-}
 
 function meshAsset(
   topology: 'point-list' | 'line-list',
@@ -107,7 +87,6 @@ async function bootstrapFocused(
   const app = appResult.value;
   const world = app.world;
   const material = Materials.unlit([0.1, 0.9, 1, falsify === 'alpha' ? 0.4 : 1], {
-    castShadow: false,
     renderState: {
       ...(falsify === 'depth-sort' || falsify === 'alpha'
         ? { depthWriteEnabled: false }
@@ -221,24 +200,68 @@ async function bootstrapLegacy(target: HTMLCanvasElement): Promise<void> {
     console.error('[topology] AssetRegistry is null (renderer construction failed)');
     return;
   }
+  const sourceResult = createBoxGeometry(1.4, 1.4, 1.4);
+  if (!sourceResult.ok) return reportGeometryError(sourceResult.error);
+  const wireframeResult = createWireframeGeometry(sourceResult.value);
+  if (!wireframeResult.ok) return reportGeometryError(wireframeResult.error);
+  const edgesResult = createEdgesGeometry(sourceResult.value, 1);
+  if (!edgesResult.ok) return reportGeometryError(edgesResult.error);
+
   const world = app.world;
-  const meshHandle: Handle<'MeshAsset', 'shared'> = world.allocSharedRef('MeshAsset', buildWireframeBoxLineList());
-  const materialHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef(
-    'MaterialAsset',
-    Materials.unlit([0.1, 0.9, 1, 1], { castShadow: false }),
+  const wireframeHandle = world.allocSharedRef('MeshAsset', wireframeResult.value);
+  const edgesHandle = world.allocSharedRef('MeshAsset', edgesResult.value);
+  const wireMaterialHandle = world.allocSharedRef(
+    'MaterialAsset', Materials.unlit([0.1, 0.9, 1, 1]),
+  );
+  const edgesMaterialHandle = world.allocSharedRef(
+    'MaterialAsset', Materials.unlit([1, 0.65, 0.12, 1]),
   );
   world.spawn(
-    { component: Transform, data: { quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-    { component: MeshFilter, data: { assetHandle: meshHandle } },
-    { component: MeshRenderer, data: { materials: [materialHandle] } },
+    { component: Transform, data: { pos: [-1.1, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: MeshFilter, data: { assetHandle: wireframeHandle } },
+    { component: MeshRenderer, data: { materials: [wireMaterialHandle] } },
   ).unwrap();
   world.spawn(
-    { component: Transform, data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726] } },
+    { component: Transform, data: { pos: [1.1, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: MeshFilter, data: { assetHandle: edgesHandle } },
+    { component: MeshRenderer, data: { materials: [edgesMaterialHandle] } },
+  ).unwrap();
+  world.spawn(
+    { component: Transform, data: { pos: [0, 0.35, 5.4], quat: [0, 0, 0, 1] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) } },
   ).unwrap();
   const start = app.start();
   if (!start.ok) return reportAppError(start.error);
-  console.warn(`[topology] legacy backend=${app.renderer.inspect().capabilities.backendKind}`);
+  const backend = app.renderer.inspect().capabilities.backendKind;
+  const hud = document.querySelector<HTMLDivElement>('#topology-hud');
+  if (hud !== null) {
+    hud.textContent = [
+      'factory=createWireframeGeometry + createEdgesGeometry',
+      `wireframe edgeCount=${edgeCount(wireframeResult.value)} topology=line-list indexed=false`,
+      `edges edgeCount=${edgeCount(edgesResult.value)} topology=line-list indexed=false threshold=1deg`,
+      `backend=${backend} provenance=renderer.inspect().capabilities.backendKind`,
+      'failure recovery=branch AssetError.code/detail, retry Geometry owner input',
+    ].join('\n');
+  }
+  console.warn(`[topology] legacy backend=${backend}`);
+}
+
+function edgeCount(mesh: MeshAsset): number {
+  return (mesh.submeshes[0]?.vertexCount ?? 0) / 2;
+}
+
+function reportGeometryError(error: AssetError): void {
+  if (error.code === 'asset-parse-failed') {
+    const detail = error.detail;
+    if (detail !== undefined && 'field' in detail && 'value' in detail && 'reason' in detail) {
+      console.error(
+        `[topology] geometry recovery: ${error.code} field=${detail.field} ` +
+          `value=${String(detail.value)} reason=${detail.reason}`,
+      );
+      return;
+    }
+  }
+  console.error(`[topology] geometry recovery: ${error.code} hint=${error.hint}`);
 }
 
 function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {

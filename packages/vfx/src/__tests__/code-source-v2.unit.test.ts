@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseParticleEffectSourceV2, parseVfxStageDeclarations } from '../code-source.js';
+import { parseVfxStageDeclarations } from '../code-source.js';
+import { parseParticleEffectSourceV3 } from '../code-source-v3.js';
 
 const source = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'sparks',
@@ -17,9 +18,9 @@ const source = {
   ],
 };
 
-describe('ParticleCodeEffectSource v2', () => {
+describe('ParticleCodeEffectSource v3', () => {
   it('accepts typed bounded channels and same-effect visual events', () => {
-    const result = parseParticleEffectSourceV2({
+    const result = parseParticleEffectSourceV3({
       ...source,
       emitters: [
         {
@@ -41,7 +42,7 @@ describe('ParticleCodeEffectSource v2', () => {
   });
 
   it('accepts the code-first source without an operator stack', () => {
-    const result = parseParticleEffectSourceV2(source);
+    const result = parseParticleEffectSourceV3(source);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.emitters[0]?.program.module).toBe('sparks.vfx.wgsl');
@@ -56,12 +57,12 @@ describe('ParticleCodeEffectSource v2', () => {
   });
 
   it('rejects v1 with an executable recook hint', () => {
-    const result = parseParticleEffectSourceV2({ schemaVersion: 1, emitters: [] });
+    const result = parseParticleEffectSourceV3({ schemaVersion: 1, emitters: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('vfx-source-version-unsupported');
-      expect(result.error.hint).toContain('WGSL');
-      expect(result.error.hint).toContain('recook');
+      expect(result.error.hint).toContain('Program v3');
+      expect(result.error.hint).toContain('cold-cook');
     }
   });
 
@@ -73,10 +74,10 @@ describe('ParticleCodeEffectSource v2', () => {
     expect(emitter).toBeDefined();
     if (emitter === undefined) return;
     emitter.backend = { required: 'cpu' };
-    expect(parseParticleEffectSourceV2(backend).ok).toBe(false);
+    expect(parseParticleEffectSourceV3(backend).ok).toBe(false);
     const derived = structuredClone(source) as typeof source & { backendPlan: string };
     derived.backendPlan = 'gpu';
-    expect(parseParticleEffectSourceV2(derived).ok).toBe(false);
+    expect(parseParticleEffectSourceV3(derived).ok).toBe(false);
   });
 
   it.each([
@@ -88,7 +89,7 @@ describe('ParticleCodeEffectSource v2', () => {
     ['custom data', { customData: { value: 1 } }],
   ])('rejects unknown nested %s fields', (_name, override) => {
     const emitter = { ...source.emitters[0], ...override };
-    expect(parseParticleEffectSourceV2({ ...source, emitters: [emitter] }).ok).toBe(false);
+    expect(parseParticleEffectSourceV3({ ...source, emitters: [emitter] }).ok).toBe(false);
   });
 
   it('keeps Data Interface requirements out of the source-side roster', () => {
@@ -96,7 +97,7 @@ describe('ParticleCodeEffectSource v2', () => {
       ...source.emitters[0],
       dataInterfaces: [{ token: 'vfx:camera' }],
     };
-    expect(parseParticleEffectSourceV2({ ...source, emitters: [emitter] }).ok).toBe(false);
+    expect(parseParticleEffectSourceV3({ ...source, emitters: [emitter] }).ok).toBe(false);
   });
 
   it('accepts an explicit mesh submesh and rejects ambiguous indices', () => {
@@ -111,11 +112,11 @@ describe('ParticleCodeEffectSource v2', () => {
       { kind: 'mesh', material: 'material-guid', mesh: 'mesh-guid', submesh: 2 },
     ];
     emitter.renderers = renderers;
-    expect(parseParticleEffectSourceV2(mesh).ok).toBe(true);
+    expect(parseParticleEffectSourceV3(mesh).ok).toBe(true);
     const renderer = renderers[0];
     expect(renderer).toBeDefined();
     if (renderer === undefined) return;
     renderer.submesh = -1;
-    expect(parseParticleEffectSourceV2(mesh).ok).toBe(false);
+    expect(parseParticleEffectSourceV3(mesh).ok).toBe(false);
   });
 });

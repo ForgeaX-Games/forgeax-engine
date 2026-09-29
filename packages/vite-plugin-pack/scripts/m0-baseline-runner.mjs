@@ -350,17 +350,68 @@ function parseArgs(argv) {
     featureDirectory: process.env.FORGEAX_FEATURE_DIR ?? defaultFeatureDirectory,
     output: null,
     finalMode: process.env.FORGEAX_BASELINE_MODE === 'final',
+    cohesion: false,
+    before: null,
+    runGates: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--feature-dir') args.featureDirectory = resolve(argv[++index]);
     else if (argv[index] === '--output') args.output = resolve(argv[++index]);
     else if (argv[index] === '--final') args.finalMode = true;
+    else if (argv[index] === '--cohesion') args.cohesion = true;
+    else if (argv[index] === '--before') args.before = resolve(argv[++index]);
+    else if (argv[index] === '--run-gates') args.runGates = true;
     else throw new Error(`unknown argument: ${argv[index]}`);
   }
   return args;
 }
 
 const args = parseArgs(process.argv.slice(2));
+if (args.cohesion) {
+  const { collectM0CohesionSnapshot, compareM0CohesionSnapshots } = await import(
+    '../../../scripts/forgeax/check-format-tier1-scope.mjs'
+  );
+  const after = collectM0CohesionSnapshot(repositoryRoot);
+  const before = args.before === null
+    ? { schemaVersion: 1, metrics: {
+        devkitRootExports: 38,
+        packInventoryExportModules: 2,
+        sceneInstanceLines: 1564,
+        typesIndexLines: 4856,
+      } }
+    : JSON.parse(readFileSync(args.before, 'utf8'));
+  const report = {
+    schemaVersion: 1,
+    milestone: 'M0',
+    before,
+    after,
+    comparison: compareM0CohesionSnapshots(before, after),
+    gates: [],
+  };
+  if (args.runGates) {
+    for (const command of [['pnpm', ['test:layout']], ['pnpm', ['lint:internal']]]) {
+      try {
+        execFileSync(command[0], command[1], { cwd: repositoryRoot, stdio: 'pipe', encoding: 'utf8' });
+        report.gates.push({ command: [command[0], ...command[1]].join(' '), status: 'pass' });
+      } catch (error) {
+        report.gates.push({
+          command: [command[0], ...command[1]].join(' '),
+          status: 'fail',
+          output: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  const serialized = `${JSON.stringify(report, null, 2)}\n`;
+  if (args.output !== null) {
+    mkdirSync(dirname(args.output), { recursive: true });
+    writeFileSync(args.output, serialized);
+  }
+  process.stdout.write(serialized);
+  if (report.comparison.status !== 'pass' || report.gates.some((gate) => gate.status !== 'pass')) {
+    process.exitCode = 1;
+  }
+} else {
 const baseline = buildBaseline(args.featureDirectory, args.finalMode);
 const serialized = `${JSON.stringify(baseline, null, 2)}\n`;
 if (args.output !== null) {
@@ -368,3 +419,4 @@ if (args.output !== null) {
   writeFileSync(args.output, serialized);
 }
 process.stdout.write(serialized);
+}

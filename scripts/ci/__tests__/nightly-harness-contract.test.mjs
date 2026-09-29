@@ -28,30 +28,47 @@ test('nightly materializes the authenticated harness before documentation tests'
   assert.match(setup, /FORGEAX_SKIP_HARNESS_SYNC: ['"]1['"]/);
   assert.match(setup, /pnpm install --frozen-lockfile/);
   assert.doesNotMatch(setup, /--ignore-scripts/);
+  assert.match(
+    setup,
+    /- name: Prepare Dawn device-limit normalization[\s\S]*?uses: \.\/\.github\/actions\/prepare-dawn-device-limits/,
+  );
   assert.match(harness, /shell: bash/);
   assert.match(harness, /FORGEAX_HARNESS_TOKEN: \$\{\{ secrets\.GHA \}\}/);
   assert.match(harness, /FORGEAX_HARNESS_SPARSE_DOCS: ['"]1['"]/);
-  assert.match(harness, /pnpm harness:sync/);
-  for (const document of [
-    'material-asset-migration.md',
-    'vfx-particle-runtime-design.md',
-    'reports/2026-08-03-black-screen-diagnosis-review.md',
-  ]) {
-    assert.match(harness, new RegExp(`test -f \\.forgeax-harness/docs/${document}`));
-  }
+  assert.match(harness, /node scripts\/ci\/materialize-harness-docs\.mjs/);
   assert.match(
     smokeJob,
-    /- name: Setup Node\.js for Linux Emscripten[\s\S]*?package-manager-cache: false/,
+    /- name: Setup Node\.js for WASM hydration[\s\S]*?package-manager-cache: false/,
   );
-  assert.match(
-    smokeJob,
-    /- name: Setup Node\.js \(non-Linux upstream\)[\s\S]*?package-manager-cache: false/,
-  );
+  assert.doesNotMatch(smokeJob, /Setup Node\.js \(non-Linux upstream\)/);
   assert.match(smokeJob, /NODE_OPTIONS: --max-old-space-size=4096/);
+});
+
+test('nightly bounds harness documentation recovery to the shared retry helper', () => {
+  const smokeJob = jobSection('smoke-browser-dawn');
+  const materialize = smokeJob.indexOf('- name: Materialize harness documentation');
+  const dawn = smokeJob.indexOf('- name: Vitest dawn project');
+  const harness = smokeJob.slice(materialize, dawn);
+  assert.match(harness, /node scripts\/ci\/materialize-harness-docs\.mjs/);
+  assert.doesNotMatch(harness, /sleep|while true|for attempt/);
 });
 
 test('sparse harness sync skips the clone checkout before applying docs patterns', () => {
   assert.match(harnessSync, /'--filter=blob:none', '--sparse', '--no-checkout'/);
   assert.match(harnessSync, /'sparse-checkout', 'set', 'docs'/);
   assert.match(harnessSync, /git\(\['read-tree', '-mu', 'HEAD'\]/);
+});
+
+test('nightly Metal native boundary restores its pinned wgpu source before Cargo gates', () => {
+  const metalJob = jobSection('native-ray-query-metal-build');
+  const node = metalJob.indexOf('- name: Setup Node.js');
+  const wgpu = metalJob.indexOf('- name: Restore pinned wgpu checkout');
+  const install = metalJob.indexOf('- name: Install workspace dependencies');
+  const cargo = metalJob.indexOf('- name: Verify Metal native owner');
+
+  assert.ok(node >= 0, 'Metal job must provision Node for checkout recovery');
+  assert.ok(wgpu > node, 'wgpu checkout must wait for Node');
+  assert.ok(install > wgpu, 'dependency installation must see the pinned wgpu source');
+  assert.ok(cargo > install, 'Cargo gates must run after wgpu restoration');
+  assert.match(metalJob.slice(wgpu, install), /node scripts\/ci\/prepare-wgpu-checkout\.mjs/);
 });

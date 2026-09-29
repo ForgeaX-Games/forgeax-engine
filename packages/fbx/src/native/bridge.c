@@ -393,6 +393,66 @@ static void write_nodes(Buf *b, ufbx_scene *scene) {
     free(order);
 }
 
+/* LODGroup is a NodeAttribute attached to a parent node.  ufbx exposes the
+ * attribute's instances and keeps each instance's child order as the source
+ * file order, so export one engine group per instance rather than flattening
+ * multiple FBX instances into one ambiguous list. */
+static void write_lod_groups(Buf *b, ufbx_scene *scene) {
+    if (scene->lod_groups.count == 0) return;
+
+    buf_str(b, ",\"lodGroups\":[");
+    int first_group = 1;
+    for (size_t gi = 0; gi < scene->lod_groups.count; gi++) {
+        ufbx_lod_group *lod = scene->lod_groups.data[gi];
+        for (size_t ii = 0; ii < lod->instances.count; ii++) {
+            ufbx_node *parent = lod->instances.data[ii];
+            if (!parent) continue;
+            if (!first_group) buf_char(b, ',');
+            first_group = 0;
+            buf_str(b, "{\"children\":[");
+            for (size_t ci = 0; ci < parent->children.count; ci++) {
+                if (ci > 0) buf_char(b, ',');
+                ufbx_node *child = parent->children.data[ci];
+                int mesh_index = -1;
+                if (child && child->mesh) {
+                    for (size_t mi = 0; mi < scene->meshes.count; mi++) {
+                        if (scene->meshes.data[mi] == child->mesh) {
+                            mesh_index = (int)mi;
+                            break;
+                        }
+                    }
+                }
+                buf_str(b, "{\"meshIndex\":");
+                buf_int(b, mesh_index);
+                if (ci < lod->lod_levels.count) {
+                    const ufbx_lod_level *level = &lod->lod_levels.data[ci];
+                    buf_str(b, ",\"distance\":");
+                    buf_double(b, level->distance);
+                    buf_str(b, ",\"display\":");
+                    switch (level->display) {
+                    case UFBX_LOD_DISPLAY_SHOW: buf_quoted(b, "show"); break;
+                    case UFBX_LOD_DISPLAY_HIDE: buf_quoted(b, "hide"); break;
+                    default: buf_quoted(b, "use-lod"); break;
+                    }
+                }
+                buf_char(b, '}');
+            }
+            buf_str(b, "],\"threshold\":");
+            if (lod->lod_levels.count > 1) {
+                buf_double(b, lod->lod_levels.data[1].distance);
+            } else {
+                buf_double(b, 0.0);
+            }
+            buf_str(b, ",\"mode\":");
+            buf_quoted(b, lod->relative_distances ? "percentage" : "distance");
+            buf_str(b, ",\"relative\":");
+            buf_str(b, lod->relative_distances ? "true" : "false");
+            buf_str(b, ",\"displayMode\":\"eLODGroup\"}");
+        }
+    }
+    buf_char(b, ']');
+}
+
 /* ── Materials writing ─────────────────────────────────────────────── */
 
 static void write_materials(Buf *b, ufbx_scene *scene) {
@@ -909,6 +969,9 @@ void parseFbxWasm(const void *data, size_t size) {
 
     /* Nodes */
     write_nodes(&b, scene);
+
+    /* Native FbxLODGroup attributes and their ordered node children. */
+    write_lod_groups(&b, scene);
 
     /* Materials */
     write_materials(&b, scene);

@@ -18,6 +18,7 @@ import {
   materialShaderTextureFieldNames,
   validateMaterialCookIdentity,
   validateMaterialPasses,
+  validateMaterialTransmissionContract,
   validateParamType,
   validateSpriteSlices,
 } from '../registry/validate-material';
@@ -81,6 +82,31 @@ describe('validateMaterialCookIdentity', () => {
         guid: 'mat-parent',
         layoutIdentity: 'sha256:changed-layout',
       }),
+    ).toMatchObject({
+      code: 'material-derived-interface-mismatch',
+      detail: { stage: 'extract', action: 'recook' },
+    });
+  });
+
+  it('rejects a stale Standard layer-plan identity at the root admission boundary', () => {
+    expect(
+      validateMaterialCookIdentity(
+        {
+          guid: 'mat-child',
+          receipt: {
+            identity: { layoutIdentity: 'sha256:root-layout' },
+            derivedInterface: {
+              layoutIdentity: 'sha256:root-layout',
+              layerPlanIdentity: 'standard-layer-plan-v1:base-only:forward,deferred,shadow',
+            },
+          },
+        } as never,
+        {
+          guid: 'mat-parent',
+          layoutIdentity: 'sha256:root-layout',
+          layerPlanIdentity: 'stale-layer-plan',
+        },
+      ),
     ).toMatchObject({
       code: 'material-derived-interface-mismatch',
       detail: { stage: 'extract', action: 'recook' },
@@ -177,6 +203,50 @@ describe('validateMaterialPasses', () => {
       }),
     );
     expect((e?.detail as { paramName: string }).paramName).toBe('alphaCutoff');
+  });
+});
+
+describe('validateMaterialTransmissionContract', () => {
+  it.each([
+    ['transmission range', { transmission: 1.1 }],
+    ['ior range', { ior: 0 }],
+    ['thickness range', { thickness: -0.1 }],
+    ['attenuation distance', { attenuationDistance: Number.POSITIVE_INFINITY }],
+  ])('returns a structured error for %s', (_name, value) => {
+    const error = validateMaterialTransmissionContract(mat({ values: value }));
+    expect(error?.code).toBe('material-transmission-contract-invalid');
+    expect(error?.detail).toMatchObject({ reason: expect.any(String) });
+  });
+
+  it('rejects BLEND and depth writes when transmission is active', () => {
+    expect(
+      validateMaterialTransmissionContract(
+        mat({
+          values: { transmission: 0.5 },
+          passes: [
+            {
+              name: 'forward',
+              program: { module: 'forgeax_material::standard' },
+              renderState: { blend: {} },
+            },
+          ],
+        }),
+      )?.detail,
+    ).toMatchObject({ reason: 'blend' });
+    expect(
+      validateMaterialTransmissionContract(
+        mat({
+          values: { transmission: 0.5 },
+          passes: [
+            {
+              name: 'forward',
+              program: { module: 'forgeax_material::standard' },
+              renderState: { depthWriteEnabled: true },
+            },
+          ],
+        }),
+      )?.detail,
+    ).toMatchObject({ reason: 'depth-write' });
   });
 });
 

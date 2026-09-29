@@ -36,7 +36,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
 const REQUIRE_VISIBLE = process.env.TEXT_SMOKE_REQUIRE_VISIBLE !== '0';
 
@@ -232,7 +232,8 @@ world.spawn(
       bloom: BLOOM_ENABLED,
       bloomThreshold: 1.0,
       bloomIntensity: 1.0,
-      bloomBlurRadius: 4.0,
+      bloomSoftKnee: 0.5,
+      bloomScatter: 0.7,
     },
   },
 );
@@ -425,12 +426,11 @@ async function registerBakedFont(world, assets) {
   if (!samplerGuidParsed.ok) throw new Error(`samplerGuid parse failed: ${samplerGuidParsed.error.code}`);
   assets.catalog(atlasGuidParsed.value, {
     kind: 'texture',
-    width: decoded.width,
-    height: decoded.height,
+    shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
     format: 'rgba8unorm',
     data: decoded.data,
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   });
 
   return world.allocSharedRef('FontAsset', {

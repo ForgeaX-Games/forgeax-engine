@@ -335,12 +335,14 @@ async function uploadCheckerboardTexture(
   }
   const desc: TextureAsset = {
     kind: 'texture',
-    width: side,
-    height: side,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: side, height: side },
+    },
     format: 'rgba8unorm-srgb',
     data: bytes,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
   const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', desc);
   return handle;

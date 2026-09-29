@@ -7,8 +7,8 @@
 // FXAA 3.11 fragment shader -- faithful port of the canonical Simon
 // Rodriguez reference (same lineage as Bevy's WGSL port), adapted to
 // forgeax naga_oil conventions. Hardcoded "High" quality preset: 12-step
-// edge search with compile-time step multipliers (no UBO, no #ifdef quality
-// branches).
+// edge search with compile-time step multipliers (the only UBO field is the
+// final-output dither switch; there are no quality #ifdef branches).
 //
 // Vertex stage: imports the SSOT fullscreen_triangle() from
 // forgeax_view::common (single large triangle, research Finding 1).
@@ -33,14 +33,18 @@
 // holes in shaded surfaces -- the bug this rewrite fixes.
 //
 // Bindings (group 0):
-//   @binding(0) screenTexture : texture_2d<f32>  -- sampled LDR input
+//   @binding(0) screenTexture : texture_2d<f32>  -- sampled pass-domain input
 //   @binding(1) samp          : sampler           -- linear filterable sampler
-// linearLdrColorDomain: FXAA samples and writes linear LDR values; display
-// encoding happens only at the final output surface.
+//   @binding(2) params        : FxaaParams        -- final-output policy
+// DOMAIN: the positive LUT path samples and writes linear-LDR values. Its
+// ditherEnabled uniform is forced to zero because the following fs_encode_only
+// surface writer owns the sole OETF and final dither. The legacy direct path
+// may still enable the same bounded dither when FXAA is itself the surface
+// writer; that legacy route remains display-encoded. FXAA never performs an
+// OETF.
 
-#import forgeax_view::common::FullscreenOutput
+#import forgeax_view::common::{FullscreenOutput, ditherUnorm8}
 #import forgeax_view::common::fullscreen_triangle
-#import forgeax_view::common::linearToSrgbOetf
 
 const EDGE_THRESHOLD_MIN: f32 = 0.0312;
 const EDGE_THRESHOLD_MAX: f32 = 0.125;
@@ -50,16 +54,30 @@ const ITERATIONS: i32 = 12;
 @group(0) @binding(0) var screenTexture: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 
+struct FxaaParams {
+  // Zero for graph-owned linear-LDR intermediates; non-zero is reserved for a
+  // direct final surface writer and never performs color-space conversion.
+  ditherEnabled: f32,
+  // Keep the uniform block at one 16-byte slot. WebGL2/GLES uniform-buffer
+  // validation uses the std140-aligned block size, while the host uploads a
+  // four-f32 (16-byte) payload.
+  _pad0: f32,
+  _pad1: f32,
+  _pad2: f32,
+};
+
+@group(0) @binding(2) var<uniform> params: FxaaParams;
+
 fn rgb2luma(rgb: vec3<f32>) -> f32 {
   return sqrt(dot(rgb, vec3<f32>(0.299, 0.587, 0.114)));
 }
 
-fn sampleColor(uv: vec2<f32>) -> vec3<f32> {
-  return textureSampleLevel(screenTexture, samp, uv, 0.0).rgb;
+fn sampleColor(uv: vec2<f32>) -> vec4<f32> {
+  return textureSampleLevel(screenTexture, samp, uv, 0.0);
 }
 
 fn sampleLuma(uv: vec2<f32>) -> f32 {
-  return rgb2luma(textureSampleLevel(screenTexture, samp, uv, 0.0).rgb);
+  return rgb2luma(sampleColor(uv).rgb);
 }
 
 // High-preset edge-search step multipliers (canonical FXAA 3.11 QUALITY
@@ -91,7 +109,8 @@ fn fs_main(in: FullscreenOutput) -> @location(0) vec4<f32> {
   let inverseScreenSize = 1.0 / dims;
   let uv = in.uv;
 
-  let centerColor = sampleColor(uv);
+  let centerSample = sampleColor(uv);
+  let centerColor = centerSample.rgb;
   let lumaCenter = rgb2luma(centerColor);
 
   // Lumas of the 4 direct neighbours.
@@ -106,7 +125,10 @@ fn fs_main(in: FullscreenOutput) -> @location(0) vec4<f32> {
 
   // Not on an edge (or in a near-uniform region): pass the centre through.
   if lumaRange < max(EDGE_THRESHOLD_MIN, lumaMax * EDGE_THRESHOLD_MAX) {
-    return vec4<f32>(linearToSrgbOetf(centerColor), 1.0);
+    return vec4<f32>(
+      select(centerColor, ditherUnorm8(centerColor, in.position.xy), params.ditherEnabled > 0.5),
+      centerSample.a,
+    );
   }
 
   // Lumas of the 4 corners.
@@ -254,6 +276,10 @@ fn fs_main(in: FullscreenOutput) -> @location(0) vec4<f32> {
     finalUv.x += pixelOffset * stepLength;
   }
 
-  let finalColor = sampleColor(finalUv);
-  return vec4<f32>(linearToSrgbOetf(finalColor), 1.0);
+  let finalSample = sampleColor(finalUv);
+  let finalColor = finalSample.rgb;
+  return vec4<f32>(
+    select(finalColor, ditherUnorm8(finalColor, in.position.xy), params.ditherEnabled > 0.5),
+    finalSample.a,
+  );
 }

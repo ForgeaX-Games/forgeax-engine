@@ -143,7 +143,8 @@ export type RhiErrorCode =
   | 'rhi-descriptor-invalid'
   | 'instancing-exceeds-uniform-cap'
   | 'render-system-empty-worlds'
-  | 'render-system-owner-out-of-range';
+  | 'render-system-owner-out-of-range'
+  | 'rhi-texture-format-capability-unavailable';
 
 /**
  * Detail structure exclusive to the `shader-compile-failed` path.
@@ -186,8 +187,22 @@ export interface RhiAssetNotRegisteredDetail {
  * message: string }` so downstream `switch (err.code)` handlers can narrow
  * the inner error (`.code` / `.expected` / `.hint`) without an `as` cast.
  */
+/**
+ * Structured non-RHI causes carried by a `webgpu-runtime-error` wrapper.
+ *
+ * Pipeline-spec failures retain their own detail record here so callers can
+ * reach the backend cause without parsing `Error.message` or losing the
+ * producer-owned fields during initialization fan-out.
+ */
+export interface RhiWebgpuRuntimeCause {
+  readonly code: string;
+  readonly message: string;
+  readonly name?: string;
+  readonly detail?: object;
+}
+
 export interface RhiWebgpuRuntimeDetail {
-  readonly error: RhiError | { code: string; message: string; name?: string };
+  readonly error: RhiError | RhiWebgpuRuntimeCause;
 }
 
 /**
@@ -213,11 +228,10 @@ export interface RhiWebgpuRuntimeDetail {
  *     `{ renderableCount, limit }` to `{ maxStorageBufferBindingSize,
  *     requestedBytes }`. Emit point at the time was
  *     `AssetRegistry.createInstancedBuffer`.
- *   - feat-20260514-ecs-children-instances-managed-buffer-array M3 / w15:
- *     `AssetRegistry.createInstancedBuffer` deleted alongside the
- *     `InstancedBufferAsset` POD; emit point migrated to the record
- *     stage upload path (`requestedBytes` now equals
- *     `Instances.transforms.byteLength` per Instances-bearing entity).
+ *   - feat-20260907-case01-case05-engine-convergence: explicit instance
+ *     matrices are supplied by the renderer-owned collection projection;
+ *     `requestedBytes` describes the resident record payload at the record
+ *     stage, independent of ECS managed-array capacity.
  */
 export interface LimitExceededDetail {
   readonly maxStorageBufferBindingSize: number;
@@ -225,24 +239,13 @@ export interface LimitExceededDetail {
 }
 
 /**
- * Detail structure exclusive to the `'render-system-multi-light'` path
- * (feat-20260519-light-casters-point-spot-pbr M3 / w20 + plan-strategy
- * section 8 (3) (b)).
- *
- * Emitted by the RenderSystem record stage when first-slice cap exceedance
- * is detected: `type` discriminates the offending bucket
- * (`'directional'` for N>1 / `'point'` or `'spot'` for N>4); `got`
- * carries the observed entity count so AI users can branch via property
- * access (`err.detail.type === 'point' && err.detail.got > 4`) rather
- * than parsing the message string (charter proposition 4 + F-3 contract
- * surface).
- *
- * Single live emit point: the RenderSystem record stage three-bucket
- * fail-fast (`packages/runtime/src/render-system-record.ts`). Minor
- * additive evolution per AGENTS.md error model evolution contract.
+ * Detail structure exclusive to the `'render-system-multi-light'` path.
+ * The only remaining cardinality rule is one global DirectionalLight; all
+ * PointLight, SpotLight, and RectArea lights are admitted through the shared
+ * shared Cluster corpus and are admitted by the same local-light contract.
  */
 export interface RhiMultiLightDetail {
-  readonly type: 'directional' | 'point' | 'spot';
+  readonly type: 'directional';
   readonly got: number;
 }
 
@@ -331,6 +334,13 @@ export interface RhiOwnerOutOfRangeDetail {
   readonly worldCount: number;
 }
 
+/** Detail for an incomplete device-owned texture-format profile probe. */
+export interface RhiTextureFormatCapabilityUnavailableDetail {
+  readonly stage: string;
+  readonly deviceGeneration: number;
+  readonly reason: string;
+}
+
 /**
  * Tagged union of `.detail` shapes carried by structured errors.
  *
@@ -360,7 +370,8 @@ export type RhiErrorDetail =
   | LimitExceededDetail
   | RhiMultiLightDetail
   | RhiInstancingExceedsUniformCapDetail
-  | RhiOwnerOutOfRangeDetail;
+  | RhiOwnerOutOfRangeDetail
+  | RhiTextureFormatCapabilityUnavailableDetail;
 
 /**
  * Structured RHI error.

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const expectedCommit = '8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1';
+const expectedCommit = '40f4a34ebaf56f9a046231f54125ad046239d3f3';
 const checkout = resolve(process.env.FORGEAX_WGPU_V30_CHECKOUT ?? process.argv[2] ?? 'references/wgpu-v30');
 const outputDirectory = resolve(
   process.env.FORGEAX_WGPU_UPSTREAM_REPORT ?? process.argv[3] ?? 'report/native-ray-query-upstream',
@@ -84,8 +84,8 @@ const suites = [
 ];
 const report = {
   schemaVersion: 1,
-  wgpuVersion: '30.0.0',
-  wgpuTag: 'v30.0.0',
+  wgpuVersion: '30.0.1',
+  wgpuTag: 'v30.0.1',
   wgpuTagCommit: commit,
   suites,
 };

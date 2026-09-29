@@ -3,7 +3,7 @@
 //
 // Replaces packages/types/src/__tests__/error-hints.test.ts. Mirrors the
 // 12 it blocks with direct fs/regex checks against
-// packages/types/src/index.ts (the SSOT source) plus runtime imports of the
+// the focused types contract owners (the SSOT sources) plus runtime imports of the
 // PACK_ERROR_HINTS / GLTF_ERROR_HINTS objects.
 //
 // Anchors: feat-20260517 D-7 (binary form + historical narrative sinks to
@@ -18,10 +18,17 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..');
-const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts');
+const TYPES_SOURCES = [
+  'core-contracts.ts',
+  'asset-error-contracts.ts',
+  'image-pack-contracts.ts',
+  'audio-contracts.ts',
+  'physics-contracts.ts',
+  'runtime-contracts.ts',
+].map((file) => resolve(REPO_ROOT, 'packages', 'types', 'src', file));
 
 const failures = [];
-const src = readFileSync(TYPES_INDEX, 'utf8');
+const src = TYPES_SOURCES.map((file) => readFileSync(file, 'utf8')).join('\n');
 
 const { PACK_ERROR_HINTS } = await import(
   resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts')
@@ -38,16 +45,16 @@ const { GLTF_ERROR_HINTS } = await import(
   return import(resolve(REPO_ROOT, 'packages', 'gltf', 'dist', 'errors.mjs'));
 });
 
-// (a1-a3) PACK_ERROR_HINTS three subcommand-form hints reference the binary form.
+// (a1-a3) PACK_ERROR_HINTS three recovery hints reference the unified command form.
 for (const code of ['pack-meta-missing', 'pack-guid-collision', 'pack-cyclic-reference']) {
   const h = PACK_ERROR_HINTS[code];
   if (!h) {
     failures.push(`(a) PACK_ERROR_HINTS missing key "${code}"`);
     continue;
   }
-  if (!/forgeax-engine-remote-asset\s/.test(h)) {
+  if (!/forgeax asset\s/.test(h)) {
     failures.push(
-      `(a) PACK_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-remote-asset\` binary; got: ${h}`,
+      `(a) PACK_ERROR_HINTS["${code}"] does not reference the unified forgeax asset command; got: ${h}`,
     );
   }
   if (h.includes('forgeax-engine-remote asset ')) {
@@ -57,16 +64,16 @@ for (const code of ['pack-meta-missing', 'pack-guid-collision', 'pack-cyclic-ref
   }
 }
 
-// (b1-b2) GLTF_ERROR_HINTS two subcommand-form hints reference the binary form.
+// (b1-b2) GLTF_ERROR_HINTS two recovery hints reference the unified command form.
 for (const code of ['gltf-malformed-header', 'gltf-meta-missing']) {
   const h = GLTF_ERROR_HINTS[code];
   if (!h) {
     failures.push(`(b) GLTF_ERROR_HINTS missing key "${code}"`);
     continue;
   }
-  if (!/forgeax-engine-remote-gltf\s/.test(h)) {
+  if (!/forgeax asset\s/.test(h)) {
     failures.push(
-      `(b) GLTF_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-remote-gltf\` binary; got: ${h}`,
+      `(b) GLTF_ERROR_HINTS["${code}"] does not reference the unified forgeax asset command; got: ${h}`,
     );
   }
   if (h.includes('forgeax-engine-remote gltf ')) {
@@ -76,33 +83,31 @@ for (const code of ['gltf-malformed-header', 'gltf-meta-missing']) {
   }
 }
 
-// (c1-c3) types/index.ts grep gate complement (zero hits for deleted subcommand forms).
+// (c1-c3) types source grep gate complement (zero hits for deleted subcommand forms).
 for (const tok of [
   'forgeax-engine-remote asset ',
   'forgeax-engine-remote gltf ',
   'forgeax-engine-remote inspect',
 ]) {
   if (src.includes(tok)) {
-    failures.push(`(c) types/index.ts still contains deleted token "${tok}"`);
+    failures.push(`(c) types source still contains deleted token "${tok}"`);
   }
 }
 
-// (d) console-startup-failed inspect-routing hint template surfaces binary form.
-if (!/did you mean 'forgeax-engine-remote-ecs\s+\$\{[^}]*\}'/.test(src)) {
-  failures.push(
-    `(d) types/index.ts is missing the "did you mean 'forgeax-engine-remote-ecs ...'" hint template`,
-  );
+// (d) console-startup-failed inspect-routing hint template surfaces the unified live path.
+if (!/forgeax dev eval --root <project>/.test(src)) {
+  failures.push('(d) types source is missing the unified forgeax dev eval recovery hint template');
 }
 
 // (e) RemoteErrorDetail server-startup-failed variant declares removedAt + docAnchor.
 if (!/server-startup-failed[\s\S]{0,400}?removedAt/.test(src)) {
   failures.push(
-    `(e) types/index.ts RemoteErrorDetail server-startup-failed variant missing removedAt sub-field`,
+    `(e) types source RemoteErrorDetail server-startup-failed variant missing removedAt sub-field`,
   );
 }
 if (!/server-startup-failed[\s\S]{0,400}?docAnchor/.test(src)) {
   failures.push(
-    `(e) types/index.ts RemoteErrorDetail server-startup-failed variant missing docAnchor sub-field`,
+    `(e) types source RemoteErrorDetail server-startup-failed variant missing docAnchor sub-field`,
   );
 }
 
@@ -131,12 +136,12 @@ const remoteCodes = [
 ];
 for (const code of remoteCodes) {
   if (!src.includes(code)) {
-    failures.push(`(g) types/index.ts is missing RemoteErrorCode member ${code}`);
+    failures.push(`(g) types source is missing RemoteErrorCode member ${code}`);
   }
 }
 
 if (failures.length === 0) {
-  console.log('grep-error-hints: pass (PACK + GLTF binary-form hints + 4 remote members)');
+  console.log('grep-error-hints: pass (unified PACK + GLTF hints + 4 remote members)');
   process.exit(0);
 } else {
   console.error('grep-error-hints: FAIL');

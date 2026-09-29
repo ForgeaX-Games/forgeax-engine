@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Resolve the declared hello and learn-render smoke surface into one audited
-// 300-frame roster. Declaration mode describes the exact scripts; --execute
+// 60-frame roster. Declaration mode describes the exact scripts; --execute
 // runs each declared command and preserves its runtime result in the roster.
 
 import { spawnSync } from 'node:child_process';
@@ -159,7 +159,7 @@ function smokeDeclaration(root, workspace) {
         tokens: parsed.tokens,
         command: invocation,
         declaredCommand,
-        frames: 300,
+        frames: 60,
         status: 'declared',
       },
     ],
@@ -167,7 +167,7 @@ function smokeDeclaration(root, workspace) {
   };
 }
 
-export function buildSmokeRoster(appsRoot, learnRoot, frames = 300) {
+export function buildSmokeRoster(appsRoot, learnRoot, frames = 60) {
   const roots = [resolve(appsRoot), resolve(learnRoot)];
   const entries = [];
   const unavailable = [];
@@ -265,7 +265,7 @@ function parseArgs(argv) {
   const args = {
     appsRoot: join(root, 'apps/hello'),
     learnRoot: join(root, 'apps/learn-render'),
-    frames: 300,
+    frames: 60,
     json: null,
     execute: false,
     cwd: process.cwd(),

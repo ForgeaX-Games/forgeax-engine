@@ -1,0 +1,3000 @@
+[
+  {
+    "id": "static",
+    "featureTargets": [
+      { "id": "exposure-adaptation-card", "url": "/?taa-case=exposure-adaptation-card", "stages": ["linear-HDR", "linear-LDR", "final-sRGB"], "pngIsSupplemental": true },
+      { "id": "white-balance-card", "url": "/?taa-case=white-balance-card", "stages": ["linear-HDR", "linear-LDR", "final-sRGB"], "pngIsSupplemental": true },
+      { "id": "lut-output-card", "url": "/?taa-case=lut-output-card", "stages": ["linear-HDR", "linear-LDR", "final-sRGB"], "pngIsSupplemental": true }
+    ],
+    "expectation": "Static pixels remain identity with ROI difference at most 0.01.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "stationary-bars",
+        "motion": "none",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "83f6c51de8c572c437edf7fbfc685f7824908da9e984e70778bf7f2aed46bf5c",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ]
+        }
+      },
+      "roi": {
+        "on": 26.941176470588225,
+        "off": 26.941176470588225,
+        "delta": 0,
+        "threshold": 0.01
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "static",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "static",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/static-motion-blur-off.png",
+        "sha256": "918a7584b9e8f001bf9b9f0e053cc00e054ed80725cec7c110983d0e5584a97f",
+        "bytes": 10927,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.09389410855010884,
+        "bottomStddevLuma": 0.15825260935438237,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-off compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "0edb9a92e72db0bceba5ff69cf81d880fa8fd1ef7694e8b77e80681817f151bd",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.3137254901960784,
+            0.34509803921568627,
+            0.8313725490196079
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.80392156862746,
+        "off": 24.035294117647062,
+        "delta": 0.4392156862745099,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/moving-rigid-motion-blur-on.png",
+        "sha256": "004c284c958403f999e23d235b9ac405da9a3de57ae917c6b3e7b28b3bb4163d",
+        "bytes": 11747,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0946063591516572,
+        "bottomStddevLuma": 0.16069846169380675,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Replace the static scene input with the moving-rigid input and apply the on MotionBlur state.",
+      "observed": "motion-blur-on is the intentional MotionBlur on variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "moving-rigid",
+    "expectation": "Rigid object motion produces a motion ROI difference greater than 0.05.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "0edb9a92e72db0bceba5ff69cf81d880fa8fd1ef7694e8b77e80681817f151bd",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.3137254901960784,
+            0.34509803921568627,
+            0.8313725490196079
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.80392156862746,
+        "off": 24.035294117647062,
+        "delta": 0.4392156862745099,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/moving-rigid-motion-blur-on.png",
+        "sha256": "004c284c958403f999e23d235b9ac405da9a3de57ae917c6b3e7b28b3bb4163d",
+        "bytes": 11747,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0946063591516572,
+        "bottomStddevLuma": 0.16069846169380675,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "0edb9a92e72db0bceba5ff69cf81d880fa8fd1ef7694e8b77e80681817f151bd",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.3137254901960784,
+            0.34509803921568627,
+            0.8313725490196079
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.80392156862746,
+        "off": 24.035294117647062,
+        "delta": 0.4392156862745099,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/moving-rigid-motion-blur-off.png",
+        "sha256": "24fa152b7a7e0f9d802d2c6a75aa735103e8d875d2bc4b17d1384e4b3d192d8f",
+        "bytes": 10940,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0956252027392055,
+        "bottomStddevLuma": 0.1594130380631897,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Remove the MotionBlur component before the comparison frame.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "camera-pan",
+    "expectation": "Camera pan produces screen-space motion without a stale previous-frame sample.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 600,
+        "dawnFrames": 600,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "stationary-bars",
+        "motion": "camera-pan",
+        "camera": "horizontal-pan",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 600
+      },
+      "readback": {
+        "sha256": "aa920b02d99a194f4f45785f9db93d87b5a1b24ca249853603c4ae1790b0edd6",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.8745098039215686,
+            0.8745098039215686,
+            0.8745098039215686
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.0392156862745098,
+            0.0392156862745098,
+            0.0392156862745098
+          ]
+        }
+      },
+      "roi": {
+        "on": 37,
+        "off": 36.92941176470588,
+        "delta": 0.0235294117647058,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "camera-pan",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 599
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "camera-pan",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 313,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 312
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/camera-pan-motion-blur-on-resumed.png",
+        "sha256": "bf0f0a94c1e5f2f1b1b6854cbcec0050bb24a0b9e3cf718b3cd3c84d5d7d3e86",
+        "bytes": 25899,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.15678238250473894,
+        "bottomStddevLuma": 0.3258300628960111,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on-resumed compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 600,
+        "dawnFrames": 600,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "stationary-bars",
+        "motion": "camera-pan",
+        "camera": "horizontal-pan",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 600
+      },
+      "readback": {
+        "sha256": "aa920b02d99a194f4f45785f9db93d87b5a1b24ca249853603c4ae1790b0edd6",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.8745098039215686,
+            0.8745098039215686,
+            0.8745098039215686
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.0392156862745098,
+            0.0392156862745098,
+            0.0392156862745098
+          ]
+        }
+      },
+      "roi": {
+        "on": 37,
+        "off": 36.92941176470588,
+        "delta": 0.0235294117647058,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "camera-pan",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 599
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "camera-pan",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 313,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 312
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/camera-pan-motion-blur-off.png",
+        "sha256": "ba76d35911086d04ab340c96c18a336ed89672330dcce20c60b9421804a69245",
+        "bytes": 16875,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.15693900897558694,
+        "bottomStddevLuma": 0.3261812462021662,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Remove the MotionBlur component before the comparison frame.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "depth-edge",
+    "expectation": "Depth discontinuities reject unrelated samples and keep halo difference at most 0.05.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": true
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "right-bar-offset-z",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "1f3200e15257433c4ecfbef4c7bd379dcdf859230e4fef0aba89dc263271dd38",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ]
+        }
+      },
+      "roi": {
+        "on": 40.517647058823506,
+        "off": 40.517647058823506,
+        "delta": 0,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "depth-edge",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "depth-edge",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/depth-edge-motion-blur-on.png",
+        "sha256": "24e37c6356ebaf319e342b3315ab0a675f19d40a74da1b79c19e8ab915fd2773",
+        "bytes": 12136,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.09587892731903208,
+        "bottomStddevLuma": 0.15755270988594874,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": true
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "right-bar-offset-z",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "1f3200e15257433c4ecfbef4c7bd379dcdf859230e4fef0aba89dc263271dd38",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ]
+        }
+      },
+      "roi": {
+        "on": 40.517647058823506,
+        "off": 40.517647058823506,
+        "delta": 0,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "depth-edge",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "depth-edge",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/depth-edge-motion-blur-off.png",
+        "sha256": "5adb0a45788be1cc95d38674c9daf161f11ff5edac8f1c9d6e2a9a3e9e6a7a2f",
+        "bytes": 11178,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0933338247993438,
+        "bottomStddevLuma": 0.14369596019104705,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Remove the MotionBlur component before the comparison frame.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "reactive",
+    "expectation": "Reactive pixels suppress blur and preserve the current linear color and alpha.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "stationary-alpha-bars",
+        "motion": "none",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "alpha-0.6",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "83f6c51de8c572c437edf7fbfc685f7824908da9e984e70778bf7f2aed46bf5c",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ]
+        }
+      },
+      "roi": {
+        "on": 28.388235294117642,
+        "off": 28.898039215686268,
+        "delta": 0.5098039215686275,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "reactive",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "reactive",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/reactive-motion-blur-on-resumed.png",
+        "sha256": "918a7584b9e8f001bf9b9f0e053cc00e054ed80725cec7c110983d0e5584a97f",
+        "bytes": 10927,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.09389410855010884,
+        "bottomStddevLuma": 0.15825260935438237,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on-resumed compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "0edb9a92e72db0bceba5ff69cf81d880fa8fd1ef7694e8b77e80681817f151bd",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.25098039215686274,
+            0.2980392156862745,
+            0.8980392156862745
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.3137254901960784,
+            0.34509803921568627,
+            0.8313725490196079
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.80392156862746,
+        "off": 24.035294117647062,
+        "delta": 0.4392156862745099,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "moving-rigid",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/moving-rigid-motion-blur-off.png",
+        "sha256": "24fa152b7a7e0f9d802d2c6a75aa735103e8d875d2bc4b17d1384e4b3d192d8f",
+        "bytes": 10940,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0956252027392055,
+        "bottomStddevLuma": 0.1594130380631897,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Replace the reactive scene input with the moving-rigid input and apply the off MotionBlur state.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "cut-reset",
+    "expectation": "Cut, invalid depth, and subpixel motion resolve to current color with preserved alpha.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-with-cut",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "frame-90-position-jump",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "669e8f33ad2f7b2c67ae039cf16da56f6fd6a4eaf093a3b85aa3654f3c5ee7c6",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.192156862745094,
+        "off": 24.568627450980387,
+        "delta": 0.5019607843137255,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "cut-reset",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "cut-reset",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 311,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 310
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/cut-reset-motion-blur-on-resumed.png",
+        "sha256": "6ea8e36956edf63478bc58630df98da3add85a1fe04e0706918a94626c499438",
+        "bytes": 11972,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.0942306842956159,
+        "bottomStddevLuma": 0.15966983048786065,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on-resumed compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-with-cut",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "frame-90-position-jump",
+        "bloom": "off"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "669e8f33ad2f7b2c67ae039cf16da56f6fd6a4eaf093a3b85aa3654f3c5ee7c6",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "roi": {
+        "on": 24.192156862745094,
+        "off": 24.568627450980387,
+        "delta": 0.5019607843137255,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "cut-reset",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "cut-reset",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 311,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 310
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/cut-reset-motion-blur-off.png",
+        "sha256": "feab05529afca9759318c8f5750dfbb7a5199edb962bda8e33e2e05e4f9fed08",
+        "bytes": 11795,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 519901,
+        "meanLuma": 0.09384830821654937,
+        "bottomStddevLuma": 0.15804011498353238,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Remove the MotionBlur component before the comparison frame.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  },
+  {
+    "id": "taa-motion-blur-bloom",
+    "expectation": "TAA resolves before Motion Blur and Bloom, preserving a bright moving streak without feedback ghost.",
+    "positive": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "enabled"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "e58686662473b23d1d8c03ad301da0b07ae1e89f6080b4b2b79f8cb8e39f8b5b",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.2549019607843137,
+            0.3333333333333333,
+            0.9176470588235294
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.32941176470588235,
+            0.3803921568627451,
+            0.8666666666666667
+          ]
+        }
+      },
+      "roi": {
+        "on": 25.937254901960785,
+        "off": 25.184313725490195,
+        "delta": 0.41568627450980394,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "bloom-bright",
+        "bloom-blur-h",
+        "bloom-blur-v",
+        "bloom-composite",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "taa-motion-blur-bloom",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "bloom-bright",
+            "bloom-blur-h",
+            "bloom-blur-v",
+            "bloom-composite",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "taa-motion-blur-bloom",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "bloom-bright",
+              "bloom-blur-h",
+              "bloom-blur-v",
+              "bloom-composite",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "bloom-bright",
+              "bloom-blur-h",
+              "bloom-blur-v",
+              "bloom-composite",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "on",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/taa-motion-blur-bloom-motion-blur-on.png",
+        "sha256": "3aff7185abf398838fe36dcff5a33db59d6ec65c6d2f508d351aa0076b740867",
+        "bytes": 11717,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 101871,
+        "meanLuma": 0.08402662180291132,
+        "bottomStddevLuma": 0.18766024580652071,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "observed": "motion-blur-on compositor PNG and Dawn copyTextureToBuffer samples passed; alphaMin=255.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Dawn 300-frame copyTextureToBuffer plus Chromium WebGPU compositor PNG at the current exact source/build identity."
+    },
+    "falsifier": {
+      "backend": "webgpu",
+      "lane": "browser-webgpu",
+      "schema": "hello-taa-browser-smoke/1",
+      "coverage": {
+        "frames": 300,
+        "dawnFrames": 300,
+        "browserFrames": 300,
+        "dawnReadback": true,
+        "browserPng": true,
+        "independentCaseInput": true,
+        "sameDepthPositiveControl": false
+      },
+      "caseInput": {
+        "scene": "moving-bars",
+        "motion": "rigid-horizontal",
+        "camera": "fixed",
+        "depth": "single-plane",
+        "reactive": "opaque",
+        "cut": "none",
+        "bloom": "enabled"
+      },
+      "source": {
+        "path": "apps/hello/taa/src/main.ts",
+        "sha256": "5b66a0164e66ae83470ee2e736c7d3a72ef8a0f24aac4c9a6a585760861ca52c",
+        "buildCommand": "pnpm --filter @forgeax/hello-taa build",
+        "backend": "webgpu",
+        "frames": 300
+      },
+      "readback": {
+        "sha256": "e58686662473b23d1d8c03ad301da0b07ae1e89f6080b4b2b79f8cb8e39f8b5b",
+        "sampleCount": 89,
+        "samples": {
+          "center": [
+            0.2549019607843137,
+            0.3333333333333333,
+            0.9176470588235294
+          ],
+          "corner": [
+            0,
+            0,
+            0
+          ],
+          "edge": [
+            0.32941176470588235,
+            0.3803921568627451,
+            0.8666666666666667
+          ]
+        }
+      },
+      "roi": {
+        "on": 25.937254901960785,
+        "off": 25.184313725490195,
+        "delta": 0.41568627450980394,
+        "threshold": 0.005
+      },
+      "passTrace": [
+        "shadowCascade0",
+        "shadowCascade1",
+        "shadowCascade2",
+        "shadowCascade3",
+        "directional-shadow-observation",
+        "spot-shadow",
+        "skybox",
+        "gpu-driven.view-reset",
+        "gpu-driven.frustum-compact",
+        "gpu-driven.finalize-indirect",
+        "main",
+        "standard-scene-data",
+        "linear-hdr-observation",
+        "taa-resolve",
+        "motion-blur",
+        "bloom-bright",
+        "bloom-blur-h",
+        "bloom-blur-v",
+        "bloom-composite",
+        "output-transform",
+        "debug-overlay"
+      ],
+      "inspection": {
+        "dawn": {
+          "visualCase": "taa-motion-blur-bloom",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 299
+          },
+          "passes": [
+            "shadowCascade0",
+            "shadowCascade1",
+            "shadowCascade2",
+            "shadowCascade3",
+            "directional-shadow-observation",
+            "spot-shadow",
+            "skybox",
+            "main",
+            "standard-scene-data",
+            "linear-hdr-observation",
+            "taa-resolve",
+            "motion-blur",
+            "bloom-bright",
+            "bloom-blur-h",
+            "bloom-blur-v",
+            "bloom-composite",
+            "output-transform",
+            "debug-overlay"
+          ]
+        },
+        "browser": {
+          "visualCase": "taa-motion-blur-bloom",
+          "temporal": {
+            "status": "stable",
+            "historyValid": true,
+            "historyAttempt": "committed",
+            "epoch": 300
+          },
+          "initialState": {
+            "frame": 301,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 300
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "bloom-bright",
+              "bloom-blur-h",
+              "bloom-blur-v",
+              "bloom-composite",
+              "output-transform",
+              "debug-overlay"
+            ]
+          },
+          "resumedState": {
+            "frame": 312,
+            "antialias": "taa",
+            "motionBlur": {
+              "enabled": true,
+              "shutterAngle": 180,
+              "maxRadiusPixels": 24,
+              "sampleCount": 12,
+              "demoMotionSpeed": "7.2 world units/s (dt-based)",
+              "status": "active",
+              "temporalDemand": "scene-data-temporal-v1",
+              "historyWrites": 0
+            },
+            "temporal": {
+              "status": "stable",
+              "historyValid": true,
+              "historyAttempt": "committed",
+              "epoch": 311
+            },
+            "passes": [
+              "shadowCascade0",
+              "shadowCascade1",
+              "shadowCascade2",
+              "shadowCascade3",
+              "directional-shadow-observation",
+              "spot-shadow",
+              "skybox",
+              "gpu-driven.view-reset",
+              "gpu-driven.frustum-compact",
+              "gpu-driven.finalize-indirect",
+              "main",
+              "standard-scene-data",
+              "linear-hdr-observation",
+              "taa-resolve",
+              "motion-blur",
+              "bloom-bright",
+              "bloom-blur-h",
+              "bloom-blur-v",
+              "bloom-composite",
+              "output-transform",
+              "debug-overlay"
+            ]
+          }
+        }
+      },
+      "mode": "off",
+      "png": {
+        "path": "apps/hello/taa/evidence/readback/taa-motion-blur-bloom-motion-blur-off.png",
+        "sha256": "9dd13c34ca2e0a25cf15ff2444e717281d2ee98090aaaf3ab87df2fa01912d8f",
+        "bytes": 10938,
+        "width": 1922,
+        "height": 1082,
+        "nonBlack": 105039,
+        "meanLuma": 0.08485948794700071,
+        "bottomStddevLuma": 0.1859836994532757,
+        "alphaMin": 255,
+        "alphaOpaque": 519901,
+        "sampledPixels": 519901
+      },
+      "variant": "Remove the MotionBlur component before the comparison frame.",
+      "observed": "motion-blur-off is the intentional MotionBlur off variant; PNG hash and pass trace differ from the positive case.",
+      "verdict": "pass",
+      "status": "pass",
+      "confidence": 1,
+      "provenance": "Mechanical falsifier executed by the live Browser carrier toggle; it is accepted only because the broken variant changed the real compositor PNG and pass trace."
+    }
+  }
+]

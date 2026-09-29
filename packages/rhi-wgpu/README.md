@@ -88,3 +88,14 @@ Per-handle destroyed-state bookkeeping in the TS shim layer mirrors `rhi-webgpu`
 Implementation locations:
 - `packages/rhi-wgpu/src/device.ts` -- `destroyBuffer` / `destroyTexture` methods
 - `packages/rhi-wgpu/src/buffer.ts` -- per-handle destroyed flag in the buffer wrapper
+
+## Render bundles
+
+`createRenderBundleEncoder` uses the shared render-command adapter, including wrapped
+buffer resolution, 64-bit offsets and dynamic-offset slices. `finish` creates an immutable
+WASM bundle; `executeBundles` preserves reuse without consuming its JS handle. Native
+wgpu enforces attachment and resource compatibility. The source-built WASM artifact must
+match this checkout; a stale artifact without the bundle methods is an error.
+
+wgpu 29 does not expose native bundle debug markers. The WASM encoder validates balanced
+debug groups, while RHI Debug retains their markers in captured commands.

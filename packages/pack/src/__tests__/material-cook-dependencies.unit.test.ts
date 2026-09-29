@@ -1,10 +1,22 @@
 import type { AssetGuid } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { collectMaterialCookRefs } from '../evidence/material-cook.js';
+import { AssetGuid as Guid } from '../guid.js';
 import { NativeCookerRegistry } from '../native-cooker-registry.js';
 import { createRuntimePackPublication } from '../runtime-publication.js';
 
 describe('material cook dependency closure', () => {
+  it('keeps binary parent and texture GUIDs in the canonical catalog spelling', () => {
+    const guid = '11111111-1111-4111-8111-111111111111';
+    const parsed = Guid.parse(guid);
+    if (!parsed.ok) throw parsed.error;
+    expect(
+      collectMaterialCookRefs({
+        parent: parsed.value,
+        values: { baseColorTexture: { texture: parsed.value, sampler: parsed.value } },
+      }),
+    ).toMatchObject({ parent: [guid], textures: [guid], samplers: [guid] });
+  });
   it('collects parent, texture, sampler, and module references', () => {
     expect(
       collectMaterialCookRefs({
@@ -22,6 +34,50 @@ describe('material cook dependency closure', () => {
       textures: ['texture/albedo'],
       samplers: ['sampler/linear'],
       modules: ['module/pbr'],
+    });
+  });
+
+  it('collects transmission and thickness texture dependencies', () => {
+    expect(
+      collectMaterialCookRefs({
+        parameters: [
+          { name: 'transmissionTexture', type: 'texture' },
+          { name: 'thicknessTexture', type: 'texture' },
+        ],
+        values: {
+          transmissionTexture: { texture: 'texture/transmission', sampler: 'sampler/linear' },
+          thicknessTexture: { texture: 'texture/thickness', sampler: 'sampler/linear' },
+        },
+      }),
+    ).toEqual({
+      parent: [],
+      textures: ['texture/thickness', 'texture/transmission'],
+      samplers: ['sampler/linear'],
+      modules: [],
+    });
+  });
+
+  it('keeps authored Standard values with both texture dependency edges', () => {
+    const refs = collectMaterialCookRefs({
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' } }],
+      parameters: [
+        { name: 'transmissionTexture', type: 'texture' },
+        { name: 'thicknessTexture', type: 'texture' },
+      ],
+      values: {
+        transmission: 0.8,
+        ior: 1.45,
+        thickness: 0.25,
+        transmissionTexture: { texture: 'texture/transmission', sampler: 'sampler/linear' },
+        thicknessTexture: { texture: 'texture/thickness', sampler: 'sampler/linear' },
+      },
+    });
+
+    expect(refs).toEqual({
+      parent: [],
+      textures: ['texture/thickness', 'texture/transmission'],
+      samplers: ['sampler/linear'],
+      modules: ['forgeax::default-standard-pbr'],
     });
   });
 

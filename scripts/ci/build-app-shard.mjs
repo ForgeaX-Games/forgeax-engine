@@ -1,7 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { projectAppShaderManifest, readSharedShaderManifest } from './app-shader-manifest.mjs';
+import { readRoster, resolveRunnableEntries } from './run-dawn-smoke-roster.mjs';
 
 function parseArgs(argv) {
   const result = {
@@ -17,6 +28,9 @@ function parseArgs(argv) {
     sharedInputManifest: null,
     attempt: null,
     omitTransferApps: [],
+    skipBuildApps: [],
+    selectedApps: [],
+    retainArtifactOnly: false,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -27,6 +41,9 @@ function parseArgs(argv) {
     else if (arg === '--shared-input-manifest') result.sharedInputManifest = argv[++index];
     else if (arg === '--attempt') result.attempt = Number(argv[++index]);
     else if (arg === '--omit-transfer-app') result.omitTransferApps.push(argv[++index]);
+    else if (arg === '--skip-build-app') result.skipBuildApps.push(argv[++index]);
+    else if (arg === '--app') result.selectedApps.push(argv[++index]);
+    else if (arg === '--retain-artifact-only') result.retainArtifactOnly = true;
     else if (arg === '--merge-ddc') result.mergeDdc = true;
     else if (arg === '--cache-hit') result.cacheHit = true;
     else if (arg === '--snapshots-dir') result.snapshotsDir = argv[++index];
@@ -61,19 +78,155 @@ function discoverApps(root) {
   return found.sort();
 }
 
-function artifactInventory(root, apps) {
-  return apps.flatMap((app) => {
-    const manifest = `apps/${app}/dist/shaders/manifest.json`;
-    return existsSync(join(root, manifest)) ? [manifest] : [];
+function failArtifact(code, detail) {
+  fail(code, {
+    expected: 'declared app-shard artifact closure',
+    detail,
+    hint: 'Rebuild the app shard and verify its roster-declared Pack closure.',
+    ...detail,
   });
 }
 
-function copyShardArtifacts(root, outputDir, report) {
+function isWithin(rootPath, candidatePath) {
+  const child = relative(rootPath, candidatePath);
+  return child !== '' && !child.startsWith('..') && !isAbsolute(child);
+}
+
+function safeArtifactPath(_root, distDir, rawPath, { code, app, guid }) {
+  if (typeof rawPath !== 'string' || rawPath.trim() === '' || rawPath.includes('\\'))
+    failArtifact(code, { app, guid, path: rawPath });
+  const normalized = rawPath.replace(/^\/+/, '');
+  const candidate = resolve(distDir, normalized);
+  const distReal = realpathSync(distDir);
+  if (
+    normalized.split('/').some((part) => part === '..' || part === '.') ||
+    !isWithin(distDir, candidate) ||
+    !existsSync(candidate) ||
+    !isWithin(distReal, realpathSync(candidate))
+  )
+    failArtifact('ci-app-shard-pack-unsafe-path', { app, guid, path: rawPath });
+  return candidate;
+}
+
+function packClosureInventory(root, app, packGuids) {
+  const appRoot = join(root, 'apps', app);
+  const distDir = join(appRoot, 'dist');
+  const packIndexPath = join(distDir, 'pack-index.json');
+  if (!existsSync(packIndexPath))
+    failArtifact('ci-app-shard-pack-index-missing', { app, path: packIndexPath });
+  let packIndex;
+  try {
+    packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+  } catch {
+    failArtifact('ci-app-shard-pack-index-invalid', { app, path: packIndexPath });
+  }
+  if (!Array.isArray(packIndex))
+    failArtifact('ci-app-shard-pack-index-invalid', { app, path: packIndexPath });
+
+  const paths = new Set([`apps/${app}/dist/pack-index.json`]);
+  const packageRecords = new Map();
+  for (const guid of packGuids) {
+    const matches = packIndex.filter((entry) => entry?.guid === guid);
+    if (matches.length !== 1)
+      failArtifact('ci-app-shard-pack-guid-missing', { app, guid, matchCount: matches.length });
+    const packageUrl = matches[0].packageUrl;
+    if (typeof packageUrl !== 'string' || !packageUrl.startsWith('/assets/'))
+      failArtifact('ci-app-shard-pack-unsafe-path', { app, guid, path: packageUrl });
+    const packagePath = safeArtifactPath(root, distDir, packageUrl, {
+      code: 'ci-app-shard-pack-package-missing',
+      app,
+      guid,
+    });
+    let record = packageRecords.get(packagePath);
+    if (record === undefined) {
+      let packFile;
+      try {
+        packFile = JSON.parse(readFileSync(packagePath, 'utf8'));
+      } catch {
+        failArtifact('ci-app-shard-pack-package-invalid', { app, guid, path: packagePath });
+      }
+      record = { packFile, requiredGuids: new Set() };
+      packageRecords.set(packagePath, record);
+    }
+    record.requiredGuids.add(guid);
+    const assets = record.packFile?.assets?.filter((asset) => asset?.guid === guid) ?? [];
+    if (assets.length !== 1)
+      failArtifact('ci-app-shard-pack-guid-missing', { app, guid, matchCount: assets.length });
+    paths.add(`apps/${app}/dist/${relative(distDir, packagePath)}`);
+  }
+  for (const [packagePath, record] of packageRecords) {
+    const packAssets = Array.isArray(record.packFile?.assets) ? record.packFile.assets : [];
+    const byGuid = new Map(packAssets.map((asset) => [asset?.guid, asset]));
+    const reachable = new Set(record.requiredGuids);
+    const pending = [...reachable];
+    for (let index = 0; index < pending.length; index += 1) {
+      const guid = pending[index];
+      const asset = byGuid.get(guid);
+      if (asset === undefined) {
+        failArtifact('ci-app-shard-pack-guid-missing', { app, guid, path: packagePath });
+      }
+      for (const ref of asset?.refs ?? []) {
+        if (typeof ref === 'string' && !reachable.has(ref)) {
+          reachable.add(ref);
+          pending.push(ref);
+        }
+      }
+    }
+    for (const guid of reachable) {
+      const asset = byGuid.get(guid);
+      const bodyDescriptor = asset?.artifacts?.body;
+      if (bodyDescriptor === undefined) continue;
+      const bodyPath = bodyDescriptor.path;
+      if (typeof bodyPath !== 'string' || !bodyPath.endsWith('.bin'))
+        failArtifact('ci-app-shard-pack-body-missing', { app, guid, path: bodyPath });
+      const bodyFile = safeArtifactPath(root, dirname(packagePath), bodyPath, {
+        code: 'ci-app-shard-pack-body-missing',
+        app,
+        guid,
+      });
+      paths.add(`apps/${app}/dist/${relative(distDir, bodyFile)}`);
+    }
+  }
+  return [...paths].sort();
+}
+
+function rosterPackRequirements(root) {
+  const rosterPath = join(root, 'scripts', 'ci', 'dawn-smoke-roster.json');
+  if (!existsSync(rosterPath)) return new Map();
+  const roster = readRoster(rosterPath);
+  const resolved = resolveRunnableEntries({ repoRoot: root, roster });
+  const requirements = new Map();
+  for (const entry of resolved.declared) {
+    const app = entry.path.match(/^apps\/(.+)\/package\.json$/)?.[1];
+    if (app === undefined) continue;
+    const guids = entry.gates.flatMap((gate) => gate.artifactRequirements?.packGuids ?? []);
+    if (guids.length > 0) requirements.set(app, [...new Set(guids)].sort());
+  }
+  return requirements;
+}
+
+function artifactInventory(root, apps) {
+  const requirements = rosterPackRequirements(root);
+  return apps.flatMap((app) => {
+    const manifest = `apps/${app}/dist/shaders/manifest.json`;
+    const paths = existsSync(join(root, manifest)) ? [manifest] : [];
+    const packGuids = requirements.get(app) ?? [];
+    return packGuids.length > 0 ? [...paths, ...packClosureInventory(root, app, packGuids)] : paths;
+  });
+}
+
+function copyShardArtifacts(root, outputDir, report, sharedShaderManifest) {
   for (const relative of report.artifactInventory) {
     const source = join(root, relative);
     const destination = join(outputDir, 'artifacts', relative);
     mkdirSync(dirname(destination), { recursive: true });
-    cpSync(source, destination, { recursive: true });
+    if (sharedShaderManifest !== null && relative.endsWith('/dist/shaders/manifest.json')) {
+      const appManifest = JSON.parse(readFileSync(source, 'utf8'));
+      const projected = projectAppShaderManifest(appManifest, sharedShaderManifest, source);
+      writeFileSync(destination, `${JSON.stringify(projected, null, 2)}\n`);
+    } else {
+      cpSync(source, destination, { recursive: true });
+    }
   }
 }
 
@@ -125,11 +278,11 @@ function mergeDdcSnapshots(options) {
   process.exit(0);
 }
 
-function writeReport(root, outputDir, report) {
+function writeReport(root, outputDir, report, sharedShaderManifest) {
   const output = resolve(outputDir);
   const reportDir = join(output, 'report');
   mkdirSync(reportDir, { recursive: true });
-  copyShardArtifacts(root, output, report);
+  copyShardArtifacts(root, output, report, sharedShaderManifest);
   writeFileSync(
     join(reportDir, `coverage-${report.shardIndex}-a${report.attempt}.json`),
     JSON.stringify({ ...report, result: 'success' }, null, 2),
@@ -140,7 +293,23 @@ function writeReport(root, outputDir, report) {
   );
 }
 
+function retainArtifactOnly(root, outputDir, apps) {
+  // The consumer needs the same compact projection as an artifact download.
+  // Drop full app bundles between shards, after every retained file was staged.
+  for (const app of apps) {
+    const dist = join(root, 'apps', app, 'dist');
+    const staged = join(outputDir, 'artifacts', 'apps', app, 'dist');
+    rmSync(dist, { recursive: true, force: true });
+    if (existsSync(staged)) cpSync(staged, dist, { recursive: true });
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
+if (options.retainArtifactOnly && !options.outputDir) {
+  fail('ci-app-shard-output-dir-required', {
+    expected: '--output-dir when retaining only the artifact projection',
+  });
+}
 if (
   !Number.isInteger(options.shardCount) ||
   options.shardCount < 1 ||
@@ -168,18 +337,50 @@ if (
 const attempt = options.attempt ?? Number(process.env.GITHUB_RUN_ATTEMPT ?? 1);
 if (!Number.isInteger(attempt) || attempt < 1) fail('ci-app-shard-attempt-invalid', { attempt });
 const roster = discoverApps(root);
-const apps = roster.filter((_, index) => index % options.shardCount === options.shardIndex);
-const omittedTransferApps = [...new Set(options.omitTransferApps)];
-const unknownOmittedTransferApp = omittedTransferApps.find((app) => !apps.includes(app));
+const selectedApps = new Set(options.selectedApps);
+for (const app of selectedApps) {
+  if (!roster.includes(app)) fail('ci-app-shard-app-not-in-roster', { app });
+}
+// Keep global shard ownership while limiting source recovery to the consumer's apps.
+const apps = roster.filter(
+  (app, index) =>
+    index % options.shardCount === options.shardIndex &&
+    (selectedApps.size === 0 || selectedApps.has(app)),
+);
+// CLI exclusions describe the global roster. Derive their local ownership so
+// additions to the sorted roster cannot strand an exclusion on an old shard.
+const requestedOmissions = [...new Set(options.omitTransferApps)];
+const requestedSkips = [...new Set(options.skipBuildApps)];
+const unknownOmittedTransferApp = requestedOmissions.find((app) => !roster.includes(app));
 if (unknownOmittedTransferApp !== undefined) {
   fail('ci-app-shard-transfer-app-not-in-shard', {
     app: unknownOmittedTransferApp,
     shardIndex: options.shardIndex,
-    expected: apps,
-    hint: 'Only omit transfer payloads for apps assigned to this shard.',
+    expected: roster,
+    hint: 'Only omit transfer payloads for apps in the build roster.',
   });
 }
+const unknownSkippedBuildApp = requestedSkips.find((app) => !roster.includes(app));
+if (unknownSkippedBuildApp !== undefined) {
+  fail('ci-app-shard-build-app-not-in-shard', {
+    app: unknownSkippedBuildApp,
+    shardIndex: options.shardIndex,
+    expected: roster,
+    hint: 'Only skip builds for apps in the build roster.',
+  });
+}
+const skippedTransferApp = requestedSkips.find((app) => !requestedOmissions.includes(app));
+if (skippedTransferApp !== undefined) {
+  fail('ci-app-shard-skip-build-transfer-required', {
+    app: skippedTransferApp,
+    expected: 'every skipped build app must also be omitted from transfer',
+    hint: 'A skipped build cannot contribute an app-dist payload.',
+  });
+}
+const omittedTransferApps = requestedOmissions.filter((app) => apps.includes(app));
+const skippedBuildApps = requestedSkips.filter((app) => apps.includes(app));
 const transferApps = apps.filter((app) => !omittedTransferApps.includes(app));
+const buildApps = apps.filter((app) => !skippedBuildApps.includes(app));
 const shardSizes = Array.from(
   { length: options.shardCount },
   (_, shardIndex) => roster.filter((_, index) => index % options.shardCount === shardIndex).length,
@@ -191,13 +392,20 @@ const report = {
   apps,
   transferApps,
   omittedTransferApps,
+  buildApps,
+  skippedBuildApps,
   appCount: apps.length,
   loadImbalance: Math.max(...shardSizes) - Math.min(...shardSizes),
-  artifactInventory: options.dryRun ? artifactInventory(root, apps) : [],
+  artifactInventory: options.dryRun ? artifactInventory(root, transferApps) : [],
   dryRun: options.dryRun,
 };
 
-if (!options.dryRun && apps.length > 0) {
+const sharedShaderManifest =
+  options.sharedInputManifest === null
+    ? null
+    : readSharedShaderManifest(root, options.sharedInputManifest).manifest;
+
+if (!options.dryRun && buildApps.length > 0) {
   const runner = join(root, 'scripts', 'build-apps.mjs');
   const result = spawnSync(
     process.execPath,
@@ -206,7 +414,8 @@ if (!options.dryRun && apps.length > 0) {
       ...(options.sharedInputManifest === null
         ? []
         : ['--shared-input-manifest', resolve(root, options.sharedInputManifest)]),
-      ...apps,
+      '--app-shard-shader-delta',
+      ...buildApps,
     ],
     {
       cwd: root,
@@ -216,6 +425,9 @@ if (!options.dryRun && apps.length > 0) {
   );
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
-report.artifactInventory = artifactInventory(root, apps);
-if (options.outputDir) writeReport(root, options.outputDir, report);
+report.artifactInventory = artifactInventory(root, transferApps);
+if (options.outputDir) writeReport(root, options.outputDir, report, sharedShaderManifest);
+if (options.retainArtifactOnly && !options.dryRun) {
+  retainArtifactOnly(root, resolve(options.outputDir), transferApps);
+}
 process.stdout.write(`${JSON.stringify(report)}\n`);

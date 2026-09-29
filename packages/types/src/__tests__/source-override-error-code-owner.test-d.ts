@@ -19,6 +19,9 @@ describe('source-override error-code ownership', () => {
       | 'import-produced-no-assets'
       | 'guid-mismatch'
       | 'mesh-material-slot-topology-change'
+      | 'mesh-lod-contract-invalid'
+      | 'mesh-lod-topology-change'
+      | 'mesh-lod-authority-conflict'
       | 'import-internal-error'
       | 'source-validation-failed'
     >();
@@ -44,6 +47,9 @@ describe('source-override error-code ownership', () => {
         case 'import-produced-no-assets':
         case 'guid-mismatch':
         case 'mesh-material-slot-topology-change':
+        case 'mesh-lod-contract-invalid':
+        case 'mesh-lod-topology-change':
+        case 'mesh-lod-authority-conflict':
         case 'import-internal-error':
         case 'source-validation-failed':
         case 'unknown-source-key':

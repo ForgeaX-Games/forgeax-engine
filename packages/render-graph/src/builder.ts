@@ -1,22 +1,30 @@
-import type { Buffer, RhiCaps, Texture, TextureView } from '@forgeax/engine-rhi';
+import type { Buffer, RhiCaps, Texture, TextureDescriptor, TextureView } from '@forgeax/engine-rhi';
 import { CompiledRenderGraphImpl } from './compiled-graph.js';
 import { err, ok, RenderGraphError, type Result } from './errors.js';
+import type { ResolvedColorTargetDescriptor } from './graph.js';
 import {
   accessResourceId,
   bufferHandle,
   type CompiledPass,
   type CompiledResource,
   type CompiledView,
+  type GraphTextureAllocation,
   handleData,
   type PassRecord,
+  physicalAllocationKey,
   type ResourceRecord,
+  releaseGraphTexture,
+  snapshotPass,
+  snapshotTextureDescriptor,
   type TextureViewRecord,
   textureHandle,
   textureViewHandle,
 } from './kernel-internal.js';
+import { isTextureViewDimensionCompatible } from './resource-registry.js';
 import type {
   CompiledRenderGraph,
   CompiledRenderGraphInfo,
+  CompiledResourceDescriptor,
   ComputeGraphPass,
   CopyGraphPass,
   GraphAccess,
@@ -57,6 +65,69 @@ const TEXTURE_USAGE = {
 } as const;
 
 let nextGeneration = 1;
+
+function textureByteSize(
+  format: GPUTextureFormat,
+  dimension: GPUTextureDimension,
+  extent: { readonly width: number; readonly height: number; readonly depthOrArrayLayers: number },
+  mipLevelCount: number,
+  sampleCount: number,
+): number | undefined {
+  const bytesPerTexel =
+    format === 'r8unorm' || format === 'r8snorm' || format === 'r8uint' || format === 'r8sint'
+      ? 1
+      : format === 'rg8unorm' ||
+          format === 'rg8snorm' ||
+          format === 'rg8uint' ||
+          format === 'rg8sint' ||
+          format === 'r16unorm' ||
+          format === 'r16snorm' ||
+          format === 'r16uint' ||
+          format === 'r16sint' ||
+          format === 'r16float'
+        ? 2
+        : format === 'rgba8unorm' ||
+            format === 'rgba8unorm-srgb' ||
+            format === 'rgba8snorm' ||
+            format === 'rgba8uint' ||
+            format === 'rgba8sint' ||
+            format === 'r32float' ||
+            format === 'r32uint' ||
+            format === 'r32sint'
+          ? 4
+          : format === 'rg16float' ||
+              format === 'rg16uint' ||
+              format === 'rg16sint' ||
+              format === 'rg16snorm' ||
+              format === 'rg16unorm'
+            ? 4
+            : format === 'rgba16float' ||
+                format === 'rgba16uint' ||
+                format === 'rgba16sint' ||
+                format === 'rgba16snorm' ||
+                format === 'rgba16unorm' ||
+                format === 'rg32float' ||
+                format === 'rg32uint' ||
+                format === 'rg32sint'
+              ? 8
+              : format === 'rgba32float' || format === 'rgba32uint' || format === 'rgba32sint'
+                ? 16
+                : undefined;
+  if (bytesPerTexel === undefined) return undefined;
+  let bytes = 0;
+  let width = extent.width;
+  let height = extent.height;
+  let depth = extent.depthOrArrayLayers;
+  for (let level = 0; level < mipLevelCount; level += 1) {
+    bytes += width * height * depth * bytesPerTexel * sampleCount;
+    width = Math.max(1, Math.floor(width / 2));
+    height = Math.max(1, Math.floor(height / 2));
+    // Array layers are independent images and retain their layer count at
+    // every mip. Only a true 3D allocation reduces its depth axis.
+    if (dimension === '3d') depth = Math.max(1, Math.floor(depth / 2));
+  }
+  return bytes;
+}
 
 interface NormalizedRange {
   readonly mipStart: number;
@@ -106,6 +177,9 @@ function textureUsage(access: GraphTextureAccess): number {
     case 'storage-write':
     case 'storage-read-write':
       return TEXTURE_USAGE.storageBinding;
+    case 'sampled-storage-read-write':
+    case 'sampled-storage-write':
+      return TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding;
     case 'color-attachment':
     case 'depth-stencil-read':
     case 'depth-stencil-write':
@@ -123,8 +197,10 @@ function accessMode(access: GraphBufferAccess | GraphTextureAccess): {
 } {
   switch (access) {
     case 'storage-read-write':
+    case 'sampled-storage-read-write':
       return { read: true, write: true };
     case 'storage-write':
+    case 'sampled-storage-write':
     case 'color-attachment':
     case 'depth-stencil-write':
     case 'copy-dst':
@@ -151,7 +227,14 @@ function rangesOverlap(
 }
 
 function freezeInfo(info: CompiledRenderGraphInfo): CompiledRenderGraphInfo {
+  const freezeDescriptor = (descriptor: CompiledResourceDescriptor) => {
+    if (descriptor.kind !== 'texture') return Object.freeze({ ...descriptor });
+    const size =
+      typeof descriptor.size === 'string' ? descriptor.size : Object.freeze({ ...descriptor.size });
+    return Object.freeze({ ...descriptor, size });
+  };
   return Object.freeze({
+    generation: info.generation,
     passes: Object.freeze(
       info.passes.map((pass) =>
         Object.freeze({
@@ -161,7 +244,14 @@ function freezeInfo(info: CompiledRenderGraphInfo): CompiledRenderGraphInfo {
         }),
       ),
     ),
-    resources: Object.freeze(info.resources.map((resource) => Object.freeze({ ...resource }))),
+    resources: Object.freeze(
+      info.resources.map((resource) =>
+        Object.freeze({
+          ...resource,
+          descriptor: freezeDescriptor(resource.descriptor),
+        }),
+      ),
+    ),
   });
 }
 
@@ -184,7 +274,13 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const unique = this.reserveLabel(label);
     if (!unique.ok) return unique;
     const id = this.nextId++;
-    this.resources.set(id, { id, label, kind: 'texture', origin: 'created', descriptor });
+    this.resources.set(id, {
+      id,
+      label,
+      kind: 'texture',
+      origin: 'created',
+      descriptor: snapshotTextureDescriptor(descriptor),
+    });
     return ok(textureHandle(this.owner, id));
   }
 
@@ -203,7 +299,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       label,
       kind: 'texture',
       origin: 'imported',
-      descriptor,
+      descriptor: snapshotTextureDescriptor(descriptor),
       resolve,
     });
     return ok(textureHandle(this.owner, id));
@@ -218,7 +314,13 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const unique = this.reserveLabel(label);
     if (!unique.ok) return unique;
     const id = this.nextId++;
-    this.resources.set(id, { id, label, kind: 'buffer', origin: 'created', descriptor });
+    this.resources.set(id, {
+      id,
+      label,
+      kind: 'buffer',
+      origin: 'created',
+      descriptor: Object.freeze({ ...descriptor }),
+    });
     return ok(bufferHandle(this.owner, id));
   }
 
@@ -237,7 +339,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       label,
       kind: 'buffer',
       origin: 'imported',
-      descriptor,
+      descriptor: Object.freeze({ ...descriptor }),
       resolve,
     });
     return ok(bufferHandle(this.owner, id));
@@ -259,7 +361,12 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const unique = this.reserveLabel(label);
     if (!unique.ok) return unique;
     const id = this.nextId++;
-    this.views.set(id, { id, label, textureId: data.id, descriptor });
+    this.views.set(id, {
+      id,
+      label,
+      textureId: data.id,
+      descriptor: Object.freeze({ ...descriptor }),
+    });
     return ok(textureViewHandle(this.owner, id, data.id));
   }
 
@@ -294,7 +401,13 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const unique = this.reserveLabel(label);
     if (!unique.ok) return unique;
     const id = this.nextId++;
-    this.views.set(id, { id, label, textureId: data.id, descriptor, resolve });
+    this.views.set(id, {
+      id,
+      label,
+      textureId: data.id,
+      descriptor: Object.freeze({ ...descriptor }),
+      resolve,
+    });
     return ok(textureViewHandle(this.owner, id, data.id));
   }
 
@@ -336,7 +449,13 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     );
     if (!allocated.ok) return allocated;
 
+    const generation = nextGeneration;
+    const physicalKey = (resource: CompiledResource<FrameCtx>): string | undefined => {
+      const handle = resource.texture ?? resource.buffer;
+      return handle === undefined ? undefined : physicalAllocationKey(handle);
+    };
     const info = freezeInfo({
+      generation,
       passes: analyzed.value.passes.map((pass, executionIndex) => ({
         name: pass.name,
         kind: pass.pass.kind,
@@ -352,15 +471,88 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
           (dependency) => analyzed.value.passes[dependency]?.name ?? 'unknown',
         ),
       })),
-      resources: [...allocated.value.resources.values()].map((resource) => ({
-        label: resource.record.label,
-        kind: resource.record.kind,
-        origin: resource.record.origin,
-        firstUse: resource.firstUse,
-        lastUse: resource.lastUse,
-        derivedUsage: resource.usage,
-      })),
+      resources: [...allocated.value.resources.values()].map((resource) => {
+        const texture =
+          resource.record.kind === 'texture'
+            ? (resource.record.descriptor as GraphTextureDescriptor)
+            : undefined;
+        const buffer =
+          resource.record.kind === 'buffer'
+            ? (resource.record.descriptor as GraphBufferDescriptor)
+            : undefined;
+        const allocationKey = physicalKey(resource);
+        const extent =
+          texture === undefined ? undefined : this.resolveExtent(texture.size, options.surfaceSize);
+        const knownByteSize =
+          resource.record.origin === 'imported' || resource.usage === 0
+            ? undefined
+            : texture === undefined
+              ? buffer?.size
+              : textureByteSize(
+                  texture.format,
+                  texture.dimension ?? '2d',
+                  this.resolveExtent(texture.size, options.surfaceSize),
+                  texture.mipLevelCount ?? 1,
+                  texture.sampleCount ?? 1,
+                );
+        const byteSizeUnknownReason =
+          resource.record.origin === 'imported'
+            ? ('imported-owner' as const)
+            : resource.usage === 0
+              ? ('not-allocated' as const)
+              : knownByteSize === undefined
+                ? ('format-or-layout-unknown' as const)
+                : undefined;
+        return {
+          label: resource.record.label,
+          kind: resource.record.kind,
+          origin: resource.record.origin,
+          descriptor:
+            texture === undefined
+              ? {
+                  kind: 'buffer' as const,
+                  size: buffer?.size ?? 0,
+                }
+              : {
+                  kind: 'texture' as const,
+                  format: texture.format,
+                  ...(texture.domain === undefined ? {} : { domain: texture.domain }),
+                  size: texture.size,
+                  width: extent?.width ?? 1,
+                  height: extent?.height ?? 1,
+                  depthOrArrayLayers: extent?.depthOrArrayLayers ?? 1,
+                  mipLevelCount: texture.mipLevelCount ?? 1,
+                  sampleCount: texture.sampleCount ?? 1,
+                },
+          firstUse: resource.firstUse,
+          lastUse: resource.lastUse,
+          derivedUsage: resource.usage,
+          ...(allocationKey === undefined ? {} : { physicalAllocationKey: allocationKey }),
+          ...(texture === undefined ? {} : { format: texture.format }),
+          ...(knownByteSize === undefined ? {} : { byteSize: knownByteSize }),
+          ...(byteSizeUnknownReason === undefined ? {} : { byteSizeUnknownReason }),
+          ...(texture === undefined
+            ? {}
+            : {
+                dimension: texture.dimension ?? '2d',
+                extent,
+              }),
+        };
+      }),
     });
+
+    const colorTargetDescriptors = new Map<string, ResolvedColorTargetDescriptor>();
+    for (const resource of allocated.value.resources.values()) {
+      if (resource.record.kind !== 'texture' || resource.texture === undefined) continue;
+      const extent = this.resolveExtent(resource.record.descriptor.size, options.surfaceSize);
+      colorTargetDescriptors.set(resource.record.label, {
+        texture: resource.texture,
+        format: resource.record.descriptor.format,
+        size: { width: extent.width, height: extent.height },
+        usage: resource.usage,
+        sample: resource.record.descriptor.sampleCount ?? 1,
+      });
+    }
 
     return ok(
       new CompiledRenderGraphImpl(
@@ -371,6 +563,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         allocated.value.views,
         Object.freeze(analyzed.value.passes),
         info,
+        colorTargetDescriptors,
       ),
     );
   }
@@ -393,7 +586,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       if (!valid.ok) return valid;
     }
     this.passNames.add(name);
-    this.passes.push({ id: this.passes.length, name, pass });
+    this.passes.push({ id: this.passes.length, name, pass: snapshotPass(pass) });
     return ok(undefined);
   }
 
@@ -431,6 +624,12 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const compiledPasses: CompiledPass<FrameCtx>[] = [];
     const history: NormalizedAccess[] = [];
 
+    for (const resource of this.resources.values()) {
+      if (resource.kind !== 'texture' || resource.origin !== 'created') continue;
+      const usage = resource.descriptor.usage ?? 0;
+      if (usage !== 0) usageByResource.set(resource.id, usage);
+    }
+
     for (let passIndex = 0; passIndex < this.passes.length; passIndex++) {
       const pass = this.passes[passIndex];
       if (pass === undefined) continue;
@@ -441,10 +640,14 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         const item = this.normalizeAccess(passIndex, pass, access);
         if (!item.ok) return item;
         normalized.push(item.value);
+        const resource = this.resources.get(item.value.resourceId);
         const usage =
-          this.resources.get(item.value.resourceId)?.kind === 'buffer'
+          (resource?.kind === 'texture' && resource.origin === 'created'
+            ? (resource.descriptor.usage ?? 0)
+            : 0) |
+          (resource?.kind === 'buffer'
             ? bufferUsage(access.usage as GraphBufferAccess)
-            : textureUsage(access.usage as GraphTextureAccess);
+            : textureUsage(access.usage as GraphTextureAccess));
         usageByResource.set(
           item.value.resourceId,
           (usageByResource.get(item.value.resourceId) ?? 0) | usage,
@@ -597,6 +800,12 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     pass: PassRecord<FrameCtx>,
     caps: RhiCaps,
   ): Result<void, RenderGraphError> {
+    if (
+      pass.pass.kind === 'raster' &&
+      pass.pass.descriptor.colorAttachments.length > caps.maxColorAttachments
+    ) {
+      return this.capabilityError(pass.name, 'color-attachments');
+    }
     if (pass.pass.kind === 'compute' && !caps.compute) {
       return this.capabilityError(pass.name, 'compute');
     }
@@ -613,7 +822,9 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       if (
         (access.usage === 'storage-read' ||
           access.usage === 'storage-write' ||
-          access.usage === 'storage-read-write') &&
+          access.usage === 'storage-read-write' ||
+          access.usage === 'sampled-storage-read-write' ||
+          access.usage === 'sampled-storage-write') &&
         handleData(access.resource)?.kind === 'texture-view' &&
         !caps.storageTexture
       ) {
@@ -628,7 +839,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
 
   private capabilityError(
     passName: string,
-    capability: 'compute' | 'storage-buffer' | 'storage-texture' | 'indirect',
+    capability: 'compute' | 'storage-buffer' | 'storage-texture' | 'indirect' | 'color-attachments',
     access?: GraphAccess,
   ): Result<never, RenderGraphError> {
     const resourceId = access === undefined ? undefined : accessResourceId(access);
@@ -665,7 +876,11 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
           continue;
         }
         if (!left.write && !right.write) continue;
-        if (left.usage === right.usage && left.usage === 'storage-read-write') continue;
+        if (
+          left.usage === right.usage &&
+          (left.usage === 'storage-read-write' || left.usage === 'sampled-storage-read-write')
+        )
+          continue;
         const label = this.resources.get(left.resourceId)?.label;
         return err(
           new RenderGraphError({
@@ -677,6 +892,19 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
               resourceLabel: label,
               accesses: [left.usage, right.usage],
             },
+          }),
+        );
+      }
+    }
+    if (pass.pass.kind !== 'compute') {
+      const invalid = accesses.find((access) => access.usage === 'sampled-storage-write');
+      if (invalid !== undefined) {
+        return err(
+          new RenderGraphError({
+            code: 'access-conflict',
+            expected: `pass '${pass.name}' uses ordered compute dispatches for sampled-storage-write`,
+            hint: 'move the write-then-sample chain into a compute pass',
+            detail: { passName: pass.name, usage: invalid.usage },
           }),
         );
       }
@@ -839,6 +1067,27 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         }
       }
     }
+    for (const view of this.views.values()) {
+      const texture = this.resources.get(view.textureId);
+      if (texture?.kind !== 'texture') continue;
+      const allocationDimension = texture.descriptor.dimension ?? '2d';
+      const viewDimension = view.descriptor.dimension;
+      if (!isTextureViewDimensionCompatible(allocationDimension, viewDimension)) {
+        return err(
+          new RenderGraphError({
+            code: 'resource-descriptor-invalid',
+            expected: `texture '${texture.label}' view dimension matches allocation dimension`,
+            hint: 'use a 3d view only for a 3d allocation and preserve array views on 2d allocations',
+            detail: {
+              resourceLabel: texture.label,
+              field: 'dimension',
+              expected: allocationDimension,
+              actual: viewDimension ?? '2d',
+            },
+          }),
+        );
+      }
+    }
     return ok(undefined);
   }
 
@@ -856,21 +1105,22 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
   > {
     const compiledResources = new Map<number, CompiledResource<FrameCtx>>();
     const compiledViews = new Map<number, CompiledView<FrameCtx>>();
-    const createdTextures: Texture[] = [];
+    const createdTextures: GraphTextureAllocation[] = [];
     const createdBuffers: Buffer[] = [];
     const discard = (): void => {
-      for (const texture of createdTextures) options.device.destroyTexture(texture);
+      for (const texture of createdTextures) releaseGraphTexture(options.device, texture);
       for (const buffer of createdBuffers) options.device.destroyBuffer(buffer);
     };
 
     for (const resource of this.resources.values()) {
       const usage = usageByResource.get(resource.id) ?? 0;
       let texture: Texture | undefined;
+      let textureAllocation: GraphTextureAllocation | undefined;
       let buffer: Buffer | undefined;
       if (resource.origin === 'created' && usage !== 0) {
         if (resource.kind === 'texture') {
           const extent = this.resolveExtent(resource.descriptor.size, options.surfaceSize);
-          const created = options.device.createTexture({
+          const descriptor: TextureDescriptor = {
             label: resource.label,
             size: extent,
             mipLevelCount: resource.descriptor.mipLevelCount ?? 1,
@@ -879,7 +1129,16 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
             format: resource.descriptor.format,
             usage,
             viewFormats: [...(resource.descriptor.viewFormats ?? [])],
-          });
+          };
+          const signature = JSON.stringify(descriptor);
+          textureAllocation =
+            options.reuseResourcesFrom instanceof CompiledRenderGraphImpl
+              ? options.reuseResourcesFrom.retainTexture(options.device, resource.label, signature)
+              : undefined;
+          const created =
+            textureAllocation === undefined
+              ? options.device.createTexture(descriptor)
+              : ok(textureAllocation.texture);
           if (!created.ok) {
             discard();
             return err(
@@ -892,7 +1151,8 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
             );
           }
           texture = created.value;
-          createdTextures.push(texture);
+          textureAllocation ??= { texture, signature, references: 1 };
+          createdTextures.push(textureAllocation);
         } else {
           const created = options.device.createBuffer({
             label: resource.label,
@@ -920,7 +1180,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         usage,
         firstUse: firstUseByResource.get(resource.id) ?? null,
         lastUse: lastUseByResource.get(resource.id) ?? null,
-        ...(texture === undefined ? {} : { texture }),
+        ...(texture === undefined ? {} : { texture, textureAllocation }),
         ...(buffer === undefined ? {} : { buffer }),
       });
     }

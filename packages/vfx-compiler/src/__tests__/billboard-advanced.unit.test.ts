@@ -7,7 +7,7 @@ const billboard = {
   textureSheet: { columns: 4, rows: 2, frameRate: 12, frameCount: 8 },
   pivot: [0.2, 0.8],
   softParticle: { fadeDistance: 0.5 },
-  sorting: 'back-to-front',
+  sorting: 'view-depth',
 } as const;
 
 describe('billboard advanced reflection', () => {
@@ -21,7 +21,7 @@ describe('billboard advanced reflection', () => {
         textureSheet: { columns: 4, rows: 2, frameRate: 12, frameCount: 8 },
         pivot: [0.2, 0.8],
         softParticle: { fadeDistance: 0.5, requiresDepth: true },
-        sorting: 'back-to-front',
+        sorting: 'view-depth',
       });
       expect(result.value[0]?.shaderInputs).toEqual([
         'textureSheet',

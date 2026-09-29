@@ -1,5 +1,6 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { VfxDataInterfaceRequirement } from './data-interface.js';
+import type { VfxCustomLayout, VfxParticleCoreLayout } from './particle-layout.js';
 
 export type VfxValue = number | readonly number[];
 export type VfxValueMap = Readonly<Record<string, VfxValue>>;
@@ -21,9 +22,12 @@ export interface VfxReflectedStruct {
 }
 
 export interface VfxEffectReflection {
-  readonly version: 1;
+  /** The single executable particle data ABI. */
+  readonly version: 3;
   readonly parameters: VfxReflectedStruct;
   readonly custom: VfxReflectedStruct;
+  readonly core: VfxParticleCoreLayout;
+  readonly customLayout: VfxCustomLayout;
   readonly dataInterfaces?: readonly VfxDataInterfaceRequirement[];
   readonly fingerprint: string;
 }
@@ -48,10 +52,16 @@ export interface VfxEffectContract<Values extends VfxValueMap = VfxValueMap> {
   readonly reflection: VfxEffectReflection;
   readonly fingerprint: string;
   readonly packedSize: number;
+  /** Bytes in the effect-instance Parameters uniform. */
+  readonly parameterSize: number;
+  /** Bytes in one persistent per-particle Custom record. */
+  readonly customStride: number;
   readonly defaults: Values;
   createValues(initial?: Partial<Values>): Result<Values, VfxEffectContractError>;
   validateValues(values: VfxValueMap): Result<Values, VfxEffectContractError>;
   pack(values: Values): Result<Uint8Array, VfxEffectContractError>;
+  packParameters(values: Values): Result<Uint8Array, VfxEffectContractError>;
+  packCustom(values: VfxValueMap): Result<Uint8Array, VfxEffectContractError>;
 }
 
 const VECTOR_LENGTH = {
@@ -65,8 +75,13 @@ const VECTOR_LENGTH = {
 
 export type VfxValueType = keyof typeof VECTOR_LENGTH;
 
-function fieldList(reflection: VfxEffectReflection): readonly VfxReflectedField[] {
-  return [...reflection.parameters.fields, ...reflection.custom.fields];
+function fieldList(
+  reflection: VfxEffectReflection,
+  includeCustom = false,
+): readonly VfxReflectedField[] {
+  return includeCustom
+    ? [...reflection.parameters.fields, ...reflection.custom.fields]
+    : reflection.parameters.fields;
 }
 
 function zeroValue(type: VfxValueType): VfxValue {
@@ -101,14 +116,29 @@ function fail(
 
 function validateReflection(reflection: VfxEffectReflection): Result<true, VfxEffectContractError> {
   if (
-    reflection.version !== 1 ||
+    reflection.version !== 3 ||
     typeof reflection.fingerprint !== 'string' ||
     !reflection.fingerprint.startsWith('sha256:')
   ) {
     return fail(
       'vfx-reflection-invalid',
       'reflection',
-      'a version 1 reflection with a sha256 fingerprint',
+      'a version 3 reflection with a sha256 fingerprint',
+      'recook the effect with the current VFX compiler',
+    );
+  }
+  if (
+    reflection.core.name !== 'VfxParticle' ||
+    reflection.core.stride !== 112 ||
+    reflection.core.fields.length === 0 ||
+    reflection.customLayout.name !== 'VfxCustom' ||
+    reflection.customLayout.stride < 0 ||
+    reflection.customLayout.lanes < 0
+  ) {
+    return fail(
+      'vfx-reflection-invalid',
+      'reflection.core',
+      'Program v3 Core and Custom layouts derived from the particle schema',
       'recook the effect with the current VFX compiler',
     );
   }
@@ -140,14 +170,21 @@ function validateMap<Values extends VfxValueMap>(
   reflection: VfxEffectReflection,
   values: VfxValueMap,
 ): Result<Values, VfxEffectContractError> {
-  const fields = new Map(fieldList(reflection).map((field) => [field.name, field]));
+  return validateMapAgainstFields<Values>(fieldList(reflection), values);
+}
+
+function validateMapAgainstFields<Values extends VfxValueMap>(
+  reflectedFields: readonly VfxReflectedField[],
+  values: VfxValueMap,
+): Result<Values, VfxEffectContractError> {
+  const fields = new Map(reflectedFields.map((field) => [field.name, field]));
   for (const name of Object.keys(values)) {
     const field = fields.get(name);
     if (field === undefined) {
       return fail(
         'vfx-value-unknown-field',
         name,
-        'a field declared by VfxParameters or VfxCustom',
+        'a field declared by the selected VFX data scope',
         `remove ${name} or declare it in the authored WGSL struct`,
         values[name],
       );
@@ -181,13 +218,33 @@ export function createVfxEffectContract<Values extends VfxValueMap = VfxValueMap
   const checked = validateReflection(reflection);
   if (!checked.ok) throw new TypeError(checked.error.hint);
   const defaults = defaultsFor<Values>(reflection);
-  const fields = fieldList(reflection);
   const customBase = reflection.parameters.size;
-  const packedSize = customBase + reflection.custom.size;
+  const parameterSize = reflection.parameters.size;
+  const customStride = reflection.customLayout.stride;
+  const packedSize = customBase;
+  const packFields = (
+    values: VfxValueMap,
+    selected: readonly VfxReflectedField[],
+    size: number,
+    baseOffset: number,
+  ): Result<Uint8Array, VfxEffectContractError> => {
+    const checkedValues = validateMapAgainstFields<Values>(selected, values);
+    if (!checkedValues.ok) return checkedValues;
+    const bytes = new Uint8Array(size);
+    const view = new DataView(bytes.buffer);
+    for (const field of selected) {
+      const value = checkedValues.value[field.name];
+      if (value === undefined) continue;
+      writeValue(view, baseOffset + field.offset, field.type, value);
+    }
+    return ok(bytes);
+  };
   return {
     reflection,
     fingerprint: reflection.fingerprint,
     packedSize,
+    parameterSize: reflection.parameters.size,
+    customStride,
     defaults,
     createValues(initial = {} as Partial<Values>) {
       const merged = { ...defaults, ...initial };
@@ -197,17 +254,13 @@ export function createVfxEffectContract<Values extends VfxValueMap = VfxValueMap
       return validateMap<Values>(reflection, values);
     },
     pack(values) {
-      const checkedValues = validateMap<Values>(reflection, values);
-      if (!checkedValues.ok) return checkedValues;
-      const bytes = new Uint8Array(packedSize);
-      const view = new DataView(bytes.buffer);
-      for (const field of fields) {
-        const value = checkedValues.value[field.name];
-        if (value === undefined) continue;
-        const base = reflection.parameters.fields.includes(field) ? 0 : customBase;
-        writeValue(view, base + field.offset, field.type, value);
-      }
-      return ok(bytes);
+      return packFields(values, reflection.parameters.fields, parameterSize, 0);
+    },
+    packParameters(values) {
+      return packFields(values, reflection.parameters.fields, parameterSize, 0);
+    },
+    packCustom(values) {
+      return packFields(values, reflection.custom.fields, customStride, 0);
     },
   };
 }

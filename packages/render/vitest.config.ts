@@ -16,7 +16,7 @@ export default defineProject({
     ],
     typecheck: {
       enabled: true,
-      tsconfig: './tsconfig.json',
+      tsconfig: './tsconfig.test.json',
     },
   },
 });

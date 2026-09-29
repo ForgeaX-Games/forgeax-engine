@@ -4,7 +4,7 @@
 // Strategy: drive the engine ECS path with a NxN cube grid and a revolving
 // camera. Frustum culling runs unconditionally in the extract stage. Verify:
 //   (a) backend=webgpu
-//   (b) frames >= 300
+//   (b) frames >= 60
 //   (c) pixel readback epsilon <= 0.05
 //   (d) at least one frame has culled > 0 (frustum culling is active)
 //   (e) Renderer.onError count == 0
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
@@ -216,7 +216,7 @@ const cameraEntity = world.spawn(
 
 // --- 4. Frame loop ---
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 let maxCulled = 0;

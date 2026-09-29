@@ -2,20 +2,16 @@ import { createBoxGeometry, createSphereGeometry } from '@forgeax/engine-geometr
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   Camera,
+  Fog,
   Materials,
   MeshFilter,
   MeshRenderer,
-  PostProcessParams,
   PointLight,
   perspective,
 } from '@forgeax/engine-render';
 import { quat } from '@forgeax/engine-math';
 import { Transform } from '@forgeax/engine-scene';
-import { FOG_POSTPROCESS_ID, packFogParams } from './fog-feature.js';
 import fogSceneJson from './fog-scene.json';
-
-export { packFogParams };
-export type { FogFalloffMode } from './fog-feature.js';
 
 type Vec3 = readonly [number, number, number];
 type Color4 = readonly [number, number, number, number];
@@ -111,27 +107,21 @@ export interface FogWorldController {
 const fogColor = fogScene.fogColor;
 const fogParameters = fogScene.fog;
 
-function encodeFogParameters(parameters: FogParameters): Uint8Array {
-  const mode = parameters.heightFalloff > 0 ? 'exponential-squared' : 'exponential';
-  const density = Math.max(parameters.density * (parameters.heightFalloff > 0 ? 5 : 1), 0.001);
-  return packFogParams(mode, density, 20);
-}
-
 export function buildFogWorld(world: World, aspect = 16 / 9): FogWorldController {
   let fogWorld = world;
   let activeFogData: (typeof fogParameters)[keyof typeof fogParameters] | undefined =
     fogParameters.height;
   let fogEntity: EntityHandle | undefined = world.spawn({
-    component: PostProcessParams,
-    data: { shader: FOG_POSTPROCESS_ID, data: encodeFogParameters(fogParameters.height) },
+    component: Fog,
+    data: fogParameters.height,
   }).unwrap();
   let revision = 1;
   let previousPhase: FogPhase = 'height';
 
   const attachFog = (data: (typeof fogParameters)[keyof typeof fogParameters]): void => {
     fogEntity = fogWorld.spawn({
-      component: PostProcessParams,
-      data: { shader: FOG_POSTPROCESS_ID, data: encodeFogParameters(data) },
+      component: Fog,
+      data,
     }).unwrap();
     revision += 1;
   };
@@ -141,7 +131,7 @@ export function buildFogWorld(world: World, aspect = 16 / 9): FogWorldController
       attachFog(data);
       return;
     }
-    fogWorld.set(fogEntity, PostProcessParams, { data: encodeFogParameters(data) }).unwrap();
+    fogWorld.set(fogEntity, Fog, data).unwrap();
     revision += 1;
   };
   const detachFog = (): void => {
@@ -159,8 +149,8 @@ export function buildFogWorld(world: World, aspect = 16 / 9): FogWorldController
     fogWorld = next;
     if (activeFogData !== undefined) {
       fogEntity = fogWorld.spawn({
-        component: PostProcessParams,
-        data: { shader: FOG_POSTPROCESS_ID, data: encodeFogParameters(activeFogData) },
+        component: Fog,
+        data: activeFogData,
       }).unwrap();
     }
     revision += 1;

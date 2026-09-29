@@ -156,18 +156,38 @@ async function listRunArtifacts(repository, runId) {
 
 export function selectRunArtifacts(artifacts, pattern, expectedCount) {
   const matcher = artifactNamePattern(pattern);
-  const selected = artifacts
-    .filter(
-      (artifact) =>
-        artifact !== null &&
-        typeof artifact === 'object' &&
-        artifact.expired !== true &&
-        Number.isInteger(artifact.id) &&
-        artifact.id > 0 &&
-        typeof artifact.name === 'string' &&
-        matcher.test(artifact.name),
+  // Failed-job reruns can publish the same producer name again in one run.
+  // IDs are opaque: a newer upload can have a smaller ID. Creation time owns order.
+  const latestByName = new Map();
+  for (const artifact of artifacts) {
+    if (
+      artifact === null ||
+      typeof artifact !== 'object' ||
+      artifact.expired === true ||
+      !Number.isInteger(artifact.id) ||
+      artifact.id <= 0 ||
+      typeof artifact.name !== 'string' ||
+      !matcher.test(artifact.name)
     )
-    .sort((left, right) => left.name.localeCompare(right.name));
+      continue;
+    const previous = latestByName.get(artifact.name);
+    if (previous === undefined) {
+      latestByName.set(artifact.name, artifact);
+    } else if (previous.id !== artifact.id) {
+      const previousTime = Date.parse(previous.created_at);
+      const currentTime = Date.parse(artifact.created_at);
+      if (
+        !Number.isFinite(previousTime) ||
+        !Number.isFinite(currentTime) ||
+        previousTime === currentTime
+      )
+        throw new Error(`artifact ${artifact.name} has ambiguous creation time`);
+      if (currentTime > previousTime) latestByName.set(artifact.name, artifact);
+    }
+  }
+  const selected = [...latestByName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
   if (selected.length !== expectedCount)
     throw new Error(
       `artifact pattern ${pattern} matched ${selected.length}; expected exactly ${expectedCount}`,
@@ -281,6 +301,9 @@ async function metadataFor(repository, artifactId, requestTimeoutMs, idleTimeout
       })
     ).toString('utf8'),
   );
+  const expectedSha = process.env.FORGEAX_ARTIFACT_EXPECTED_SHA;
+  if (expectedSha && metadata.workflow_run?.head_sha !== expectedSha)
+    throw new Error(`artifact ${artifactId} product SHA mismatch`);
   if (metadata.expired) throw new Error(`artifact ${artifactId} has expired`);
   if (typeof metadata.digest !== 'string' || !/^sha256:[a-f0-9]{64}$/i.test(metadata.digest))
     throw new Error(`artifact ${artifactId} has invalid digest metadata`);
@@ -346,6 +369,10 @@ export async function ensureArtifactDestination(path) {
   await mkdir(path, { recursive: true });
 }
 
+export function artifactDestination(path, artifactName, mergeMultiple = false) {
+  return mergeMultiple ? path : join(path, artifactName);
+}
+
 async function hydrateArtifact(repository, artifactId, path) {
   const root = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'forgeax-artifact-'));
   const archive = join(root, `${artifactId}.zip`);
@@ -381,6 +408,7 @@ async function main() {
   const pattern = argument('--artifact-pattern');
   const expectedCountArgument = argument('--expected-count');
   const path = resolve(argument('--path') ?? '.');
+  const mergeMultiple = process.argv.includes('--merge-multiple');
   const staggerSeconds = Number(argument('--stagger-seconds') ?? '0');
   if (!repository) throw new Error('GITHUB_REPOSITORY is required');
   const exactIdMode = artifactIds !== null;
@@ -390,6 +418,8 @@ async function main() {
     throw new Error(
       'choose exactly one artifact source: --artifact-ids or --run-id with --artifact-pattern and --expected-count',
     );
+  if (mergeMultiple && exactIdMode)
+    throw new Error('--merge-multiple requires run artifact discovery');
   if (!Number.isInteger(staggerSeconds) || staggerSeconds < 0)
     throw new Error('stagger seconds must be a non-negative integer');
   if (staggerSeconds > 0) {
@@ -405,7 +435,11 @@ async function main() {
   const expectedCount = positiveInteger(expectedCountArgument, 'expected count');
   const artifacts = await discoverRunArtifacts(repository, runId, pattern, expectedCount);
   for (const artifact of artifacts) {
-    await hydrateArtifact(repository, String(artifact.id), join(path, artifact.name));
+    await hydrateArtifact(
+      repository,
+      String(artifact.id),
+      artifactDestination(path, artifact.name, mergeMultiple),
+    );
   }
 }
 

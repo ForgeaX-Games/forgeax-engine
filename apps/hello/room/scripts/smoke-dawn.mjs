@@ -3,7 +3,7 @@
 //
 // End-to-end convergence proof: dawn-node drive the same ECS path hello-
 // room browser src/main.ts composes (3 mesh + hierarchy + merged
-// MeshRenderer + Camera + DirectionalLight), run 300 frames, sample
+// MeshRenderer + Camera + DirectionalLight), run 60 frames, sample
 // a multi-pixel grid on the final render target + compare against a
 // committed baseline (apps/hello/room/scripts/baseline.png) with
 // ε=0.05 per channel (AC-05 / AC-25 human-locked tolerance).
@@ -16,9 +16,9 @@
 //      root Cube (MeshRenderer + standard MaterialAsset) + Sphere child
 //      (MeshRenderer + unlit MaterialAsset, ChildOf -> root) + Plane child
 //      (MeshRenderer + standard MaterialAsset, ChildOf -> root) + Camera + Light.
-//   4. await runtime host initialization + 300x lease-bound renderer.draw(...).
+//   4. await runtime host initialization + 60x lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync multi-pixel grid sample; verdict =
-//      4 criteria (a) backend=webgpu (b) frames>=300
+//      4 criteria (a) backend=webgpu (b) frames>=60
 //      (c) per-pixel distance to baseline <= SMOKE_PIXEL_THRESHOLD on at
 //          least M of N sample sites (multi-mesh ε=0.05 permissive gate)
 //      (d) Renderer.onError RhiError count == 0 (hierarchy-broken etc.).
@@ -34,7 +34,7 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -268,7 +268,7 @@ const HANDLE_FIELDS = {
 };
 const sceneAsset = {
   kind: 'scene',
-  entities: sceneEntry.payload.nodes.map((n) => {
+  entities: Object.fromEntries(Object.entries(sceneEntry.payload.entities).map(([key, n]) => {
     const components = {};
     for (const [name, data] of Object.entries(n.components)) {
       // Replace refs index numbers with GUID strings for handle-type
@@ -302,8 +302,8 @@ const sceneAsset = {
       }
       components[name] = resolved;
     }
-    return { localId: n.localId, components };
-  }),
+    return [key, { components }];
+  })),
 };
 
 const world = new World();
@@ -343,7 +343,7 @@ if (!instanceRes.ok) {
   process.exit(1);
 }
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // shadow-csm-runtime-vary.dawn.test.ts - feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path
 // M5 / w26: dynamic cascadeCount + mapSize via world.set dawn-node test.
 //
@@ -20,6 +21,8 @@ import { World } from '@forgeax/engine-ecs';
 import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { projectDirectionalShadowInspection } from '../../../render/src/assembly/directional-shadow-inspection';
+import { resolveDirectionalShadowBackendAdmission } from '../../../render/src/render-pipeline';
 import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
@@ -27,15 +30,63 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 // biome-ignore lint/suspicious/noExplicitAny: dawn-node detection guard
 const dawnReady = typeof navigator !== 'undefined' && (navigator as any).gpu !== undefined;
 
+describe('M3 RhiNull structural admission', () => {
+  it('requires the structural-only RhiNull projection and explicit no-pixel claim', async () => {
+    const module = (await import('../../../render/src/render-pipeline')) as Record<string, unknown>;
+    const resolver = module.resolveDirectionalShadowBackendAdmission;
+    expect(typeof resolver).toBe('function');
+    const result = (
+      resolver as (input: {
+        backendKind: 'null';
+        requested: 'pcssMedium' | 'pcssHigh';
+        candidate: 'accepted' | 'failed';
+      }) => { effective: string; fallbackReason?: string; pixelEvidence: string }
+    )({ backendKind: 'null', requested: 'pcssMedium', candidate: 'accepted' });
+    expect(result).toMatchObject({
+      effective: 'rhi-null-structural',
+      fallbackReason: 'rhi-null-structural',
+      pixelEvidence: 'not-available',
+    });
+  });
+
+  it('keeps RhiNull recovery structural and generation-scoped', () => {
+    const inspection = projectDirectionalShadowInspection({
+      admission: resolveDirectionalShadowBackendAdmission({
+        backendKind: 'null',
+        requested: 'pcssMedium',
+        candidate: 'accepted',
+      }),
+      cascadeCount: 4,
+      mapSize: 1024,
+      shadowMapBytes: 16_777_216,
+      writerPasses: 4,
+      blockerTaps: 0,
+      filterTapUpperBound: 0,
+      seamTapUpperBound: 0,
+      deviceGeneration: 4,
+      graphGeneration: 9,
+    });
+    expect(inspection).toMatchObject({
+      effective: 'rhi-null-structural',
+      pixelEvidence: 'not-available',
+      deviceGeneration: 4,
+      graphGeneration: 9,
+    });
+  });
+});
+
 const WIDTH = 320;
 const HEIGHT = 240;
+const LIGHTWEIGHT_DAWN = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+// The variation gate only needs to observe graph rebuilds. Keep the full
+// 2048 atlas for local/nightly diagnostics, while avoiding a 4-cascade 16MiB
+// allocation on the overloaded PR lane.
+const LARGE_MAP_SIZE = LIGHTWEIGHT_DAWN ? 1024 : 2048;
 
 interface MockCanvas {
   width: number;
@@ -135,19 +186,19 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     if (!host.ok) throw host.error;
     const { renderer } = host.value;
     expect(renderer.inspect().state).toBe('alive');
-    const { world, shadowEntity } = buildScene(4, 2048);
+    const { world, shadowEntity } = buildScene(4, LARGE_MAP_SIZE);
 
     expect(drawPublished(renderer, world).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
-      mapSize: 2048,
+      mapSize: LARGE_MAP_SIZE,
       shadowDistance: 50,
       cascadeCount: 2,
     });
     expect(drawPublished(renderer, world).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
-      mapSize: 2048,
+      mapSize: LARGE_MAP_SIZE,
       shadowDistance: 50,
       cascadeCount: 4,
     });
@@ -166,7 +217,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     if (!host.ok) throw host.error;
     const { renderer } = host.value;
     expect(renderer.inspect().state).toBe('alive');
-    const { world, shadowEntity } = buildScene(4, 2048);
+    const { world, shadowEntity } = buildScene(4, LARGE_MAP_SIZE);
 
     expect(drawPublished(renderer, world).ok).toBe(true);
 
@@ -178,7 +229,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     expect(drawPublished(renderer, world).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
-      mapSize: 2048,
+      mapSize: LARGE_MAP_SIZE,
       shadowDistance: 50,
       cascadeCount: 4,
     });
@@ -198,6 +249,31 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     const { renderer } = host.value;
     expect(renderer.inspect().state).toBe('alive');
     const { world } = buildScene(1, 1024);
+    expect(drawPublished(renderer, world).ok).toBe(true);
+  });
+
+  it('castShadow true -> false -> true toggles the directional graph without device error', async () => {
+    if (!dawnReady) return;
+    const canvas = createMockCanvas();
+    const host = await constructRuntimeRendererHost(
+      canvas as unknown as HTMLCanvasElement,
+      {},
+      { shaderManifestUrl: ENGINE_MANIFEST_URL },
+    );
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    const { world, shadowEntity } = buildScene(4, 1024);
+
+    expect(drawPublished(renderer, world).ok).toBe(true);
+    world.set(shadowEntity, DirectionalLight, { castShadow: false });
+    expect(drawPublished(renderer, world).ok).toBe(true);
+    world.set(shadowEntity, DirectionalLight, {
+      castShadow: true,
+      mapSize: 1024,
+      shadowDistance: 50,
+      cascadeCount: 4,
+    });
     expect(drawPublished(renderer, world).ok).toBe(true);
   });
 });

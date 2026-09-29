@@ -12,6 +12,7 @@
     "types": ["@webgpu/types", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.json"],
+  "exclude": ["src/**/__tests__/**/*.ts"],
   "references": [
     { "path": "../types" },
     { "path": "../rhi" }

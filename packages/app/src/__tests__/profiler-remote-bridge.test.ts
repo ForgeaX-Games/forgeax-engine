@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { serializeBridgeResult } from '../internal/browser-remote-bridge';
 
 const BRIDGE_SOURCE = fileURLToPath(
   new URL('../internal/browser-remote-bridge.ts', import.meta.url),
@@ -26,6 +27,26 @@ describe('browser remote profiler bridge', () => {
   it('keeps profiler failures in the JSON-safe eval envelope', () => {
     expect(bridge).toContain("code: typeof e.code === 'string' ? e.code : 'script-runtime-error'");
     expect(bridge).toContain('detail');
-    expect(bridge).toContain('JSON.stringify(envelope)');
+    expect(bridge).toContain('script-result-unserializable');
+  });
+
+  it('reports an unserializable result as an eval failure', () => {
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    for (const value of [
+      cyclic,
+      undefined,
+      () => 42,
+      { run: () => 42 },
+      { missing: undefined },
+      { nonFinite: Number.NaN },
+      { nonFinite: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(serializeBridgeResult({ ok: true, value })).toMatchObject({
+        ok: false,
+        error: { code: 'script-result-unserializable' },
+      });
+    }
+    expect(serializeBridgeResult({ ok: true, value: 7 })).toEqual({ ok: true, value: 7 });
   });
 });

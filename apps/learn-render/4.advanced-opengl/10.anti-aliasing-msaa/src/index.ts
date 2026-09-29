@@ -74,7 +74,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  console.warn(`[msaa] execution=${app.execution.report().actualTier}`);
+  console.warn(`[msaa] execution=${JSON.stringify(app.execution.report().workers)}`);
 
   const world = app.world;
 

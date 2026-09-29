@@ -1,5 +1,24 @@
 # @forgeax/engine-image
 
+## 3D density source contract
+
+体积密度仍由 image producer 生成标准 `TextureAsset`：`shape.viewDimension: '3d'`、
+`shape.extent.depth`、`colorSpace: 'linear'` 与显式 `mips` 必须同时存在。Meta 保持
+GUID/sourceKey；Pack body 与 receipt 提供 digest/generation 证据。
+
+```mermaid
+sequenceDiagram
+  participant M as Meta
+  participant I as Importer
+  participant P as Pack
+  M->>I: GUID + descriptor + sibling
+  I->>P: TextureAsset + body digest
+  P-->>M: CookReceipt generation
+```
+
+缺少 sibling、布局或 receipt 时返回结构化错误。修复同一 sourceKey 后重新 import/cook，
+不要向 runtime 注入 1×1 或其它 stand-in 纹理。
+
 > **Disk-to-memory image importer for forgeax-engine.** Pure functions translate `*.jpg` / `*.png` / `*.hdr` source files into `TextureAsset` / `EquirectAsset` PODs (raw `.bin` or Basis `.ktx2`) + `external-asset-package` sidecar JSON. GPU upload lives in `@forgeax/engine-runtime` (charter P5: producer / consumer split).
 
 ## Evidence and recovery
@@ -7,6 +26,30 @@
 The image importer is a producer: its source meta declares the GUID and import settings, while the cook step owns the `CookReceipt`. The Vite pack producer later publishes the catalog `packageUrl` and optional `cookReceiptUrl`; consumers join those facts as `AssetEvidence` instead of treating a catalog row as proof.
 
 For an image with no receipt, report `notCooked`; a matching input fingerprint is `ready/current`, and a changed fingerprint is `ready/stale`. Missing source, receipt, or runtime capability is `unknown`. Package and artifact checks are explicit `notChecked`, `passed`, or `failed`. Recover by fixing the source meta or recooking, then rerunning the offline `lookup/verify --guid --project --catalog --json` probe; do not substitute a runtime placeholder.
+
+## PixelSurface authoring
+
+`PixelSurface` is the small image-owned CPU authoring surface for generated
+RGBA8 content. `createPixelSurface(width, height)` returns a validated POD
+backed by `Uint8Array`; `setPixel`, `fillRect`, `fillCircle`, `blit`, and the
+deterministic `noise` operation mutate that surface, while `toDecodedImage`,
+`toTextureAsset`, and `toAssetPack` project it into existing image/Pack
+contracts. It does not create GPU handles or duplicate the runtime texture
+upload owner. Invalid dimensions, coordinates, rectangles, and source extents
+return the closed `image-surface-invalid` error with `operation`, `field`,
+`value`, and `expected` in `detail`; branch on `error.code`, never on message
+text. Use `DecodedImage` for decoded source data and `PixelSurface` for
+deliberately generated pixels.
+
+### Color LUT source and recovery
+
+`.cube` files follow the same producer route as every other image: Node-only
+parse, canonicalize, digest, cook, and publish an ordinary 3D `TextureAsset`.
+The parser/compiler never crosses into player runtime. Keep the original GUID
+and `sourceKey` through Pack, CookReceipt, Catalog, and `AssetRegistry`; a
+failed parse or stale receipt is not publishable. AI recovery is
+`inspect -> rebuild/cold-cook -> verify -> retry`, with the same identity at
+every hop and a last-known-good runtime candidate retained on failure.
 
 ## compressionMode sidecar field
 
@@ -43,6 +86,34 @@ through the importer sidecar:
   set `compressionMode: 'none'` or bake mips offline.
 - Uncompressed textures (`compressionMode: 'none'`) are exempt: they support
   runtime mip-gen normally.
+
+## Array and volume source contract
+
+`*.texture.json` is the source-owned descriptor for sampled arrays and volumes.
+The descriptor is parsed once, then the producer emits one `TextureAsset` and
+one asset-local body artifact; layer or slice GUIDs are not minted.
+
+| Field | Contract |
+|:--|:--|
+| `shape.viewDimension` | Closed value: `2d`, `2d-array`, or `3d`. |
+| `shape.extent` | Positive integer `width`/`height`, plus `layers` for `2d-array` or `depth` for `3d`. |
+| `mips` | `none`, `generate`, or an explicit packed level count. |
+| `rawSibling` | Required source-relative raw byte sibling; missing bytes return structured `source-read-failed`. |
+| body artifact | Canonical `mip-major,image-major,row-major` bytes with one digest and byte length. |
+
+```mermaid
+flowchart LR
+    A["texture descriptor"] --> B["parse closed shape and mip policy"]
+    B --> C["read raw sibling"]
+    C --> D["derive canonical layout"]
+    D --> E["publish one TextureAsset and body artifact"]
+```
+
+> [!CAUTION]
+> `2d-array` and `3d` are payload shapes, not separate asset kinds. Consumers
+> must preserve the single GUID, canonical byte order, and producer digest;
+> runtime code must not reconstruct layers from URL naming or create a
+> per-layer fallback asset.
 
 ### Determinism
 
@@ -126,7 +197,7 @@ if (!r.ok) {
 // 2. translate decoded bytes + meta to AssetPack (sidecar JSON shape)
 const pack = toAssetPack(r.value.decoded, r.value.meta);
 
-// 3. write byte-stable JSON to disk; second `forgeax-engine-console asset
+// 3. write byte-stable JSON to disk; second `forgeax asset
 //    import` produces a byte-identical file (AC-16 idempotent reimport)
 await fs.writeFile('wood-container.jpg.meta.json', JSON.stringify(pack, null, 2));
 
@@ -156,7 +227,7 @@ function's documented result path.
 - **二态分离** -- 本包仅做磁盘 -> 内存翻译；GPU 上传 (`copyExternalImageToTexture` / `writeTexture`) 全部在 `@forgeax/engine-runtime` 内，本包 grep `device.queue.writeTexture` 零命中（CI 闸门）
 - **同型镜像 in-flight gltf loader** -- `subAssetKey { kind, name?, indexFallback }` 与 `feat-20260515-gltf-loader-via-asset-system` 完全等价（image 单子资产场景退化为 `kind='image'` / `indexFallback='images/0'`）
 - **disk schema 复用 meta.schema.json** -- `*.meta.json` 走 `external-asset-package` kind，不新增 schema kind（plan-strategy D-4）
-- **byte-identical reimport** -- 第二次 `forgeax-engine-console asset import` 产出与第一次 `git diff` 输出空（AC-16）
+- **byte-identical reimport** -- 第二次 `forgeax asset import` 产出与第一次 `git diff` 输出空（AC-16）
 - **Current source boundary** -- KTX2 / Basis are handled by the image importer; EXR, cubemap face, array layer, and video texture remain outside this package contract.
 
 ## 相关包

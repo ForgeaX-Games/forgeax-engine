@@ -23,7 +23,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { Camera, orthographic, perspective } from '@forgeax/engine-render';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { syncCameraAspect, syncCanvasDrawingBuffer } from '../create-app';
 import { resolveRhiDebugFlag } from '../internal/rhi-debug-flag';
@@ -229,6 +229,18 @@ describe('create-app.test.ts', () => {
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       expect(r.value.aspect).toBeCloseTo(2, 5);
+    });
+
+    it('does not journal a same-f32 aspect on every frame', () => {
+      const world = new World();
+      world.spawn({ component: Camera, data: perspective({ fov: 1, aspect: 1 }) }).unwrap();
+      const set = vi.spyOn(world, 'set');
+
+      syncCameraAspect(world, 1280, 720);
+      syncCameraAspect(world, 1280, 720);
+
+      expect(set).toHaveBeenCalledTimes(1);
+      set.mockRestore();
     });
 
     it('autoAspect=false camera is left untouched', () => {

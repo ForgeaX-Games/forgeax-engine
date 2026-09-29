@@ -1,8 +1,9 @@
 import { World } from '@forgeax/engine-ecs';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature, RenderFeatureHiddenEntityReport } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 describe('render feature hidden entity report contract', () => {
   it('keeps World and entity identity as the only merge keys', () => {
@@ -20,10 +21,10 @@ describe('render feature hidden entity report contract', () => {
         context.reportHiddenEntity?.({ world, entity: 9 as never });
         return ok({ count: context.worlds.length });
       },
-      plan: () => ok({ resources: [], passes: [] }),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [world],
       owner: 0,
       frameNumber: 1,

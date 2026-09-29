@@ -39,8 +39,8 @@ function requiredEvent(report, name) {
 
 function assertWorkerTier(report) {
   const execution = report.appReportBeforeStop;
-  if (execution?.requestedTier !== 'engine-worker' || execution?.actualTier !== 'engine-worker') {
-    fail('M27 did not keep the explicit engine-worker tier', execution);
+  if (execution?.workers?.engine?.requested !== true || execution?.workers?.engine?.enabled !== true || execution?.workers?.render?.enabled !== false || execution?.workers?.kernels?.enabled !== false) {
+    fail('M27 did not keep the explicit co-located Engine Worker policy', execution);
   }
   if (execution.engine?.realm !== 'worker') fail('M27 engine realm fell back to Host', execution);
   if (execution.capabilities?.worker?.available !== true) {

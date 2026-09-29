@@ -145,13 +145,11 @@ async function main(): Promise<void> {
   const atlasB = 'hello-tilemap-object-layer/atlas-b';
   const atlasAPayload: TextureAsset = {
     kind: 'texture',
-    width: 64,
-    height: 64,
+    shape: { viewDimension: '2d', extent: { width: 64, height: 64 } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array(64 * 64 * 4).fill(255),
     colorSpace: 'srgb',
-    mipmap: false,
-    mipLevelCount: 1,
+    mips: { kind: 'none' },
   };
   const atlasBPayload: TextureAsset = { ...atlasAPayload, data: new Uint8Array(64 * 64 * 4).fill(128) };
   const tileset = makeTilesetAsset(atlasA, atlasB);
@@ -191,6 +189,7 @@ async function main(): Promise<void> {
         },
       },
       { component: ChildOf, data: { parent: tilemap } },
+      { component: Transform, data: {} },
     )
     .unwrap();
 

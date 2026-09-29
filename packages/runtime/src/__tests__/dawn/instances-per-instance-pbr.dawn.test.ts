@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 // instances-per-instance-pbr.dawn.test.ts -- feat-20260604-instances-per-instance-transform-shader-group3-bin
 // M1 / w2.
 //
@@ -10,11 +11,8 @@
 // AC-01: PBR instances=N vs instances=1 frames differ (diffCount>0).
 // AC-06: single entity + N instance reads meshes[0] (not meshes[instance_index]).
 //
-// Red phase (current): the shader reads meshes[instance_index].worldFromLocal
-// -- all N copies collapse to entity origin. The two frames are identical
-// (diffCount===0) because instance=1 at origin and instances=N all at origin
-// produce the same pixel pattern. GREEN after w4 lands (PBR vs_main reads
-// meshes[0] + instances[idx]).
+// The PBR vertex path must combine the entity transform from meshes[0] with
+// the per-instance transform selected by instance_index.
 //
 // Dual-state methodology: render to two textures (instances=N vs instances=1),
 // read back both, count pixels that differ by more than epsilon. The
@@ -52,6 +50,11 @@ const INSTANCE_GRID_Y = 3;
 const INSTANCE_GRID_Z = 2;
 const INSTANCE_COUNT = INSTANCE_GRID_X * INSTANCE_GRID_Y * INSTANCE_GRID_Z; // 30
 const SPACING = 2.5;
+// Windows Dawn first-touch attempts have reached about 80 seconds for this
+// two-renderer PBR/readback probe. Keep the test bounded, but above the
+// project-wide 30-second budget so retries do not turn a slow valid probe into
+// a cancelled nightly job.
+const PBR_DAWN_TEST_TIMEOUT_MS = 120_000;
 
 function buildTranslationGrid(): Float32Array {
   const out = new Float32Array(INSTANCE_COUNT * 16);
@@ -81,12 +84,12 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
-describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () => {
-  it('instances=N vs instances=1: frames differ in pixel diff count (currently RED)', async () => {
+describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06)', () => {
+  it('instances=N vs instances=1: frames differ in pixel diff count', {
+    timeout: PBR_DAWN_TEST_TIMEOUT_MS,
+  }, async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable) {
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
@@ -366,9 +369,6 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
 
     // AC-01: diffCount>0 -- the two frames must differ (instances=N spreads
     // to distinct positions, instances=1 renders at entity origin only).
-    // RED before w4: all N copies collapse to entity origin, so both frames
-    // render the same cube at the same position -> diffCount===0.
-    // Currently RED: diffCount===0 because shader doesn't read @group(3)
     expect(diffCount).toBeGreaterThan(0);
     // Also verify the N-instance frame has substantial non-clear pixels
     // (proves instances rendered, not just an empty frame)
@@ -377,7 +377,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
   });
 
   // w5 -- unlit dual-state: N unlit instances at distinct NDC positions (AC-02)
-  it('unlit Instances=N vs instances=1: frames differ (RED before w5)', async () => {
+  it('unlit Instances=N vs instances=1: frames differ', async () => {
     const dawnAvailable_2 = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable_2) {
       throw new Error('dawn-node navigator.gpu not injected');

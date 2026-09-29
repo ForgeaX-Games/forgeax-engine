@@ -34,6 +34,7 @@
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-physics-rapier2d": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
@@ -41,22 +42,28 @@
     "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-remote": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-tool-runtime": "workspace:*",
-    "@forgeax/engine-animation": "workspace:*"
+    "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-picking": "workspace:*",
+    "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*"
   },
   "devDependencies": {
-    "@forgeax/engine-remote": "workspace:*",
-    "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-rhi-null": "workspace:*",
-    "@forgeax/engine-rhi-webgpu": "workspace:*",
-    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "@types/ws": "^8.5.10",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "@forgeax/engine-graphics-extras": "workspace:*"
   },
   "forgeax": {
     "metrics": {

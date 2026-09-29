@@ -16,7 +16,8 @@ export type ParticleBoundsSource =
     };
 
 export type ParticleRendererOverflowPolicy = 'drop-newest' | 'drop-oldest';
-export type ParticleRendererSorting = 'none' | 'emitter' | 'back-to-front';
+/** Internal structural projection used while validating the v3 source. */
+export type ParticleRendererSortingStructure = 'none' | 'emitter' | 'back-to-front';
 
 export interface ParticleTextureSheetSource {
   readonly columns: number;
@@ -29,7 +30,7 @@ export interface ParticleSoftParticleSource {
   readonly fadeDistance: number;
 }
 
-export type ParticleRendererSource =
+export type ParticleRendererSourceStructure =
   | {
       readonly kind: 'billboard';
       readonly material: string;
@@ -40,7 +41,7 @@ export type ParticleRendererSource =
       readonly textureSheet?: ParticleTextureSheetSource;
       readonly pivot?: readonly [number, number];
       readonly softParticle?: ParticleSoftParticleSource;
-      readonly sorting?: ParticleRendererSorting;
+      readonly sorting?: ParticleRendererSortingStructure;
     }
   | {
       readonly kind: 'mesh';
@@ -124,7 +125,7 @@ export interface ParticleEventSource {
   readonly recursionDepth: number;
 }
 
-export interface ParticleEmitterSourceV2 {
+export interface ParticleEmitterSourceStructure {
   readonly id: string;
   readonly capacity: number;
   readonly backend: { readonly required: 'gpu' };
@@ -136,18 +137,18 @@ export interface ParticleEmitterSourceV2 {
     readonly loopDuration?: number;
   };
   readonly program: { readonly module: string };
-  readonly renderers: readonly ParticleRendererSource[];
+  readonly renderers: readonly ParticleRendererSourceStructure[];
   readonly channels?: readonly ParticleChannelSource[];
   readonly events?: readonly ParticleEventSource[];
   readonly simulationWhenCulled?: 'continue' | 'pause' | 'restart-on-visible';
 }
 
-export interface ParticleEffectRootSourceV2 {
-  readonly schemaVersion: 2;
-  readonly emitters: readonly ParticleEmitterSourceV2[];
+export interface ParticleEffectRootSourceStructure {
+  readonly schemaVersion: 3;
+  readonly emitters: readonly ParticleEmitterSourceStructure[];
 }
 
-export type ParticleEffectSourceV2 = ParticleEffectRootSourceV2;
+export type ParticleEffectSourceStructure = ParticleEffectRootSourceStructure;
 
 export interface ParticleCodeSourceInvalidDetail {
   readonly path: string;
@@ -364,9 +365,9 @@ function parseEmitter(
   value: unknown,
   index: number,
   ids: Set<string>,
-): Result<ParticleEmitterSourceV2, ParticleCodeSourceError> {
+): Result<ParticleEmitterSourceStructure, ParticleCodeSourceError> {
   const path = `emitters[${index}]`;
-  if (!record(value)) return invalid(path, 'a v2 emitter object');
+  if (!record(value)) return invalid(path, 'a Program v3 emitter object');
   const extra = allowed(value, [
     'id',
     'capacity',
@@ -380,7 +381,7 @@ function parseEmitter(
     'events',
     'simulationWhenCulled',
   ]);
-  if (extra !== undefined) return invalid(`${path}.${extra}`, 'a v2 emitter field');
+  if (extra !== undefined) return invalid(`${path}.${extra}`, 'a Program v3 emitter field');
   if (!text(value.id) || ids.has(value.id)) return invalid(`${path}.id`, 'a unique non-empty id');
   const id = value.id;
   ids.add(id);
@@ -763,28 +764,29 @@ function parseEmitter(
   ) {
     return invalid(`${path}.simulationWhenCulled`, 'continue, pause, or restart-on-visible', id);
   }
-  return ok(value as unknown as ParticleEmitterSourceV2);
+  return ok(value as unknown as ParticleEmitterSourceStructure);
 }
 
-export function parseParticleEffectSourceV2(
+/** Validate the fields shared by the canonical Program v3 source parser. */
+export function parseParticleEffectSourceStructure(
   value: unknown,
-): Result<ParticleEffectSourceV2, ParticleCodeSourceError> {
+): Result<ParticleEffectSourceStructure, ParticleCodeSourceError> {
   if (!record(value)) return invalid('$', 'a particle effect source object');
-  if (value.schemaVersion !== 2) {
+  if (value.schemaVersion !== 3) {
     return err({
       code: 'vfx-source-version-unsupported',
-      expected: 'ParticleEffectSource schemaVersion 2',
-      hint: 'migrate code behavior to WGSL and recook; v1 is not interpreted at runtime',
+      expected: 'ParticleEffectSource schemaVersion 3',
+      hint: 'cold-cook the source with the Program v3 compiler; older versions are not executable',
       detail: { path: 'schemaVersion' },
     });
   }
   const extra = allowed(value, ['schemaVersion', 'emitters']);
   if (extra !== undefined) return invalid(extra, 'a root field: emitters');
   if (!Array.isArray(value.emitters) || value.emitters.length === 0) {
-    return invalid('emitters', 'at least one v2 emitter');
+    return invalid('emitters', 'at least one Program v3 emitter');
   }
   const ids = new Set<string>();
-  const emitters: ParticleEmitterSourceV2[] = [];
+  const emitters: ParticleEmitterSourceStructure[] = [];
   for (const [index, emitter] of value.emitters.entries()) {
     const parsed = parseEmitter(emitter, index, ids);
     if (!parsed.ok) return parsed;
@@ -814,14 +816,8 @@ export function parseParticleEffectSourceV2(
   }
   return ok(
     Object.freeze({
-      schemaVersion: 2,
+      schemaVersion: 3,
       emitters: Object.freeze(emitters),
     }),
   );
-}
-
-export function defineParticleEffectSourceV2<T extends ParticleEffectSourceV2>(source: T): T {
-  const parsed = parseParticleEffectSourceV2(source);
-  if (!parsed.ok) throw new TypeError(`${parsed.error.code}: ${parsed.error.expected}`);
-  return source;
 }

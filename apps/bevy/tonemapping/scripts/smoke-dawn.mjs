@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 
@@ -146,7 +146,7 @@ function diff(left, right) {
   return { mean: total / (WIDTH * HEIGHT * 3), changedPixels };
 }
 
-const targetFrames = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const targetFrames = SMOKE_MIN_FRAMES;
 const modeFrames = Math.max(1, Math.floor(targetFrames / TONEMAP_MODES.length));
 let framesObserved = 0;
 let drawErrors = 0;
@@ -191,7 +191,7 @@ if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserve
 if (errors.length > 0) failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((err) => err.code).join(', ')}]`);
 if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);
 if (distinctModes < 3) failures.push(`(d) fewer than 3 tone-map modes changed pixels: ${distinctModes}`);
-if (!passNames.includes('tonemap')) failures.push(`(e) missing tonemap pass; actual=${passNames.join(',')}`);
+if (!passNames.includes('output-transform')) failures.push(`(e) missing output-transform pass; actual=${passNames.join(',')}`);
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildFrameModel } from '../frame-model';
+import { summarizeFrame } from '../frame-summary';
 import type { Tape } from '../protocol/types';
 
 function makeTape(): Tape {
@@ -92,6 +93,7 @@ describe('FrameModel canonical projection', () => {
 
     expect(roundTrip).toEqual(model);
     expect(Object.keys(model)).toEqual([
+      'unseededResources',
       'commands',
       'passes',
       'resources',
@@ -125,6 +127,28 @@ describe('FrameModel canonical projection', () => {
       ]),
     );
     expect(model.works.every((work) => work.eventIndex >= 0 && work.passIndex >= 0)).toBe(true);
+  });
+
+  it('reports absent bootstrap bytes without claiming frame writes are initial snapshots', () => {
+    const tape = makeTape();
+    const model = buildFrameModel(tape);
+    expect(model.unseededResources).toEqual([
+      { resourceId: 'buffer-1', kind: 'buffer', format: null, sampleCount: 1 },
+    ]);
+    const seeded = buildFrameModel({
+      ...tape,
+      bootstrap: tape.bootstrap.map((resource) =>
+        resource.handleId === 'buffer-1'
+          ? { ...resource, initialData: [{ hash: 'seed', byteOffset: 0, byteLength: 64 }] }
+          : resource,
+      ),
+    });
+    expect(seeded.unseededResources).toEqual([]);
+    const summary = summarizeFrame(model);
+    expect(summary.works.map((work) => work.workIndex)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(summary.unseededResources).toEqual(model.unseededResources);
+    expect(JSON.stringify(summary)).not.toContain('@vertex');
+    expect(summary.works[0]?.group).toEqual(['render group', 'nested group']);
   });
 
   it('fails closed instead of exposing empty legacy projections or Map values', () => {
@@ -281,5 +305,143 @@ describe('FrameModel canonical projection', () => {
         resourceKind: 'textureView',
       }),
     ]);
+  });
+
+  it('attributes recorded dynamic offsets to each draw in layout binding order', () => {
+    const buffer = (handleId: string) => ({
+      handleId,
+      kind: 'buffer' as const,
+      create: { kind: 'createBuffer' as const, handleId, desc: { size: 4096, usage: 64 } },
+      initialData: [],
+    });
+    const draw = {
+      kind: 'draw' as const,
+      passHandleId: 'pass:render',
+      vertexCount: 3,
+      instanceCount: 1,
+      firstVertex: 0,
+      firstInstance: 0,
+    };
+    const tape: Tape = {
+      header: { formatVersion: 7, rhiCaps: {}, eventCount: 6, blobCount: 0 },
+      bootstrap: [
+        buffer('buffer:static'),
+        buffer('buffer:view'),
+        buffer('buffer:light'),
+        {
+          handleId: 'bgl:dynamic',
+          kind: 'binding',
+          create: {
+            kind: 'createBindGroupLayout',
+            handleId: 'bgl:dynamic',
+            desc: {
+              entries: [
+                { binding: 4, visibility: 2, buffer: { type: 'uniform', hasDynamicOffset: true } },
+                { binding: 0, visibility: 2, buffer: { type: 'uniform', hasDynamicOffset: true } },
+                { binding: 1, visibility: 2, buffer: { type: 'uniform' } },
+              ],
+            },
+          },
+          initialData: [],
+        },
+        {
+          handleId: 'bindGroup:dynamic',
+          kind: 'binding',
+          create: {
+            kind: 'createBindGroup',
+            handleId: 'bindGroup:dynamic',
+            layoutHandleId: 'bgl:dynamic',
+            entries: [
+              { binding: 4, resourceKind: 'buffer', bufferSize: 256 },
+              { binding: 0, resourceKind: 'buffer', bufferSize: 256 },
+              { binding: 1, resourceKind: 'buffer' },
+            ],
+            resourceHandleIds: ['buffer:light', 'buffer:view', 'buffer:static'],
+          },
+          initialData: [],
+        },
+      ],
+      events: [
+        {
+          kind: 'beginRenderPass',
+          passHandleId: 'pass:render',
+          cmdHandleId: 'encoder:1',
+          desc: { colorAttachments: [] },
+          colorAttachmentViewHandleIds: [],
+        },
+        {
+          kind: 'setBindGroup',
+          passHandleId: 'pass:render',
+          index: 0,
+          bindGroupHandleId: 'bindGroup:dynamic',
+          dynamicOffsets: [0, 512],
+        },
+        draw,
+        {
+          kind: 'setBindGroup',
+          passHandleId: 'pass:render',
+          index: 0,
+          bindGroupHandleId: 'bindGroup:dynamic',
+          dynamicOffsets: [1280, 768],
+        },
+        draw,
+        { kind: 'endRenderPass', passHandleId: 'pass:render' },
+      ],
+      blobs: [],
+    };
+
+    const offsets = buildFrameModel(tape).works.map((work) =>
+      work.bindings.map((binding) => [binding.binding, binding.dynamicOffset]),
+    );
+    expect(offsets).toEqual([
+      [
+        [4, 512],
+        [0, 0],
+        [1, null],
+      ],
+      [
+        [4, 768],
+        [0, 1280],
+        [1, null],
+      ],
+    ]);
+  });
+
+  it('projects MSAA resolve targets index-aligned with color attachments', () => {
+    const tape: Tape = {
+      header: { formatVersion: 7, rhiCaps: {}, eventCount: 3, blobCount: 0 },
+      bootstrap: [],
+      events: [
+        {
+          kind: 'beginRenderPass',
+          passHandleId: 'pass:msaa',
+          cmdHandleId: 'encoder:1',
+          desc: { colorAttachments: [] },
+          colorAttachmentViewHandleIds: ['view:accum-msaa', undefined, 'view:plain'],
+          colorAttachmentResolveTargetHandleIds: ['view:accum', undefined, undefined],
+        },
+        {
+          kind: 'draw',
+          passHandleId: 'pass:msaa',
+          vertexCount: 3,
+          instanceCount: 1,
+          firstVertex: 0,
+          firstInstance: 0,
+        },
+        { kind: 'endRenderPass', passHandleId: 'pass:msaa' },
+      ],
+      blobs: [],
+    };
+    const model = buildFrameModel(tape);
+    expect(model.passes[0]?.colorAttachmentViewHandleIds).toEqual([
+      'view:accum-msaa',
+      'view:plain',
+    ]);
+    expect(model.passes[0]?.colorAttachmentResolveViewHandleIds).toEqual(['view:accum', null]);
+    expect(model.works[0]?.attachments).toEqual({
+      colorViewHandleIds: ['view:accum-msaa', 'view:plain'],
+      colorResolveViewHandleIds: ['view:accum', null],
+      depthStencilViewHandleId: null,
+    });
   });
 });

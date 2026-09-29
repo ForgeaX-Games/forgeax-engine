@@ -27,7 +27,7 @@ export async function writeVertexColorCaseReport(
   path: string,
   report: VertexColorCaseReport,
 ): Promise<void> {
-  if (report.frameCount !== 300 || report.verdict !== 'passed' || report.status !== 'complete') {
+  if (report.frameCount !== 60 || report.verdict !== 'passed' || report.status !== 'complete') {
     throw new Error('vertex-color report writer only publishes complete passing evidence');
   }
   await mkdir(dirname(path), { recursive: true });

@@ -1,129 +1,73 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { readProjectFacts } from '../project.js';
 
-async function project(forge: unknown, manifest: unknown): Promise<string> {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-devkit-project-'));
-  await Promise.all([
-    writeFile(resolve(root, 'forge.json'), `${JSON.stringify(forge)}\n`),
-    writeFile(resolve(root, 'package.json'), `${JSON.stringify(manifest)}\n`),
-    writeFile(resolve(root, 'main.ts'), 'export async function bootstrap() {}\n'),
-  ]);
+const temporary: string[] = [];
+const guid = '01900000-0000-7000-8000-000000000100';
+afterEach(async () => {
+  await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+async function project(fields: object = {}, packageFields: object = {}) {
+  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-project-'));
+  temporary.push(root);
+  await writeFile(
+    resolve(root, 'forge.json'),
+    JSON.stringify({ id: 'game', name: 'Game', schemaVersion: '3.0.0', roots: {}, ...fields }),
+  );
+  await writeFile(
+    resolve(root, 'package.json'),
+    JSON.stringify({ name: 'game', ...packageFields }),
+  );
   return root;
 }
-
 describe('readProjectFacts', () => {
-  it('derives defaults from the existing authorities', async () => {
-    const root = await project(
-      {
-        id: 'game',
-        name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'main.ts',
-        plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
-        physics: '3d',
-        defaultScene: 'c5def54a-ed2b-4fa1-9535-8e1b18cb9f5b',
-      },
-      { name: 'game', forgeax: {} },
-    );
-    const result = await readProjectFacts(root);
-    expect(result).toEqual({
+  it('reads root references without resolving or executing runtime code', async () => {
+    const roots = { engine: guid, host: guid, build: guid };
+    const root = await project({ roots });
+    expect(await readProjectFacts(root)).toMatchObject({
       ok: true,
-      value: expect.objectContaining({
-        root,
-        id: 'game',
-        name: 'Game',
-        entry: 'main.ts',
-        plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
-        physics: '3d',
-        defaultScene: 'c5def54a-ed2b-4fa1-9535-8e1b18cb9f5b',
-        assetRoots: ['assets'],
-      }),
+      value: { root, roots, assetRoots: ['assets'] },
     });
   });
-
-  it('fails when the declared entry is missing', async () => {
-    const root = await project(
-      {
-        id: 'game',
-        name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'missing.ts',
-        plugins: [{ id: 'gameplay', name: './missing.ts', realm: 'engine' }],
-      },
-      { name: 'game' },
-    );
-    const result = await readProjectFacts(root);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('project-entry-missing');
-  });
-
-  it('derives the schema-owned bootstrap entry when no plugin claims the entry module', async () => {
-    const root = await project(
-      {
-        id: 'game',
-        name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'main.ts',
-      },
-      { name: 'game' },
-    );
-    const result = await readProjectFacts(root);
-    expect(result).toEqual({
+  it('canonicalizes symlinked paths before generating host paths', async () => {
+    const root = await project();
+    const parent = await mkdtemp(resolve(tmpdir(), 'forgeax-alias-'));
+    temporary.push(parent);
+    await symlink(root, resolve(parent, 'game'), 'dir');
+    expect(await readProjectFacts(resolve(parent, 'game'))).toMatchObject({
       ok: true,
-      value: expect.objectContaining({
-        bootstrapEntry: 'main.ts',
-        plugins: [],
-      }),
+      value: { root: await realpath(root) },
     });
   });
-
-  it('preserves project-owned asset importer and public directory declarations', async () => {
-    const root = await project(
-      {
-        id: 'game',
-        name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'main.ts',
-        plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
-      },
-      {
-        name: 'game',
-        forgeax: {
-          assets: {
-            roots: ['assets'],
-            importers: ['./assets/plugins/importer.ts#factory'],
-            publicDir: 'assets/public',
-          },
-        },
-      },
-    );
-    const result = await readProjectFacts(root);
-    expect(result).toEqual({
+  it('rejects the removed project authoring paths', async () => {
+    for (const fields of [{ plugins: [] }, { defaultScene: guid }, { schemaVersion: '2.0.0' }]) {
+      expect(await readProjectFacts(await project(fields))).toMatchObject({
+        ok: false,
+        error: { code: 'project-manifest-invalid' },
+      });
+    }
+  });
+  it('uses the fixed assets content root and supports an empty project', async () => {
+    const root = await project();
+    await mkdir(resolve(root, 'assets'));
+    expect(await readProjectFacts(root)).toMatchObject({
       ok: true,
-      value: expect.objectContaining({
-        assetRoots: ['assets'],
-        assetImporters: ['./assets/plugins/importer.ts#factory'],
-        assetPublicDir: 'assets/public',
-      }),
+      value: { roots: {}, assetRoots: ['assets'] },
     });
   });
-
-  it('rejects realm Entries the standalone host cannot activate', async () => {
-    const root = await project(
-      {
-        id: 'game',
-        name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'main.ts',
-        plugins: [{ id: 'host-tools', name: './main.ts', realm: 'host' }],
-      },
-      { name: 'game' },
+  it('ships game-3d with asset-owned host and engine roots', async () => {
+    const result = await readProjectFacts(
+      resolve(import.meta.dirname, '../../../../templates/game-3d'),
     );
-    const result = await readProjectFacts(root);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('project-plugin-realm-unsupported');
+    expect(result).toMatchObject({
+      ok: true,
+      value: { roots: { frontend: expect.any(String), engine: expect.any(String) } },
+    });
+    if (result.ok) {
+      expect(result.value).not.toHaveProperty('plugins');
+      expect(result.value).not.toHaveProperty('defaultScene');
+    }
   });
 });

@@ -10,6 +10,11 @@ mutation, two schedules, resources, time, and optional shared numeric kernels.
 > in their owning packages. Do not add a second ECS facade for one of those
 > domains.
 
+`World` directly owns its graph, entity records, managed stores, relationship
+indexes, row/block revisions, and execution health. Query, command, and
+lifecycle helpers receive only the typed package-internal capabilities they
+actually consume; there is no `WorldCore`, `WorldData`, or second state bag.
+
 ```mermaid
 flowchart LR
   HOST["App host"] --> WORLD["World.update(delta)"]
@@ -17,8 +22,9 @@ flowchart LR
   FIXED --> UPDATE["Update + command flush"]
   UPDATE --> PUBLISH["Scene / render projections"]
   WORLD --> QUERY["Query row / span"]
-  WORLD --> JOURNAL["Bounded change journal"]
-  JOURNAL --> PROJECTION["ecs/projection"]
+  WORLD --> VERSION["Component row versions"]
+  VERSION --> QUERY
+  WORLD --> STRUCTURE["Structure epoch + typed evidence"]
 ```
 
 ## The smallest useful journey
@@ -77,9 +83,17 @@ open-ended metadata do not belong on a component token.
 | `string` | managed text value | `{ type: 'string', default: '' }` |
 | `entity` | raw entity reference | `{ type: 'entity' }` |
 | `shared<Tag>` | externally owned shared payload handle | `{ type: 'shared<MeshAsset>' }` |
-| `array<T>` | variable array replaced as one value | `{ type: 'array<f32>' }` |
+| `array<T>` | variable array replaced as one value or written in place by range | `{ type: 'array<f32>' }` |
 | `array<T,N>` | fixed-size inline array | `{ type: 'array<f32, 4>' }` |
 | sparse tag | presence-only marker | `defineComponent('Disabled', {})` |
+
+`world.sharedRefs.acquire(target, payload)` returns one caller-owned reference
+while preserving the interned handle for the same target and payload object.
+Release once per acquisition, including repeated acquisitions of the same
+handle. Component columns retain their own references through the normal write
+barrier. `world.internSharedRef` remains an idempotent producer lookup and does
+not retain on repeated discovery; `world.allocSharedRef` creates an independent
+handle.
 
 The `fields` object is deeply frozen at definition time. A value replacement
 uses the ordinary mutation path:
@@ -91,13 +105,61 @@ const current = world.get(entity, Trail).unwrap();
 world.set(entity, Trail, { points: new Float32Array([...current.points, 2]) });
 ```
 
+`world.setArrayRange(entity, component, field, offset, values)` overwrites
+`values.length` elements of an array field in place, starting at element
+`offset`; the array length never changes. It publishes the component through
+the same changed-epoch barrier as `set`, and additionally records the element
+range so projection consumers can refresh only what changed:
+
+```ts
+// Move instance row 42 (16 floats per mat4) without republishing the column.
+world.setArrayRange(entity, Instances, 'transforms', 42 * 16, matrix).unwrap();
+```
+
+A window outside the array, or a field that is not an array, returns
+`array-range-out-of-bounds` (`detail: { component, field, offset, length, size }`,
+`size: -1` for a non-array field) and leaves the World unchanged. Use `set`
+to resize.
+
+`readArrayRangesChangedSince(world, entity, component, field, since)` from
+`@forgeax/engine-ecs/projection` answers the merged element ranges written
+after the mutation epoch `since` (read with `readMutationEpoch(world)`), or
+`'whole'` when any other write replaced the field, the entity was despawned,
+or the bounded per-field history (1024 writes) no longer covers `since`.
+`'whole'` is always a safe answer; consumers then reproject the full array.
+
 The Scene package may define a single-field `Name { value: 'string' }` token
 for authoring. ECS stores the value through the same closed `string` schema
 vocabulary, but does not own the Scene component or its authoring policy.
 
 Scene and Render own their domain schemas, for example `Instances { transforms`
-is a Render-owned projection whose array payload still follows ECS replacement
-semantics.
+is a Render-owned projection whose array payload follows ECS replacement and
+range-write semantics.
+
+### Required components are resolved at structural boundaries
+
+Use `requires` when a component is only valid with one or more other component
+tokens. The ECS expands this declaration transitively during `spawn`,
+`addComponent`, and deferred `Commands` materialization; it does not scan or
+repair entities during a frame.
+
+```ts
+const GlobalTransform = defineComponent('GlobalTransform', { world: 'array<f32, 16>' });
+const Transform = defineComponent(
+  'Transform',
+  { x: 'f32' },
+  { requires: [GlobalTransform] },
+);
+
+// The archetype contains both columns. No scene-specific helper is required.
+const entity = world.spawn({ component: Transform, data: { x: 0 } }).unwrap();
+```
+
+The declaration is generic: explicit data for a required component wins, and
+missing requirements are appended once in dependency order. Removing a
+required component is intentionally not a cascade; it is an explicit escape
+hatch that lets an owner surface a structured invariant error instead of doing
+hidden structural work.
 
 There is no public `push`, `pop`, `capacity`, `reserveArrayCapacity`, view
 class, or user-managed target-array mutation API. A replacement is one bounded
@@ -119,13 +181,16 @@ target is an engine-maintained, read-only materialized vector with a
 source-to-slot backpointer for amortized $O(1)$ attach, detach, and reparent.
 
 ```ts
-import { defineRelationship } from '@forgeax/engine-ecs';
+import { defineComponent, defineRelationship } from '@forgeax/engine-ecs';
+
+const Spatial = defineComponent('Spatial', {});
 
 const { source: ChildOf, target: Children } = defineRelationship({
   sourceName: 'ChildOf',
   sourceField: 'parent',
   targetName: 'Children',
   targetField: 'entities',
+  sourceRequires: [Spatial],
   exclusive: true,
   linkedSpawn: true,
 });
@@ -134,6 +199,11 @@ const parent = world.spawn().unwrap();
 const child = world.spawn({ component: ChildOf, data: { parent } }).unwrap();
 const children = world.get(parent, Children).unwrap().entities;
 ```
+
+`sourceRequires` applies the same structural-boundary rule to the writable
+relationship source: adding `ChildOf` also materializes its required
+components. The reverse `Children` projection does not gain a second write
+path, and no frame system scans the world to repair the dependency.
 
 `Children` and `AnimationTargets` are read projections, not a second write
 authority. `Children { entities` is a materialized target owned by ECS; the
@@ -157,23 +227,98 @@ for (const span of writable.spans().unwrap()) {
 }
 ```
 
-Incremental owners use the explicitly named projection subpath. It carries
-bounded change evidence only; a full rebuild uses the ordinary query path.
+Incremental owners keep their own `changed` Query. Component row versions are
+the value-change authority; `World.getStructureEpoch()` invalidates caches when
+entity/component membership changes. There is no parallel value-event journal
+or projection-change object vocabulary. A changed query uses the existing
+component mutation epochs to skip row scans when any required changed input
+has no unobserved write; row versions still select the exact result otherwise.
 
 ```ts
-import { createWorldProjection } from '@forgeax/engine-ecs/projection';
-
-const projection = createWorldProjection(world, { components: [Position] });
-const next = projection.poll();
-if (next.status === 'rebuild') {
-  // Rebuild the owner's cache with world.query(...).spans().
-} else {
-  for (const change of next.changes) console.log(change.entity, change.kind);
+const structureEpoch = world.getStructureEpoch();
+const changed = world.query({ changed: [Position] }).unwrap();
+for (const span of changed.spans().unwrap()) {
+  for (const entity of span.entities) console.log(entity);
 }
+// If world.getStructureEpoch() !== structureEpoch, reconcile membership from
+// the owner's ordinary Query and then drain the changed Query once.
 ```
 
-Projection output never contains table ids, rows, columns, or a duplicate
-snapshot data plane.
+`added` is the matching first-observation filter for component membership. It
+uses the same row-version cursor as `changed`, so each consumer drains its own
+query independently:
+
+```ts
+const added = world.query({ read: [Position], added: [Position] }).unwrap();
+for (const row of added) initializeProjection(row.entity, row.get(Position));
+```
+
+State consumers use `createStateProjection` from the projection subpath. A consumer
+retains accepted identities per 256-row block; current membership and component
+revisions discover the next unique source-index work set. Deletion, migration,
+sparse tags and generation reuse reconcile against final World records, without
+a structural event history or an overflow recovery mode.
+
+```ts
+import { createStateProjection } from '@forgeax/engine-ecs/projection';
+
+const projection = createStateProjection(world, [Position]);
+const candidate = projection.read();
+for (const index of candidate.indices) {
+  reconcileCurrentEntity(index, projection.entity(index));
+}
+candidate.accept(); // Only after the consumer successfully applies its changes.
+```
+
+| Boundary | Contract |
+|:--|:--|
+| Discovery | Enumerates current nonempty relevant tables plus retained deleted blocks; unchanged blocks skip row reads. |
+| Acceptance | Synchronous, consumer-local; a new read, invalidation, or World mutation expires an outstanding candidate. |
+| Failure | Leave the batch unaccepted and read again; poisoned Worlds reject projection. |
+| Scratch | `indices` is borrowed until the next `read`; do not retain it as a snapshot. |
+| Invalidation | Preserves prior identities so deleted sources can still leave the consumer. |
+| Fast check | `isCurrent()` compares accepted World epochs without allocating a batch; unrelated writes may return false. |
+| Root facts | `membershipChanged` and `changedComponents` conservatively identify work domains; `changed(entity, component)` checks a surviving value against acceptance. Removed components require current-membership reconciliation. |
+
+The optional third argument selects candidate table membership (any listed
+component); it defaults to the observed components. Sparse candidates conservatively
+include current tables. Consumers still inspect final component membership and
+values: the work set is conservative, never an event stream.
+
+The `@forgeax/engine-ecs/world-read` seam is a read-only owner capability for
+hot semantic scalar/array probes. `World.getStructureEpoch()` remains the
+public cache-invalidation primitive; the seam never returns tables, archetypes,
+columns, or mutable views. Ordinary gameplay code should continue to use
+`World.get` and queries.
+
+When an owner needs one scalar or one array element without materializing a row,
+import the capability explicitly and keep the probe read-only. Entity fields
+are returned as their stored u32, so narrow a non-null value to the existing
+`EntityHandle` before passing it to another entity-typed probe:
+
+```ts
+import { ENTITY_NULL_RAW, type EntityHandle } from '@forgeax/engine-ecs';
+import { ChildOf, Children } from '@forgeax/engine-scene';
+import { worldRead } from '@forgeax/engine-ecs/world-read';
+
+const parentRaw = world[worldRead].getFieldValue(child, ChildOf, 'parent');
+const parent: EntityHandle | undefined =
+  parentRaw === undefined || parentRaw === ENTITY_NULL_RAW
+    ? undefined
+    : (parentRaw as EntityHandle);
+const count =
+  parent === undefined ? undefined : world[worldRead].getArrayLength(parent, Children, 'entities');
+const firstChild =
+  parent === undefined
+    ? undefined
+    : world[worldRead].getArrayElement(parent, Children, 'entities', 0);
+```
+
+`undefined` means the entity, component, field, or element is unavailable; the
+capability never hands out a storage view and cannot mutate the World.
+
+Queries never expose table ids, rows, columns, or a duplicate snapshot data
+plane.
 
 ## Schedules, time, and resources
 
@@ -197,6 +342,10 @@ world.addSystem(FixedUpdate, {
 runs one update step, and flushes each system's command buffer. Clock readers
 receive a stable read view; the scheduler owns writes. Resources are non-owning
 values: Cordis/plugin owners dispose external payloads, not `World`.
+Final shared-reference `release()` returns the payload to its caller.
+The store retains no release journal or content-change versions. Runtime content
+uses managed ECS components owned by `assets-runtime`; final release does not
+retain the external payload.
 
 ## Failure and recovery
 
@@ -212,6 +361,28 @@ if (!result.ok) {
       break;
     default:
       console.error(result.error.code, result.error.hint);
+  }
+}
+```
+
+Recovery means constructing a fresh World and replaying the authoritative
+game state; a poisoned identity is never reused:
+
+```ts
+function createWorld(): World {
+  const next = new World();
+  next.addSystem(Update, Move).unwrap();
+  return next;
+}
+
+let liveWorld = createWorld();
+const step = liveWorld.update(1 / 60);
+if (!step.ok && liveWorld.execution.health === 'poisoned') {
+  // The first failed frame can be `system-failed`; a later call is
+  // `world-poisoned`. Health is the stable recovery boundary for both.
+  liveWorld = createWorld();
+  for (const saved of savedPositions) {
+    liveWorld.spawn({ component: Position, data: saved }).unwrap();
   }
 }
 ```
@@ -238,6 +409,13 @@ diagnostics. It is not a live registry and is not a storage escape hatch.
 Consumers should use entity counts, active component names, schedule summaries,
 and resource keys; gameplay code should use queries.
 
+`world.componentsOf(entity)` returns a detached array of the live entity's
+component tokens, including sparse tags, or the normal stale-entity error.
+Unlike `world.components.entries()`, it reflects actual archetype membership
+without requiring a plugin catalog lease. Inspection plugins combine it with
+public component reflection and `world.get`; it adds no inspection state or
+per-frame work to the World.
+
 ## Public surface and subpaths
 
 The root barrel is intentionally small. Advanced capabilities are named by
@@ -246,8 +424,9 @@ their owner instead of being forwarded through the root.
 | Entry | Purpose |
 |:--|:--|
 | `@forgeax/engine-ecs` | World, components, relationships, queries, schedules, resources, errors |
-| `@forgeax/engine-ecs/projection` | Bounded change cursor and rebuild signal |
+| `@forgeax/engine-ecs/projection` | Current-state block projection, render read versions, numeric spans, and array range-change evidence |
 | `@forgeax/engine-ecs/shared` | Shared numeric kernel contracts |
+| `@forgeax/engine-ecs/world-read` | Safe semantic scalar/array reads for owner-package hot paths |
 | `@forgeax/engine-ecs/externalization` | Generic component projection and entity remap |
 
 `Result`, `ok`, `err`, and `Handle` come from `@forgeax/engine-types`; ECS does
@@ -265,7 +444,11 @@ consumer needs one of those concerns, move the owner to App, Scene, Render,
 Physics, or the explicitly named ECS subpath.
 </details>
 
-## Verification
+## Contract invariants
+
+The following are package-contract statements, not a claim that every
+repository-wide browser, Dawn, or consumer gate is green. Gate results for a
+specific change belong to its closed-loop verification report.
 
 - [x] Entity and component mutation use one World authority.
 - [x] Relationship targets remain materialized for $O(1 + k)$ reads.
@@ -275,4 +458,13 @@ Physics, or the explicitly named ECS subpath.
 - [x] Advanced projection/shared/externalization APIs are named subpaths.
 
 For the full migration rationale and acceptance matrix, see the canonical
-[ECS 80% architecture design](../../.forgeax-harness/docs/specs/2026-08-22-ecs-core-80-percent-architecture-reduction-design.md).
+[ECS World ownership simplification design](../../.forgeax-harness/docs/specs/2026-09-08-ecs-worldcore-simplification-design.md).
+
+### Large managed arrays
+
+The eight BufferPool size classes bound pooling, not field capacity. Larger
+arrays use dedicated allocations; release drops their storage instead of
+retaining a large free bucket. Growth preserves bytes and slot identity, and
+allocation failure returns the existing structured managed-buffer error. Small
+fields keep their existing allocation and reuse behavior. Game data, including
+instance transforms, remains World-owned regardless of its size.

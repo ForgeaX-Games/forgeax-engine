@@ -197,6 +197,9 @@ const npmInstallArgs = [
   '--no-audit',
   '--no-fund',
   '--package-lock=false',
+  // Keep every package's dependencies physically isolated so a transitive
+  // runtime import cannot accidentally resolve through npm hoisting.
+  '--install-strategy=nested',
   '--cache',
   npmCache,
   '--userconfig',

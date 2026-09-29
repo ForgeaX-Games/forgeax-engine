@@ -32,7 +32,8 @@
 // gap as `import-produced-no-assets`. A texture sub-asset that fails byte
 // extraction surfaces as `gltf-image-extract-failed` (D-6).
 
-import { packMeshBinV4 } from '@forgeax/engine-import/mesh-bin';
+import { deriveDefaultLodScreenCoverages } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import/mesh-bin';
 import { AssetGuid as AssetGuidCodec } from '@forgeax/engine-pack/guid';
 import type {
   AssetGuid,
@@ -50,35 +51,64 @@ import type {
 import {
   IMPORT_ERROR_HINTS,
   ImportError,
+  readConservativeAnimatedBounds,
   reconcileMeshMaterialSlotTopology,
   resolveMeshMaterialSlotDefaultGuid,
   toShared,
 } from '@forgeax/engine-types';
+import { deriveGltfAnimatedBounds } from './animated-bounds';
 import {
   gltfDocToSceneAsset,
   meshIrToMeshAsset,
   toMaterialAsset,
+  validateMaterialTangentInputs,
   validateMaterialUvSets,
 } from './bridge.js';
 import { gltfErr } from './errors.js';
 import { extractImageBytes } from './extract-image-bytes.js';
 import { deriveTextureColorSpace } from './image-color-space.js';
+import { cookGltfMeshCards } from './mesh-cards';
 import type { GltfBufferViewDecodeCapability } from './meshopt-decode.js';
 import type { GltfDoc, GltfMaterialIr, GltfTextureInfoIr } from './parse-gltf.js';
 import { parseGlbForImporter, parseGltfForImporter } from './parse-gltf.js';
+import { deriveGltfShadowCapsules } from './shadow-capsules';
 
 type ParseDocResult =
   | { readonly ok: true; readonly value: GltfDoc }
   | { readonly ok: false; readonly error: ImportError };
-
 function isGlbBytes(source: string): boolean {
   return source.toLowerCase().endsWith('.glb');
+}
+
+function parseFailureMessage(
+  prefix: string,
+  error: { readonly code: string; readonly expected: string; readonly detail?: unknown },
+): string {
+  const detail = error.detail === undefined ? '' : ` detail=${JSON.stringify(error.detail)}`;
+  return `${prefix}: ${error.code} ${error.expected}${detail}`;
 }
 
 function publishesCatalogProduct(input: {
   readonly importSettings: Readonly<Record<string, unknown>>;
 }): boolean {
   return input.importSettings.geometry !== 'procedural';
+}
+
+function applyImportSettingsBounds(
+  doc: GltfDoc,
+  importSettings: Readonly<Record<string, unknown>>,
+): GltfDoc {
+  let changed = false;
+  const skeletons = doc.skeletons.map((record, sourceIndex) => {
+    // Source extras are the primary producer path. The sidecar row is an
+    // explicit external-producer override for sources whose authoring tool
+    // cannot carry ForgeaX extras; neither path derives a bind-pose AABB.
+    const bounds = readConservativeAnimatedBounds(importSettings, sourceIndex);
+    if (bounds === undefined || record.bounds !== undefined) return record;
+    changed = true;
+    return { ...record, bounds };
+  });
+  return changed ? { ...doc, skeletons } : doc;
 }
 
 function previousMaterialSlotTopology(
@@ -231,7 +261,7 @@ async function parseDoc(
     const res = await parseGlbForImporter(ab, source, meshopt === undefined ? {} : { meshopt });
     if (!res.ok) {
       if (res.error instanceof ImportError) return { ok: false, error: res.error };
-      throw new Error(`parseGlb failed: ${res.error.code} ${res.error.expected}`);
+      throw new Error(parseFailureMessage('parseGlb failed', res.error));
     }
     return { ok: true, value: res.value };
   }
@@ -261,7 +291,7 @@ async function parseDoc(
   );
   if (!res.ok) {
     if (res.error instanceof ImportError) return { ok: false, error: res.error };
-    throw new Error(`parseGltf failed: ${res.error.code} ${res.error.expected}`);
+    throw new Error(parseFailureMessage('parseGltf failed', res.error));
   }
   return { ok: true, value: res.value };
 }
@@ -412,6 +442,20 @@ export function materialRefsForPack(
   pushRefsForSlot(mat.normalTexture, 'normalTexture');
   pushRefsForSlot(mat.occlusionTexture, 'occlusionTexture');
   pushRefsForSlot(mat.emissiveTexture, 'emissiveTexture');
+  pushRefsForSlot(mat.transmissionTexture, 'transmissionTexture');
+  pushRefsForSlot(mat.thicknessTexture, 'thicknessTexture');
+  pushRefsForSlot(mat.clearcoatTexture, 'clearcoatTexture');
+  pushRefsForSlot(mat.clearcoatRoughnessTexture, 'clearcoatRoughnessTexture');
+  pushRefsForSlot(mat.clearcoatNormalTexture, 'clearcoatNormalTexture');
+  pushRefsForSlot(mat.anisotropyTexture, 'anisotropyTexture');
+  pushRefsForSlot(mat.sheenColorTexture, 'sheenColorTexture');
+  pushRefsForSlot(mat.sheenRoughnessTexture, 'sheenRoughnessTexture');
+  pushRefsForSlot(mat.iridescenceTexture, 'iridescenceTexture');
+  pushRefsForSlot(mat.iridescenceThicknessTexture, 'iridescenceThicknessTexture');
+  pushRefsForSlot(mat.specularTexture, 'specularTexture');
+  pushRefsForSlot(mat.specularColorTexture, 'specularColorTexture');
+  pushRefsForSlot(mat.diffuseTransmissionTexture, 'diffuseTransmissionTexture');
+  pushRefsForSlot(mat.diffuseTransmissionColorTexture, 'diffuseTransmissionColorTexture');
   return refs;
 }
 
@@ -439,6 +483,20 @@ function rewriteMaterialAssetRefs(
       | 'normalTexture'
       | 'occlusionTexture'
       | 'emissiveTexture'
+      | 'transmissionTexture'
+      | 'thicknessTexture'
+      | 'clearcoatTexture'
+      | 'clearcoatRoughnessTexture'
+      | 'clearcoatNormalTexture'
+      | 'anisotropyTexture'
+      | 'sheenColorTexture'
+      | 'sheenRoughnessTexture'
+      | 'iridescenceTexture'
+      | 'iridescenceThicknessTexture'
+      | 'specularTexture'
+      | 'specularColorTexture'
+      | 'diffuseTransmissionTexture'
+      | 'diffuseTransmissionColorTexture'
     ),
     GltfTextureInfoIr | number | undefined,
   ][] = [
@@ -447,6 +505,20 @@ function rewriteMaterialAssetRefs(
     ['normalTexture', mat.normalTexture],
     ['occlusionTexture', mat.occlusionTexture],
     ['emissiveTexture', mat.emissiveTexture],
+    ['transmissionTexture', mat.transmissionTexture],
+    ['thicknessTexture', mat.thicknessTexture],
+    ['clearcoatTexture', mat.clearcoatTexture],
+    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
+    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
+    ['anisotropyTexture', mat.anisotropyTexture],
+    ['sheenColorTexture', mat.sheenColorTexture],
+    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
+    ['iridescenceTexture', mat.iridescenceTexture],
+    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
+    ['specularTexture', mat.specularTexture],
+    ['specularColorTexture', mat.specularColorTexture],
+    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
+    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
   ];
   let cursor = 0;
   for (const [slot, rawBinding] of slots) {
@@ -489,7 +561,9 @@ async function importGltf(
   }
   const parsed = await parseDoc(ctx.source, read.value, ctx, meshopt);
   if (!parsed.ok) return parsed;
-  const doc = parsed.value;
+  const doc = deriveGltfShadowCapsules(
+    deriveGltfAnimatedBounds(applyImportSettingsBounds(parsed.value, ctx.importSettings)),
+  );
   const maps = buildHandleMaps(ctx.subAssets, doc);
 
   // Pre-derive each images[] row's colorSpace from material slot bindings
@@ -585,7 +659,94 @@ async function importGltf(
           }),
         };
       }
-      const meshPayload = stabilizeMeshMaterialSlots(bridged.value, ctx, sub.guid, sub.sourceKey);
+      const cards = await cookGltfMeshCards(
+        bridged.value,
+        prims,
+        doc.materials,
+        ctx.importSettings.meshCards,
+      );
+      if (!cards.ok)
+        return {
+          ok: false,
+          error: new ImportError({
+            code: 'import-internal-error',
+            expected: cards.error.expected,
+            hint: cards.error.hint,
+            detail: { reason: `mesh ${sub.sourceIndex}: ${JSON.stringify(cards.error.detail)}` },
+          }),
+        };
+      const stabilizedMesh = stabilizeMeshMaterialSlots(cards.value, ctx, sub.guid, sub.sourceKey);
+      const lodGroup =
+        doc.lod?.groups?.find(
+          (group) => doc.nodes[group.rootNode]?.meshIndex === sub.sourceIndex,
+        ) ??
+        (doc.lod?.rootNode !== undefined &&
+        doc.nodes[doc.lod.rootNode]?.meshIndex === sub.sourceIndex
+          ? doc.lod
+          : undefined);
+      const rootMeshIndex = lodGroup === undefined ? undefined : sub.sourceIndex;
+      if (lodGroup !== undefined) {
+        const referencedMeshIndices = [
+          sub.sourceIndex,
+          ...lodGroup.lodNodeIds.map((nodeIndex) => doc.nodes[nodeIndex]?.meshIndex),
+        ];
+        const missingMeshIndex = referencedMeshIndices.find(
+          (meshIndex) =>
+            !Number.isInteger(meshIndex) ||
+            meshIndex === null ||
+            meshIndex === undefined ||
+            maps.meshGuidByIndex.get(meshIndex as number) === undefined,
+        );
+        if (missingMeshIndex !== undefined) {
+          return {
+            ok: false,
+            error: new ImportError({
+              code: 'import-internal-error',
+              expected: 'every MSFT_lod node to resolve a cooked mesh sub-asset',
+              actual: String(missingMeshIndex),
+              hint: 'repair the referenced glTF mesh primitives and re-run the importer',
+              detail: {
+                reason: `MSFT_lod group for mesh ${sub.sourceIndex} references an unprojected mesh`,
+              },
+            }),
+          };
+        }
+      }
+      const authoredLods =
+        sub.sourceKey === undefined ? undefined : ctx.sourceOverrides?.[sub.sourceKey]?.lods;
+      const lodEntries = Array.isArray(authoredLods) ? authoredLods : [];
+      const lodLevels =
+        rootMeshIndex === sub.sourceIndex && lodGroup !== undefined
+          ? lodGroup.lodNodeIds.flatMap((nodeIndex, index) => {
+              const meshIndex = doc.nodes[nodeIndex]?.meshIndex;
+              const guid =
+                meshIndex === undefined || meshIndex === null
+                  ? undefined
+                  : maps.meshGuidByIndex.get(meshIndex);
+              if (guid === undefined) return [];
+              const authored = lodEntries[index];
+              const authoredCoverage =
+                authored !== null && typeof authored === 'object'
+                  ? (authored as { readonly screenCoverage?: unknown }).screenCoverage
+                  : undefined;
+              const coverage =
+                typeof authoredCoverage === 'number'
+                  ? authoredCoverage
+                  : (lodGroup.screenCoverages[index] ??
+                    deriveDefaultLodScreenCoverages(lodGroup.lodNodeIds.length + 1)[index]);
+              const parsed = AssetGuidCodec.parse(guid);
+              return parsed.ok && coverage !== undefined
+                ? [{ mesh: parsed.value, screenCoverage: coverage, guid }]
+                : [];
+            })
+          : [];
+      const meshPayload: MeshAsset =
+        lodLevels.length === 0
+          ? stabilizedMesh
+          : {
+              ...stabilizedMesh,
+              lods: lodLevels.map(({ mesh, screenCoverage }) => ({ mesh, screenCoverage })),
+            };
       const materialRefs: AssetRef[] = [];
       const seenMaterialGuids = new Set<string>();
       for (let slotIndex = 0; slotIndex < meshPayload.materialSlots.length; slotIndex++) {
@@ -600,6 +761,15 @@ async function importGltf(
           });
         }
       }
+      for (const [lodIndex, level] of lodLevels.entries()) {
+        if (!seenMaterialGuids.has(level.guid.toLowerCase())) {
+          seenMaterialGuids.add(level.guid.toLowerCase());
+          materialRefs.push({
+            guid: level.guid,
+            sourceField: { fieldName: 'lods', arrayIndex: lodIndex },
+          });
+        }
+      }
       out.push({
         guid: sub.guid,
         kind: 'mesh',
@@ -609,9 +779,9 @@ async function importGltf(
         artifacts: {
           body: {
             mediaType: 'application/x-forgeax-mesh',
-            assetCodec: { name: 'mesh-binary', version: '4' },
+            assetCodec: { name: 'mesh-binary', version: '5' },
             bytes: (() => {
-              const packed = packMeshBinV4(
+              const packed = packMeshBin(
                 meshPayload as never,
                 sub.sourceKey ?? ctx.source,
                 materialRefs.map((ref) => ref.guid),
@@ -619,7 +789,7 @@ async function importGltf(
               if (!packed.ok) {
                 throw new ImportError({
                   code: 'import-internal-error',
-                  expected: 'mesh-bin v4 producer to accept the canonical mesh projection',
+                  expected: 'mesh-bin v5 producer to accept the canonical mesh projection',
                   hint: 're-cook the source with its Meta sidecar after fixing the mesh payload',
                   detail: { reason: `${packed.error.code}: ${packed.error.actual}` },
                 });
@@ -657,6 +827,10 @@ async function importGltf(
         );
         if (!uvResult.ok) {
           throw Object.assign(new Error(uvResult.error.message), uvResult.error);
+        }
+        const tangentResult = validateMaterialTangentInputs(mat, meshIr);
+        if (!tangentResult.ok) {
+          throw Object.assign(new Error(tangentResult.error.message), tangentResult.error);
         }
       }
       const matAsset = toMaterialAsset(mat, {
@@ -794,30 +968,30 @@ async function importGltf(
       // SkinAsset.jointPaths.
       //
       // D-2 / D-3: refs carries structured edge metadata (AssetRef[]).
-      // Walk scene entities to build a handle-value -> (entityLocalId,
+      // Walk keyed scene entities to build a handle-value -> (entityKey,
       // componentName, fieldName, arrayIndex?) provenance map, then
-      // produce AssetRef[] with sourceField / sceneEntityId filled for mesh
+      // produce AssetRef[] with sourceField / sceneEntityKey filled for mesh
       // handle-field edges. Skeleton edges: sourceField from Skin.skeleton if entity
       // carries that GUID. Skin edges: sourceField=undefined (cross-edge
       // with no entity-component representation).
       const handleValueProvenance = new Map<
         number,
-        { sceneEntityId: number; componentName: string; fieldName: string; arrayIndex?: number }
+        { sceneEntityKey: string; componentName: string; fieldName: string; arrayIndex?: number }
       >();
-      const skeletonGuidProvenance = new Map<string, { sceneEntityId: number }>();
-      for (const entity of scene.entities) {
+      const skeletonGuidProvenance = new Map<string, { sceneEntityKey: string }>();
+      for (const [sceneEntityKey, entity] of Object.entries(scene.entities)) {
         const comps = entity.components as Record<string, Record<string, unknown>>;
         const mf = comps.MeshFilter;
         if (mf !== undefined && typeof mf.assetHandle === 'number') {
           handleValueProvenance.set(mf.assetHandle, {
-            sceneEntityId: entity.localId,
+            sceneEntityKey,
             componentName: 'MeshFilter',
             fieldName: 'assetHandle',
           });
         }
         const skin = comps.Skin;
         if (skin !== undefined && typeof skin.skeleton === 'string') {
-          skeletonGuidProvenance.set(skin.skeleton, { sceneEntityId: entity.localId });
+          skeletonGuidProvenance.set(skin.skeleton, { sceneEntityKey });
         }
       }
 
@@ -833,7 +1007,7 @@ async function importGltf(
               fieldName: prov.fieldName,
               ...(prov.arrayIndex !== undefined ? { arrayIndex: prov.arrayIndex } : {}),
             },
-            sceneEntityId: prov.sceneEntityId,
+            sceneEntityKey: prov.sceneEntityKey,
           };
         }
         return { guid };
@@ -854,7 +1028,7 @@ async function importGltf(
               ? {
                   guid,
                   sourceField: { componentName: 'Skin', fieldName: 'skeleton' },
-                  sceneEntityId: skProv.sceneEntityId,
+                  sceneEntityKey: skProv.sceneEntityKey,
                 }
               : { guid },
           );
@@ -898,6 +1072,8 @@ async function importGltf(
         kind: 'skeleton' as const,
         inverseBindMatrices: rec.inverseBindMatrices,
         jointCount: rec.jointCount,
+        ...(rec.bounds === undefined ? {} : { bounds: rec.bounds }),
+        ...(rec.shadowCapsules === undefined ? {} : { shadowCapsules: rec.shadowCapsules }),
       };
       out.push({ guid: sub.guid, kind: 'skeleton', payload, refs: [], artifacts: {} });
     } else if (sub.kind === 'skin') {

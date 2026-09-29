@@ -1,0 +1,633 @@
+import { describe, expect, it } from 'vitest';
+
+import packageJson from '../../package.json' with { type: 'json' };
+
+const SCRIPT = '../../scripts/smoke-performance.mjs';
+
+describe('hello-lod-occlusion performance evidence contract', () => {
+  it('declares a real producer for the enabled benchmark metric', () => {
+    expect(packageJson.scripts['bench:json']).toContain('FORGEAX_LOD_GPU_PRODUCER=1');
+    expect(packageJson.forgeax.metrics.bench).toMatchObject({
+      enabled: true,
+      reportPath: 'evidence/gpu-frame-samples.json',
+    });
+  });
+
+  it('keeps ProfileCapture diagnostics opt-in, bounded, and paired by order', async () => {
+    const {
+      LOD_PROFILE_EVENT_LIMIT,
+      LOD_PROFILE_FRAME_LIMIT,
+      LOD_PROFILE_PHASES,
+      buildLodProfileDiagnostics,
+      profileCaptureKey,
+    } = await import(SCRIPT);
+    const { compareProfileCaptures, validateProfileCapture } = await import('@forgeax/engine-profiler');
+    const capture = (captureId: string, condition: string) => ({
+      schemaVersion: '1.0',
+      captureId,
+      timeUnit: 'microseconds',
+      frameLimit: LOD_PROFILE_FRAME_LIMIT,
+      eventLimit: LOD_PROFILE_EVENT_LIMIT,
+      phaseCatalog: { app: [], render: LOD_PROFILE_PHASES },
+      records:
+        condition === 'treatment'
+          ? LOD_PROFILE_PHASES.map((phase: string, index: number) => ({
+              kind: 'phase',
+              source: 'render',
+              frameId: 1,
+              phase,
+              startMicros: index,
+              endMicros: index + 1,
+              durationMicros: 1,
+            }))
+          : [],
+      completeness: {
+        status: 'complete',
+        retainedEventCount: condition === 'treatment' ? LOD_PROFILE_PHASES.length : 0,
+        droppedEventCount: 0,
+      },
+    });
+    const captures: Record<string, unknown> = {};
+    for (const order of ['baseline-treatment', 'treatment-baseline']) {
+      for (const condition of ['baseline', 'treatment']) {
+        captures[profileCaptureKey(order, condition)] = capture(
+          `capture-${String(Object.keys(captures).length + 1).padStart(4, '0')}`,
+          condition,
+        );
+      }
+    }
+    const diagnostics = buildLodProfileDiagnostics({
+      identity: { build: 'test-build' },
+      captures,
+      validateProfileCapture,
+      compareProfileCaptures,
+    });
+    expect(diagnostics.keys).toHaveLength(4);
+    expect(diagnostics.frameLimit).toBe(32);
+    expect(diagnostics.eventLimit).toBe(16_384);
+    expect(Object.keys(diagnostics.comparisons)).toEqual([
+      'baseline-treatment',
+      'treatment-baseline',
+    ]);
+  });
+
+  it('derives a bounded slow-runner calibration window from the visibility budget', async () => {
+    const { deriveOccluderCalibrationMaxFrames } = await import(SCRIPT);
+    expect(deriveOccluderCalibrationMaxFrames(98)).toBe(106);
+    expect(deriveOccluderCalibrationMaxFrames(1)).toBe(32);
+    expect(deriveOccluderCalibrationMaxFrames(200_000)).toBe(128);
+    expect(deriveOccluderCalibrationMaxFrames(undefined)).toBe(32);
+  });
+
+  const identity = {
+    build: 'build-a',
+    scene: 'lod-scene',
+    sourceKey: 'lod-scene:root',
+    sidecarDigest: 'sha256:a',
+    packDigest: 'sha256:b',
+    seed: 7,
+    viewport: '1280x720',
+    adapter: 'test',
+    backend: 'dawn',
+    capabilities: ['timestamp-query'],
+    fixture: {
+      candidateScale: [0.5, 0.5, 0.5],
+      occluderScale: [2, 10, 0.1],
+    },
+  };
+
+  const rawSamples = () =>
+    Array.from({ length: 128 }, (_, index) => ({
+      identity,
+      order: index % 4 < 2 ? 'baseline-treatment' : 'treatment-baseline',
+      condition: index % 2 === 0 ? 'baseline' : 'treatment',
+      gpuFrameUs: index % 2 === 0 ? 100 : 70,
+    }));
+
+  const worldFact = (
+    view: string,
+    visible: number,
+    occluded: number,
+    lodHistogram: readonly { level: number; count: number }[],
+    primitiveSlot: number,
+  ) => ({
+    view,
+    candidates: 128,
+    visible,
+    occluded,
+    lodHistogram,
+    primitiveSlot,
+    slotGeneration: 1,
+  });
+  const falsification = [
+    ['forced-lod0', 'lod-selection-policy', ['geometry', 'occlusion', 'view']],
+    ['all-visible', 'occluder-absence', ['geometry', 'lod', 'view']],
+    ['occlusion-off-on', 'occluder-presence', ['geometry', 'lod', 'view']],
+    ['page-exhaustion', 'query-page-capacity', ['geometry', 'lod', 'view']],
+    ['delayed-map', 'map-delay', ['geometry', 'lod', 'occlusion', 'view']],
+    ['world-reorder', 'world-array-order', ['geometry', 'primitive', 'view']],
+  ].map(([caseName, intervention, held]) => ({
+    case: caseName,
+    verdict: 'pass',
+    evidence: {
+      protocol: { intervention, held },
+      ...(caseName === 'occlusion-off-on'
+        ? {
+            off: {
+              count: { candidates: 128, visible: 128, occluded: 0 },
+            },
+            on: {
+              count: { candidates: 128, visible: 16, occluded: 112 },
+            },
+            settleFrames: 98,
+          }
+        : {}),
+      ...(caseName === 'world-reorder'
+        ? {
+            attribution: {
+              status: 'same-submit',
+              forwardSubmit: { frameId: 100, build: 'build-a', deviceGeneration: 1 },
+              reverseSubmit: { frameId: 101, build: 'build-a', deviceGeneration: 1 },
+            },
+            forward: { frameId: 100, view: 'shared-view' },
+            reverse: { frameId: 101, view: 'shared-view' },
+            sameViewIdentity: true,
+            samePrimitiveIdentity: true,
+            forwardSlot: { primitiveSlot: 0, slotGeneration: 1 },
+            reverseSlot: { primitiveSlot: 0, slotGeneration: 1 },
+            worlds: { treatment: 'treatment-world', baseline: 'baseline-world' },
+            worldAttribution: {
+              treatment: {
+                forward: worldFact('treatment-world', 16, 112, [{ level: 1, count: 128 }], 1),
+                reverse: worldFact('treatment-world', 16, 112, [{ level: 1, count: 128 }], 1),
+              },
+              baseline: {
+                forward: worldFact('baseline-world', 128, 0, [{ level: 0, count: 128 }], 2),
+                reverse: worldFact('baseline-world', 128, 0, [{ level: 0, count: 128 }], 2),
+              },
+            },
+          }
+        : {}),
+    },
+  }));
+
+  const inspection = {
+    baseline: {
+      frames: 128,
+      candidates: 128,
+      visible: 128,
+      occluded: 0,
+      lodHistogram: [{ level: 0, count: 128 }],
+      pagePressure: { used: 128, capacity: 12_288 },
+      lodCoverage: 0,
+      submittedInstanceRatio: 1,
+      geometryWorkReduction: 0,
+      batchCount: 1,
+      indirectDrawCount: 1,
+      cpuP50Us: 100,
+      cpuP95Us: 120,
+      queryP50Us: 10,
+      queryP95Us: 20,
+      queryMemoryBytes: 196_608,
+    },
+    treatment: {
+      frames: 128,
+      candidates: 128,
+      visible: 16,
+      occluded: 112,
+      lodHistogram: [{ level: 1, count: 128 }],
+      pagePressure: { used: 128, capacity: 12_288 },
+      lodCoverage: 1,
+      submittedInstanceRatio: 0.125,
+      geometryWorkReduction: 0.8,
+      batchCount: 128,
+      indirectDrawCount: 16,
+      cpuP50Us: 90,
+      cpuP95Us: 110,
+      queryP50Us: 10,
+      queryP95Us: 20,
+      queryMemoryBytes: 196_608,
+    },
+  };
+  const groups = {
+    control: inspection.baseline,
+    lodOnly: {
+      ...inspection.baseline,
+      lodHistogram: [
+        { level: 0, count: 64 },
+        { level: 1, count: 64 },
+      ],
+      lodCoverage: 0.5,
+      geometryWorkReduction: 0.2,
+    },
+    occlusionOnly: {
+      ...inspection.treatment,
+      visible: 16,
+      occluded: 112,
+      lodHistogram: [{ level: 0, count: 128 }],
+      lodCoverage: 0,
+      submittedInstanceRatio: 0.125,
+      geometryWorkReduction: 0,
+      cpuP50Us: 100,
+      cpuP95Us: 120,
+    },
+    treatment: inspection.treatment,
+  };
+
+  const admittingEvidence = (schema: string, falsificationOverride = falsification) => ({
+    schema,
+    identity,
+    warmupSubmits: 32,
+    retainedSamples: 128,
+    metrics: {
+      timestampAvailable: true,
+      configuredQueryBudget: 2048,
+      effectiveQueryBudget: 2048,
+      settleSubmits: 98,
+      retestSubmits: 44,
+      expirySubmits: 88,
+      lodCoverage: 1,
+      submittedInstanceRatio: 0.125,
+      geometryWorkReduction: 0.8,
+      cpuP50Us: 90,
+      cpuP95Us: 110,
+      cpuP95Regression: -0.08333333333333333,
+      queryP50Us: 10,
+      queryP95Us: 20,
+      queryMemoryBytes: 196_608,
+      workload: { candidates: 128, visible: 16, occluded: 112 },
+      inspection,
+      groups: { ...groups },
+      gpuMedianImprovement: 0.3,
+      gpuP95Regression: -0.3,
+    },
+    falsification: falsificationOverride,
+    samples: rawSamples(),
+    verdict: 'not-production-ready',
+  });
+
+  it('uses nearest-rank statistics over both A/B orders', async () => {
+    const { summarize } = await import(SCRIPT);
+    const values = Array.from({ length: 128 }, (_, index) => index + 1);
+    expect(summarize(values)).toEqual({ medianUs: 64, p95Us: 122, samples: 128 });
+  });
+
+  it('fails closed when GPU timestamp evidence is unavailable', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const result = validatePerformanceEvidence({
+      schema: GPU_FRAME_SAMPLES_SCHEMA,
+      identity,
+      warmupSubmits: 32,
+      retainedSamples: 128,
+      metrics: { timestampAvailable: false },
+      falsification,
+      samples: [],
+      verdict: 'unavailable',
+    });
+    expect(result.verdict).toBe('unavailable');
+  });
+
+  it('does not accept mismatched identity across samples', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const samples = rawSamples();
+    const sample = samples[12];
+    if (sample === undefined) throw new Error('test fixture must contain sample 12');
+    samples[12] = { ...sample, identity: { ...identity, packDigest: 'sha256:other' } };
+    const result = validatePerformanceEvidence({
+      schema: GPU_FRAME_SAMPLES_SCHEMA,
+      identity,
+      warmupSubmits: 32,
+      retainedSamples: 128,
+      metrics: {
+        timestampAvailable: true,
+        configuredQueryBudget: 2048,
+        effectiveQueryBudget: 2048,
+        settleSubmits: 98,
+        retestSubmits: 44,
+        expirySubmits: 88,
+        lodCoverage: 1,
+        submittedInstanceRatio: 0.125,
+        geometryWorkReduction: 0.2,
+        cpuP50Us: 100,
+        cpuP95Us: 120,
+        cpuP95Regression: -0.08333333333333333,
+        queryP50Us: 10,
+        queryP95Us: 20,
+        queryMemoryBytes: 196_608,
+        workload: { candidates: 128, visible: 16, occluded: 112 },
+        inspection,
+        groups,
+        gpuMedianImprovement: 0.3,
+        gpuP95Regression: 0,
+      },
+      falsification,
+      samples,
+      verdict: 'identity-mismatch',
+    });
+    expect(result.verdict).toBe('identity-mismatch');
+  });
+
+  it('gates submitted instances by reduction rather than visibility retention', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const result = validatePerformanceEvidence({
+      schema: GPU_FRAME_SAMPLES_SCHEMA,
+      identity,
+      warmupSubmits: 32,
+      retainedSamples: 128,
+      metrics: {
+        timestampAvailable: true,
+        configuredQueryBudget: 2048,
+        effectiveQueryBudget: 2048,
+        settleSubmits: 98,
+        retestSubmits: 44,
+        expirySubmits: 88,
+        lodCoverage: 1,
+        submittedInstanceRatio: 0.125,
+        geometryWorkReduction: 0.8,
+        cpuP50Us: 90,
+        cpuP95Us: 110,
+        cpuP95Regression: -0.08333333333333333,
+        queryP50Us: 10,
+        queryP95Us: 20,
+        queryMemoryBytes: 196_608,
+        workload: { candidates: 128, visible: 16, occluded: 112 },
+        inspection,
+        groups,
+        gpuMedianImprovement: 0.3,
+        gpuP95Regression: -0.3,
+      },
+      falsification,
+      samples: rawSamples(),
+      verdict: 'not-production-ready',
+    });
+    expect(result.verdict).toBe('production-ready');
+  });
+
+  it('accepts selector batches that contain suppressed-only entries while bounding raster commands', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const sparseDrawEvidence = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    sparseDrawEvidence.metrics.inspection.treatment = {
+      ...sparseDrawEvidence.metrics.inspection.treatment,
+      batchCount: 128,
+      indirectDrawCount: 16,
+    };
+    const result = validatePerformanceEvidence(sparseDrawEvidence);
+    expect(result.verdict).toBe('production-ready');
+  });
+
+  it('uses the CPU median for admission while retaining p95 tail evidence', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const noisyTailEvidence = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    noisyTailEvidence.metrics.inspection = {
+      baseline: { ...noisyTailEvidence.metrics.inspection.baseline, cpuP95Us: 100 },
+      treatment: { ...noisyTailEvidence.metrics.inspection.treatment, cpuP95Us: 300 },
+    };
+    noisyTailEvidence.metrics.groups.occlusionOnly = {
+      ...noisyTailEvidence.metrics.groups.occlusionOnly,
+      cpuP95Us: 100,
+    };
+    noisyTailEvidence.metrics.cpuP95Us = 300;
+    noisyTailEvidence.metrics.cpuP95Regression = 2;
+    const result = validatePerformanceEvidence(noisyTailEvidence);
+    expect(result.verdict).toBe('production-ready');
+  });
+
+  it('admits the machine-stable GPU median floor while retaining the p95 gate', async () => {
+    const {
+      GPU_FRAME_SAMPLES_SCHEMA,
+      GPU_MEDIAN_IMPROVEMENT_LIMIT,
+      validatePerformanceEvidence,
+    } = await import(SCRIPT);
+    expect(GPU_MEDIAN_IMPROVEMENT_LIMIT).toBe(0.15);
+    const atFloor = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    atFloor.samples = atFloor.samples.map((sample) =>
+      sample.condition === 'treatment' ? { ...sample, gpuFrameUs: 85 } : sample,
+    );
+    atFloor.metrics.gpuMedianImprovement = 0.15;
+    atFloor.metrics.gpuP95Regression = -0.15;
+    expect(validatePerformanceEvidence(atFloor).verdict).toBe('production-ready');
+
+    const belowFloor = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    belowFloor.samples = belowFloor.samples.map((sample) =>
+      sample.condition === 'treatment' ? { ...sample, gpuFrameUs: 86 } : sample,
+    );
+    belowFloor.metrics.gpuMedianImprovement = 0.14;
+    belowFloor.metrics.gpuP95Regression = -0.14;
+    expect(validatePerformanceEvidence(belowFloor).verdict).toBe('not-production-ready');
+  });
+
+  it('admits one stable raster command per LOD level of a selector batch', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA, BENCHMARK_LOD_LEVEL_SLOTS } =
+      await import(SCRIPT);
+    const evidence = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    evidence.metrics.groups.lodOnly = {
+      ...evidence.metrics.groups.lodOnly,
+      batchCount: 1,
+      indirectDrawCount: BENCHMARK_LOD_LEVEL_SLOTS,
+    };
+    expect(validatePerformanceEvidence(evidence).verdict).toBe(
+      validatePerformanceEvidence(admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA)).verdict,
+    );
+    evidence.metrics.groups.lodOnly = {
+      ...evidence.metrics.groups.lodOnly,
+      indirectDrawCount: BENCHMARK_LOD_LEVEL_SLOTS + 1,
+    };
+    expect(() => validatePerformanceEvidence(evidence)).toThrow(
+      'performance lodOnly group is not linked to the locked workload',
+    );
+  });
+
+  it('rejects raster command counts that exceed selector batch LOD slots', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const invalidEvidence = admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA);
+    invalidEvidence.metrics.inspection.treatment = {
+      ...invalidEvidence.metrics.inspection.treatment,
+      batchCount: 16,
+      indirectDrawCount: 128,
+    };
+    expect(() => validatePerformanceEvidence(invalidEvidence)).toThrow(
+      'performance treatment inspection is not linked to its candidate workload',
+    );
+  });
+
+  it('fails closed when World-reorder attribution is not renderer-owned', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const withoutRendererAttribution = falsification.map((entry) => {
+      if (entry.case !== 'world-reorder') return entry;
+      return {
+        ...entry,
+        evidence: {
+          ...entry.evidence,
+          attribution: { ...entry.evidence.attribution, status: 'unavailable' },
+        },
+      };
+    }) as unknown as typeof falsification;
+    expect(() =>
+      validatePerformanceEvidence(
+        admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA, withoutRendererAttribution),
+      ),
+    ).toThrow('world-reorder pass requires renderer-owned same-submit attribution');
+  });
+
+  it('fails closed when World-reorder changes a per-World tuple across array order', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const changedWorldFacts = falsification.map((entry) => {
+      if (entry.case !== 'world-reorder') return entry;
+      const worldAttribution = entry.evidence.worldAttribution;
+      if (worldAttribution === undefined) return entry;
+      return {
+        ...entry,
+        evidence: {
+          ...entry.evidence,
+          worldAttribution: {
+            ...worldAttribution,
+            treatment: {
+              ...worldAttribution.treatment,
+              reverse: {
+                ...worldAttribution.treatment.reverse,
+                visible: 15,
+                occluded: 113,
+              },
+            },
+          },
+        },
+      };
+    }) as unknown as typeof falsification;
+    expect(() =>
+      validatePerformanceEvidence(
+        admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA, changedWorldFacts),
+      ),
+    ).toThrow('world-reorder treatment attribution changed across worlds[] reorder');
+  });
+
+  it('fails closed when World-reorder submits use a different build identity', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const changedBuild = falsification.map((entry) => {
+      if (entry.case !== 'world-reorder') return entry;
+      const attribution = entry.evidence.attribution;
+      if (attribution === undefined) return entry;
+      return {
+        ...entry,
+        evidence: {
+          ...entry.evidence,
+          attribution: {
+            ...attribution,
+            reverseSubmit: { ...attribution.reverseSubmit, build: 'build-b' },
+          },
+        },
+      };
+    }) as unknown as typeof falsification;
+    expect(() =>
+      validatePerformanceEvidence(admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA, changedBuild)),
+    ).toThrow('world-reorder pass requires same-identity attribution evidence');
+  });
+
+  it('fails closed when World-reorder reports a false stable-view summary', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const falseSummary = falsification.map((entry) => {
+      if (entry.case !== 'world-reorder') return entry;
+      return {
+        ...entry,
+        evidence: { ...entry.evidence, sameViewIdentity: false },
+      };
+    }) as unknown as typeof falsification;
+    expect(() =>
+      validatePerformanceEvidence(admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA, falseSummary)),
+    ).toThrow('world-reorder pass requires same-identity attribution evidence');
+  });
+
+  it('requires complete World-reorder identity before declaring the phase pass', async () => {
+    const { worldReorderAttributionIsValid } = await import(SCRIPT);
+    const worldEntry = falsification.find((entry) => entry.case === 'world-reorder');
+    if (
+      worldEntry === undefined ||
+      worldEntry.evidence === undefined ||
+      worldEntry.evidence.attribution === undefined ||
+      worldEntry.evidence.forward === undefined ||
+      worldEntry.evidence.reverse === undefined ||
+      worldEntry.evidence.forwardSlot === undefined ||
+      worldEntry.evidence.reverseSlot === undefined ||
+      worldEntry.evidence.worlds === undefined ||
+      worldEntry.evidence.worldAttribution === undefined
+    ) {
+      throw new Error('world-reorder fixture is incomplete');
+    }
+    const worldEvidence = worldEntry.evidence;
+    const attribution = worldEvidence.attribution!;
+    const forward = worldEvidence.forward!;
+    const reverse = worldEvidence.reverse!;
+    const validInput = {
+      expectedBuild: identity.build,
+      forwardSubmit: attribution.forwardSubmit,
+      reverseSubmit: attribution.reverseSubmit,
+      forwardView: forward.view,
+      reverseView: reverse.view,
+      forwardSlot: worldEvidence.forwardSlot,
+      reverseSlot: worldEvidence.reverseSlot,
+      worldIdentities: worldEvidence.worlds,
+      worldAttribution: worldEvidence.worldAttribution,
+    };
+    expect(worldReorderAttributionIsValid(validInput)).toBe(true);
+    expect(
+      worldReorderAttributionIsValid({ ...validInput, expectedBuild: 'different-build' }),
+    ).toBe(false);
+    expect(worldReorderAttributionIsValid({ ...validInput, reverseSlot: undefined })).toBe(false);
+    expect(worldReorderAttributionIsValid({ ...validInput, reverseView: 'different-view' })).toBe(
+      false,
+    );
+  });
+
+  it('fails closed when occlusion-off-on does not settle to the locked workload', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const incompleteToggle = falsification.map((entry) => {
+      if (entry.case !== 'occlusion-off-on') return entry;
+      return {
+        ...entry,
+        evidence: {
+          ...entry.evidence,
+          on: { count: { candidates: 128, visible: 15, occluded: 113 } },
+          settleFrames: 50,
+        },
+      };
+    });
+    expect(() =>
+      validatePerformanceEvidence(
+        admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA, incompleteToggle),
+      ),
+    ).toThrow('occlusion-off-on falsification must settle to the locked 16/112 workload');
+  });
+
+  it('rejects empty raw samples and incomplete falsification instead of false-green', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    expect(() =>
+      validatePerformanceEvidence({
+        schema: GPU_FRAME_SAMPLES_SCHEMA,
+        identity,
+        warmupSubmits: 32,
+        retainedSamples: 128,
+        metrics: {
+          timestampAvailable: true,
+          configuredQueryBudget: 2048,
+          effectiveQueryBudget: 2048,
+          settleSubmits: 98,
+          retestSubmits: 44,
+          expirySubmits: 88,
+          lodCoverage: 0.9,
+          submittedInstanceRatio: 0.9,
+          geometryWorkReduction: 0.1,
+          cpuP50Us: 100,
+          cpuP95Us: 120,
+          cpuP95Regression: 0,
+          queryP50Us: 10,
+          queryP95Us: 20,
+          queryMemoryBytes: 196_608,
+          gpuMedianImprovement: 0.9,
+          gpuP95Regression: 0,
+        },
+        falsification: [],
+        samples: [],
+        verdict: 'production-ready',
+      }),
+    ).toThrow('exactly 128 raw samples');
+  });
+});

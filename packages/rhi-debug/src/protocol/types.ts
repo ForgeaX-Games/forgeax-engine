@@ -11,6 +11,7 @@ export type TapeBlobCompression = 'none' | 'gzip';
 export type ResourceKind =
   | 'buffer'
   | 'texture'
+  | 'query-set'
   | 'texture-view'
   | 'sampler'
   | 'shader-module'

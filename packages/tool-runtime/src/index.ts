@@ -1,4 +1,15 @@
 export {
+  createToolApi,
+  type ToolApi,
+  type ToolApiProviderHandle,
+  type ToolApiProviderInput,
+  type ToolApiProviderSnapshot,
+  type ToolApiProviderState,
+  type ToolApiRecord,
+  type ToolApiRunOptions,
+  type ToolApiSnapshot,
+} from './api.js';
+export {
   type ArtifactManifestValidation,
   createArtifactManifest,
   createArtifactRef,
@@ -45,6 +56,19 @@ export {
   type CarrierStateMachineOptions,
   createCarrierStateMachine,
 } from './carrier.js';
+export * from './command-contract.js';
+export {
+  commandPath,
+  createToolCommandRegistry,
+  defineCommand,
+  type ToolCommandDescriptor,
+  ToolCommandError,
+  type ToolCommandErrorCode,
+  type ToolCommandHelp,
+  type ToolCommandNode,
+  type ToolCommandPath,
+  type ToolCommandRegistry,
+} from './command-tree.js';
 export {
   artifactIncompleteError,
   cancellationError,
@@ -57,6 +81,12 @@ export {
   terminalError,
   timeoutError,
 } from './errors.js';
+export {
+  parseToolJsonSchema,
+  type ToolJsonSchema,
+  type ToolSchemaFailure,
+  toolJsonSchema,
+} from './json-schema.js';
 export {
   createLexicalLease,
   type LeaseCleanupFailure,
@@ -103,6 +133,7 @@ export type {
   JsonPrimitive,
   JsonValue,
   SnapshotRef,
+  ToolCallerIdentity,
   ToolCapability,
   ToolCapabilityResolver,
   ToolCapabilityResult,
@@ -113,6 +144,7 @@ export type {
   ToolDomainFailure,
   ToolEvidenceKind,
   ToolExecutionContext,
+  ToolExecutionOwner,
   ToolExecutor,
   ToolExecutorResult,
   ToolExecutorValue,

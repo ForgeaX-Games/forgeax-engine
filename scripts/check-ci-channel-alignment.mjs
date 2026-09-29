@@ -225,7 +225,7 @@ function checkPnpmVersionFile(rootDir) {
 function runAlignmentCheck(ciYamlText, rootDir) {
   const issues = [];
   const primaryBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
-  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
+  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm-shard');
   const portabilityBlock = extractJobBlock(ciYamlText, PORTABILITY_JOB);
   if (!primaryBlock) issues.push(`jobs.${PRIMARY_JOB} block not found in ci.yml`);
   if (!portabilityBlock) issues.push(`jobs.${PORTABILITY_JOB} block not found in ci.yml`);
@@ -418,7 +418,7 @@ function runOwnershipCheck({
   // The coverage/typecheck owner and the uninstrumented ratio owner are
   // deliberately separate jobs so they can run concurrently.
   const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
-  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
+  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm-shard');
   const coveragePerfBlock = extractJobBlock(ciYamlText, 'coverage-perf');
   if (priBlock) {
     const coverageSteps = [
@@ -433,13 +433,13 @@ function runOwnershipCheck({
     const isSingleOwner = coverageOwners.length === 1 && Boolean(coverageBlock);
     if (!isSingleOwner) {
       issues.push(
-        `[ownership] FAIL: coverage-pnpm must own exactly one vitest+typecheck command (found ${coverageOwners.length})\n` +
-          `  Project: primary-pnpm/coverage-pnpm\n` +
+        `[ownership] FAIL: coverage-pnpm-shard must own exactly one vitest+typecheck command (found ${coverageOwners.length})\n` +
+          `  Project: primary-pnpm/coverage-pnpm-shard\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
           `  W7: ${W7_PATH}\n` +
           `  W8: ${W8_PATH}\n` +
-          `  Expected: one coverage/typecheck owner in coverage-pnpm; primary-pnpm must not carry an event-specific duplicate`,
+          `  Expected: one coverage/typecheck owner in coverage-pnpm-shard; primary-pnpm must not carry an event-specific duplicate`,
       );
     }
     const coveragePerfSteps = coveragePerfBlock ? extractStepRuns(coveragePerfBlock) : [];
@@ -541,7 +541,7 @@ function runOwnershipSelfTest() {
   const ecsConf = readFileSync(path.join(rootDir, 'packages/ecs/vitest.config.ts'), 'utf8');
   const pkgText = readFileSync(path.join(rootDir, 'package.json'), 'utf8');
   const primaryWithoutPerf = ciText.replace(/ --project=ecs-perf/g, '');
-  // Remove the split coverage owner from coverage-pnpm to exercise the
+  // Remove the split coverage owner from coverage-pnpm-shard to exercise the
   // zero-candidate guard (F-1: silently green when the ownership command is
   // deleted).
   const zeroVitestTypecheck = ciText.replace(
@@ -549,10 +549,10 @@ function runOwnershipSelfTest() {
     'node scripts/ci/missing-coverage-owner.mjs',
   );
   const duplicateVitestTypecheck = ciText.replace(
-    '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
+    '      - name: Vitest coverage (v8) (bounded runtime children)\n',
     '      - name: Duplicate coverage owner\n' +
       '        run: node scripts/ci/run-split-vitest-coverage.mjs --group-size=1\n' +
-      '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
+      '      - name: Vitest coverage (v8) (bounded runtime children)\n',
   );
   const portabilityMarker = 'run: bun run test:portability';
   const portabilityWithProject = ciText.replace(
@@ -638,13 +638,13 @@ function runOwnershipSelfTest() {
       'ownership-primary-zero-vitest-typecheck',
       { ciYamlText: zeroVitestTypecheck, rootDir },
       true,
-      'coverage-pnpm must own exactly one',
+      'coverage-pnpm-shard must own exactly one',
     ],
     [
       'ownership-primary-duplicate-vitest-typecheck',
       { ciYamlText: duplicateVitestTypecheck, rootDir },
       true,
-      'coverage-pnpm must own exactly one',
+      'coverage-pnpm-shard must own exactly one',
     ],
     [
       'ownership-portability-contains-ecs-perf',

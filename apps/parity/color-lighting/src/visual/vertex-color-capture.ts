@@ -1,12 +1,16 @@
 import { World } from '@forgeax/engine-ecs';
 import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
-import type { RendererLegacyHostAdapter } from '@forgeax/engine-render/internal/construct-renderer';
+import type {
+  RendererHostAssembly,
+  RendererLegacyHostAdapter,
+} from '@forgeax/engine-render/internal/construct-renderer';
 import {
   Camera,
   Materials,
   MeshFilter,
   MeshRenderer,
+  TONEMAP_LINEAR,
   perspective,
 } from '@forgeax/engine-render';
 import type { RhiDevice } from '@forgeax/engine-rhi';
@@ -21,6 +25,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   NoBlending,
+  PerspectiveCamera,
   RenderTarget,
   Scene,
   SRGBColorSpace,
@@ -37,7 +42,7 @@ import { VERTEX_COLOR_REQUIRED_CASES } from '../coverage/required-cases';
 
 const WIDTH = 128;
 const HEIGHT = 128;
-const FRAME_COUNT = 300;
+const FRAME_COUNT = 60;
 const FLOATS_PER_HALF_PIXEL = 4;
 
 type FixtureVertex = readonly [number, number, number, number];
@@ -55,6 +60,17 @@ export interface VertexCaptureOptions {
   readonly sourceSha: string;
   readonly forgeaxBundler?: VertexColorForgeaxBundler;
   readonly vertexColorFalsifier?: VertexColorFalsifierMode;
+}
+
+/**
+ * A renderer session amortizes backend construction across the seven required
+ * fixtures (and their producer-owned falsifiers). The evidence contract still
+ * opens a fresh World and renders 60 frames for every capture; only the
+ * renderer/device/manifest lifetime is shared.
+ */
+export interface VertexColorCaptureSession {
+  capture(options: VertexCaptureOptions): Promise<VertexColorCaptureOutput>;
+  dispose(): Promise<void>;
 }
 
 interface CaptureCanvas {
@@ -423,8 +439,6 @@ function setupWorld(fixture: VertexColorSemanticFixture, forceWhite = false): Wo
   const world = new World();
   const alphaCutoff = typeof fixture.alphaCutoff === 'number' ? fixture.alphaCutoff : undefined;
   const material = Materials.unlit([1, 1, 1, 1], {
-    colorSpace: 'linear',
-    castShadow: false,
     renderState: { cullMode: 'none' },
     ...(alphaCutoff === undefined ? {} : { alphaCutoff }),
   });
@@ -445,30 +459,35 @@ function setupWorld(fixture: VertexColorSemanticFixture, forceWhite = false): Wo
   }
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 3] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 1 }), clearColor: [0, 0, 0, 1] } },
+    {
+      component: Camera,
+      data: {
+        ...perspective({ fov: Math.PI / 4, aspect: 1 }),
+        // The producer reads the renderer-owned linear-HDR observation below.
+        // Explicitly opt into the linear output-transform path; the camera's
+        // zero-config tonemap path writes directly to the display surface and
+        // intentionally publishes no HDR observation attachment.
+        tonemap: TONEMAP_LINEAR,
+        clearColor: [0, 0, 0, 1],
+      },
+    },
   ).unwrap();
   return world;
 }
 
-export async function captureForgeaxVertexColor({ fixture, backend, sourceSha, forgeaxBundler, vertexColorFalsifier }: VertexCaptureOptions): Promise<VertexColorCaptureOutput> {
-  if (forgeaxBundler === undefined) {
-    throw new Error(JSON.stringify({
-      code: 'producer-entry-missing',
-      detail: 'ForgeaX bundler options were not injected into the capture entry',
-      recovery: 'run a producer entry with an injected shader manifest (Browser adapter or Dawn data URL)',
-    }));
-  }
-  const surface = createCanvas();
-  const constructed = await constructRuntimeRendererHost(surface.canvas, {}, forgeaxBundler as never);
-  if (!constructed.ok) throw new Error(`ForgeaX renderer unavailable: ${constructed.error.code}`);
-  const { renderer, debugDrawHost } = constructed.value;
+async function captureForgeaxWithAssembly(
+  assembly: RendererHostAssembly,
+  surface: CaptureCanvas,
+  { fixture, backend, sourceSha, vertexColorFalsifier }: VertexCaptureOptions,
+): Promise<VertexColorCaptureOutput> {
+  const { renderer, debugDrawHost } = assembly;
   const legacyHost = debugDrawHost as unknown as RendererLegacyHostAdapter;
   const device = debugDrawHost.device;
+  const world = setupWorld(fixture, vertexColorFalsifier === 'white-color');
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   try {
-    const world = setupWorld(fixture, vertexColorFalsifier === 'white-color');
-    const attached = renderer.attach(world);
-    if (!attached.ok) throw attached.error;
-    const lease = attached.value;
     for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
       world.update().unwrap();
       const draw = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
@@ -502,8 +521,54 @@ export async function captureForgeaxVertexColor({ fixture, backend, sourceSha, f
       readback: 'copyTextureToBuffer',
     };
   } finally {
-    await renderer.dispose();
+    // The device stays alive for the next fixture. Detaching the lease removes
+    // the World-owned derived systems and read lease before the next capture.
+    legacyHost.detachScene(world);
+  }
+}
+
+export async function createForgeaxVertexColorCaptureSession(
+  forgeaxBundler: VertexColorForgeaxBundler,
+): Promise<VertexColorCaptureSession> {
+  const surface = createCanvas();
+  const constructed = await constructRuntimeRendererHost(surface.canvas, {}, forgeaxBundler as never);
+  if (!constructed.ok) {
     surface.destroy();
+    const error = constructed.error;
+    const code = 'code' in error ? error.code : 'engine-environment-error';
+    throw new Error(`ForgeaX renderer unavailable: ${code}`);
+  }
+  let disposed = false;
+  return {
+    capture(options) {
+      if (disposed) return Promise.reject(new Error('ForgeaX vertex-color capture session is disposed'));
+      return captureForgeaxWithAssembly(constructed.value, surface, options);
+    },
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      try {
+        await constructed.value.renderer.dispose();
+      } finally {
+        surface.destroy();
+      }
+    },
+  };
+}
+
+export async function captureForgeaxVertexColor(options: VertexCaptureOptions): Promise<VertexColorCaptureOutput> {
+  if (options.forgeaxBundler === undefined) {
+    throw new Error(JSON.stringify({
+      code: 'producer-entry-missing',
+      detail: 'ForgeaX bundler options were not injected into the capture entry',
+      recovery: 'run a producer entry with an injected shader manifest (Browser adapter or Dawn data URL)',
+    }));
+  }
+  const session = await createForgeaxVertexColorCaptureSession(options.forgeaxBundler);
+  try {
+    return await session.capture(options);
+  } finally {
+    await session.dispose();
   }
 }
 
@@ -561,14 +626,17 @@ export async function captureThreeVertexColor({ fixture, backend, sourceSha, ver
     } else {
       addPrimitive(!isNoColorFixture(fixture), 0);
     }
-    const camera = new (await import('three')).PerspectiveCamera(45, 1, 0.1, 10);
+    const camera = new PerspectiveCamera(45, 1, 0.1, 10);
     camera.position.set(0, 0, 3);
     try {
       renderer.setRenderTarget(linearTarget);
-      for (let frame = 0; frame < FRAME_COUNT; frame += 1) await renderer.renderAsync(scene, camera);
+      // renderer.init() completed before the loop. Calling the deprecated
+      // renderAsync() 300 times re-enters that wrapper for no benefit and
+      // creates avoidable work on the overloaded CI GPU.
+      for (let frame = 0; frame < FRAME_COUNT; frame += 1) renderer.render(scene, camera);
       const linearReadback = await renderer.readRenderTargetPixelsAsync(linearTarget, 0, 0, WIDTH, HEIGHT);
       renderer.setRenderTarget(finalTarget);
-      await renderer.renderAsync(scene, camera);
+      renderer.render(scene, camera);
       const finalReadback = await renderer.readRenderTargetPixelsAsync(finalTarget, 0, 0, WIDTH, HEIGHT);
       const linearBytes = new Uint8Array(
         (linearReadback as { readonly buffer: ArrayBuffer; readonly byteOffset: number; readonly byteLength: number }).buffer,

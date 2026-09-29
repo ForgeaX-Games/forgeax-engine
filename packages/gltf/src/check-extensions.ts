@@ -1,13 +1,16 @@
 // check-extensions.ts - KHR / vendor extension gate.
 //
-// v1 required-extension support contains EXT_mesh_gpu_instancing,
-// KHR_lights_punctual, and KHR_texture_transform. The exported legacy list remains the original mesh
-// extension list for callers that display the v1 mesh-only surface.
+// Required-extension support contains EXT_mesh_gpu_instancing,
+// EXT_meshopt_compression, KHR_lights_punctual, KHR_texture_transform, and
+// the KHR material transmission/IOR/volume/clearcoat/anisotropy/sheen/
+// iridescence/specular extensions. The exported list is the public supported
+// extension surface consumed by both the required-extension gate and callers
+// that need to discover support.
 // (feat-20260518-gltf-instancing-and-name-component plan-strategy section
 // 2 D-1 / D-3). Any extension listed in `extensionsRequired[]` outside
-// this allowlist triggers `gltf-extension-unsupported` (hard fail).
+// the supported extension set triggers `gltf-extension-unsupported` (hard fail).
 // Extensions listed in `extensionsUsed[]` (but not required and not in
-// allowlist) are recorded in `importSettings.diagnostics
+// supported extension set) are recorded in `importSettings.diagnostics
 // .unsupportedExtensions` so AI users can observe them downstream — and
 // nothing else: `extensionsUsed` is purely informational per the glTF spec
 // (only `extensionsRequired` is binding), and exporters routinely
@@ -21,19 +24,30 @@
 
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 
-/** Hard-coded v1 allowlist (plan-strategy decision section 2 D-1 / D-3). */
+/** Public supported extension list used by the required/used declaration gate. */
 export const EXTENSION_ALLOWLIST: readonly string[] = [
   'EXT_mesh_gpu_instancing',
   'EXT_meshopt_compression',
+  'KHR_lights_punctual',
+  'KHR_texture_transform',
+  'KHR_materials_transmission',
+  'KHR_materials_ior',
+  'KHR_materials_volume',
+  'KHR_materials_clearcoat',
+  'KHR_materials_anisotropy',
+  'KHR_materials_sheen',
+  'KHR_materials_iridescence',
+  'KHR_materials_specular',
+  'KHR_materials_diffuse_transmission',
 ];
 const SUPPORTED_EXTENSIONS: readonly string[] = [
   ...EXTENSION_ALLOWLIST,
-  'KHR_lights_punctual',
-  'KHR_texture_transform',
+  'MSFT_lod',
+  'MSFT_screencoverage',
 ];
 
 export interface ExtensionsCheckResult {
-  /** Names listed in extensionsUsed but not in the allowlist. */
+  /** Names listed in extensionsUsed but not in the supported extension set. */
   readonly unsupportedUsed: readonly string[];
 }
 
@@ -43,7 +57,7 @@ export interface GltfExtensionsJson {
 }
 
 /**
- * Validate the glTF JSON's extension declarations against the v1 allowlist.
+ * Validate the glTF JSON's extension declarations against the supported set.
  *
  * Returns:
  *   - `Result.err(gltf-extension-unsupported)` for the FIRST entry of

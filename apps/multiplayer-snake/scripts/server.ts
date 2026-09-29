@@ -8,23 +8,13 @@ const server = await startServer(requestedPort);
 console.log(`Snake authority listening on ws://localhost:${server.port}`);
 
 let stopping = false;
-let tickTimer: ReturnType<typeof setInterval> | undefined;
-const stop = (exitCode = 0): void => {
+const stop = async (exitCode = 0): Promise<void> => {
   if (stopping) return;
   stopping = true;
-  if (tickTimer !== undefined) clearInterval(tickTimer);
-  const closed = server.close();
-  if (!closed.ok) console.error(`${closed.error.code}: ${closed.error.hint}`);
-  process.exit(closed.ok ? exitCode : 1);
+  await server.close();
+  process.exit(exitCode);
 };
 
-process.once('SIGINT', stop);
-process.once('SIGTERM', stop);
-tickTimer = setInterval(() => {
-  const updated = server.world.update(1 / 60);
-  if (!updated.ok) {
-    console.error(`${updated.error.code}: ${updated.error.hint}`);
-    stop(1);
-  }
-}, 1000 / 60);
+process.once('SIGINT', () => void stop());
+process.once('SIGTERM', () => void stop());
 await new Promise<void>(() => {});

@@ -24,7 +24,7 @@
 // import owner; the runtime only consumes the resulting bytes.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -56,7 +56,7 @@ function packMeshBinForTest(
     uv.set(vertices.subarray(source + 6, source + 8), vertex * 2);
     tangent.set(vertices.subarray(source + 8, source + 12), vertex * 4);
   }
-  const packed = packMeshBinV4(
+  const packed = packMeshBin(
     {
       vertices,
       indices,

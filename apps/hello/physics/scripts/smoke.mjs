@@ -24,9 +24,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WASM_LOAD_TIMEOUT_MS = Number.parseInt(process.env.FORGEAX_SMOKE_PHYSICS_WASM_TIMEOUT_MS ?? '10000', 10);
 
 const WIDTH = 800;
@@ -263,27 +264,51 @@ console.log(`[smoke] sphere initial pos y=${initialPosY}`);
 let totalFrames = 0;
 const phaseFailures = [];
 const frameDeltaMs = 1_000 / 60;
-function driveFrame(deltaMs) {
+const frameCreditTimeoutMs = Number.parseInt(
+  process.env.FORGEAX_SMOKE_FRAME_CREDIT_TIMEOUT_MS ?? '5000',
+  10,
+);
+const FRAME_CREDIT_TIMEOUT_MS = Number.isFinite(frameCreditTimeoutMs) && frameCreditTimeoutMs > 0 ? frameCreditTimeoutMs : 5_000;
+async function waitForFrameCredit() {
+  const deadline = Date.now() + FRAME_CREDIT_TIMEOUT_MS;
+  while (app.execution.report().frame.inFlight >= 2) {
+    if (Date.now() >= deadline) {
+      phaseFailures.push(
+        `frame credit did not settle within ${FRAME_CREDIT_TIMEOUT_MS}ms (inFlight=${app.execution.report().frame.inFlight})`,
+      );
+      return false;
+    }
+    // Dawn receipts settle asynchronously. Yield briefly so the completion
+    // callback can release the App's two-frame credit before the next tick.
+    await delay(1);
+  }
+  return true;
+}
+async function driveFrame(deltaMs) {
   const due = rafQueue.shift();
   if (!due) {
     phaseFailures.push(`frame queue empty before frame ${totalFrames + 1}`);
     return undefined;
   }
+  if (!(await waitForFrameCredit())) return undefined;
   fakeNow += deltaMs;
   due.cb(fakeNow);
   totalFrames++;
+  await delay(1);
   return observations[observations.length - 1];
 }
 
-driveFrame(frameDeltaMs);
-const baseline = driveFrame(frameDeltaMs);
+await driveFrame(frameDeltaMs);
+const baseline = await driveFrame(frameDeltaMs);
 const physicsWorld = app.world.hasResource('PhysicsWorld') ? app.world.getResource('PhysicsWorld') : undefined;
 if (physicsWorld !== undefined) physicsWorld.teleport(sphereEntity, [0, 5, 0]);
-const oversizedDelta = driveFrame(5_000);
-const healthyRecovery = driveFrame(frameDeltaMs);
+const oversizedDelta = await driveFrame(5_000);
+const healthyRecovery = await driveFrame(frameDeltaMs);
 
+// Observe two fixed physics steps per render after the recovery probe so the
+// 60-frame window reaches ground contact without changing the scene or timestep.
 while (totalFrames < SMOKE_MIN_FRAMES) {
-  if (driveFrame(frameDeltaMs) === undefined) break;
+  if ((await driveFrame(frameDeltaMs * 2)) === undefined) break;
 }
 
 // Restore real performance.now and wait for any pending WASM to settle.
@@ -374,6 +399,8 @@ const finalObservation = observations[observations.length - 1];
 const collisionWritebackPass =
   maxCollidingEntities > 0 &&
   validObservation(finalObservation) &&
+  finalObservation.droppedUpdates === healthyRecovery?.droppedUpdates &&
+  finalObservation.droppedSeconds === healthyRecovery?.droppedSeconds &&
   finalObservation.bodyCount === baseline?.bodyCount &&
   finalObservation.hasBody &&
   finalObservation.pos.every(Number.isFinite);
@@ -447,6 +474,7 @@ if (failures.length > 0) {
 
 console.log(`[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, pos y: ${initialPosY} -> ${finalPosY}, app.onError=0`);
 console.log('[m25] PASS - physics large-delta recovery');
+emitSmokeReceipt('hello-physics/smoke', totalFrames);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

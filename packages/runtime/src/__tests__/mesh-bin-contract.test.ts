@@ -1,4 +1,4 @@
-import { unpackMeshBinV4 } from '@forgeax/engine-assets-runtime';
+import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
 import { describe, expect, it } from 'vitest';
 
 describe('mesh-bin v4 closed error contract', () => {
@@ -7,7 +7,7 @@ describe('mesh-bin v4 closed error contract', () => {
     new Uint8Array([2, 0, 0, 0]),
     new Uint8Array([3, 0, 0, 0]),
   ])('rejects malformed or legacy bytes with structured recovery', (bytes) => {
-    const result = unpackMeshBinV4(bytes, 'runtime://contract');
+    const result = unpackMeshBin(bytes, 'runtime://contract');
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.subject).toBe('mesh-bin');

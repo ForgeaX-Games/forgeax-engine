@@ -57,7 +57,8 @@ const canvas = {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const manifest = await buildEngineShaderManifest();
-const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
+const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(manifestUrl));
 
 function makeWorld() {
   const world = new World();
@@ -83,7 +84,7 @@ function makeFeature(identity, state) {
     extract: () => ok(undefined),
     plan: () => {
       if (!state.repaired) throw new Error(`${identity} declarative plan is intentionally unavailable`);
-      return ok({ resources: [], passes: [] });
+      return ok({ work: [] });
     },
   };
 }

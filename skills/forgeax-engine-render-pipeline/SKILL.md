@@ -6,24 +6,180 @@ description: ForgeaX render pipelines, post-processing, and typed RenderGraph ow
 # forgeax-engine-render-pipeline
 
 > [!IMPORTANT]
-> `RenderPipeline.build` 只声明 typed graph topology。Renderer 独占 compile、last-known-good 替换、execute、retire、`finish()` 与每帧一次 `queue.submit()`。
+> RenderPipeline.build declares typed graph topology only. Renderer exclusively owns compile, last-known-good replacement, execution, retirement, finish(), and one queue.submit() per frame.
 
-## 路由
+## Local volumetric fog
 
-| 目标 | 使用入口 |
+Use one `VolumetricFog` entity for each local medium; select
+`VolumetricFogSamplingValue.density` for an authored local 3D density field.
+Read the [Render contract](../../packages/render/README.md#local-volumetric-fog)
+for author fields, owner limits, accepted-count inspection, and consumer
+boundaries. On overflow or invalid parameters, repair the named owner and
+retry; never silently drop a volume or composite it through a second renderer.
+
+## Fog and translucency
+
+`Fog` fogs the opaque scene in place (`analytic-fog`, before transmission and
+translucent draws); every blended writer fogs itself at its own depth through
+`translucent_fog` and the View copy selected by its blend composition. Do not add
+a post-translucency fog pass or composite particles before fog. The
+[Render contract](../../packages/render/README.md#fog-and-translucency) states the
+composition rules and limits; prove a fog-order bug with an RHI capture (fog work
+before the translucent work, bound View offset `translucentViewOffset(...)`).
+
+## Transmission/refraction
+
+Transmission/refraction stays in the Standard pipeline: one renderer-owned backdrop copy, optional
+rough mip raster passes, transmission before ordinary transparent, then temporal/post. Use
+`renderer.inspect().transmission` for capability, extent, format, mips, bytes, and recovery facts;
+never add a second graph or app-owned scene-color copy.
+
+## Order-independent transparency
+
+`Camera.transparency: TRANSPARENCY_WEIGHTED_BLENDED` replaces the sorted pass for eligible draws
+with `oit-accumulate` (rgba16float accum + r16float weight, shared additive/revealage blend) and
+`oit-composite` over scene color; ineligible draws keep the sorted `transparent` pass after the
+composite. `addStandardTransparentPasses` builds this for forward and deferred alike. MSAA
+accumulates into 4x targets with 1x resolves; TAA, fog, DoF and outline treat the composite as the
+transparent pass; planar/target captures stay sorted; the GPU-driven lane carries no transparents.
+Read `renderer.inspect().transparency` for requested/resolved mode, draw counts, closed ineligible
+reasons, and the `capability-absent` fallback. Contract:
+[render README](../../packages/render/README.md#order-independent-transparency).
+
+## Routing
+
+| Goal | Entry |
 |:--|:--|
-| tonemap / bloom / FXAA / MSAA | `Camera` 字段 |
-| 天空盒 | `SkyboxBackground` |
-| 在 URP 尾部追加全屏效果 | `renderer.postProcess.register` + `URP_PIPELINE_ID` 的 `config.postEffects` |
-| 替换整条 pass topology | `RenderPipeline.build` |
-| feature 写 scene color/depth | `createRenderFeatureTarget` + `staging.addGraphicsPass` |
-| compute 生成 vertex/index/indirect buffer，再 raster 消费 | `staging.addComputePass` + `staging.addGraphicsPass`；共享同一 prepared GPU buffer ref |
+| tonemap / bloom / FXAA / MSAA | Camera fields |
+| Skybox | SkyboxBackground |
+| CubeCamera / ReflectionProbe capture | `CubeCamera` / `ReflectionProbe` + one Renderer receipt path |
+| RenderTarget source / readback | `Renderer.createRenderTargetTextureSource` + receipt-bound `observe` |
+| Standard linear-output stages/camera effects | Camera companion + Standard output plan + ordinary RenderFeature |
+| Encoded-output tail effects | createFullscreenRenderFeature + createRenderer({ features }); only effects that preserve spatial position |
+| Replace pass topology | RenderPipeline.build |
+| Feature writes scene color/depth | createRenderFeatureTarget + staging.addGraphicsPass |
+| Compute produces vertex/index/indirect buffers for raster | staging.addComputePass + staging.addGraphicsPass, sharing prepared GPU buffer refs |
 | RHI backend / capability | `forgeax-engine-rhi` |
-| 帧录制/replay | `forgeax-engine-rhi-debug` |
+| Frame capture/replay | forgeax-engine-rhi-debug |
 
-## Camera 与内建管线
+## Directional shadow entry
+
+DirectionalLight.shadowFilter is the public directional-shadow authoring entry.
+It is an ECS enum; assign
+DirectionalShadowFilterValue.pcf1, .pcf3, .pcf5, .pcssMedium, or
+.pcssHigh numeric constants, not string labels. Valid labels are
+pcf1, pcf3, pcf5, pcssMedium, pcssHigh; default is pcf3. Do not create
+numeric or compatibility aliases. PCSS
+shadowAngularRadius is in radians, defaults to 0.00465, and accepts
+[0.0001, 0.05]. maxPenumbraTexels is in texels, defaults to 32, and must be
+a finite integer in [1, 64]. Other CSM fields, units, and defaults live in the
+Directional shadow quality table in
+[`packages/render/README.md`](../../packages/render/README.md); do not duplicate the schema here.
+
+For small-scale contact occlusion below cascade resolution (grass, foliage,
+feet), set DirectionalLight.contactShadowLength in meters (default 0, off;
+typical 0.1-0.5). It is an inline depth march in the Deferred lighting pass and
+does not add a pass. Forward ignores it, so pair it with
+`renderPath: 'deferred'`. It is independent of castShadow. See Screen-space
+contact shadows in the render README.
+
+For skinned characters, add the `CapsuleShadow` tag component to cast the
+directional shadow from `SkeletonAsset.shadowCapsules` (fitted at glTF/FBX
+import) instead of re-rasterizing the mesh into every cascade. It needs
+`renderPath: 'deferred'` and a `castShadow` DirectionalLight; read
+`renderer.inspect().capsuleShadow.fallbacks` when an entity is not admitted.
+See Capsule character shadows in the render README.
+
+Per-entity opt-out is `ShadowParticipation { cast, receive }` (Bevy
+`NotShadowCaster` / `NotShadowReceiver`; absent means both true). `cast: false`
+leaves every shadow map, and `receive: false` skips all shadow sampling on that
+surface. The WebGL2 fallback always receives. `PointLightShadow` bias uses
+Bevy units: `depthBias` in world meters (default 0.08), `normalBias` in cube
+texels (default 0.6). Point sampling is hardware 2x2 and needs
+`forgeaxShader({ engineEntries: { pointShadows: true } })`; without it
+`renderer.inspect().pointShadow.status` is `unavailable`, never `ready`. Directional and
+spot bias keep normalized depth plus world-meter normal offset.
+
+After authoring, read renderer.inspect().directionalShadow once. This bounded
+POD uses the same field names as Render/Runtime READMEs: requested, effective,
+`status`, `fallbackReason`, `lastKnownGood`, `pixelEvidence`,
+`cascadeCount`, `mapSize`, `shadowMapBytes`, `writerPasses`, `blockerTaps`,
+filterTapUpperBound, seamTapUpperBound, deviceGeneration, and
+graphGeneration. effective is not an echo of the request: WebGL2 PCSS requests
+produce explicit PCF fallback; RhiNull produces rhi-null-structural. Neither
+is PCSS pixel evidence. not-run must remain not-run.
+
+For shadow cost, read renderer.inspect().shadowRaster: `passCount`, `drawCount`,
+and per-view `cache` plus `invalidationReason`. A static scene that keeps
+missing names the changing input; fix that producer instead of disabling shadows.
+Moving or animated casters only re-raster the views they touch: one
+renderer-global classification splits settled and dynamic casters, and every
+directional, spot, and point-face view keeps settled casters in a cached
+`layer: 'static'` view and redraws only dynamic casters over a copy of it. `shadowRaster.views[]` lists both
+identities; a static-layer hit with final-layer misses is the expected cost of a
+scene with moving characters. Directional views also skip casters smaller than
+one or two shadow texels; `views[].texelCulled` counts them per view.
+A static-layer miss under an unchanged light matrix redraws only the changed
+casters' footprint; `views[].dirtyRectCount` present means a partial redraw,
+absent on a miss means a full one. Any light-matrix change, including a
+cascade that moved by whole texels with the camera, is a full static redraw:
+re-rastering settled casters is cheaper than shifting the retained depth.
+Without GPU-driven shadow views (the direct lane or no storage buffers) the
+whole directional atlas is retained while the persistent caster content and the
+cascade matrices are unchanged, so camera-only motion redraws only when a
+cascade crosses a page; skinned casters keep it redrawing every frame.
+Declare level geometry `Mobility` static (`@forgeax/engine-scene`) so its casters
+join the static layer at once even when spawned later; undeclared casters join
+at the first frame only as part of the initial population, otherwise one 16-frame
+window after creation or 100 unchanged frames after a move.
+
+For per-frame CPU cache cost, read renderer.inspect().renderScene.frameCaches:
+lifetime `hits`/`misses` for `visibilityProjection`, `temporalSnapshots`,
+`transparentSort` and `renderBundles` (residency lives in
+`renderScene.gpuDriven.residencyValidation*`). Diff two samples for a window
+rate. Camera-only motion should keep visibility and temporal near 100%; a
+distance-sorted transparent set legitimately misses when the orbit swaps pairs.
+Render bundles re-record only the changed material batch; a pass whose batches
+never repeat backs off to direct recording and probes again later. A quiet
+scene (no movers or churn) should report zero steady-state bundle misses; a
+persistent miss means some per-batch command input, such as a bind group,
+is recreated every frame.
+
+Diagnose failures through error.code, error.expected,
+error.hint, and code-specific error.detail, not message parsing. For
+shadow-invalid-config, read detail.field, detail.actual,
+detail.bound, and detail.reason; repair that authored field and retry. If
+status is rejected with lastKnownGood retained, repair or rebuild/cold-cook
+the identified producer, invoke renderer.recover(), then retry. Do not label
+fallback, LKG, or structural evidence as accepted PCSS.
+
+Read evidence in this order: authored label/unit, inspect()'s
+requested/effective/reason → `deviceGeneration`/`graphGeneration` →
+MVD receipt backend and visual/readback/timing status. Only available supports
+the corresponding pixel claim; unsupported and not-run remain explicit. Renderer alone owns
+compile, LKG, execute, retire, finish(), and one queue.submit() per frame. This skill
+adds no second query, buffer, UBO, binding, atlas, pass, RPC, or recovery owner.
+
+## Selection outline
+
+Use `Outline` on the active camera for an explicit camera-World entity set,
+linear visible/hidden colors, integer output-pixel width, and
+`OutlineOcclusionValue.visible`, `.hidden` or `.all`. Read the
+[Render contract](../../packages/render/README.md#selection-outline) for bounds,
+coverage and graph placement. Empty selection, zero width and component removal
+produce no Outline passes. Inspect `renderer.inspect().perFramePassNames`, then capture the
+selection, classification and composite work through RHI Debug; retain live and
+fresh-device replay pixels plus the missing-composite falsifier.
+
+## Camera and built-in pipelines
 
 ```ts
+import {
+  ANTIALIAS_FXAA,
+  BLOOM_ENABLED,
+  TONEMAP_REINHARD_EXTENDED,
+} from '@forgeax/engine/render';
+
 world.spawn(
   { component: Transform, data: cameraTransform },
   {
@@ -33,19 +189,20 @@ world.spawn(
       aspect: canvas.width / canvas.height,
       near: 0.1,
       far: 1000,
-      tonemap: 'aces',
+      tonemap: TONEMAP_REINHARD_EXTENDED,
       exposure: 1,
-      antialias: 'fxaa',
-      bloom: 'on',
+      antialias: ANTIALIAS_FXAA,
+      bloom: BLOOM_ENABLED,
       bloomThreshold: 1,
       bloomIntensity: 0.35,
-      bloomBlurRadius: 4,
+      bloomSoftKnee: 0.5,
+      bloomScatter: 0.7,
     },
   },
 );
 ```
 
-内建 topology：
+Built-in topology:
 
 ```mermaid
 flowchart LR
@@ -54,22 +211,161 @@ flowchart LR
   G --> F --> O["observation"] --> P["bloom / tone / FXAA"] --> D["display surface"]
 ```
 
-`renderer.perFramePassNames` 返回编译后的 pass 顺序；它是 topology 观测面，不是执行 API。
+renderer.perFramePassNames reports compiled pass order; it observes topology and does not execute it.
 
-## 自定义 RenderPipeline
+### Built-in camera Depth of Field
+
+DoF is authored on the active perspective `Camera` through the Engine-owned
+`DepthOfField` component. Its presence enables the shared Standard post chain;
+`maxRadiusPixels: 0` or component removal is the exact zero-work path. Use the
+closed numeric values exported by Render when selecting a side or quality:
+
+```ts
+import {
+  Camera,
+  DepthOfField,
+  DepthOfFieldQualityValue,
+  DepthOfFieldSideValue,
+} from '@forgeax/engine-render';
+
+world.addComponent(camera, {
+  component: DepthOfField,
+  data: {
+    focusDistance: 8,
+    fStop: 1.4,
+    sensorHeight: 0.024,
+    maxRadiusPixels: 16,
+    quality: DepthOfFieldQualityValue.medium,
+    blurSide: DepthOfFieldSideValue.both,
+  },
+});
+```
+
+Near/far/both use the same signed thin-lens CoC. Quality changes tap density and
+does not change the radius. The feature consumes the Standard `RenderExtent`
+domain and uses `max(1, ceil(axis / 2))` for half-resolution resources. It reads
+the current matching depth contract, including the multisampled depth variant;
+it does not reinterpret an invalid temporal-v1 sample as raw depth.
+
+Read `renderer.inspect().depthOfField` after a submitted frame. `requested` is
+the current component projection; `effective`, `graphGeneration`,
+`deviceGeneration`, and `lastKnownGood` describe the last successful submit.
+When candidate compilation or submission fails, the candidate is retained only
+as a diagnostic and the prior accepted projection remains effective. Use the
+reported `fallbackReason` before retrying the existing Renderer recovery path.
+With no component on the active camera, the projection stays present as
+`status: 'off'` with zero DoF graph facts. Invalid authoring fields and
+orthographic requests remain inspectable through the camera snapshot's
+structured `error` (`code`, `expected`, `hint`, `detail`) and report
+`invalid` or `unsupported` without graph admission.
+
+### Built-in barrel distortion
+
+`BarrelDistortion` is an ordinary camera companion. It samples the submitted
+linear-LDR scene at the output extent after LUT and before FXAA and the single
+output encoding. `strength` is finite in `[0, 0.35]`; `centerX` and `centerY`
+are top-left-origin output-viewport fractions in `[0, 1]`. Missing or zero
+strength is the exact-zero path. Positive strength uses auto-crop, so the
+camera FOV stays fixed while the visible scene region becomes narrower.
+
+```ts
+import { BarrelDistortion, Camera } from '@forgeax/engine-render';
+
+world.addComponent(camera, {
+  component: BarrelDistortion,
+  data: { strength: 0.2, centerX: 0.5, centerY: 0.5 },
+});
+```
+
+The same output-sized mapping is available from the public Render package:
+`createBarrelDistortionMapping(width, height, data)` derives the immutable POD,
+then `mapDisplayToScene(out, mapping, x, y)` and `mapSceneToDisplay(out, mapping,
+x, y)` use continuous physical pixels. Reuse the mapping from the submitted
+`FrameReceipt` (or the serialized worker frame signal); do not read a newer ECS
+component when the displayed frame is still older. An inverse point outside the
+display rectangle is a miss. Legacy `pick` coordinates remain unwarped; use the
+explicit `pickDisplay`/`computeDisplayScreenRay` entrypoints once per pointer.
+DOM/ShadowRoot HUD layout is not transformed. World labels and vertex distance
+tests must project through the inverse mapping into displayed pixels.
+
+The built-in feature is registered through the ordinary ordered feature host and
+uses the existing in-flight retirement. Missing or zero strength produces zero
+resources, uploads, and passes while keeping the shader declaration available
+to production Naga/Dawn validation. Each accepted receipt carries the immutable
+mapping, output extent, camera matrices, device generation, graph generation,
+and frame identity, including the identity case. Display consumers must reject
+retired, lost, or zero-size contexts and never recover a camera from the live
+World. Browser consumers can use the App frame-submission subscription to carry
+that same context across the Engine Worker boundary.
+
+Read `renderer.inspect().barrelDistortion` for the effective mapping, output
+extent, accepted `frameId`, `deviceGeneration`, `graphGeneration`, and
+`lastKnownGood`. An invalid component reports the closed
+`barrel-distortion-invalid-parameter` error with `detail.field`, `detail.value`,
+and the expected bound. A missing `rgba16floatRenderable` capability is admitted
+only when the extracted plan is active; an empty or zero-strength plan remains
+zero-work. Repair the producer or disable the component, then retry through the
+same Renderer recovery route. While a candidate is pending or fails, the
+previous mapping and picture stay paired; a successful disable publishes an
+explicit identity mapping and retires the old resources after in-flight work.
+Do not treat a missing mapping as identity, and do not use a newer World camera
+to interpret an older submitted frame.
+
+## GPU pass timing boundary
+
+The public Render route is one opt-in on `RendererOptions.gpuPassTiming`, one
+`draw()` `FrameReceipt`, and one `observe(receipt, { include: ['timings'] })`
+request. Observation returns bounded JSON-safe facts for that receipt. Branch
+on the closed statuses `complete`, `partial`, `unavailable`, and `failed`, then
+read the matching `reason` or `error` `code`, `expected`, `hint`, and `detail`.
+Pass duration is a pass fact; it is not frame latency. `current` status,
+completeness, and `latestKnownGood` are distinct projections, and an omitted
+`timings` include does not start work or materialize a future observation.
+
+Render owns the session, generation fence, parser, retention, and recovery
+publication. The bounded fact contract is
+[`packages/render/src/record/gpu-pass-timing/contract.ts`](../../packages/render/src/record/gpu-pass-timing/contract.ts);
+the fail-closed benchmark validator is
+[`packages/render/bench/gpu-pass-timing/validator.ts`](../../packages/render/bench/gpu-pass-timing/validator.ts).
+RenderGraph contributes only neutral pass-boundary seams such as
+`timestampWrites` and `after(frame)`; it never owns timing policy or status.
+
+```ts
+const renderer = created.value;
+const frame = renderer.draw(request);
+if (frame.ok) {
+  const observation = await renderer.observe(frame.value, { include: ['timings'] });
+  if (observation.ok && observation.value.timings !== undefined) {
+    const timing = observation.value.timings;
+    if (timing.status === 'complete') console.log(timing.frame.passes);
+    else console.log(timing.reason?.code ?? timing.error?.code, timing.latestKnownGood);
+  }
+}
+```
+
+Use the producer-owned recovery `hint` and inspect the named source before
+retrying. Do not add a timing controller, second counter, live trace, or
+membership-specific accepted-evidence path.
+
+Target/probe capture stays inside this same typed graph. Each cube face uses its own face camera
+and array-layer view; promotion waits for `FrameReceipt.completed`. PMREM work is bounded to one
+face/mip step per frame, and a probe outside its box selects the renderer's Skylight irradiance
+fallback. A healthy `renderer.recover()` result with `renderer-state-invalid` is a guard, not a
+device-loss recovery result; recovery invalidates the old generation and rebuilds physical targets.
+
+## Custom RenderPipeline
 
 ```ts
 import {
   addTypedScenePass,
-  addTypedTonemapPass,
+  addTypedOutputTransformPass,
   createRenderPipelineTarget,
   importRenderPipelineSurface,
   type RenderPipeline,
-} from '@forgeax/engine-render';
-import { ok } from '@forgeax/engine-types';
+} from '@forgeax/engine/render/authoring';
 
 export const customPipeline: RenderPipeline = {
-  build({ graph, contributeFeatures }, topology) {
+  build({ graph, contributeFeatures, observationCaptureDomains }, topology) {
     const surface = importRenderPipelineSurface(graph, topology);
     if (!surface.ok) return surface;
 
@@ -111,38 +407,60 @@ export const customPipeline: RenderPipeline = {
     if (!features.ok) return features;
 
     if (topology.camera.tonemap === 'none') {
-      return addTypedTonemapPass(graph, color.value, surface.value.storage, true);
+      return addTypedOutputTransformPass(graph, color.value, surface.value.storage, {
+        outputOnly: true,
+        observationCaptureDomains,
+      });
     }
-    return addTypedTonemapPass(graph, color.value, surface.value.display);
+    return addTypedOutputTransformPass(graph, color.value, surface.value.display ?? surface.value.storage, {
+      observationCaptureDomains,
+    });
   },
 };
 ```
 
-安装：
+Forward the build context's `observationCaptureDomains` to the final output transform: it
+captures the requested `final-srgb` receipt there, so `requestObservation(['final-srgb'])` and
+`observe(receipt, { include: ['final-srgb'] })` work on a custom graph. Unrequested frames add
+no copy.
+
+Feature installation happens through the public renderer construction options:
 
 ```ts
-renderer.registerPipeline('game::custom', customPipeline);
-const installed = renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: 'game::custom',
+import { createRenderer } from '@forgeax/engine-runtime';
+import { createFullscreenRenderFeature } from '@forgeax/engine-render/authoring';
+
+const feature = createFullscreenRenderFeature({
+  identity: 'game::vignette',
+  source: VIGNETTE_WGSL,
+  reads: ['ldrColor'],
 });
-if (!installed.ok) throw installed.error;
+const created = await createRenderer(canvas, { features: [feature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
+Use `standardProfile` in the same construction options for Standard quality.
+The returned `Renderer` has no runtime `configureStandard` or
+`installRenderFeature` methods; the feature host owns declarations, graph
+admission, and in-flight retirement after construction.
+
 > [!CAUTION]
-> 安装自定义 pipeline 是整体替换。要保留 URP 阴影、tone、bloom，只追加 `config.postEffects`。
+`postEffects` run after the encoded output and must not add a second spatial
+warp. A spatial effect belongs in the Standard output plan so its sampling
+domain, target, FXAA order, and one OETF writer remain explicit.
 
 ## Typed resource ownership
 
-`RenderGraphBuilder` 只接受本 builder 创建或导入的 opaque handle：
+RenderGraphBuilder accepts only opaque handles created or imported by that builder:
 
-| 资源 | 创建/导入 | pass access |
+| Resource | Creation/import | Pass access |
 |:--|:--|:--|
 | texture | `createTexture` / `importTexture` | `sampled-read`, `storage-read`, `storage-write`, `color-attachment`, `depth-stencil-read`, `depth-stencil-write`, `copy-src`, `copy-dst` |
-| texture view | `view` / `importView` | attachment 与 texture read/write access |
+| Texture view | view / importView | Attachments and texture read/write access |
 | buffer | `createBuffer` / `importBuffer` | `uniform-read`, `storage-read`, `storage-write`, `vertex-read`, `index-read`, `indirect-read`, `copy-src`, `copy-dst` |
 
-`storage-write → vertex-read/index-read/indirect-read` 会建立 compute→raster 依赖并触发所需 barrier。不要另建 resource ledger、string key 或手写 pass dependency 来复制这条事实。
+storage-write followed by vertex-read/index-read/indirect-read establishes compute-to-raster dependencies and required barriers. Do not duplicate this with a resource ledger, string keys, or manual pass dependencies.
 
 ```ts
 const compacted = graph.importBuffer(
@@ -178,9 +496,20 @@ return graph.addRasterPass('visible-raster', {
 });
 ```
 
+## Render publication
+
+For a separate Render Worker, keep `extract` beside World and construct the same
+declared feature in the receiver bootstrap. Use `assetDependencies(data)` for
+GUID resources and `onSourceFrameSubmitted(data, feedback)` for source-owned
+intent acknowledgment. Keep GPU state in receiver-local planning/submission.
+Bootstrap `configureRenderer` owns pipeline/post-effect installation;
+`executionBootstrapHost.renderTargets` owns source target descriptions. Follow
+[Render publication](../../packages/render/README.md#render-publication) for
+payload ownership, geometry, resources and lifecycle rules.
+
 ## RenderFeature compute → raster
 
-Pipeline 拥有 attachment；feature 只声明所需的逻辑 target：
+The pipeline owns attachments; features declare required logical targets:
 
 ```ts
 const sceneColor = createRenderFeatureTarget({
@@ -190,17 +519,17 @@ const sceneColor = createRenderFeatureTarget({
 });
 ```
 
-feature 的 `prepare` 创建 GPU program、bindings 与 buffer refs；`contribute` 用同一 ref 先 `addComputePass`，再在 `addGraphicsPass` 的 `vertexData` / `indexData` / indirect command 中消费。Projection 会把 physical buffer 导入一次，并把 compute `storage-write` 与 raster `vertex-read` / `index-read` / `indirect-read` 投影进 renderer 的同一个 graph。
+Feature prepare creates GPU programs, bindings, and buffer refs. contribute uses the same refs in addComputePass and subsequent addGraphicsPass vertexData/indexData/indirect commands. Projection imports each physical buffer once and records compute storage-write plus raster vertex-read/index-read/indirect-read in the renderer's graph.
 
-规则：
+Rules:
 
-- attachment 使用 `RenderFeatureTargetHandle`，不得猜 pipeline 内部名字。
-- compute 与 raster 共享 prepared buffer ref，不能复制 handle registry。
-- topology 变化写入 contribution signature；下一帧编译并原子替换 last-known-good graph。
-- capability 缺失返回结构化错误或选择显式 fallback lane；不得静默提交无效 compute。
-- multi-World 的 `worldId` 是 renderer-local attachment identity；不得把它当作本帧 `worlds[]` 下标，detach 后重挂必须获得新 generation。
+- Use RenderFeatureTargetHandle for attachments; do not guess internal pipeline names.
+- Share prepared buffer refs between compute and raster; do not duplicate handle registries.
+- Include topology changes in the contribution signature; compile and atomically replace the last-known-good graph next frame.
+- Missing capabilities require structured errors or an explicit fallback lane; never silently submit invalid compute.
+- Multi-World worldId is a renderer-local attachment identity, not this frame's worlds[] index. Reattachment after detach must get a new generation.
 
-完整 VFX prepared-compute authoring 见 `forgeax-engine-vfx`；底层 builder/error contract 见 `packages/render-graph/README.md`。
+Prepared-compute VFX authoring: forgeax-engine-vfx. Builder/error contracts: packages/render-graph/README.md.
 
 ## Points and Lines main-pass route
 
@@ -234,42 +563,77 @@ The browser gate may be explicitly skipped by the loop authority; record that
 as skipped, never as a pass. A Dawn timeout is blocked environment evidence,
 not a successful smoke result.
 
-## 后处理追加
+## Appending post-processing
 
 ```ts
-renderer.postProcess.register('game::vignette', {
-  source: vignetteWgsl,
-  params: { byteSize: 16 },
-});
-
-renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: URP_PIPELINE_ID,
-  config: { postEffects: ['game::vignette'] },
-});
+const created = await createRenderer(canvas, { features: [vignetteFeature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
-## 验证
+## GPU-driven LOD selection
 
-| 修改 | 最小验证 |
+The built-in GPU-driven lane selects LOD on the GPU per view. LOD members with
+an identical chain share one batch that owns one indirect command and one
+visible segment per level; the cull computes projected height from GpuScene
+transforms and the view camera and appends each item to its level (two levels
+for a crossfade pair). Camera motion across a LOD threshold keeps
+`filteredPlanBuilds` at zero and uploads no height payload. Diagnose a wrong
+level with the view readback (`lodSelection` histogram, per-level segments) or
+an RHI Debug capture of the per-level `drawIndexedIndirect` commands, not by
+adding a CPU selection path. `indirectDrawCount` counts per-level commands.
+
+Shadow views rank LOD against their own light view-projection, clamped to at
+most `SHADOW_LOD_MAX_COARSER` levels coarser than the main camera's finest
+level, so a caster never drops detail the main view still shows. A retained
+static shadow layer invalidates on LOD only when the clamped level becomes
+finer; `lod-changed` static misses under camera motion indicate a broken clamp.
+
+## GPU-driven occlusion (two-phase HZB)
+
+With `caps.firstInstanceIndirect`, the main camera's GPU lane splits the scene
+pass: the early pass (`g-buffer` / `main`) draws last frame's visible items, a
+furthest depth pyramid (`occlusion-depth-pyramid-*`) builds from its depth,
+`gpu-driven.occlusion-cull` tests the rest, and `g-buffer-late` / `main-late`
+draws what was revealed. It is on by default; opt out per pipeline with
+`RenderPipelineAsset.config.gpuOcclusion: false`. MSAA, shadow views, and
+devices without the capability keep the single-phase path. There is no
+reprojection: history is a per-instance visibility bit. A missing object that
+reappears one frame late means a broken late append; a falsely culled object
+means a wrong footprint or pyramid level. Diagnose it with `readLodSelection()`
+(`occlusion.culled` / `late`) and an RHI Debug capture of the pyramid mips and
+late indirect commands, not by disabling the cull.
+
+## Verification
+
+| Change | Minimum verification |
 |:--|:--|
 | pipeline topology | `pnpm --filter @forgeax/engine-render test` |
 | RenderFeature projection | render + runtime integration tests |
 | RHI access/barrier | render-graph unit + Dawn mixed compute→raster capture/replay |
-| engine/RHI/demo | 全部 hello/learn-render Dawn 300 帧 + `pnpm test:browser` + `pnpm test:dawn` |
+| Engine/RHI/demo | All hello/learn-render Dawn smokes at 60 completed frames + pnpm test:browser + pnpm test:dawn |
 
-检查点：
+Checkpoints:
 
-- graph compile 在 swapchain acquisition 前完成；失败继续使用 last-known-good graph。
-- 每帧一个 shared encoder、一个 `finish()`、一个 frame submit。
-- retired graph 等待 in-flight execution 后销毁资源。
-- compute-produced indirect buffer 的 physical usage 同时包含 storage 与 indirect。
-- Browser/Dawn 验证是真实执行证据；rhi-null 只证明结构。
+- Graph compilation precedes swapchain acquisition; failure retains the last-known-good graph.
+- One shared encoder, one finish(), and one submission per frame.
+- Retired graphs wait for in-flight execution before destroying resources.
+- Compute-produced indirect buffers include both storage and indirect physical usage.
+- Browser/Dawn checks provide real execution evidence; RhiNull proves structure only.
 
 ## SSOT
 
-- Pipeline contract：`packages/render/src/render-pipeline.ts`
-- Builtin topology：`packages/render/src/urp-pipeline.ts`、`packages/render/src/hdrp-pipeline.ts`
-- Typed targets/primitives：`packages/render/src/render-pipeline-target.ts`、`packages/render/src/typed-render-graph-primitives.ts`
-- Feature projection：`packages/render/src/features/render-graph-compute.ts`、`packages/render/src/features/render-graph-raster.ts`
-- Graph builder/access validation：`packages/render-graph/src/builder.ts`
+- Pipeline contract: `packages/render/src/render-pipeline.ts`
+- Builtin topology: `packages/render/src/pipeline/standard-pipeline.ts`, `packages/render/src/pipeline/standard-post.ts`
+- Typed targets/primitives: `packages/render/src/render-pipeline.ts`, `packages/render/src/typed-render-graph-primitives.ts`
+- Feature projection: `packages/render/src/features/plan.ts`, `packages/render/src/features/host.ts`
+- Graph builder/access validation: `packages/render-graph/src/builder.ts`
+## Public material MRT
+
+Author `MaterialPass.outputs` in WGSL location order, cook/load the material, then
+bind matching `colorTargets` in `addTypedScenePass`. Install the graph through
+`createRenderer(canvas, { pipeline })`; reuse the same graph views for downstream
+passes. Use per-output blend/write masks and per-attachment `colorClearValues`.
+See [the public MRT contract](../../packages/render/README.md#public-material-mrt).
+Validate every attachment with the Browser and Dawn material-mrt fixtures,
+including resize, live/replay equality and missing-draw falsification.

@@ -47,9 +47,9 @@ export function makeCheckerboardPixels(): Uint8Array {
  * Build the texture demo world from the World-owned TextureAsset shared ref.
  */
 export function buildTextureWorld(world: World, texId: number): void {
-  const normalMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1], { baseColorTexture: texId, castShadow: false }));
-  const redMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 0, 0, 0.5], { baseColorTexture: texId, castShadow: false }));
-  const blueMat = world.allocSharedRef('MaterialAsset', Materials.unlit([0, 0, 1, 0.5], { baseColorTexture: texId, castShadow: false }));
+  const normalMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1], { baseColorTexture: texId }));
+  const redMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 0, 0, 0.5], { baseColorTexture: texId }));
+  const blueMat = world.allocSharedRef('MaterialAsset', Materials.unlit([0, 0, 1, 0.5], { baseColorTexture: texId }));
 
   // Normal quad at z=1.5
   world.spawn(

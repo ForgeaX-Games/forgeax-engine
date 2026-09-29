@@ -8,17 +8,17 @@ async function readSource(relativePath: string): Promise<string> {
 describe('direct light snapshot integration contract', () => {
   it('uses one normalized spot snapshot for both forward pipelines', async () => {
     const extract = await readSource('../../../../../../packages/render/src/render-system-extract.ts');
-    const hdrpShader = await readSource('../../../../../../packages/shader/src/hdrp-cluster-forward.wgsl');
+    const standardClusterShader = await readSource('../../../../../../packages/shader/src/standard-cluster.wgsl');
 
     expect(extract).toContain('direction: dirN');
-    expect(hdrpShader).not.toContain('normalize(light.direction.xyz)');
+    expect(standardClusterShader).not.toContain('normalize(light.direction.xyz)');
   });
 
   it('keeps the finite-range curve shared by the shader consumers', async () => {
     const punctualShader = await readSource('../../../../../../packages/shader/src/lighting-punctual.wgsl');
-    const hdrpShader = await readSource('../../../../../../packages/shader/src/hdrp-cluster-forward.wgsl');
+    const standardClusterShader = await readSource('../../../../../../packages/shader/src/standard-cluster.wgsl');
 
     expect(punctualShader).toContain('factor * factor');
-    expect(hdrpShader).toContain('factor * factor');
+    expect(standardClusterShader).toContain('factor * factor');
   });
 });

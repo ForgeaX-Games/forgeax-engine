@@ -12,17 +12,212 @@ export interface MeshMaterialBindingDiagnostic {
   readonly detail?: Readonly<AssetErrorDetail>;
 }
 
+/** Detached final-frame receipt for the Standard material IBL binding chain. */
+export interface IblBindingResourceInspection {
+  readonly viewIdentity: number;
+  readonly samplerIdentity: number;
+  readonly deviceGeneration: number;
+}
+
+export interface IblBindingEntryInspection {
+  readonly binding: number;
+  readonly kind: 'textureView' | 'sampler' | 'buffer';
+  readonly resourceIdentity: number;
+}
+
+export interface IblBindingInspection {
+  readonly status: 'binding-chain-consistent' | 'binding-chain-mismatch';
+  readonly frameId: number;
+  readonly deviceGeneration: number;
+  readonly active: 'active' | 'fallback';
+  readonly cache: {
+    readonly identity: number;
+    readonly generation: number;
+    readonly prefilterMipCount: number;
+    readonly prefilterViewMipCount: number;
+  };
+  readonly sampler: {
+    readonly expected: {
+      readonly magFilter: 'linear';
+      readonly minFilter: 'linear';
+      readonly mipmapFilter: 'linear';
+      readonly addressModeU: 'clamp-to-edge';
+      readonly addressModeV: 'clamp-to-edge';
+      readonly addressModeW: 'clamp-to-edge';
+    };
+    readonly identities: readonly number[];
+  };
+  readonly resources: {
+    readonly irradiance: IblBindingResourceInspection;
+    readonly prefilter: IblBindingResourceInspection;
+    readonly brdfLut: IblBindingResourceInspection;
+    readonly intensityBufferIdentity: number;
+  };
+  readonly material?: {
+    readonly bindGroupIdentity: number;
+    readonly materialBglIdentity: number;
+    readonly cache: 'hit' | 'miss';
+    readonly skylightBindingStart: number;
+    readonly entries: readonly IblBindingEntryInspection[];
+    readonly reflectionBindings: readonly number[];
+  };
+  readonly pipeline?: {
+    readonly pipelineIdentity: number;
+    readonly effectiveMaterialLayoutIdentity: string | undefined;
+    readonly materialBglIdentity: number;
+    readonly bindGroupIdentity: number;
+    readonly drawFrameId: number;
+  };
+  readonly errors: readonly string[];
+}
+
 export interface ResolvedMeshMaterialBinding {
   readonly handle: number;
   readonly source: MeshMaterialBindingSource;
 }
 
+/** Lifecycle values projected from an already prepared resident binding. */
+export type MeshMaterialBindingReadiness = 'ready' | 'pending' | 'failed' | 'last-known-good';
+
+/** Structured producer failure retained by the renderer's bounded projection. */
+export interface MeshMaterialBindingPreparationFailure {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail?: Readonly<Record<string, unknown>>;
+}
+
+export interface MeshMaterialBindingSamplerObservation {
+  readonly handle: number;
+  readonly resident: boolean;
+}
+
+export interface MeshMaterialBindingTextureObservation {
+  readonly handle: number;
+  readonly mipLevelCount: number;
+}
+
+/**
+ * One material-slot's bounded resident projection. The renderer reports only
+ * resources it actually resolved for the slot; Pack/AssetRegistry lifecycle
+ * records stay owned by the producer and are never copied here.
+ */
+export interface MeshMaterialBindingResidency {
+  readonly readiness: MeshMaterialBindingReadiness;
+  readonly samplers: readonly MeshMaterialBindingSamplerObservation[];
+  readonly textures: readonly MeshMaterialBindingTextureObservation[];
+  readonly preparationFailure?: MeshMaterialBindingPreparationFailure;
+}
+
 /** Public read-only observation of the bindings used by the last frame. */
 export interface MeshMaterialBindingObservation {
   readonly worldId: number;
+  /** Stable World identity for cross-world inspection; worldId is only a frame slot. */
+  readonly worldIdentity?: string;
   readonly entityKey: number;
   readonly bindings: readonly ResolvedMeshMaterialBinding[];
   readonly diagnostics: readonly MeshMaterialBindingDiagnostic[];
+  /** One resident projection per resolved material slot. */
+  readonly residency: readonly MeshMaterialBindingResidency[];
+}
+
+export interface MeshMaterialBindingSummary {
+  readonly total: number;
+  readonly ready: number;
+  readonly pending: number;
+  readonly failed: number;
+  readonly lastKnownGood: number;
+  readonly textureCount: number;
+  readonly samplerCount: number;
+}
+
+const EMPTY_RESIDENCY: MeshMaterialBindingResidency = Object.freeze({
+  readiness: 'pending',
+  samplers: Object.freeze([]),
+  textures: Object.freeze([]),
+});
+
+/**
+ * Build the sole renderer observation projection from the resident seam.
+ * Missing facts remain `pending`; they are never guessed from a URL, asset
+ * name, or authoring field. Slot cardinality is normalized so aggregation is
+ * deterministic even while a preparation candidate is incomplete.
+ */
+export function projectMeshMaterialBindingObservation(input: {
+  readonly worldId: number;
+  readonly worldIdentity?: string;
+  readonly entityKey: number;
+  readonly bindings: readonly ResolvedMeshMaterialBinding[];
+  readonly diagnostics: readonly MeshMaterialBindingDiagnostic[];
+  readonly residency?: readonly MeshMaterialBindingResidency[];
+}): MeshMaterialBindingObservation {
+  const residency = input.bindings.map((_, index) => {
+    const value = input.residency?.[index] ?? EMPTY_RESIDENCY;
+    return Object.freeze({
+      ...value,
+      samplers: Object.freeze(value.samplers.map((sampler) => Object.freeze({ ...sampler }))),
+      textures: Object.freeze(value.textures.map((texture) => Object.freeze({ ...texture }))),
+      ...(value.preparationFailure === undefined
+        ? {}
+        : {
+            preparationFailure: Object.freeze({
+              ...value.preparationFailure,
+              ...(value.preparationFailure.detail === undefined
+                ? {}
+                : { detail: Object.freeze({ ...value.preparationFailure.detail }) }),
+            }),
+          }),
+    });
+  });
+  return {
+    worldId: input.worldId,
+    ...(input.worldIdentity === undefined ? {} : { worldIdentity: input.worldIdentity }),
+    entityKey: input.entityKey,
+    bindings: Object.freeze([...input.bindings]),
+    diagnostics: Object.freeze([...input.diagnostics]),
+    residency: Object.freeze(residency),
+  };
+}
+
+/** Recompute bounded readiness/resource counts from retained observations. */
+export function summarizeMeshMaterialBindings(
+  observations: readonly MeshMaterialBindingObservation[],
+): MeshMaterialBindingSummary {
+  let ready = 0;
+  let pending = 0;
+  let failed = 0;
+  let lastKnownGood = 0;
+  let textureCount = 0;
+  let samplerCount = 0;
+  for (const observation of observations) {
+    for (const residency of observation.residency) {
+      switch (residency.readiness) {
+        case 'ready':
+          ready += 1;
+          break;
+        case 'pending':
+          pending += 1;
+          break;
+        case 'failed':
+          failed += 1;
+          break;
+        case 'last-known-good':
+          lastKnownGood += 1;
+          break;
+      }
+      textureCount += residency.textures.length;
+      samplerCount += residency.samplers.length;
+    }
+  }
+  return {
+    total: ready + pending + failed + lastKnownGood,
+    ready,
+    pending,
+    failed,
+    lastKnownGood,
+    textureCount,
+    samplerCount,
+  };
 }
 
 export type ResolveMeshMaterialBindingsResult =

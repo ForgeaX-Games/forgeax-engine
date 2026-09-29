@@ -99,24 +99,25 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     expect('baseColorTexture' in pv).toBe(false);
   });
 
-  it('(3) shader NOT registered (R-4 cross-worktree) -> graceful "try every int" fallback', () => {
-    // No paramSchema lookup available -> getMaterialShaderTextureFieldNames
-    // returns undefined for every shader id.
+  it('(3) shader NOT registered (R-4 cross-worktree) -> graceful structured texture fallback', () => {
+    // No paramSchema lookup is available, so the loader cannot classify bare
+    // integers as texture refs. Explicit structured texture values remain
+    // resolvable across worktrees without guessing at scalar fields.
     const ctx = makeCtx({
       shaderTextureFieldNames: () => undefined,
     });
     const out = materialLoader.load(
       {
         passes: [{ program: { module: 'forgeax::user-defined' } }],
-        values: { customTexture: 0 },
+        values: { customTexture: { texture: 0 } },
       },
       ['tex-guid'],
       ctx,
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { values: Record<string, unknown> }).values;
-    // Graceful fallback resolves any in-range int to its refs[] GUID string.
-    expect(pv.customTexture).toBe('tex-guid');
+    // Explicit structured refs resolve to the enclosing refs[] GUID.
+    expect(pv.customTexture).toEqual({ texture: 'tex-guid' });
   });
 
   it('(4) shader registered + scalar paramValue with refs[] index in range -> NOT misclassified', () => {

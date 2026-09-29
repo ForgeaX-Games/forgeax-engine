@@ -1,5 +1,5 @@
 export { MeshBinAssetError } from './errors/asset.js';
 export {
   type UnpackedMeshBin,
-  unpackMeshBinV4,
+  unpackMeshBin,
 } from './loaders/mesh-bin.js';

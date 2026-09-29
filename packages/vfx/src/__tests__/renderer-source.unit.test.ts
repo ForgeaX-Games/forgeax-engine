@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseParticleEffectSourceV2 } from '../code-source.js';
+import { parseParticleEffectSourceV3 } from '../code-source-v3.js';
 
 const rendererSource = (renderer: unknown) => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'showcase',
@@ -19,19 +19,19 @@ const rendererSource = (renderer: unknown) => ({
 
 describe('Batch B renderer source contract', () => {
   it.each([
-    ['billboard', { kind: 'billboard', material: 'vfx', sorting: 'emitter' }],
+    ['billboard', { kind: 'billboard', material: 'vfx', sorting: 'view-depth' }],
     ['ribbon', { kind: 'ribbon', material: 'vfx', stripKey: 'alive-index', capacity: 32 }],
     ['trail', { kind: 'trail', material: 'vfx', historyLength: 8, capacity: 32 }],
     ['beam', { kind: 'beam', material: 'vfx', endpointField: 'velocity', capacity: 16 }],
   ])('parses the independent %s topology', (_kind, renderer) => {
-    const parsed = parseParticleEffectSourceV2(rendererSource(renderer));
+    const parsed = parseParticleEffectSourceV3(rendererSource(renderer));
 
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.value.emitters[0]?.renderers[0]).toMatchObject(renderer);
   });
 
   it('rejects zero topology capacity instead of silently disabling output', () => {
-    const parsed = parseParticleEffectSourceV2(
+    const parsed = parseParticleEffectSourceV3(
       rendererSource({ kind: 'trail', material: 'vfx', historyLength: 8, capacity: 0 }),
     );
 
@@ -42,7 +42,7 @@ describe('Batch B renderer source contract', () => {
   });
 
   it('keeps an explicitly disabled renderer distinguishable from an empty list', () => {
-    const parsed = parseParticleEffectSourceV2(
+    const parsed = parseParticleEffectSourceV3(
       rendererSource({
         kind: 'ribbon',
         material: 'vfx',

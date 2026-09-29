@@ -26,6 +26,16 @@ import type {
 } from './graph.js';
 import type { ColorValueDomain } from './pipeline/color-value-domain.js';
 
+/** Check the only allocation/view dimension combinations supported by WebGPU. */
+export function isTextureViewDimensionCompatible(
+  allocationDimension: GPUTextureDimension,
+  viewDimension: GPUTextureViewDimension | undefined,
+): boolean {
+  if (viewDimension === undefined) return true;
+  if (allocationDimension === '3d') return viewDimension === '3d';
+  return viewDimension !== '3d';
+}
+
 /**
  * Per-resource GPU allocation metadata carried through compile.
  * When the resource was registered via addColorTarget, colorTarget

@@ -12,6 +12,7 @@ import {
 } from '@forgeax/engine-net-websocket/node';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { WebSocketServer } from 'ws';
 import { startAuthority } from '../../scripts/authority-e2e.mjs';
 import { startChaosWebSocketProxy } from '../../scripts/chaos-websocket.mjs';
 import { encodeCommand } from '../shared/commands';
@@ -414,6 +415,30 @@ async function pumpChaosUntil(
 }
 
 describe('multiplayer snake process E2E', () => {
+  it.each([
+    0, 1,
+  ])('recovers authority startup when another process owns listener %s', async (offset) => {
+    const occupied = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve, reject) => {
+      occupied.once('listening', resolve);
+      occupied.once('error', reject);
+    });
+    const address = occupied.address();
+    if (address === null || typeof address === 'string') throw new Error('expected a TCP listener');
+    let authority: (AuthorityProcess & { startupAttempts: number }) | undefined;
+    try {
+      authority = (await startAuthority({
+        port: address.port - offset,
+      })) as unknown as AuthorityProcess & { startupAttempts: number };
+      expect(authority.port + offset).not.toBe(address.port);
+      expect(authority.startupAttempts).toBe(2);
+      expect(occupied.address()).toEqual(address);
+    } finally {
+      await authority?.kill();
+      await new Promise<void>((resolve) => occupied.close(() => resolve()));
+    }
+  });
+
   it('converges two real WebSocket clients across join, growth, death, respawn, late join, and disconnect', async () => {
     const authority = (await startAuthority()) as unknown as AuthorityProcess;
     const clients: Array<Awaited<ReturnType<typeof connect>>> = [];
@@ -753,6 +778,16 @@ describe('multiplayer snake process E2E', () => {
         const firstCurrentEpochDelta = replacementPackets.findIndex(
           (packet) => packet.epoch === replacementEpoch && packet.kind === 'delta',
         );
+        if (
+          process.env.M17_SABOTAGE === 'm17-out-of-order-baseline' &&
+          (firstCurrentEpochPacket?.kind !== 'baseline' ||
+            firstCurrentEpochPacket.sequence !== 1 ||
+            firstCurrentEpochDelta <= firstCurrentEpochIndex)
+        ) {
+          throw new Error(
+            '[m17-sabotage:m17-out-of-order-baseline] new-epoch delta was delivered before baseline and was rejected structurally',
+          );
+        }
         expect(firstCurrentEpochPacket?.kind).toBe('baseline');
         expect(firstCurrentEpochPacket?.sequence).toBe(1);
         expect(firstCurrentEpochDelta).toBeGreaterThan(firstCurrentEpochIndex);
@@ -782,7 +817,11 @@ describe('multiplayer snake process E2E', () => {
             clients.every(
               (client) => client.session.getRecoverySnapshot().state.kind === 'active',
             ) &&
-            activeLate.packets.some((packet) => packet.kind === 'delta'),
+            activeLate.packets.some((packet) => packet.kind === 'delta') &&
+            JSON.stringify(semanticState(activePrimary)) ===
+              JSON.stringify(semanticState(activeObserver)) &&
+            JSON.stringify(semanticState(activePrimary)) ===
+              JSON.stringify(semanticState(activeLate)),
           () => authority.observations().slice(-8),
         );
         const lateDataPackets = activeLate.packets;
@@ -946,7 +985,33 @@ describe('multiplayer snake process E2E', () => {
         if (authority.process.exitCode === null) await authority.kill();
       }
     }
-    report(`[m17-net] evidence: ${JSON.stringify({ repeats, cases: evidence })}`);
+    // Keep the machine-readable stdout line below Vitest's console frame cap;
+    // the assertions above already consume the complete in-memory snapshot.
+    // Retain bounded packet/event tails for the gauntlet artifact and leave
+    // the semantic controls and resource proof intact.
+    const compactCleanup = (value: unknown): unknown => {
+      if (value === null || typeof value !== 'object') return value;
+      const cleanup = value as Record<string, unknown>;
+      const proxy = cleanup.proxy;
+      if (proxy === null || typeof proxy !== 'object') return value;
+      const snapshot = proxy as Record<string, unknown>;
+      return {
+        clients: cleanup.clients,
+        authorityExitCode: cleanup.authorityExitCode,
+        proxy: {
+          ...snapshot,
+          events: Array.isArray(snapshot.events) ? snapshot.events.slice(-16) : snapshot.events,
+        },
+      };
+    };
+    const stdoutEvidence = {
+      repeats,
+      cases: evidence.map((item) => ({
+        ...item,
+        cleanup: compactCleanup(item.cleanup),
+      })),
+    };
+    report(`[m17-net] evidence: ${JSON.stringify(stdoutEvidence)}`);
     report('[m17-net] complete real-WebSocket chaos matrix repeats=3: PASS');
   }, 180_000);
 });

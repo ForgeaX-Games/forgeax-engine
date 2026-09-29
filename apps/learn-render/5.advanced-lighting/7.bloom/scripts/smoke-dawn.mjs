@@ -3,7 +3,7 @@
 //
 // LearnOpenGL section 5.7 - Bloom dawn-node smoke.
 // Structural-only: >=60 frames, onError=0, perFramePassNames includes
-// 4 bloom passes + tonemap. Camera.bloom readback asserts spawn wiring.
+// the five-level Bloom chain + tonemap. Camera.bloom readback asserts spawn wiring.
 // No pixel readback (bloom visual verdict is verify-step territory).
 //
 // Scene mirrors src/index.ts: wood floor + 6 container crates + 4 HDR
@@ -19,7 +19,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
+const SMOKE_MIN_FRAMES = Math.max(60, Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10));
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -57,9 +57,20 @@ const CONTAINER_BOXES = [
 ];
 const DEG2RAD = Math.PI / 180;
 
-// Bloom pass names expected in the URP default 9-pass chain when bloom is enabled.
-const BLOOM_PASS_NAMES = ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite'];
-const TONEMAP_PASS_NAME = 'tonemap';
+// Bloom pass names expected in the bounded ten-pass chain when Bloom is enabled.
+const BLOOM_PASS_NAMES = [
+  'bloom-downsample-0',
+  'bloom-downsample-1',
+  'bloom-downsample-2',
+  'bloom-downsample-3',
+  'bloom-downsample-4',
+  'bloom-upsample-3',
+  'bloom-upsample-2',
+  'bloom-upsample-1',
+  'bloom-upsample-0',
+  'bloom-composite',
+];
+const OUTPUT_TRANSFORM_PASS_NAME = 'output-transform';
 
 // --- 1. dawn.node binding setup ---
 
@@ -172,8 +183,8 @@ if (!existsSync(WOOD_SRC_PATH) || !existsSync(CONTAINER2_SRC_PATH)) {
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
-const { Materials } = await import('@forgeax/engine-render');
-const { BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, PointLight, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Materials } = await import('@forgeax/engine/render');
+const { BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, PointLight, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine/render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -253,12 +264,11 @@ if (!woodGuidRes.ok || !container2GuidRes.ok) {
 function makeTexAsset(decoded) {
   return {
     kind: 'texture',
-    width: decoded.width,
-    height: decoded.height,
+    shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
     format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
     data: decoded.bytes,
     colorSpace: decoded.colorSpace,
-    mipmap: decoded.mipmap,
+    mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
 }
 
@@ -342,7 +352,7 @@ for (let i = 0; i < LIGHT_POSITIONS.length; i++) {
   );
   const lightBoxMat = world.allocSharedRef(
     'MaterialAsset',
-    Materials.unlit([color[0], color[1], color[2], 1.0], { castShadow: false }),
+    Materials.unlit([color[0], color[1], color[2], 1.0]),
   );
   world
     .spawn(
@@ -377,7 +387,8 @@ const cameraEntity = world
         bloom: BLOOM_ENABLED,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
-        bloomBlurRadius: 4.0,
+        bloomSoftKnee: 0.5,
+        bloomScatter: 0.7,
       },
     },
   )
@@ -439,9 +450,9 @@ if (missingBloomPasses.length > 0) {
     `(d) perFramePassNames missing bloom passes: [${missingBloomPasses.join(', ')}] (got [${passNames.join(', ')}])`,
   );
 }
-if (!passNameSet.has(TONEMAP_PASS_NAME)) {
+if (!passNameSet.has(OUTPUT_TRANSFORM_PASS_NAME)) {
   failures.push(
-    `(e) perFramePassNames missing tonemap pass (got [${passNames.join(', ')}])`,
+    `(e) perFramePassNames missing output-transform pass (got [${passNames.join(', ')}])`,
   );
 }
 
@@ -463,7 +474,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - ${failures.length === 0 ? 'all' : 'remaining'} criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, bloom passes present, tonemap pass present, Camera.bloom=BLOOM_ENABLED`,
+  `[smoke] PASS - ${failures.length === 0 ? 'all' : 'remaining'} criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, bloom passes present, output-transform pass present, Camera.bloom=BLOOM_ENABLED`,
 );
 
 device.destroy?.();

@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forgeax://hello-taa/inspection/2",
+  "title": "hello-taa bounded detached inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["paused", "antialias", "taa", "dynamicResolution", "recovery", "backend", "capabilities", "timing", "frame", "temporal", "temporalTarget", "motionBlur", "workload", "observations", "observationError", "scene", "passes"],
+  "properties": {
+    "paused": { "type": "boolean" },
+    "antialias": { "enum": ["taa", "none"] },
+    "taa": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "historyOwner", "independentFromMotionBlur"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "historyOwner": { "const": "renderer-temporal" },
+        "independentFromMotionBlur": { "const": true }
+      }
+    },
+    "dynamicResolution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "contract", "scale", "output", "internal", "coverageProducer", "status"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "contract": { "const": "fixed-scale" },
+        "scale": { "type": "number", "minimum": 0.5, "maximum": 1 },
+        "output": { "$ref": "#/$defs/extent" },
+        "internal": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/extent" }] },
+        "coverageProducer": { "type": "boolean" },
+        "status": { "enum": ["off", "fixed", "warming", "adaptive", "unavailable"] }
+      }
+    },
+    "recovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "recoverable", "phase", "lastOutcome"],
+      "properties": {
+        "state": { "enum": ["alive", "device-lost", "recovering", "faulted", "disposed"] },
+        "recoverable": { "type": "boolean" },
+        "phase": { "anyOf": [{ "type": "null" }, { "type": "string", "maxLength": 64 }] },
+        "lastOutcome": { "enum": ["none", "succeeded", "failed", "disposed"] }
+      }
+    },
+    "backend": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "capabilities": {
+      "type": "object", "additionalProperties": false,
+      "required": ["compute", "storageBuffer", "rgba16floatRenderable", "timestampQuery", "timestampPeriodNanoseconds"],
+      "properties": {
+        "compute": { "type": "boolean" },
+        "storageBuffer": { "type": "boolean" },
+        "rgba16floatRenderable": { "type": "boolean" },
+        "timestampQuery": { "type": "boolean" },
+        "timestampPeriodNanoseconds": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "timing": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/timing" }] },
+    "frame": {
+      "type": "object", "additionalProperties": false, "required": ["frameId", "deviceGeneration"],
+      "properties": {
+        "frameId": { "type": "integer", "minimum": 0 },
+        "deviceGeneration": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "temporal": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "historyValid", "historyAttempt", "epoch"],
+          "properties": {
+            "status": { "enum": ["off", "first-frame", "stable", "reset", "aborted"] },
+            "historyValid": { "type": "boolean" },
+            "historyAttempt": { "enum": ["none", "active", "committed", "aborted"] },
+            "epoch": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "temporalTarget": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["identity", "producerId", "schema", "targetCount", "descriptor"],
+          "properties": {
+            "identity": { "const": "standard-scene-temporal" },
+            "producerId": { "const": "forgeax::standard::scene-data" },
+            "schema": { "const": "forgeax::scene-data::temporal-v1" },
+            "targetCount": { "const": 1 },
+            "descriptor": {
+              "type": "object", "additionalProperties": false,
+              "required": ["format", "width", "height", "sampleCount", "bytes"],
+              "properties": {
+                "format": { "const": "rgba16float" },
+                "width": { "type": "integer", "minimum": 0 },
+                "height": { "type": "integer", "minimum": 0 },
+                "sampleCount": { "const": 1 },
+                "bytes": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "motionBlur": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "status", "shutterAngle", "maxRadiusPixels", "sampleCount", "targetFps", "effectiveSampleCount", "demoMotionSpeed", "temporalDemand", "historyWrites"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "status": { "anyOf": [{ "type": "null" }, { "enum": ["off", "active", "reset", "limited", "invalid"] }] },
+        "shutterAngle": { "type": "number", "minimum": 0, "maximum": 360 },
+        "maxRadiusPixels": { "type": "number", "minimum": 0, "maximum": 64 },
+        "sampleCount": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "targetFps": { "type": "integer", "minimum": 0, "maximum": 240 },
+        "effectiveSampleCount": { "anyOf": [{ "type": "null" }, { "enum": [0, 4, 8, 16] }] },
+        "lane": { "anyOf": [{ "type": "null" }, { "enum": ["compute", "raster-limited"] }] },
+        "passCount": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 0, "maximum": 2 }] },
+        "tapBudget": { "anyOf": [{ "type": "null" }, { "enum": [0, 4, 8, 16] }] },
+        "resetReason": { "anyOf": [{ "type": "null" }, { "enum": ["first-frame", "resize", "camera-cut", "history-version", "view-switch", "environment-change", "fog-change", "time-discontinuity", "device-recover", "submit-failure"] }] },
+        "demoMotionSpeed": { "type": "string", "maxLength": 128 },
+        "temporalDemand": { "anyOf": [{ "type": "null" }, { "enum": ["none", "scene-data-temporal-v1"] }] },
+        "historyWrites": { "type": "integer", "minimum": 0 },
+        "lastFailure": { "anyOf": [{ "type": "null" }, { "enum": ["invalid-params", "scene-data-unavailable", "submit-failure"] }] }
+      }
+    },
+    "workload": { "$ref": "#/$defs/workload" },
+    "visualProof": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["case", "input", "pipeline", "toneMap", "sceneScale", "whiteBalance", "lut"],
+          "properties": {
+            "case": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "input": {
+              "type": "object", "additionalProperties": false,
+              "required": ["colorSpace", "minimumLinearValue", "maximumLinearValue", "chartBars"],
+              "properties": {
+                "colorSpace": { "const": "linear-HDR" },
+                "minimumLinearValue": { "type": "number", "minimum": 0 },
+                "maximumLinearValue": { "type": "number", "minimum": 0 },
+                "chartBars": {
+                  "type": "array", "minItems": 1, "maxItems": 32,
+                  "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["label", "color"],
+                    "properties": {
+                      "label": { "type": "string", "minLength": 1, "maxLength": 32 },
+                      "color": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } }
+                    }
+                  }
+                }
+              }
+            },
+            "pipeline": {
+              "type": "array", "minItems": 3, "maxItems": 3,
+              "items": { "enum": ["linear-HDR", "linear-LDR", "final-sRGB"] }
+            },
+            "toneMap": { "const": "ACES filmic" },
+            "sceneScale": { "type": "number", "exclusiveMinimum": 0, "maximum": 16 },
+            "whiteBalance": {
+              "type": "object", "additionalProperties": false,
+              "required": ["temperature", "tint"],
+              "properties": {
+                "temperature": { "type": "number", "minimum": 1000, "maximum": 40000 },
+                "tint": { "type": "number", "minimum": -1, "maximum": 1 }
+              }
+            },
+            "lut": {
+              "type": "object", "additionalProperties": false,
+              "required": ["sourceKey", "strength", "receipt"],
+              "properties": {
+                "sourceKey": { "type": ["string", "null"] },
+                "strength": { "type": "number", "minimum": 0, "maximum": 1 },
+                "receipt": {
+                  "anyOf": [
+                    { "type": "null" },
+                    { "$ref": "#/$defs/lutReceipt" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observations": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/observation" } },
+    "observationError": { "anyOf": [{ "type": "null" }, { "type": "string", "maxLength": 256 }] },
+    "scene": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fullRebuilds", "deltaFrames", "transformUpdates", "projectionRecords", "lastResyncReason"],
+      "properties": {
+        "fullRebuilds": { "type": "integer", "minimum": 0 },
+        "deltaFrames": { "type": "integer", "minimum": 0 },
+        "transformUpdates": { "type": "integer", "minimum": 0 },
+        "projectionRecords": { "type": "integer", "minimum": 0 },
+        "lastResyncReason": { "anyOf": [{ "type": "null" }, { "type": "string", "maxLength": 64 }] }
+      }
+    },
+    "passes": { "type": "array", "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+  },
+  "$defs": {
+    "resolution": {
+      "type": "object", "additionalProperties": false, "required": ["id", "width", "height"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "extent": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "timing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "workload", "resolution", "frames", "frameCount", "capability"],
+      "properties": {
+        "status": { "enum": ["disabled", "running", "ready", "blocked"] },
+        "workload": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "frames": { "type": "array", "maxItems": 420, "items": { "$ref": "#/$defs/timingFrame" } },
+        "frameCount": { "type": "integer", "minimum": 0, "maximum": 420 },
+        "capability": {
+          "type": "object", "additionalProperties": false, "required": ["timestampQuery", "timestampPeriodNanoseconds"],
+          "properties": {
+            "timestampQuery": { "type": "boolean" },
+            "timestampPeriodNanoseconds": { "type": ["number", "null"], "minimum": 0 }
+          }
+        },
+        "error": { "type": "string", "maxLength": 256 },
+        "manual": {
+          "type": "object", "additionalProperties": false, "required": ["executed", "zeroCost", "timestampSlots", "receipt"],
+          "properties": {
+            "executed": { "type": "boolean" },
+            "zeroCost": { "type": "boolean" },
+            "timestampSlots": { "type": "integer", "minimum": 0 },
+            "receipt": {
+              "type": "object", "additionalProperties": false, "required": ["frameId"],
+              "properties": { "frameId": { "type": "integer", "minimum": 0 } }
+            }
+          }
+        }
+      }
+    },
+    "timingFrame": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "frameId", "deviceGeneration", "graphGeneration", "backendKind", "timestampPeriodNanoseconds", "passCapacity", "executedPassCount", "measuredPassCount", "droppedPassCount", "passes", "measuredPassNanoseconds"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "deviceGeneration": { "type": "integer", "minimum": 0 },
+        "graphGeneration": { "type": "integer", "minimum": 0 },
+        "backendKind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "timestampPeriodNanoseconds": { "type": "number", "minimum": 0 },
+        "passCapacity": { "type": "integer", "minimum": 1, "maximum": 2048 },
+        "executedPassCount": { "type": "integer", "minimum": 0 },
+        "measuredPassCount": { "type": "integer", "minimum": 0 },
+        "droppedPassCount": { "type": "integer", "minimum": 0 },
+        "passes": { "type": "array", "maxItems": 2048, "items": { "$ref": "#/$defs/timingEntry" } },
+        "measuredPassNanoseconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "timingEntry": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["passName", "passKind", "executionIndex", "status", "measurementSource", "beginningTick", "endTick", "durationNanoseconds"],
+          "properties": {
+            "passName": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "passKind": { "enum": ["raster", "compute", "copy"] },
+            "executionIndex": { "type": "integer", "minimum": 0 },
+            "status": { "const": "measured" },
+            "measurementSource": { "enum": ["pass-boundary", "copy-boundary-envelope"] },
+            "beginningTick": { "type": "string", "maxLength": 128 },
+            "endTick": { "type": "string", "maxLength": 128 },
+            "durationNanoseconds": { "type": "number", "minimum": 0 },
+            "timerResolution": { "const": "equal-ticks" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["passName", "passKind", "executionIndex", "status", "reason"],
+          "properties": {
+            "passName": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "passKind": { "enum": ["raster", "compute", "copy"] },
+            "executionIndex": { "type": "integer", "minimum": 0 },
+            "status": { "const": "unmeasured" },
+            "reason": { "$ref": "#/$defs/reason" }
+          }
+        }
+      ]
+    },
+    "reason": {
+      "type": "object", "additionalProperties": false, "required": ["code", "expected", "hint", "detail"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "expected": { "type": "string", "maxLength": 256 },
+        "hint": { "type": "string", "maxLength": 256 },
+        "detail": { "type": "object", "maxProperties": 16, "additionalProperties": true }
+      }
+    },
+    "cameraExposure": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "multiplier"],
+          "properties": { "kind": { "const": "manual" }, "multiplier": { "type": "number", "exclusiveMinimum": 0 } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "fallback", "compensationEv", "rangeEv", "rates"],
+          "properties": {
+            "kind": { "const": "auto" },
+            "fallback": { "type": "number", "exclusiveMinimum": 0 },
+            "compensationEv": { "type": "number" },
+            "rangeEv": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+            "rates": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 0 } }
+          }
+        }
+      ]
+    },
+    "autoExposure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requested", "actual", "actualState", "fallback", "lastKnownGood", "targetGeneration", "reset", "cost", "receipt"],
+      "properties": {
+        "requested": { "$ref": "#/$defs/cameraExposure" },
+        "actual": { "type": ["number", "null"] },
+        "actualState": { "enum": ["accepted", "fallback", "gpu-resident"] },
+        "fallback": { "type": "number", "exclusiveMinimum": 0 },
+        "lastKnownGood": { "type": "number", "exclusiveMinimum": 0 },
+        "targetGeneration": { "type": "integer", "minimum": 0 },
+        "recentFailure": {
+          "type": "object", "additionalProperties": false, "required": ["code", "expected", "hint", "detail"],
+          "properties": {
+            "code": { "type": "string", "maxLength": 64 },
+            "expected": { "type": "string", "maxLength": 256 },
+            "hint": { "type": "string", "maxLength": 256 },
+            "detail": { "type": "object", "maxProperties": 16, "additionalProperties": true }
+          }
+        },
+        "reset": { "type": "array", "maxItems": 16, "items": { "enum": ["camera-change", "manual-mode", "device-lost", "stale-generation"] } },
+        "cost": {
+          "type": "object", "additionalProperties": false, "required": ["histogramBytes", "passCount", "physicalPassCount"],
+          "properties": {
+            "histogramBytes": { "const": 1024 },
+            "passCount": { "type": "integer", "minimum": 0 },
+            "physicalPassCount": { "const": 1 }
+          }
+        },
+        "receipt": {
+          "type": "object", "additionalProperties": false, "required": ["frameId", "committed"],
+          "properties": { "frameId": { "type": "integer", "minimum": 0 }, "committed": { "type": "boolean" } }
+        }
+      }
+    },
+    "workload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "executed", "exposureMode", "colorLutStrength", "sourceKey", "catalogProvenance", "autoExposure", "lutReceipt", "frameGeneration", "frameIdentity", "resourceGrowth"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "executed": { "type": "boolean" },
+        "exposureMode": { "enum": ["manual", "auto"] },
+        "colorLutStrength": { "type": "number", "minimum": 0, "maximum": 1 },
+        "sourceKey": { "anyOf": [{ "type": "null" }, { "type": "string", "maxLength": 256 }] },
+        "catalogProvenance": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object", "additionalProperties": false, "required": ["guid", "sourceKey"],
+              "properties": { "guid": { "type": "string", "minLength": 1, "maxLength": 256 }, "sourceKey": { "type": "string", "minLength": 1, "maxLength": 256 } }
+            }
+          ]
+        },
+        "autoExposure": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/autoExposure" }] },
+        "lutReceipt": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object", "additionalProperties": false, "required": ["generation", "deviceEpoch", "frameId", "committed", "resident", "sourceKey"],
+              "properties": {
+                "generation": { "type": "integer", "minimum": 0 },
+                "deviceEpoch": { "type": "integer", "minimum": 0 },
+                "frameId": { "type": "integer", "minimum": 0 },
+                "committed": { "type": "boolean" },
+                "resident": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "sourceKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+              }
+            }
+          ]
+        },
+        "frameGeneration": { "type": "integer", "minimum": 0 },
+        "frameIdentity": {
+          "type": "object", "additionalProperties": false, "required": ["first", "last", "count", "sequenceSha256", "contiguous"],
+          "properties": {
+            "first": { "type": "integer" }, "last": { "type": "integer" },
+            "count": { "type": "integer", "minimum": 0, "maximum": 420 },
+            "sequenceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "contiguous": { "type": "boolean" }
+          }
+        },
+        "resourceGrowth": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["stableFrames", "byteLengthDelta", "bindGroupDelta", "resourceCountDelta", "liveResourceDelta", "allocationCount", "peakLiveCount", "mapCount", "readbackCount"],
+              "properties": {
+                "stableFrames": { "type": "integer", "minimum": 0 },
+                "byteLengthDelta": { "type": "integer" }, "bindGroupDelta": { "type": "integer" },
+                "resourceCountDelta": { "type": "integer" }, "liveResourceDelta": { "type": "integer" },
+                "allocationCount": { "type": "integer", "minimum": 0 }, "peakLiveCount": { "type": "integer", "minimum": 0 },
+                "mapCount": { "type": "integer", "minimum": 0 }, "readbackCount": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false, "required": ["id", "domain", "readback", "metadata"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "domain": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "readback": {
+          "type": "object", "additionalProperties": false, "required": ["rawHash", "frame"],
+          "properties": { "rawHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "frame": { "type": "integer", "minimum": 0 } }
+        },
+        "metadata": {
+          "type": "object", "additionalProperties": false,
+          "required": ["frameId", "deviceGeneration", "format", "graphGeneration", "textureIdentity", "readbackIdentity", "width", "height", "bytesPerRow", "footprint"],
+          "properties": {
+            "frameId": { "type": "integer", "minimum": 0 }, "deviceGeneration": { "type": "integer", "minimum": 0 },
+            "format": { "enum": ["rgba16float", "rgba8unorm", "bgra8unorm"] },
+            "backendId": { "type": "string", "maxLength": 64 }, "graphGeneration": { "type": "integer", "minimum": 0 },
+            "textureIdentity": { "type": "integer", "minimum": 0 }, "readbackIdentity": { "type": "integer", "minimum": 0 },
+            "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 },
+            "bytesPerRow": { "type": "integer", "minimum": 1 },
+            "footprint": {
+              "type": "object", "additionalProperties": false, "required": ["resourceCount", "bindGroupCount"],
+              "properties": { "resourceCount": { "type": "integer", "minimum": 0 }, "bindGroupCount": { "type": "integer", "minimum": 0 } }
+            }
+          }
+        },
+        "summary": { "$ref": "#/$defs/observationSummary" }
+      }
+    },
+    "observationSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sampleCount", "finite", "channels", "luminance"],
+      "properties": {
+        "sampleCount": { "type": "integer", "minimum": 1 },
+        "finite": { "type": "boolean" },
+        "channels": {
+          "type": "object", "additionalProperties": false,
+          "required": ["r", "g", "b", "a"],
+          "properties": {
+            "r": { "$ref": "#/$defs/observationChannel" },
+            "g": { "$ref": "#/$defs/observationChannel" },
+            "b": { "$ref": "#/$defs/observationChannel" },
+            "a": { "$ref": "#/$defs/observationChannel" }
+          }
+        },
+        "luminance": {
+          "type": "object", "additionalProperties": false,
+          "required": ["min", "max", "mean", "positiveMin", "dynamicRange"],
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" },
+            "mean": { "type": "number" },
+            "positiveMin": { "type": ["number", "null"] },
+            "dynamicRange": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      }
+    },
+    "observationChannel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["min", "max", "mean"],
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "mean": { "type": "number" }
+      }
+    },
+    "lutReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation", "deviceEpoch", "frameId", "committed", "resident", "sourceKey"],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 0 },
+        "deviceEpoch": { "type": "integer", "minimum": 0 },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "committed": { "type": "boolean" },
+        "resident": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sourceKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    }
+  }
+}

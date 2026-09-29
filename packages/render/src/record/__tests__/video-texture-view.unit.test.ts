@@ -1,8 +1,8 @@
 import { type DynamicTextureDevice, DynamicTextureStore } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
-  VIDEO_ELEMENT_PROVIDER_KEY,
-  type VideoElementProvider,
+  VIDEO_SOURCE_PROVIDER_KEY,
+  type VideoSourceProvider,
 } from '@forgeax/engine-graphics-extras';
 import type { Result, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
@@ -53,16 +53,16 @@ describe('videoTextureView provider-loss recovery', () => {
     const store = makeStore(probe);
     const errors: { readonly code: string }[] = [];
     const runtime = runtimeWithErrors((error) => errors.push(error));
-    const provider: VideoElementProvider = {
-      getElement: vi.fn(() => VIDEO),
+    const provider: VideoSourceProvider = {
+      getSource: vi.fn(() => VIDEO),
     };
-    world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
+    world.insertResource(VIDEO_SOURCE_PROVIDER_KEY, provider);
 
     const lkg = videoTextureView(world, store, runtime, ENTITY, CLIP, false);
     expect(lkg).toBeDefined();
     expect(probe.copies).toBe(1);
 
-    world.removeResource(VIDEO_ELEMENT_PROVIDER_KEY);
+    world.removeResource(VIDEO_SOURCE_PROVIDER_KEY);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
@@ -70,19 +70,19 @@ describe('videoTextureView provider-loss recovery', () => {
     expect(errors[0]?.code).toBe('video-upload-unsupported');
     expect(probe.copies).toBe(1);
 
-    world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
+    world.insertResource(VIDEO_SOURCE_PROVIDER_KEY, provider);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(errors).toHaveLength(1);
     expect(probe.copies).toBe(3);
 
-    world.removeResource(VIDEO_ELEMENT_PROVIDER_KEY);
+    world.removeResource(VIDEO_SOURCE_PROVIDER_KEY);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(errors).toHaveLength(2);
     expect(probe.copies).toBe(3);
 
-    world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
+    world.insertResource(VIDEO_SOURCE_PROVIDER_KEY, provider);
     expect(videoTextureView(world, store, runtime, ENTITY, CLIP, false)).toBe(lkg);
     expect(errors).toHaveLength(2);
     expect(probe.copies).toBe(4);

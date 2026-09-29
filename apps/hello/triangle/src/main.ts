@@ -228,7 +228,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   // smoke frame accumulator (counter-examples (ii)(iii) indirect signal +
-  // AC-03 (b) frames >= 300 criterion). Exposed on globalThis for
+  // AC-03 (b) frames >= 60 criterion). Exposed on globalThis for
   // page.evaluate consumption - naming convention `__forgeax_smoke_frames__`
   // lets any browser-side smoke harness grep-locate it at a glance.
   let framesObserved = 0;

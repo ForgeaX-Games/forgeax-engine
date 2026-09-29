@@ -124,7 +124,7 @@ try {
     const loadedMembers = loaded.map(({ result }) => {
       if (!result.ok) return { ok: false, code: result.error.code, hint: result.error.hint, detail: result.error.detail };
       switch (result.value.kind) {
-        case 'scene': return { ok: true, member: 'entities', count: result.value.entities.length };
+        case 'scene': return { ok: true, member: 'entities', count: Object.keys(result.value.entities).length };
         case 'mesh': return { ok: true, member: 'vertices', count: result.value.vertices.length };
         case 'material': return { ok: true, member: 'passes', count: result.value.passes?.length ?? 0 };
         case 'texture': return { ok: true, member: 'width', count: result.value.width };

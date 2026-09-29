@@ -1,22 +1,6 @@
-import * as SceneOwner from '@forgeax/engine-scene';
-// feat-20260608-scene-nesting-ecs-fication M2 / w18 (red phase) — nested /
-// cross-boundary / deep / multi-mount cases.
-//
-// Test file location rationale: same as world-scene-instantiate.test.ts —
-// uses SceneInstance / Transform tokens (defined in @forgeax/engine-runtime),
-// so the test physically lives in runtime; the World methods themselves
-// resolve to @forgeax/engine-ecs.
-//
-// AC anchors:
-//   - AC-23 (double-nested A->B->C: query<SceneInstance>() returns >=3 roots)
-//   - AC-24 (cross-boundary: outer entities[].ChildOf.parent points into a
-//     mount sub-region)
-//   - AC-25 (deep nesting >=5 layers does not stack-overflow)
-//   - AC-26 (same prefab mounted multiple times: mappings disjoint, overrides
-//     do not leak across mount instances)
-
-import { defineComponent, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { SceneInstance } from '@forgeax/engine-render';
+import * as SceneOwner from '@forgeax/engine-scene';
 import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
@@ -28,203 +12,146 @@ function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset
   return world.allocSharedRef('SceneAsset', asset);
 }
 
-describe('AC-23 double-nested A -> B -> C', () => {
-  it('query<SceneInstance>() returns >=3 SceneInstance roots after instantiating A', () => {
+describe('keyed nested SceneAsset instances', () => {
+  it('double-nested A -> B -> C materialises three SceneInstance roots', () => {
     const world = new World();
-    // Bottom asset C: 1 entity
     const assetC: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     const handleC = registerSceneAsset(world, assetC);
-    // Middle asset B: 1 entity + 1 mount of C
     const assetB: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: 0,
-          memberFirst: 2 as never,
-          memberCount: 1,
-        },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: 'C' } },
+      },
     };
     const handleB = registerSceneAsset(world, assetB);
-    // Outer asset A: 1 entity + 1 mount of B
     const assetA: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: 0,
-          memberFirst: 2 as never,
-          memberCount: 3,
-        },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: 'B' } },
+      },
     };
     const handleA = registerSceneAsset(world, assetA);
-
-    // Wire SceneAsset resolver: each mount.source `0` resolves to the
-    // applicable child handle. We use a thread-local trick — the
-    // instantiateScene impl is expected to use a SceneAssetResolver wired
-    // through engine.assets in production; for the unit test we set a
-    // resolver directly by stuffing handles into a Map keyed by parent.
-    // The test relies on World using the same registry the SceneAsset was
-    // alloc'd into; mount.source -> child handle resolution is done by
-    // looking up `parent.refs[source]` in the implementation. Since this
-    // unit test creates raw POD assets in-memory without `refs`, the
-    // implementation must accept an explicit resolver arm — see
-    // _setSceneAssetResolver below.
-    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
-      void sourceIdx;
-      const parentManagedRaw = parentHandle as unknown as number;
-      // Parent A handle u32 -> handle B; parent B handle u32 -> handle C.
-      if (parentManagedRaw === (handleA as unknown as number)) return ok(handleB);
-      if (parentManagedRaw === (handleB as unknown as number)) return ok(handleC);
+    SceneOwner.worldSetSceneAssetResolver(world, (source, parentHandle) => {
+      if (typeof source === 'number') return ok(source as Handle<'SceneAsset', 'shared'>);
+      const parent = Number(parentHandle);
+      if (parent === Number(handleA) && source === 'B') return ok(handleB);
+      if (parent === Number(handleB) && source === 'C') return ok(handleC);
       return err({ code: 'asset-not-found' });
     });
 
-    const r = SceneOwner.worldInstantiateScene(world, handleA);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-
+    const result = SceneOwner.worldInstantiateScene(world, handleA);
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    if (!result.ok) return;
     let count = 0;
     const query = world.query({ with: [SceneInstance] }).unwrap();
     for (const _row of query) count += 1;
     expect(count).toBeGreaterThanOrEqual(3);
   });
-});
 
-describe('AC-25 deep nesting >=5 layers — no stack overflow', () => {
-  it('5-layer chain instantiates successfully', () => {
+  it('five keyed instance layers recurse without stack overflow', () => {
     const world = new World();
-    // Build chain L0 ... L5 where Lk mounts L(k+1).
-    // R2/B-2: mount.memberCount must equal child.totalSlots; recompute
-    // bottom-up. L5 has no mounts -> totalSlots=1; each k<5 has
-    // 1 entity + 1 mount.localId + memberCount(=child.totalSlots) slots.
     const handles: Handle<'SceneAsset', 'shared'>[] = [];
-    let childTotalSlots = 1; // L5: just one entity
-    for (let k = 5; k >= 0; k -= 1) {
+    for (let layer = 5; layer >= 0; layer -= 1) {
       const asset: SceneAsset = {
         kind: 'scene',
-        entities: [{ localId: 0 as never, components: { Transform: {} } }],
-        mounts:
-          k < 5
-            ? [
-                {
-                  localId: 1 as never,
-                  source: 0,
-                  memberFirst: 2 as never,
-                  memberCount: childTotalSlots,
-                },
-              ]
-            : [],
+        entities: {
+          'entity-0': { components: { Transform: {} } },
+          ...(layer < 5
+            ? { child: { components: {}, instance: { source: `layer-${layer + 1}` } } }
+            : {}),
+        },
       };
       handles.unshift(registerSceneAsset(world, asset));
-      // Update for the parent layer above.
-      // totalSlots = 1 entity + 1 mount.localId + memberCount slots
-      childTotalSlots = k < 5 ? 1 + 1 + childTotalSlots : 1;
     }
-    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
-      void sourceIdx;
-      const raw = parentHandle as unknown as number;
-      for (let k = 0; k < handles.length - 1; k += 1) {
-        if (raw === (handles[k] as unknown as number)) {
-          const next = handles[k + 1];
-          if (next === undefined) break;
-          return ok(next);
-        }
-      }
-      return err({ code: 'asset-not-found' });
+    SceneOwner.worldSetSceneAssetResolver(world, (_source, parentHandle) => {
+      const parentIndex = handles.findIndex((handle) => Number(handle) === Number(parentHandle));
+      const next = handles[parentIndex + 1];
+      return next === undefined ? err({ code: 'asset-not-found' }) : ok(next);
     });
-    const r = SceneOwner.worldInstantiateScene(world, handles[0] as Handle<'SceneAsset', 'shared'>);
-    expect(r.ok).toBe(true);
+    const result = SceneOwner.worldInstantiateScene(
+      world,
+      handles[0] as Handle<'SceneAsset', 'shared'>,
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
   });
-});
 
-describe('AC-26 same prefab mounted multiple times — disjoint mappings', () => {
-  it('two mounts of the same child each get their own member entities', () => {
+  it('same child instance twice gets disjoint child mappings', () => {
     const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [99, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [99, 0, 0] } } } },
     };
     const childHandle = registerSceneAsset(world, child);
-    // Parent: 1 entity + 2 mounts of `child`
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [
-        { localId: 1 as never, source: 0, memberFirst: 3 as never, memberCount: 1 },
-        { localId: 2 as never, source: 0, memberFirst: 4 as never, memberCount: 1 },
-      ],
+      entities: {
+        first: { components: {}, instance: { source: 'child' } },
+        second: { components: {}, instance: { source: 'child' } },
+      },
     };
     const parentHandle = registerSceneAsset(world, parent);
-    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentH) => {
-      void sourceIdx;
-      void parentH;
-      return ok(childHandle);
+    SceneOwner.worldSetSceneAssetResolver(world, (source) => {
+      return typeof source === 'number'
+        ? ok(source as Handle<'SceneAsset', 'shared'>)
+        : source === 'child'
+          ? ok(childHandle)
+          : err({ code: 'asset-not-found' });
     });
-    const r = SceneOwner.worldInstantiateScene(world, parentHandle);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const inst = world.get(r.value.root, SceneInstance);
-    if (!inst.ok) throw new Error('get SceneInstance failed');
-    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
-    if (!(inst.value.mapping instanceof Uint32Array)) return;
-    // Two mount-time children at memberFirst=3 and memberFirst=4 should be
-    // distinct entities.
-    const m3 = inst.value.mapping[3];
-    const m4 = inst.value.mapping[4];
-    expect(m3).toBeDefined();
-    expect(m4).toBeDefined();
-    expect(m3).not.toBe(m4);
+    const result = SceneOwner.worldInstantiateScene(world, parentHandle);
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    if (!result.ok) return;
+    const instance = world.get(result.value.root, SceneInstance);
+    expect(instance.ok).toBe(true);
+    if (!instance.ok) return;
+    expect(instance.value.mapping[2]).toBeDefined();
+    expect(instance.value.mapping[3]).toBeDefined();
+    expect(instance.value.mapping[2]).not.toBe(instance.value.mapping[3]);
   });
-});
 
-describe('AC-24 outer entity ChildOf points into mount sub-region', () => {
-  it('outer entity carries ChildOf with parent=mapping[memberFirst+k]', () => {
+  it('parent components can address a nested child by a key path', () => {
     const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: {} } },
-        { localId: 1 as never, components: { Transform: {} } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': { components: { Transform: {} } },
+      },
     };
     const childHandle = registerSceneAsset(world, child);
-    // Outer scene: entity[0] is independent root; entity[1] declares
-    // ChildOf {parent: 3} — referencing the FIRST member of the mount at
-    // localId=2 (memberFirst=3). The runtime must remap localId=3 to the
-    // live spawned member entity.
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: {} } },
-        { localId: 1 as never, components: { Transform: {}, ChildOf: { parent: 3 } } },
-      ],
-      mounts: [{ localId: 2 as never, source: 0, memberFirst: 3 as never, memberCount: 2 }],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': {
+          components: { Transform: {}, ChildOf: { parent: ['child', 'entity-0'] } },
+        },
+        child: { components: {}, instance: { source: 'child' } },
+      },
     };
     const parentHandle = registerSceneAsset(world, parent);
-    SceneOwner.worldSetSceneAssetResolver(world, () => ok(childHandle));
-    const r = SceneOwner.worldInstantiateScene(world, parentHandle);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const inst = world.get(r.value.root, SceneInstance);
-    if (!inst.ok) throw new Error('get failed');
-    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
-    if (!(inst.value.mapping instanceof Uint32Array)) return;
-    const outerE = inst.value.mapping[1] as unknown as number;
-    const memberE = inst.value.mapping[3] as unknown as number;
-    const co = world.get(outerE as never, ChildOf);
-    expect(co.ok).toBe(true);
-    if (!co.ok) return;
-    expect(co.value.parent as unknown as number).toBe(memberE);
+    SceneOwner.worldSetSceneAssetResolver(world, (source) =>
+      typeof source === 'number'
+        ? ok(source as Handle<'SceneAsset', 'shared'>)
+        : source === 'child'
+          ? ok(childHandle)
+          : err({ code: 'asset-not-found' }),
+    );
+    const result = SceneOwner.worldInstantiateScene(world, parentHandle);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const instance = world.get(result.value.root, SceneInstance);
+    expect(instance.ok).toBe(true);
+    if (!instance.ok) return;
+    const outer = instance.value.mapping[1] as number;
+    const nested = instance.value.mapping[3] as number;
+    const childOf = world.get(outer as never, ChildOf);
+    expect(childOf.ok).toBe(true);
+    if (!childOf.ok) return;
+    expect(childOf.value.parent as unknown as number).toBe(nested);
   });
 });
-
-// Force-reference defineComponent so a future TS pruning pass keeps the
-// import alive even if all explicit calls are inlined into a deeper helper.
-void defineComponent;

@@ -34,7 +34,7 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "playwright": "1.56.1",
-    "vite": "8.0.10"
+    "vite": "8.0.16"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-multithreaded-execution smoke",
@@ -66,8 +66,10 @@
         "main-serial baseline",
         "engine-worker baseline",
         "shared baseline",
+        "render-worker baseline",
+        "auto combined render and kernel baseline",
         "shared partial-write fault",
-        "explicit unavailable engine-worker tier",
+        "explicit unavailable Engine Worker policy",
         "same-process execution.rebuild()",
         "reverse-order idempotent cleanup"
       ],
@@ -81,10 +83,10 @@
     },
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "Vite app bundle shape is downstream of the tracked App, ECS, Runtime, and RHI package bundles" },
-      "fps": { "enabled": true, "sampleCount": 15, "frameCount": 300 },
+      "fps": { "enabled": true, "sampleCount": 15, "frameCount": 60 },
       "bench": { "enabled": false, "reason": "custom raw Host-frame p95 evidence is enforced by the gate metric, not the generic Vitest bench reporter" },
       "gate": { "enabled": true, "command": "pnpm gate" },
-      "spike-report": { "enabled": false, "reason": "production execution-tier consumer, not a spike" }
+      "spike-report": { "enabled": false, "reason": "production worker-policy consumer, not a spike" }
     }
   }
 }

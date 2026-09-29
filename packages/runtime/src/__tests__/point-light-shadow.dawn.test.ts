@@ -1,3 +1,4 @@
+import { shaderManifestUrl as createShaderManifestUrl } from './shader-manifest-url.fixture';
 // point-light-shadow.dawn.test.ts
 // feat-20260612-point-light-shadows M0 / T-M0-1.
 //
@@ -14,8 +15,12 @@
 import { describe, expect, it } from 'vitest';
 import { drawPublished } from './draw-published';
 
-const WIDTH = 512;
-const HEIGHT = 512;
+const LIGHTWEIGHT_DAWN = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+// The comparison-sampler contract only depends on cube topology and depth
+// ordering. Keep the local/nightly 512px atlas for diagnostics, but avoid
+// allocating six 512px lavapipe depth attachments on the overloaded PR lane.
+const WIDTH = LIGHTWEIGHT_DAWN ? 64 : 512;
+const HEIGHT = LIGHTWEIGHT_DAWN ? 64 : 512;
 const LAYERS = 6; // one cube (6 faces)
 
 // WebGPU bitmask constants per spec (avoids needing @webgpu/types globals
@@ -36,6 +41,11 @@ interface NavigatorWithGpu {
 const navWithGpu = globalThis.navigator as unknown as NavigatorWithGpu | undefined;
 const dawnReady =
   typeof globalThis.navigator !== 'undefined' && navWithGpu?.gpu?.requestAdapter !== undefined;
+
+// The renderer/readback e2e includes the first full point-shadow setup. Hosted
+// Linux Dawn cold starts can exceed the project-wide 30-second timeout while
+// still completing inside the bounded Dawn job budget.
+const POINT_LIGHT_SHADOW_DAWN_TEST_TIMEOUT_MS = 120_000;
 
 describe('M0 cube_array comparison sampler (dawn)', () => {
   it.skipIf(!dawnReady)("'dawn-binding-missing' -- dawn.node binding injection failed", () => {
@@ -536,8 +546,15 @@ async function doReadPixelsM5(
 }
 
 describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
+  // The isolated fresh-process Dawn lane can spend ~90s constructing the
+  // shader manifest and two renderer states on lavapipe. Keep this owner-
+  // specific budget above that cold-start cost instead of treating a valid
+  // integration probe as a default-30s timeout failure.
   it.skipIf(!dawnReady)(
     "'createRenderer e2e' -- spawn PointLight + PointLightShadow + cube + camera; renderer.draw runs; frame is non-black AND pixel-differs vs no-shadow baseline",
+    {
+      timeout: POINT_LIGHT_SHADOW_DAWN_TEST_TIMEOUT_MS,
+    },
     async () => {
       // Lazy-load the runtime + manifest builder (matches fxaa-pixel-diff
       // pattern). buildEngineShaderManifest produces the data: URL the
@@ -552,12 +569,25 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       const { constructRuntimeRendererHost } = await import('../renderer-host');
       const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
       const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
-      const manifest = await buildEngineShaderManifest();
-      const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
+      // CI's shared app inputs include the point profile, so this check reads
+      // the base projection directly: casters rasterize, but nothing samples them.
+      const sharedInputs = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      let manifest: Awaited<ReturnType<typeof buildEngineShaderManifest>>;
+      try {
+        manifest = await buildEngineShaderManifest();
+      } finally {
+        if (sharedInputs !== undefined)
+          process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = sharedInputs;
+      }
+      const manifestUrl = createShaderManifestUrl(manifest);
 
       const TEX_USAGE_E2E = TEX_USAGE_RENDER_ATTACHMENT | TEX_USAGE_COPY_SRC;
-      const FRAME_W = 128;
-      const FRAME_H = 128;
+      // The end-to-end assertion is non-black output, not a resolution
+      // benchmark. Preserve the local 128px target while bounding the PR
+      // readback and point-shadow atlas work on software Vulkan.
+      const FRAME_W = LIGHTWEIGHT_DAWN ? 64 : 128;
+      const FRAME_H = LIGHTWEIGHT_DAWN ? 64 : 128;
 
       let sharedDevice: GPUDevice | undefined;
       const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(
@@ -762,7 +792,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         },
         {
           component: PointLightShadow,
-          data: { mapSize: 256, nearPlane: 0.1, farPlane: 25 },
+          data: { mapSize: LIGHTWEIGHT_DAWN ? 128 : 256, nearPlane: 0.1, farPlane: 25 },
         },
       );
 
@@ -778,6 +808,17 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       if (renderTarget === undefined) throw new Error('renderTarget not configured');
       const pixelsShadow = await doReadPixelsM5(device, renderTarget, FRAME_W, FRAME_H);
       expect(pixelsShadow.length).toBeGreaterThan(0);
+      // This manifest is built without `pointShadows: true`, so no Standard
+      // variant samples the cube atlas even though casters rasterize into it.
+      // Inspection must say so instead of reporting a ready shadow path.
+      expect(renderer.inspect().pointShadow).toEqual({
+        status: 'unavailable',
+        requested: 1,
+        admitted: 0,
+        shadowed: 0,
+        shadowAtlasOccupancy: 0,
+        shadowAtlasCapacity: 4,
+      });
 
       // AC-15 contract (Round-2 fix-up scope): the shadow frame is
       // rendered (non-black) end-to-end through the createRenderer chain
@@ -793,8 +834,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       // BGL hookup landed (binding 5 cube_array atlas + binding 6
       // shadowParams), recordPointShadowPass runs the geometry walk on
       // 6xN cube faces without GPU validation errors, and the forward
-      // shader's evalPointShadowed gate in default-standard-pbr.wgsl
-      // reads the bound resources. A pixel readback of the rendered
+      // renderer reports the absent shader lane as `unavailable`. A pixel readback of the rendered
       // frame returns a non-black image in both no-shadow and
       // with-shadow scenes.
       let shadowNonZero = 0;

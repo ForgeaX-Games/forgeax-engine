@@ -6,7 +6,7 @@ import { Camera } from '../components/camera';
 import { MeshFilter } from '../components/mesh-filter';
 import { MeshRenderer } from '../components/mesh-renderer';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
-import { extractFrames } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 
 function spawnCamera(world: World): void {
   world

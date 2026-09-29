@@ -26,12 +26,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const pixels = makeAtlasPixels();
   const texture = {
     kind: 'texture' as const,
-    width: ATLAS_WIDTH,
-    height: ATLAS_HEIGHT,
+    shape: { viewDimension: '2d' as const, extent: { width: ATLAS_WIDTH, height: ATLAS_HEIGHT } },
     format: 'rgba8unorm-srgb' as const,
     data: pixels,
     colorSpace: 'srgb' as const,
-    mipmap: false,
+    mips: { kind: 'none' as const },
   };
   const handle = app.world.allocSharedRef('TextureAsset', texture);
   buildSpriteAnimationWorld(app.world, unwrapHandle(handle));

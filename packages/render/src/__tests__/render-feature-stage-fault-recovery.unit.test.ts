@@ -7,12 +7,9 @@ import {
   RenderFeaturePreparationFailedError,
   RenderFeatureStageFailedError,
 } from '../errors/render';
-import {
-  createRenderFeatureHost,
-  type RenderFeatureHost,
-  runRenderFeatureFrame,
-} from '../features/host';
+import { createRenderFeatureHost, type RenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = { backendKind: 'null' } as unknown as Readonly<RhiCaps>;
 
@@ -26,7 +23,7 @@ function healthyFeature(probe: { plan: number }): RenderFeature<{
     extract: () => ok({ ready: true }),
     plan: () => {
       probe.plan += 1;
-      return ok({ resources: [], passes: [] });
+      return ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
     },
   };
 }
@@ -70,7 +67,7 @@ function faultyFeature(
       plan: () => {
         probe.plan += 1;
         if (!repaired) return err(failure());
-        return ok({ resources: [], passes: [] });
+        return ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
       },
     },
     repair: () => {
@@ -80,7 +77,7 @@ function faultyFeature(
 }
 
 function frame(host: RenderFeatureHost, frameNumber: number) {
-  return runRenderFeatureFrame(host, {
+  return runSingleViewFeatureFrame(host, {
     worlds: [],
     owner: 0,
     frameNumber,
@@ -89,6 +86,29 @@ function frame(host: RenderFeatureHost, frameNumber: number) {
 }
 
 describe('RenderFeature stage fault recovery lifecycle', () => {
+  it('retains the original exception when a feature stage throws', () => {
+    const cause = new TypeError('feature plan exploded');
+    const host = createRenderFeatureHost(
+      [
+        {
+          identity: 'synthetic.m10.throwing',
+          extract: () => ok({ ready: true }),
+          plan: () => {
+            throw cause;
+          },
+        },
+      ],
+      caps,
+    ).unwrap();
+
+    const result = frame(host, 1);
+    expect(result.errors[0]).toMatchObject({
+      code: 'render-feature-stage-failed',
+      detail: { featureIdentity: 'synthetic.m10.throwing', cause },
+    });
+    expect(host.diagnostics()[0]?.latestError).toMatchObject({ detail: { cause } });
+  });
+
   it.each<Fault>([
     'create',
     'prepared-resource',

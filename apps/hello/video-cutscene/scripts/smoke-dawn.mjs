@@ -31,6 +31,7 @@ import { readFileSync } from 'node:fs';
 const RERUN_CMD = 'pnpm --filter @forgeax/hello-video-cutscene smoke';
 const WIDTH = 200;
 const HEIGHT = 150;
+const requestedFrameCount = Number(process.env.SMOKE_MIN_FRAMES ?? '60');
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);
@@ -38,6 +39,10 @@ console.error = (...args) => {
   consoleErrors.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   originalConsoleError(...args);
 };
+if (!Number.isInteger(requestedFrameCount) || requestedFrameCount < 60) {
+  originalConsoleError(`[smoke] FAIL - SMOKE_MIN_FRAMES must be an integer >= 60 (received ${process.env.SMOKE_MIN_FRAMES ?? '60'})`);
+  process.exit(1);
+}
 
 // --- dawn-node GPU shim ---
 let create;
@@ -210,11 +215,31 @@ const FRAME_MS = 16.67;
 globalThis.performance.now = () => fakeNow;
 
 // Drain exactly one armed frame, advancing the fake clock by `stepMs` first.
-function runFrame(stepMs = FRAME_MS) {
+const frameCreditTimeoutMs = Number.parseInt(
+  process.env.FORGEAX_SMOKE_FRAME_CREDIT_TIMEOUT_MS ?? '5000',
+  10,
+);
+const FRAME_CREDIT_TIMEOUT_MS = Number.isFinite(frameCreditTimeoutMs) && frameCreditTimeoutMs > 0 ? frameCreditTimeoutMs : 5_000;
+async function waitForFrameCredit() {
+  const deadline = Date.now() + FRAME_CREDIT_TIMEOUT_MS;
+  while (app.execution.report().frame.inFlight >= 2) {
+    if (Date.now() >= deadline) {
+      originalConsoleError(
+        `[smoke] frame credit did not settle within ${FRAME_CREDIT_TIMEOUT_MS}ms (inFlight=${app.execution.report().frame.inFlight})`,
+      );
+      return false;
+    }
+    await delay(1);
+  }
+  return true;
+}
+async function runFrame(stepMs = FRAME_MS) {
   const due = rafQueue.shift();
   if (!due) return false;
+  if (!(await waitForFrameCredit())) return false;
   fakeNow += stepMs;
   due.cb(fakeNow);
+  await delay(1);
   return true;
 }
 
@@ -223,7 +248,13 @@ if (!app.start().ok) {
   originalConsoleError('[smoke] FAIL - app.start() err');
   process.exit(1);
 }
-for (let i = 0; i < 30; i++) runFrame();
+for (let i = 0; i < 30; i++) {
+  const completed = await runFrame();
+  if (!completed) {
+    originalConsoleError(`[smoke] FAIL - running frame ${i + 1} was not scheduled`);
+    process.exit(1);
+  }
+}
 if (frameCount < 30) {
   originalConsoleError(`[smoke] FAIL - running phase advanced only ${frameCount} frames (expected 30)`);
   process.exit(1);
@@ -237,7 +268,7 @@ if (!app.pause().ok) {
   process.exit(1);
 }
 // While paused the loop arms no frame; draining the queue must not tick.
-for (let i = 0; i < 10; i++) runFrame();
+for (let i = 0; i < 10; i++) await runFrame();
 if (frameCount !== framesBeforePause) {
   originalConsoleError(
     `[smoke] FAIL - world ticked while paused (before=${framesBeforePause}, after=${frameCount})`,
@@ -258,7 +289,11 @@ if (!app.resume().ok) {
   originalConsoleError('[smoke] FAIL - app.resume() err');
   process.exit(1);
 }
-runFrame(); // first resumed frame
+const resumedFrameCompleted = await runFrame(); // first resumed frame
+if (!resumedFrameCompleted) {
+  originalConsoleError('[smoke] FAIL - first resumed frame was not scheduled');
+  process.exit(1);
+}
 const firstResumedDt = lastDt;
 if (frameCount !== framesBeforePause + 1) {
   originalConsoleError(`[smoke] FAIL - resume did not continue the loop (frameCount=${frameCount})`);
@@ -282,7 +317,27 @@ console.log(
 );
 
 // Run a few more frames to confirm steady-state continuation.
-for (let i = 0; i < 10; i++) runFrame();
+for (let i = 0; i < 10; i++) {
+  const completed = await runFrame();
+  if (!completed) {
+    originalConsoleError(`[smoke] FAIL - steady-state frame ${i + 1} was not scheduled`);
+    process.exit(1);
+  }
+}
+
+const FLEET_FRAME_COUNT = requestedFrameCount;
+while (frameCount < FLEET_FRAME_COUNT) {
+  const completed = await runFrame();
+  if (!completed) {
+    originalConsoleError(`[smoke] FAIL - fleet frame ${frameCount + 1} was not scheduled`);
+    process.exit(1);
+  }
+}
+if (frameCount < FLEET_FRAME_COUNT) {
+  originalConsoleError(`[smoke] FAIL - completed only ${frameCount} frames (expected ${FLEET_FRAME_COUNT})`);
+  process.exit(1);
+}
+console.log(`[smoke] frames observed=${frameCount}`);
 
 // --- GATE 4: stop, then resume is unusable ---
 const stopResult = app.stop();

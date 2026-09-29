@@ -13,7 +13,9 @@ import type {
   ToolDomainFailure,
   ToolExecutionContext,
 } from '@forgeax/engine-tool-runtime';
+import type { CaptureBackend } from '../types.js';
 import { runBrowserPreviewHost } from './browser-host.js';
+import type { BrowserCarrierTarget } from './display-carrier.js';
 
 export interface PreviewHostRequest {
   readonly recipe: ToolPreviewRecipeOptions;
@@ -76,6 +78,14 @@ export interface PreviewCarrierRoute {
 
 export interface PreviewHostResult {
   readonly actualCarrier: 'headless-private' | 'headed-private' | 'visible-consumer';
+  /** Requested and observed browser adapter lane for host-owned captures. */
+  readonly backendRequested?: CaptureBackend;
+  readonly backendObserved?: 'software' | 'hardware' | 'unknown';
+  readonly backendFallbackReason?: string;
+  /** Exact target identity when the headed page was borrowed from a display host. */
+  readonly carrierTarget?: BrowserCarrierTarget;
+  /** Explicit reason when the display host declined and private headed fallback ran. */
+  readonly carrierFallbackReason?: string;
   readonly trace: ToolPreviewTrace;
   readonly captureId: string;
   readonly drawCalls: number;
@@ -90,6 +100,8 @@ export interface PreviewHostResult {
   readonly artifacts: ToolPreviewRunResult['artifacts'];
   readonly operationTiming: ToolPreviewRunResult['operationTiming'];
   readonly resource?: import('@forgeax/engine-app').ToolPreviewResourceFacts;
+  /** A completed capture can still carry a truthful capability limitation. */
+  readonly capabilityFailure?: ToolDomainFailure;
 }
 
 export type PreviewHostRunner = (
@@ -154,16 +166,40 @@ export async function runCarrierPreviewRoute<T>(
   });
   if (!leased.ok) return executePrivate();
   const started = carrier.started(leased.value.leaseId);
-  if (!started.ok) return executePrivate();
-  const result = await executeConsumer(leased.value.leaseId);
-  const exited = carrier.exit(leased.value.leaseId);
-  if (!exited.ok)
-    return carrierRouteFailure(
-      exited.error.code,
-      exited.error.expected,
-      exited.error.hint,
-      exited.error.detail,
-    );
+  if (!started.ok) {
+    const exited = carrier.exit(leased.value.leaseId);
+    if (!exited.ok)
+      return carrierRouteFailure(
+        exited.error.code,
+        exited.error.expected,
+        exited.error.hint,
+        exited.error.detail,
+      );
+    return executePrivate();
+  }
+  let result: PreviewRouteResult<T> | undefined;
+  let executionFailed = false;
+  let executionError: unknown;
+  let exitFailure: PreviewRouteResult<T> | undefined;
+  try {
+    result = await executeConsumer(leased.value.leaseId);
+  } catch (error) {
+    executionFailed = true;
+    executionError = error;
+  } finally {
+    const exited = carrier.exit(leased.value.leaseId);
+    if (!exited.ok) {
+      exitFailure = carrierRouteFailure(
+        exited.error.code,
+        exited.error.expected,
+        exited.error.hint,
+        exited.error.detail,
+      );
+    }
+  }
+  if (exitFailure !== undefined) return exitFailure;
+  if (executionFailed) throw executionError;
+  if (result === undefined) throw new Error('preview carrier consumer returned no result');
   return result;
 }
 

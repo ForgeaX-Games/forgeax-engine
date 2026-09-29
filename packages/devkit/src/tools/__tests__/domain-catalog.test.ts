@@ -6,8 +6,22 @@ describe('domain preview catalog', () => {
   it('discovers four explicit domain descriptors and no generic preview alias', () => {
     const ids = createDefaultContributions().map((contribution) => contribution.descriptor.id);
     expect(ids).toEqual([
+      'project.migrate',
       'project.build',
-      'author.plugin-install',
+      'asset.plugin.create',
+      'project.root.set',
+      'asset.plugin.inspect',
+      'asset.list',
+      'asset.inspect',
+      'asset.resolve',
+      'asset.verify',
+      'asset-source.create',
+      'asset-source.clone',
+      'asset-source.import',
+      'asset-source.create-instance',
+      'asset-source.apply-values',
+      'asset-source.rebuild',
+      'asset-source.cold-cook',
       'material.preview',
       'mesh.preview',
       'vfx.preview',

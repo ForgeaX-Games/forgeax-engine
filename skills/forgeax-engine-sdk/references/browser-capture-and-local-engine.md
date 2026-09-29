@@ -5,7 +5,7 @@
 
 ## Capture owner and readiness
 
-`forgeax capture` owns one browser compositor capture. The final PNG comes from Playwright `page.screenshot()`, so it includes the WebGPU/WebGL Canvas together with normal HTML, CSS, and open Shadow DOM UI in the same viewport. A Canvas-element screenshot alone does not include surrounding HTML UI.
+`forgeax project capture` owns one browser compositor capture. The final PNG comes from Playwright `page.screenshot()`, so it includes the WebGPU/WebGL Canvas together with normal HTML, CSS, and open Shadow DOM UI in the same viewport. A Canvas-element screenshot alone does not include surrounding HTML UI.
 
 The readiness chain is explicit:
 
@@ -21,7 +21,7 @@ flowchart LR
 The Engine publishes `data-forgeax-frame-submitted` after a real renderer submission. A deterministic game may additionally set `data-forgeax-capture-ready` to `true` or a checkpoint name. `--wait-ms` is only extra compositor settle time after those signals; it is not the game-readiness authority.
 
 ```bash
-forgeax capture --backend auto --require-ui --deterministic \
+forgeax project capture --backend auto --require-ui --deterministic \
   --output artifacts/capture/game-ui.png --json
 ```
 
@@ -41,10 +41,12 @@ For repeatable cross-machine evidence, use DPR 1, the same viewport, project-loc
 
 ## One playthrough, multiple screenshots
 
-Use the persistent browser session exposed to `forgeax exec`. It preserves one Vite server, browser, page, and game World while Playwright drives input and assertions:
+Use the persistent browser session exposed by `createBrowserCapture(root)`. It preserves one Vite server, browser, page, and game World while Playwright drives input and assertions:
 
 ```js
-export default async function playthrough({ browser }) {
+import { createBrowserCapture } from '@forgeax/engine/devkit';
+const browser = createBrowserCapture(process.cwd());
+async function playthrough() {
   const session = await browser.open({
     backend: 'auto',
     deterministic: true,
@@ -59,28 +61,30 @@ export default async function playthrough({ browser }) {
     return { report: session.reportPath, captures: [spawn, arena] };
   } finally {
     await session.close();
+    await browser.close();
   }
 }
+console.log(JSON.stringify(await playthrough()));
 ```
 
 ```bash
-forgeax exec tests/playthrough.mjs --json
+node tests/playthrough.mjs
 ```
 
-Each `capture(name)` waits for a newly submitted Engine frame and the exact game checkpoint before appending an ordered row to the same `run.json`. Repeated one-shot `forgeax capture` calls restart the game and are not a substitute for a continuous playthrough.
+Each `capture(name)` waits for a newly submitted Engine frame and the exact game checkpoint before appending an ordered row to the same `run.json`. Repeated one-shot `forgeax project capture` calls restart the game and are not a substitute for a continuous playthrough.
 
 ## Local Engine binding
 
 A game normally resolves the exact published `@forgeax/engine` version. Source iteration stores one development-only override in `.forgeax/engine-binding.json` without rewriting the project manifest:
 
 ```bash
-forgeax engine status --json
-forgeax engine use-local ../forgeax-engine --json
-forgeax engine doctor --json
-forgeax engine unlink --json
+forgeax project engine status --json
+forgeax project engine use-local ../forgeax-engine --json
+forgeax project engine check --json
+forgeax project engine unlink --json
 ```
 
-`use-local` validates the Engine package family and built entry points. `doctor` reports the real workspace, package versions, build coverage, content-derived digest, newest build time, and npm-incompatible `workspace:` dependencies. File absence is the one normal SDK/registry state; `unlink` removes the sole override and returns to normal dependency resolution.
+`use-local` validates the Engine package family and built entry points. `check` reports the real workspace, package versions, build coverage, content-derived digest, newest build time, and npm-incompatible `workspace:` dependencies. File absence is the one normal SDK/registry state; `unlink` removes the sole override and returns to normal dependency resolution.
 
 To retain source changes across SDK upgrades, copy `source/engine/` to a user-owned version-controlled directory, build it there, and bind the game to that directory. The SDK never treats its source snapshot as a nested Git checkout and never silently migrates a game to a newer Engine.
 
@@ -89,10 +93,10 @@ To retain source changes across SDK upgrades, copy `source/engine/` to a user-ow
 | Capability | Status |
 |:--|:--|
 | Built SDK packages and editable `source/engine/` | Supported |
-| Local Engine status, bind, doctor, restore, and unlink | Supported |
+| Local Engine status, use-local, check, and unlink | Supported |
 | Canvas plus HTML/Shadow DOM compositor screenshots | Supported |
 | Named screenshots during one automated playthrough | Supported |
-| `forgeax engine fork --from-sdk` convenience copy | Not exposed; copy the snapshot to a user-owned directory, then `use-local` |
-| `package --format single-html` and verified `file://` runtime | Not supported; the official output remains Web ZIP served over HTTP(S) |
+| `forgeax project engine use-local <engine-directory>` convenience copy | Not exposed; copy the snapshot to a user-owned directory, then `use-local` |
+| `forgeax project package --format single-html` | Supported; verify the exact HTML through a `single-html` browser capture target before claiming file runtime or zero-network acceptance |
 
 Do not present an HTTP-loaded single-file experiment as verified `file://` support. A formal single-file format must own Worker, WASM, dynamic import, shader, pack-index, asset URL, browser security, and zero-network verification as one versioned build contract.

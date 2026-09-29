@@ -5,7 +5,12 @@
     "rootDir": "../..",
     "noEmit": true,
     "emitDeclarationOnly": false,
-    "types": ["@webgpu/types"]
+    "types": [
+      "@webgpu/types"
+    ],
+    "allowJs": true
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

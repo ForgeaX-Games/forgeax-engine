@@ -13,32 +13,25 @@ function sourceAfter(signature: string): string {
   return shadowPass.slice(start);
 }
 
-function expectValidatedOrderedLoop(
-  signature: string,
-  indexName: string,
-  dynamicOffsetBindGroup: string,
-): void {
+function expectValidatedOrderedLoop(signature: string, indexName: string): void {
   const body = sourceAfter(signature);
   expect(body).toContain(
     `for (let ${indexName} = 0; ${indexName} < validatedOrdered.length; ${indexName}++)`,
   );
-  expect(body).toContain(`${dynamicOffsetBindGroup}, [${indexName} * MESH_PER_ENTITY_STRIDE]`);
+  expect(body).toContain('const meshSsboBase = c.shadowMeshSsboBase ?? 0');
+  expect(body).toContain(`(meshSsboBase + ${indexName}) * MESH_PER_ENTITY_STRIDE`);
 }
 
 describe('shadow mesh SSBO order', () => {
   it('uses the upload order for typed directional, point, and spot shadow offsets', () => {
-    expectValidatedOrderedLoop(
-      'function recordShadowCasterDraws(',
-      'i',
-      'shadowPass.setBindGroup(2, shadowMeshBindGroup',
-    );
+    expectValidatedOrderedLoop('function recordShadowCasterDraws(', 'i');
     expect(shadowPass).toContain('export function encodeDirectionalShadowPass(');
     expect(shadowPass).toContain('export function encodePointShadowPass(');
     expect(shadowPass).toContain('export function encodeSpotShadowPass(');
     const spotBody = sourceAfter('export function encodeSpotShadowPass(');
     expect(spotBody).toContain('recordShadowCasterDraws(');
     expect(spotBody).toContain(
-      "buildMatchedRenderableIndices(c.dispatch, { LightMode: ['ShadowCaster'] })",
+      "buildMatchedRenderableIndices(shadowDispatchEntries(c), { LightMode: ['ShadowCaster'] })",
     );
     expect(shadowPass).not.toContain('export function recordShadowPass(');
     expect(shadowPass).not.toContain('export function recordPointShadowPass(');

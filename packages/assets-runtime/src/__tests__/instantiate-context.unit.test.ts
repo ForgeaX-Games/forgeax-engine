@@ -1,8 +1,8 @@
 // @forgeax/engine-assets-runtime -- buildSceneChildContext coverage (fix issue
 // #709). The breadcrumb-provenance resolver walks the recursing scene's
 // envelope.refs edges (prod) or falls back to the entity component walk (dev
-// catalog()) to recover the (entityLocalId, component.field) path for a
-// sub-asset GUID. Driven through an AssetRegistry with a mock ShaderRegistry.
+// catalog()) to recover the (entityKey, component.field) path for a sub-asset
+// GUID. Driven through an AssetRegistry with a mock ShaderRegistry.
 
 import { defineComponent } from '@forgeax/engine-ecs';
 import type { Asset } from '@forgeax/engine-types';
@@ -36,16 +36,15 @@ const SUB_GUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 function sceneWithMeshRef(): Asset & { kind: 'scene' } {
   return {
     kind: 'scene',
-    entities: [{ localId: 7, components: { T709CtxMeshFilter: { assetHandle: SUB_GUID } } }],
-    mounts: [],
+    entities: { 'entity-7': { components: { T709CtxMeshFilter: { assetHandle: SUB_GUID } } } },
   } as unknown as Asset & { kind: 'scene' };
 }
 
 describe('buildSceneChildContext', () => {
-  it('recovers entityLocalId + component.field via the entity walk fallback', () => {
+  it('recovers entityKey + component.field via the entity walk fallback', () => {
     const reg = makeRegistry();
     const ctx = buildSceneChildContext(reg, sceneWithMeshRef(), SUB_GUID.toLowerCase());
-    expect(ctx?.sceneEntityId).toBe(7);
+    expect(ctx?.sceneEntityKey).toBe('entity-7');
     expect(ctx?.componentField).toBe('T709CtxMeshFilter.assetHandle');
     expect(ctx?.sourceField).toMatchObject({
       componentName: 'T709CtxMeshFilter',

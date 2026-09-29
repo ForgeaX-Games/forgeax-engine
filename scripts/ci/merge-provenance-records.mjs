@@ -80,13 +80,15 @@ for (const { path, record } of candidates) {
         typeof artifact?.artifactName !== 'string' ||
         typeof artifact?.artifactId !== 'string' ||
         typeof artifact?.producerRunAttempt !== 'number' ||
-        typeof artifact?.upload?.startedAt !== 'string' ||
-        typeof artifact?.upload?.completedAt !== 'string' ||
-        !Number.isFinite(artifact?.upload?.elapsedSeconds) ||
-        artifact.upload.elapsedSeconds < 0 ||
-        !Number.isInteger(artifact?.upload?.transferAttempt) ||
-        artifact.upload.transferAttempt < 1 ||
-        artifact.upload.transferAttempt > 3,
+        (artifact.artifactId === ''
+          ? artifact.upload !== null
+          : typeof artifact?.upload?.startedAt !== 'string' ||
+            typeof artifact?.upload?.completedAt !== 'string' ||
+            !Number.isFinite(artifact?.upload?.elapsedSeconds) ||
+            artifact.upload.elapsedSeconds < 0 ||
+            !Number.isInteger(artifact?.upload?.transferAttempt) ||
+            artifact.upload.transferAttempt < 1 ||
+            artifact.upload.transferAttempt > 3),
     )
   )
     fail('ci-provenance-record-invalid', { path, producer: record?.producer });
@@ -239,13 +241,15 @@ const consumerArtifactIds = artifacts
 const consumerOutputLines = Object.entries(contract.consumers ?? {}).map(
   ([consumer, definition]) => {
     const classes = definition.requiredArtifactClasses ?? [];
-    const ids = classes.map((className) => {
-      const artifact = mapped.get(className);
-      if (!artifact) fail('ci-provenance-consumer-class-unmapped', { consumer, className });
-      return artifact.artifactId;
-    });
+    const ids = classes
+      .filter((className) => !shardInputClasses.has(className))
+      .map((className) => {
+        const artifact = mapped.get(className);
+        if (!artifact) fail('ci-provenance-consumer-class-unmapped', { consumer, className });
+        return artifact.artifactId;
+      });
     const outputName = `artifact_ids_${consumer.replaceAll('-', '_')}`;
-    return `${outputName}=${[...new Set(ids)].join(',')}`;
+    return `${outputName}=${ids.includes('') ? '' : [...new Set(ids)].join(',')}`;
   },
 );
 const merged = {

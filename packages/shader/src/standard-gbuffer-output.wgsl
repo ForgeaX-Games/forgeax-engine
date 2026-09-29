@@ -1,0 +1,28 @@
+#define_import_path forgeax_pbr::gbuffer_output
+#import forgeax_pbr::gbuffer::{encodeStandardNormalRoughness, encodeStandardReflectance, STANDARD_GBUFFER_NO_RECEIVE_BIT}
+
+// SceneColor owns emissive/opacity from the geometry pass onward. Four packed
+// material attachments cost 16 bytes/pixel; SceneColor remains linear HDR.
+struct GBufferOutput {
+  @location(0) scene_color : vec4<f32>,
+  @location(1) normal_roughness : u32,
+  @location(2) f0_occlusion : u32,
+  @location(3) albedo_metallic : u32,
+  @location(4) lighting_context : u32,
+#ifdef VISIBLE_SURFACE_AVAILABLE
+  // Frame row, draw-local primitive, packed geometric normal, coverage flags.
+  @location(5) visible_surface : vec4<u32>,
+#endif
+};
+
+fn encodeStandardGBuffer(normal : vec3<f32>, roughness : f32, albedo : vec3<f32>,
+  metallic : f32, f0 : vec3<f32>, occlusion : f32, emissive : vec3<f32>,
+  opacity : f32, reflection : u32, probeRow : u32, receiveShadows : bool) -> GBufferOutput {
+  var output : GBufferOutput;
+  output.scene_color = vec4<f32>(emissive, opacity);
+  output.normal_roughness = encodeStandardNormalRoughness(normal, roughness);
+  output.f0_occlusion = encodeStandardReflectance(f0, occlusion);
+  output.albedo_metallic = encodeStandardReflectance(albedo, metallic);
+  output.lighting_context = (reflection << 24u) | select(STANDARD_GBUFFER_NO_RECEIVE_BIT, 0u, receiveShadows) | probeRow;
+  return output;
+}

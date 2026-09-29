@@ -1,7 +1,7 @@
-// browser-backend-lock-error.test.ts -- M1 w4: onLockError unit tests.
+// browser-backend-lock-error.test.ts -- M3 pointer-lock failure unit tests.
 //
-// Covers: W3C rejection → onLockError (no longer silently swallowed),
-// provider reject → onLockError + providerLocked rollback.
+// Covers: W3C rejection / pointerlockerror → onLockError (no longer silently
+// swallowed), provider reject → onLockError + providerLocked rollback.
 //
 // charter awareness:
 //   P3 explicit failure -- lock failures must produce structured signals,
@@ -84,14 +84,28 @@ describe('browser-backend-lock-error.test.ts (w4)', () => {
       }
 
       // Wait for microtask to resolve promise rejection.
-      return vi.waitFor(
-        () => {
-          expect(lockErrorCalls.length).toBe(1);
-          expect(lockErrorCalls[0]?.path).toBe('w3c');
-          expect(lockErrorCalls[0]?.cause).toBe(rejectionError);
-        },
-        { timeout: 200 },
-      );
+      return vi
+        .waitFor(
+          () => {
+            expect(lockErrorCalls.length).toBe(1);
+            expect(lockErrorCalls[0]?.path).toBe('w3c');
+            expect(lockErrorCalls[0]?.cause).toBe(rejectionError);
+          },
+          { timeout: 200 },
+        )
+        .then(async () => {
+          const browserEvent = new Event('pointerlockerror');
+          const errorHandlers = listeners.get('document')?.get('pointerlockerror');
+          for (const handler of errorHandlers ?? []) handler(browserEvent);
+          await vi.waitFor(
+            () => {
+              expect(lockErrorCalls.length).toBe(2);
+              expect(lockErrorCalls[1]?.path).toBe('w3c');
+              expect(lockErrorCalls[1]?.cause).toBe(browserEvent);
+            },
+            { timeout: 200 },
+          );
+        });
     });
 
     it('W3C rejection without onLockError provided does NOT throw (backend is resilient)', () => {

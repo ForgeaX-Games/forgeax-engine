@@ -1,6 +1,6 @@
 #define_import_path my-game::pulse-material
 
-#import forgeax_view::common::{view, meshes}
+#import forgeax_view::common::{transformNormal, view, meshes}
 #import forgeax_pbr::brdf::{f_schlick}
 
 // pulse-material.wgsl - feat-20260523-shader-template-instance-split M5 / T07
@@ -34,7 +34,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   let world = meshes[idx].worldFromLocal * vec4<f32>(in.pos, 1.0);
   var out : VsOut;
   out.clip = view.worldViewProj * world;
-  out.worldNormal = normalize(meshes[idx].normalMatrix * in.normal);
+  out.worldNormal = normalize(transformNormal(meshes[idx].worldFromLocal, in.normal));
   out.baseColorUv = transformUv(in.uv, material.baseColorUvTransform);
   out.normalUv = transformUv(in.uv, material.normalUvTransform);
   return out;

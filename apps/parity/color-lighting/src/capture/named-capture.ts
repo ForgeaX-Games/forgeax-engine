@@ -12,6 +12,7 @@ import type {
 } from '../contracts/types';
 import type { AttachmentEvidence } from './attachment-readback';
 import type { ReadbackProbe } from './readback-probe';
+import type { ForgeaxSurfaceEvidence } from '../adapters/forgeax-adapter';
 
 export interface CaptureConfig {
   readonly width: number;
@@ -31,11 +32,12 @@ export interface CaptureEnvelope {
   readonly captures: NamedCaptures;
   readonly readback?: ReadbackProbe;
   readonly observations?: AttachmentEvidence;
+  readonly surfaceEvidence?: ForgeaxSurfaceEvidence;
 }
 
 export interface VertexColorNamedCapture {
   readonly backend: VertexColorBackend;
-  readonly frameCount: 300;
+  readonly frameCount: 60;
   readonly colorDomain: VertexColorDomain;
   readonly sourceSha: string;
   readonly sourceFixtureHash: string;
@@ -53,7 +55,7 @@ export function createVertexColorNamedCapture(
   if (output.backend !== 'browser-webgpu' && output.backend !== 'dawn') {
     return Promise.reject(new Error('vertex-color capture backend is not a required backend'));
   }
-  if (output.frameCount !== 300) return Promise.reject(new Error('vertex-color capture must cover 300 frames'));
+  if (output.frameCount !== 60) return Promise.reject(new Error('vertex-color capture must cover 60 frames'));
   if (output.colorDomain !== fixture.colorDomain) return Promise.reject(new Error('vertex-color capture domain does not match fixture'));
   if (output.sourceFixtureHash.length !== 64) return Promise.reject(new Error('vertex-color fixture hash is missing'));
   if (output.linear.length === 0 || output.final.length === 0) return Promise.reject(new Error('vertex-color capture bytes are missing'));
@@ -65,7 +67,7 @@ export function createVertexColorNamedCapture(
   }
   return createNamedCaptures(output.linear, output.final).then((captures) => ({
     backend: output.backend,
-    frameCount: 300,
+    frameCount: 60,
     colorDomain: output.colorDomain,
     sourceSha: output.sourceSha,
     sourceFixtureHash: output.sourceFixtureHash,

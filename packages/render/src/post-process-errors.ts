@@ -3,7 +3,7 @@
 //  feat-20260609-learn-render-4-5-framebuffers-demo-offscreen-rt-an M1 / T-2
 //  added 'fullscreen-input-not-found').
 //
-// Closed 7-member PostProcessErrorCode union + PostProcessError discriminated-union class.
+// Closed PostProcessErrorCode union + PostProcessError discriminated-union class.
 //   - 'post-process-already-registered' (programmer error) -> fullscreen effect registration THROWS a
 //     PostProcessError, mirroring ShaderCatalog.installMaterialArtifact's Map.has -> throw
 //     fail-fast (research Finding M2-4). A second register under the same id is a coding
@@ -38,7 +38,7 @@
 /**
  * Closed union of fullscreen post-process error codes.
  *
- * Exactly 7 members; AI users perform exhaustive `switch (err.code)` without a default
+ * AI users perform exhaustive `switch (err.code)` without a default
  * and TS guards completeness (AC-08).
  *
  * | code | channel | trigger |
@@ -134,21 +134,23 @@ export interface PostProcessParamsUpdateSizeMismatchDetail {
  * `detail` parameter to the variant payload at compile time.
  */
 export type PostProcessErrorDetailFor<C extends PostProcessErrorCode> =
-  C extends 'post-process-already-registered'
-    ? PostProcessPreviouslyRegisteredDetail
-    : C extends 'post-process-not-found'
-      ? PostProcessNotFoundDetail
-      : C extends 'fullscreen-input-not-found'
-        ? FullscreenInputNotFoundDetail
-        : C extends 'ssao-radius-non-positive'
-          ? SsaoRadiusNonPositiveDetail
-          : C extends 'ssao-bias-negative'
-            ? SsaoBiasNegativeDetail
-            : C extends 'params-size-mismatch'
-              ? PostProcessParamsSizeMismatchDetail
-              : C extends 'params-update-size-mismatch'
-                ? PostProcessParamsUpdateSizeMismatchDetail
-                : never;
+  C extends 'ssao-parameter-invalid'
+    ? { readonly paramName: string; readonly value: unknown }
+    : C extends 'post-process-already-registered'
+      ? PostProcessPreviouslyRegisteredDetail
+      : C extends 'post-process-not-found'
+        ? PostProcessNotFoundDetail
+        : C extends 'fullscreen-input-not-found'
+          ? FullscreenInputNotFoundDetail
+          : C extends 'ssao-radius-non-positive'
+            ? SsaoRadiusNonPositiveDetail
+            : C extends 'ssao-bias-negative'
+              ? SsaoBiasNegativeDetail
+              : C extends 'params-size-mismatch'
+                ? PostProcessParamsSizeMismatchDetail
+                : C extends 'params-update-size-mismatch'
+                  ? PostProcessParamsUpdateSizeMismatchDetail
+                  : never;
 
 /**
  * Tagged union of `.detail` payloads. The variants are unique by structural fields
@@ -170,7 +172,8 @@ const POST_PROCESS_POLICY = {
     expected: 'typed fullscreen plan references a registered post-process id',
     hint: (detail) =>
       `no post-process is registered for id '${(detail as PostProcessNotFoundDetail).id}'. ` +
-      `Register '${(detail as PostProcessNotFoundDetail).id}' with the feature host ({source, reads?}), ` +
+      'For Engine-owned effects, rebuild the shader manifest with that Engine entry enabled. ' +
+      `For custom effects, register '${(detail as PostProcessNotFoundDetail).id}' with the feature host ({source, reads?}), ` +
       'then reference it from a typed fullscreen RenderFeaturePlan.',
   },
   'fullscreen-input-not-found': {
@@ -186,6 +189,11 @@ const POST_PROCESS_POLICY = {
         `and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.`
       );
     },
+  },
+  'ssao-parameter-invalid': {
+    expected: 'finite non-negative SSAO intensity and low, medium, or high quality',
+    hint: () =>
+      'Set ssao.algorithm to ssao or gtao, ssao.intensity to a finite non-negative value and ssao.quality to low, medium, or high.',
   },
   'ssao-radius-non-positive': {
     expected: 'SSAO radius must be > 0',

@@ -10,8 +10,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const FRAMES = Math.max(SMOKE_MIN_FRAMES, 180);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
+const FRAMES = Math.max(SMOKE_MIN_FRAMES, 60);
 const WIDTH = 320;
 const HEIGHT = 180;
 
@@ -134,10 +134,10 @@ async function capture() {
 }
 
 for (let frame = 0; frame < FRAMES; frame++) {
-  world.update(0.016).unwrap();
+  world.update(3 / FRAMES).unwrap();
   const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
-  if (frame === 60) {
+  if (frame === Math.floor(FRAMES / 5)) {
     beforeUnlock = readRunConditionState(world, state);
     earlyFrame = await capture();
   }

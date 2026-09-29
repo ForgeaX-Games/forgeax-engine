@@ -1,26 +1,9 @@
-// types.test-d.ts -- compile-time fixture for the
-// AppErrorCode 12-member closed union + .detail discriminated per code +
-// 30-arm exhaustive switch over (AppError | RhiError) + dual-layer
-// instanceof EngineEnvironmentError + switch (err.code) pattern (D-6).
-//
-// Anchors:
-//   - requirements AC-07: type-level assertions on the closed union and
-//     discriminated detail; exhaustive switch must compile under tsc
-//     strict mode without falling through to a `default` arm.
-//   - plan-strategy D-3: AppErrorCode excludes 'app-device-lost'
-//     -- device-lost rides on RhiError 18-member union).
-//   - plan-strategy D-6: AI-user error consumption form is two-layer
-//     `if (err instanceof EngineEnvironmentError) { ... } else { switch
-//     (err.code) { ... } }` because EngineEnvironmentError lacks the
-//     four-field surface (charter F1 immediate-fallback example).
-//   - charter P3 / P4: closed union exhaustive switch needs no default
-//     fallback; tsc strict mode guards completeness.
-//
-// vitest --typecheck folds this file into the unit test run; if a code
-// is added or dropped without updating this fixture, the build fails.
+// Error variants intersect the backing class. Check detail assignability in both
+// directions so equivalent intersection representations retain exact contracts.
+// Compile-time contracts: closed codes, correlated detail, and exhaustive consumption.
 
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
 
 import {
@@ -31,8 +14,10 @@ import {
   type AppDetailExecutionKernelFailed,
   type AppDetailExecutionRebuildFailed,
   type AppDetailExecutionStaleWorld,
-  type AppDetailExecutionTierUnavailable,
+  type AppDetailExecutionWorkerUnavailable,
   type AppDetailEmpty,
+  type AppDetailFrameStepInvalid,
+  type AppDetailPluginActivationFailed,
   type AppDetailPointerLockFailed,
   type AppDetailSystemUpdateFailed,
   type AppErrorCode,
@@ -47,10 +32,23 @@ import type {
   LoadGameErrorDetail,
 } from '../src/load-game-errors';
 import { LoadGameError as LoadGameErrorConstructor } from '../src/load-game-errors';
-import type { App } from '../src/types';
+import type { GameHost } from '../src/game-context';
 
-describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
-  it('matches the exact twelve-code owner', () => {
+it('GameHost distinguishes Host controls from source World services', () => {
+  expectTypeOf<GameHost['canvas']>().toEqualTypeOf<
+    HTMLCanvasElement | OffscreenCanvas | undefined
+  >();
+  expectTypeOf<GameHost['app']>().not.toHaveProperty('renderer');
+  expectTypeOf<GameHost['app']>().not.toHaveProperty('dispose');
+  expectTypeOf<GameHost['app']>().not.toHaveProperty('world');
+  expectTypeOf<GameHost['app']>().not.toHaveProperty('assets');
+  expectTypeOf<Extract<GameHost['app'], { world: unknown }>>().toHaveProperty('world');
+  expectTypeOf<Extract<GameHost['app'], { world: unknown }>>().toHaveProperty('assets');
+  expectTypeOf<GameHost>().toHaveProperty('assets');
+});
+
+describe('AppErrorCode is the current closed union (AC-07)', () => {
+  it('matches the exact code owner', () => {
     expectTypeOf<AppErrorCode>().toEqualTypeOf<
       | 'app-not-started'
       | 'app-already-running'
@@ -58,12 +56,13 @@ describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
       | 'app-frame-step-invalid'
       | 'app-system-update-failed'
       | 'app-pointer-lock-failed'
-      | 'app-execution-tier-unavailable'
+      | 'app-execution-worker-unavailable'
       | 'app-execution-bootstrap-failed'
       | 'app-execution-deadline-exceeded'
       | 'app-execution-kernel-failed'
       | 'app-execution-stale-world'
       | 'app-execution-rebuild-failed'
+      | 'app-plugin-activation-failed'
     >();
   });
 
@@ -74,7 +73,7 @@ describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
     expectTypeOf<'app-frame-step-invalid'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-system-update-failed'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-pointer-lock-failed'>().toMatchTypeOf<AppErrorCode>();
-    expectTypeOf<'app-execution-tier-unavailable'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-worker-unavailable'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-execution-bootstrap-failed'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-execution-deadline-exceeded'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-execution-kernel-failed'>().toMatchTypeOf<AppErrorCode>();
@@ -145,13 +144,13 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
 
   it('execution variants preserve constructor inference and detail narrowing', () => {
     const unavailable = new AppError({
-      code: 'app-execution-tier-unavailable',
+      code: 'app-execution-worker-unavailable',
       expected: '',
       hint: '',
       detail: {
-        requestedTier: 'shared',
+        worker: 'kernels' as const,
+        reason: 'capability-unavailable' as const,
         missingCapabilities: ['sharedArrayBuffer'],
-        sharedEvidencePassed: true,
       },
     });
     const bootstrap = new AppError({
@@ -190,23 +189,29 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
       hint: '',
       detail: { worldIdentity: null, cause: new Error('rebuild') },
     });
-    if (unavailable.code === 'app-execution-tier-unavailable') {
-      expectTypeOf(unavailable.detail).toEqualTypeOf<AppDetailExecutionTierUnavailable>();
+    if (unavailable.code === 'app-execution-worker-unavailable') {
+      expectTypeOf(unavailable.detail).toMatchTypeOf<AppDetailExecutionWorkerUnavailable>();
+      expectTypeOf<AppDetailExecutionWorkerUnavailable>().toMatchTypeOf<typeof unavailable.detail>();
     }
     if (bootstrap.code === 'app-execution-bootstrap-failed') {
-      expectTypeOf(bootstrap.detail).toEqualTypeOf<AppDetailExecutionBootstrapFailed>();
+      expectTypeOf(bootstrap.detail).toMatchTypeOf<AppDetailExecutionBootstrapFailed>();
+      expectTypeOf<AppDetailExecutionBootstrapFailed>().toMatchTypeOf<typeof bootstrap.detail>();
     }
     if (deadline.code === 'app-execution-deadline-exceeded') {
-      expectTypeOf(deadline.detail).toEqualTypeOf<AppDetailExecutionDeadlineExceeded>();
+      expectTypeOf(deadline.detail).toMatchTypeOf<AppDetailExecutionDeadlineExceeded>();
+      expectTypeOf<AppDetailExecutionDeadlineExceeded>().toMatchTypeOf<typeof deadline.detail>();
     }
     if (kernel.code === 'app-execution-kernel-failed') {
-      expectTypeOf(kernel.detail).toEqualTypeOf<AppDetailExecutionKernelFailed>();
+      expectTypeOf(kernel.detail).toMatchTypeOf<AppDetailExecutionKernelFailed>();
+      expectTypeOf<AppDetailExecutionKernelFailed>().toMatchTypeOf<typeof kernel.detail>();
     }
     if (stale.code === 'app-execution-stale-world') {
-      expectTypeOf(stale.detail).toEqualTypeOf<AppDetailExecutionStaleWorld>();
+      expectTypeOf(stale.detail).toMatchTypeOf<AppDetailExecutionStaleWorld>();
+      expectTypeOf<AppDetailExecutionStaleWorld>().toMatchTypeOf<typeof stale.detail>();
     }
     if (rebuild.code === 'app-execution-rebuild-failed') {
-      expectTypeOf(rebuild.detail).toEqualTypeOf<AppDetailExecutionRebuildFailed>();
+      expectTypeOf(rebuild.detail).toMatchTypeOf<AppDetailExecutionRebuildFailed>();
+      expectTypeOf<AppDetailExecutionRebuildFailed>().toMatchTypeOf<typeof rebuild.detail>();
     }
   });
 });
@@ -215,10 +220,12 @@ describe('error detail unions derive from their code resolvers', () => {
   it('preserves the complete AppError detail union', () => {
     expectTypeOf<AppErrorDetail>().toEqualTypeOf<
       | AppDetailEmpty
+      | AppDetailFrameStepInvalid
+      | AppDetailPluginActivationFailed
       | AppDetailCanvasDetached
       | AppDetailSystemUpdateFailed
       | AppDetailPointerLockFailed
-      | AppDetailExecutionTierUnavailable
+      | AppDetailExecutionWorkerUnavailable
       | AppDetailExecutionBootstrapFailed
       | AppDetailExecutionDeadlineExceeded
       | AppDetailExecutionKernelFailed
@@ -269,29 +276,32 @@ describe('LoadGameError is a code-derived correlated union', () => {
       detail: { cause: new Error('network') },
     });
     if (moduleNotFound.code === 'module-not-found') {
-      expectTypeOf(moduleNotFound.detail).toEqualTypeOf<LoadGameDetailModuleNotFound>();
+      expectTypeOf(moduleNotFound.detail).toMatchTypeOf<LoadGameDetailModuleNotFound>();
+      expectTypeOf<LoadGameDetailModuleNotFound>().toMatchTypeOf<typeof moduleNotFound.detail>();
     }
     if (invalidFormat.code === 'invalid-format') {
-      expectTypeOf(invalidFormat.detail).toEqualTypeOf<LoadGameDetailInvalidFormat>();
+      expectTypeOf(invalidFormat.detail).toMatchTypeOf<LoadGameDetailInvalidFormat>();
+      expectTypeOf<LoadGameDetailInvalidFormat>().toMatchTypeOf<typeof invalidFormat.detail>();
     }
     if (importFailed.code === 'import-failed') {
-      expectTypeOf(importFailed.detail).toEqualTypeOf<LoadGameDetailImportFailed>();
+      expectTypeOf(importFailed.detail).toMatchTypeOf<LoadGameDetailImportFailed>();
+      expectTypeOf<LoadGameDetailImportFailed>().toMatchTypeOf<typeof importFailed.detail>();
     }
   });
 
   it('rejects invalid code/detail pairs at construction', () => {
-    // @ts-expect-error -- module-not-found requires the slug detail.
     const _wrongModuleDetail = new LoadGameErrorConstructor({
       code: 'module-not-found',
       expected: '',
       hint: '',
+      // @ts-expect-error -- module-not-found requires the slug detail.
       detail: { exportKeys: [] },
     });
-    // @ts-expect-error -- invalid-format requires the exportKeys detail.
     const _wrongFormatDetail = new LoadGameErrorConstructor({
       code: 'invalid-format',
       expected: '',
       hint: '',
+      // @ts-expect-error -- invalid-format requires the exportKeys detail.
       detail: { cause: new Error('wrong') },
     });
     void _wrongModuleDetail;
@@ -316,12 +326,13 @@ describe('LoadGameError is a code-derived correlated union', () => {
 });
 
 describe('exhaustive switch over (AppError | RhiError) compiles with no default arm (AC-07)', () => {
-  it('covers all 30 codes (12 AppError + 18 RhiError) without a default fallback', () => {
+  it('covers all current codes without a default fallback', () => {
     // The `never` return on the unreachable tail is what asserts
     // exhaustiveness: if a future commit adds a code without updating
     // this switch, the assignment to `_unreachable: never` fails tsc.
     function classify(err: AppError | RhiError): string {
-      switch (err.code) {
+      const code = err.code;
+      switch (code) {
         case 'app-not-started':
           return 'a';
         case 'app-already-running':
@@ -333,12 +344,13 @@ describe('exhaustive switch over (AppError | RhiError) compiles with no default 
         case 'app-system-update-failed':
           return 'e';
         case 'app-pointer-lock-failed':
-        case 'app-execution-tier-unavailable':
+        case 'app-execution-worker-unavailable':
         case 'app-execution-bootstrap-failed':
         case 'app-execution-deadline-exceeded':
         case 'app-execution-kernel-failed':
         case 'app-execution-stale-world':
         case 'app-execution-rebuild-failed':
+        case 'app-plugin-activation-failed':
           return 'f';
         case 'adapter-unavailable':
         case 'feature-not-enabled':
@@ -358,12 +370,18 @@ describe('exhaustive switch over (AppError | RhiError) compiles with no default 
         case 'oom':
         case 'internal-error':
         case 'hierarchy-broken':
+        case 'destroy-after-destroy':
+        case 'rhi-descriptor-invalid':
+        case 'instancing-exceeds-uniform-cap':
+        case 'render-system-empty-worlds':
+        case 'render-system-owner-out-of-range':
+        case 'rhi-texture-format-capability-unavailable':
           return 'rhi';
       }
-      // Unreachable: tsc narrows `err` to `never` once every union arm
+      // Unreachable: tsc narrows `code` to `never` once every union arm
       // is consumed above. Assigning it back to `never` is the
       // exhaustiveness guard.
-      const _unreachable: never = err;
+      const _unreachable: never = code;
       return _unreachable;
     }
     expectTypeOf(classify).toBeFunction();
@@ -378,21 +396,24 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
     // by the outer instanceof branch and no longer reaches the switch.
     function consume(err: AppError | RhiError | EngineEnvironmentError): string {
       if (err instanceof EngineEnvironmentError) {
-        return `env: ${err.detail.webgpuError?.code ?? 'no-webgpu-detail'}`;
+        const cause = err.detail.webgpuError;
+        return `env: ${cause && 'code' in cause ? cause.code : cause?.message ?? 'no-webgpu-detail'}`;
       }
-      switch (err.code) {
+      const code = err.code;
+      switch (code) {
         case 'app-not-started':
         case 'app-already-running':
         case 'app-canvas-detached':
         case 'app-frame-step-invalid':
         case 'app-system-update-failed':
         case 'app-pointer-lock-failed':
-        case 'app-execution-tier-unavailable':
+        case 'app-execution-worker-unavailable':
         case 'app-execution-bootstrap-failed':
         case 'app-execution-deadline-exceeded':
         case 'app-execution-kernel-failed':
         case 'app-execution-stale-world':
         case 'app-execution-rebuild-failed':
+        case 'app-plugin-activation-failed':
           return 'app';
         case 'adapter-unavailable':
         case 'feature-not-enabled':
@@ -412,9 +433,15 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
         case 'oom':
         case 'internal-error':
         case 'hierarchy-broken':
+        case 'destroy-after-destroy':
+        case 'rhi-descriptor-invalid':
+        case 'instancing-exceeds-uniform-cap':
+        case 'render-system-empty-worlds':
+        case 'render-system-owner-out-of-range':
+        case 'rhi-texture-format-capability-unavailable':
           return 'rhi';
       }
-      const _unreachable: never = err;
+      const _unreachable: never = code;
       return _unreachable;
     }
     expectTypeOf(consume).toBeFunction();

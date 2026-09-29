@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // fxaa-pixel-diff.dawn.test.ts - feat-20260528-fxaa-post-processing / M3 / w16.
 // Dawn integration tests: (a) AC-03 — render with antialias='fxaa' produces
 // measurable pixel difference vs antialias='none'; (b) AC-04 — tonemap='none' +
@@ -34,9 +35,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function doReadPixels(device: GPUDevice, renderTarget: GPUTexture): Promise<Uint8Array> {
   const bytesPerPixel = 4;

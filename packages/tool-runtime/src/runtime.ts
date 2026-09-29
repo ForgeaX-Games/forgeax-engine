@@ -109,8 +109,13 @@ function serializablePreview(value: unknown): JsonValue {
 function domainError(error: ToolDomainFailure): ToolRuntimeError {
   return domainFailureError(
     error.code,
-    error.expected ?? 'the producer operation to succeed',
-    error.hint ?? 'Inspect detail and repair the owning producer before retrying.',
+    typeof error.expected === 'string' ? error.expected : 'the producer operation to succeed',
+    typeof error.hint === 'string'
+      ? error.hint
+      : error.hint === undefined || error.hint === null
+        ? 'Inspect detail and repair the owning producer before retrying.'
+        : (JSON.stringify(error.hint) ??
+          'Inspect detail and repair the owning producer before retrying.'),
     error.detail,
   );
 }
@@ -177,6 +182,10 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
     const terminal = new Promise<ToolTerminal<TResult>>((resolve) => {
       resolveTerminal = resolve;
     });
+    let resolveExecutorExited!: () => void;
+    const executorExited = new Promise<void>((resolve) => {
+      resolveExecutorExited = resolve;
+    });
 
     const settle = async (
       candidate: ToolTerminal<TResult>,
@@ -230,6 +239,8 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
     const context: ToolExecutionContext = {
       runId,
       signal: controller.signal,
+      ...(options.owner === undefined ? {} : { owner: options.owner }),
+      ...(options.caller === undefined ? {} : { caller: options.caller }),
       ...(options.snapshot === undefined ? {} : { snapshot: options.snapshot }),
       emit: (event) => {
         if (!terminalStarted) channel.emit({ ...event, runId });
@@ -337,12 +348,25 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
 
     channel.emit({ kind: 'started', runId, atMs: performance.now() });
     void (async () => {
-      const parsedArgs = contribution.descriptor.argsSchema.parse(args);
-      if (!parsedArgs.ok) {
-        fail(invalidArgsError(parsedArgs.error, serializablePreview(args)));
-        return;
-      }
       try {
+        let parsedArgs: ReturnType<typeof contribution.descriptor.argsSchema.parse>;
+        try {
+          parsedArgs = contribution.descriptor.argsSchema.parse(args);
+        } catch (cause) {
+          await settle({
+            outcome: 'failed',
+            failure: invalidArgsError(
+              cause instanceof Error ? cause.message : String(cause),
+              serializablePreview(args),
+            ),
+            artifacts: [],
+          });
+          return;
+        }
+        if (!parsedArgs.ok) {
+          fail(invalidArgsError(parsedArgs.error, serializablePreview(args)));
+          return;
+        }
         if (options.signal?.aborted) {
           cancelReason = 'aborted by caller';
           fail(cancellationError(cancelReason));
@@ -378,14 +402,27 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
         } else if (hasOkField(produced)) {
           if (produced.ok === false) {
             const error = Reflect.get(produced, 'error');
+            const failureArtifacts = Reflect.get(produced, 'artifacts') ?? [];
+            if (!validateArtifactRefs(failureArtifacts)) {
+              await settle({
+                outcome: 'failed',
+                failure: domainFailureError(
+                  'artifact-ref-invalid',
+                  'failure artifact refs to be serializable ArtifactRef values',
+                  'Return refs created by createArtifactRef.',
+                ),
+                artifacts: [],
+              });
+              return;
+            }
             if (isToolRuntimeError(error)) {
-              await settle({ outcome: 'failed', failure: error, artifacts: [] });
+              await settle({ outcome: 'failed', failure: error, artifacts: failureArtifacts });
               return;
             }
             await settle({
               outcome: 'failed',
               failure: domainError(error as ToolDomainFailure),
-              artifacts: [],
+              artifacts: failureArtifacts,
             });
             return;
           }
@@ -462,6 +499,7 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
         });
       } finally {
         if (timeout !== undefined) clearTimeout(timeout);
+        resolveExecutorExited();
       }
     })();
 
@@ -469,6 +507,7 @@ export function createToolRuntime(contributions: readonly unknown[]): ToolRuntim
       id: runId,
       events: channel.events,
       terminal,
+      executorExited,
       cancel,
       disconnect,
       providerExit,

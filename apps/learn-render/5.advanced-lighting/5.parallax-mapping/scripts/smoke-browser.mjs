@@ -3,8 +3,9 @@
 // supplies the demo identity + its live-pixel hook (window.__captureParallaxMapping, installed by
 // src/index.ts).
 //
-// pixel mode: capture a frame -> replay on a fresh dawn-node device -> compare
-// the replayed RT against the live canvas readback (mean/maxChannel/coveredMean).
+// Pixel mode compares live pixels with a fresh browser-device replay using
+// unchanged mean/maxChannel/coveredMean thresholds. Node Dawn also replays the
+// tape and records its metrics; cross-backend parallax discard edges differ.
 // Local-only gate (no Chrome+WebGPU on CI runners).
 
 import { dirname } from 'node:path';
@@ -17,7 +18,10 @@ await verifyDemoCapture({
   pkg: '@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping',
   label: 'learn-render 5.5 parallax-mapping',
   mode: 'pixel',
+  waitForPackIndex: true,
   liveHook: '__captureParallaxMapping',
+  browserReplayHook: '__replayParallaxMappingCapture',
+  pixelVerdictOwner: 'browser-fresh',
   rtIdx: 0,
   appDir: dirname(here),
 });

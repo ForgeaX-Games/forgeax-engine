@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 // per-entity-material-texture-isolation.dawn.test.ts
 // bug-20260522-per-entity-material-texture-binding AC-01 regression lock.
 //
@@ -60,12 +61,11 @@ function makeChequerTexture(primaryR: number, primaryG: number, primaryB: number
   }
   return {
     kind: 'texture',
-    width: side,
-    height: side,
+    shape: { viewDimension: '2d', extent: { width: side, height: side } },
     format: 'rgba8unorm',
     data: bytes,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 
@@ -73,9 +73,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function readbackPixels(
   device: GPUDevice,

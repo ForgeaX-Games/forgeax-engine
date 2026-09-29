@@ -1,12 +1,20 @@
-import { execFile, spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { fetchWithRetry, streamFile } from './sdk-lib.mjs';
+import { validateCandidate } from './sdk-candidate.mjs';
+import {
+  fetchWithRetry,
+  mapConcurrent,
+  SDK_TEMPLATES,
+  streamFile,
+  waitForNpmPublications,
+} from './sdk-lib.mjs';
 
 const execFileAsync = promisify(execFile);
 const args = process.argv.slice(2);
@@ -15,10 +23,12 @@ const value = (name) => {
   return index < 0 ? undefined : args[index + 1];
 };
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const output = resolve(root, value('--output') ?? 'artifacts/sdk');
+const candidatePath = value('--candidate');
+const output = resolve(root, candidatePath ?? value('--output') ?? 'artifacts/sdk');
 const version = value('--version');
 const checkOnly = args.includes('--check-only');
 if (version === undefined) throw new Error('npm-release-version-missing');
+if (candidatePath !== undefined && checkOnly) throw new Error('npm-candidate-check-only-invalid');
 const tag = value('--tag') ?? (version.includes('-') ? 'next' : 'latest');
 const packageRoot = resolve(output, 'npm', 'packages');
 const carrierPath = resolve(output, 'npm', `forgeax-engine-sdk-${version}.tgz`);
@@ -26,6 +36,14 @@ const buildResult = JSON.parse(await readFile(resolve(output, 'sdk-build-result.
 if (buildResult.ok !== true || buildResult.sdkVersion !== version) {
   throw new Error('npm-sdk-build-result-mismatch');
 }
+const candidate =
+  candidatePath === undefined
+    ? undefined
+    : await validateCandidate({
+        candidateRoot: output,
+        expectedVersion: version,
+        expectedEngineCommit: buildResult.engineCommit,
+      });
 
 async function archive(path) {
   const { stdout } = await execFileAsync('tar', ['-xOf', path, 'package/package.json'], {
@@ -110,62 +128,111 @@ const ordered = [
   carrier,
 ];
 
+if (candidate !== undefined) {
+  const relativePath = (path) => relative(output, path).split(sep).join('/');
+  const actualOrder = ordered.map(({ path }) => relativePath(path));
+  const expectedOrder = candidate.npmPackages.map(({ path }) => path);
+  if (JSON.stringify(actualOrder) !== JSON.stringify(expectedOrder)) {
+    throw new Error('npm-candidate-package-order-mismatch');
+  }
+}
+
 function npmTarballUrl(name, packageVersion) {
   const packageName = name.slice(name.indexOf('/') + 1);
   return `https://registry.npmjs.org/${name}/-/${packageName}-${packageVersion}.tgz`;
 }
 
 async function waitForDev(project, packageManager, env) {
-  const detached = process.platform !== 'win32';
-  const child = spawn('corepack', [packageManager, 'run', 'dev', '--', '--json', '--port', '0'], {
-    cwd: project,
-    env,
-    detached,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const exited = new Promise((accept) => child.once('exit', accept));
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
-  });
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
-  });
+  let endpoint;
+  let failure;
+  let devUrl;
   try {
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      for (const line of stdout.split('\n')) {
-        if (!line.startsWith('{')) continue;
-        try {
-          const envelope = JSON.parse(line);
-          if (envelope.command !== 'dev' || envelope.ok !== true) continue;
-          const url = envelope.value?.urls?.local?.[0] ?? envelope.value?.urls?.network?.[0];
-          if (typeof url !== 'string') throw new Error('npm-carrier-dev-url-missing');
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`npm-carrier-dev-http-${response.status}`);
-          return url;
-        } catch (cause) {
-          if (cause instanceof SyntaxError) continue;
-          throw cause;
-        }
-      }
-      if (child.exitCode !== null) {
-        throw new Error(`npm-carrier-dev-exited: ${stdout}\n${stderr}`);
-      }
-      await new Promise((accept) => setTimeout(accept, 100));
+    const { stdout } = await execFileAsync('corepack', [packageManager, 'run', 'dev', '--json'], {
+      cwd: project,
+      env,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const envelope = JSON.parse(stdout.trim().split(/\r?\n/).at(-1) ?? '{}');
+    const value = envelope.value?.value ?? envelope.value;
+    if (
+      envelope.ok !== true ||
+      envelope.command !== 'dev start' ||
+      typeof value?.endpoint !== 'string'
+    ) {
+      throw new Error(`npm-carrier-dev-start: ${stdout}`);
     }
-    throw new Error(`npm-carrier-dev-not-ready: ${stdout}\n${stderr}`);
-  } finally {
-    if (child.exitCode === null) {
-      if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-      else child.kill('SIGTERM');
-    }
-    await exited;
+    endpoint = value.endpoint;
+    const response = await fetch(`${endpoint}/status`);
+    assert(response.ok, `npm-carrier-dev-status-${response.status}`);
+    const status = await response.json();
+    const url = status?.value?.url;
+    assert(
+      status?.value?.phase === 'ready' && typeof url === 'string',
+      'npm-carrier-dev-not-ready',
+    );
+    const page = await fetch(url);
+    assert(page.ok, `npm-carrier-dev-http-${page.status}`);
+    devUrl = url;
+  } catch (cause) {
+    failure = cause;
   }
+  try {
+    // A failed start can still own a live daemon. Read its discovery record
+    // before any temporary-project cleanup, including when execFile rejects.
+    if (endpoint === undefined) {
+      try {
+        const session = JSON.parse(
+          await readFile(resolve(project, '.forgeax/dev-session.json'), 'utf8'),
+        );
+        endpoint = session.endpoint;
+      } catch (cause) {
+        if (cause?.code !== 'ENOENT') throw cause;
+      }
+    }
+    if (endpoint !== undefined) {
+      const stopped = await fetch(`${endpoint}/stop`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert(stopped.ok, `npm-carrier-dev-stop-${stopped.status}`);
+    }
+  } catch (cleanup) {
+    failure =
+      failure === undefined
+        ? cleanup
+        : new AggregateError([failure, cleanup], 'npm-carrier-dev-cleanup');
+  }
+  if (failure !== undefined) throw failure;
+  return devUrl;
+}
+
+async function verifyGamePackage(project, packageManager, env, output) {
+  const packageResult = await execFileAsync(
+    'corepack',
+    [packageManager, 'exec', 'forgeax', 'project', 'package', '--output', output, '--json'],
+    { cwd: project, env, maxBuffer: 128 * 1024 * 1024 },
+  );
+  const entries = (await execFileAsync('unzip', ['-Z1', output])).stdout
+    .split(/\r?\n/)
+    .filter((entry) => entry.length > 0);
+  const documents = ['README.md', 'docs/feedback.md'];
+  for (const document of documents) {
+    if (!entries.includes(document)) throw new Error(`npm-game-package-document: ${document}`);
+    const source = await readFile(resolve(project, document), 'utf8');
+    const archived = await execFileAsync('unzip', ['-p', output, document], {
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (archived.stdout !== source) throw new Error(`npm-game-package-document-drift: ${document}`);
+  }
+  const envelope = JSON.parse(packageResult.stdout.trim().split(/\r?\n/).at(-1) ?? '{}');
+  if (JSON.stringify(envelope.value?.documents) !== JSON.stringify(documents))
+    throw new Error('npm-game-package-document-report');
+  return { output, documents };
 }
 
 async function verifyCarrierConsumer() {
+  let passed = false;
   const archives = new Map([...packageArchives, carrier].map((item) => [item.manifest.name, item]));
   const registry = createServer(async (request, response) => {
     try {
@@ -235,12 +302,12 @@ async function verifyCarrierConsumer() {
     ...process.env,
     CI: 'true',
     FORGEAX_DISABLE_UPDATE_CHECK: '1',
+    pnpm_config_registry: registryUrl,
     npm_config_registry: registryUrl,
     NPM_CONFIG_REGISTRY: registryUrl,
   };
   const templates = [];
   try {
-    await writeFile(resolve(temporaryRoot, '.npmrc'), `registry=${registryUrl}\n`);
     await execFileAsync(
       'corepack',
       [
@@ -256,7 +323,7 @@ async function verifyCarrierConsumer() {
       ],
       { cwd: temporaryRoot, env, maxBuffer: 64 * 1024 * 1024 },
     );
-    for (const template of ['game-empty', 'game-3d']) {
+    for (const { id: template } of SDK_TEMPLATES) {
       const lockfilePath = resolve(sdkRoot, 'templates', template, 'pnpm-lock.yaml');
       let lockfile = await readFile(lockfilePath, 'utf8');
       for (const item of packageArchives) {
@@ -266,83 +333,149 @@ async function verifyCarrierConsumer() {
         );
       }
       await writeFile(lockfilePath, lockfile);
-      await writeFile(
-        resolve(sdkRoot, 'templates', template, '.npmrc'),
-        `${await readFile(resolve(sdkRoot, 'templates', template, '.npmrc'), 'utf8')}registry=${registryUrl}\n`,
-      );
     }
-    await execFileAsync('node', [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'init', '--json'], {
-      cwd: sdkRoot,
-      env,
-      maxBuffer: 128 * 1024 * 1024,
-    });
-    for (const template of ['empty', 'game-3d']) {
+    await execFileAsync(
+      'node',
+      [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'project', 'init', '--json'],
+      {
+        cwd: sdkRoot,
+        env,
+        maxBuffer: 128 * 1024 * 1024,
+      },
+    );
+    for (const { id: template } of SDK_TEMPLATES) {
       const project = resolve(temporaryRoot, template);
       await execFileAsync(
         'node',
-        [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'new', project, '--template', template, '--json'],
+        [
+          resolve(sdkRoot, 'bin', 'forgeax.mjs'),
+          'project',
+          'new',
+          project,
+          '--template',
+          template,
+          '--json',
+        ],
         { cwd: sdkRoot, env, maxBuffer: 128 * 1024 * 1024 },
       );
       for (const script of ['doctor', 'test', 'build']) {
-        await execFileAsync('corepack', [packageManager, 'run', script, '--', '--json'], {
+        await execFileAsync('corepack', [packageManager, 'run', script, '--json'], {
           cwd: project,
           env,
           maxBuffer: 128 * 1024 * 1024,
         });
       }
+      await execFileAsync('corepack', [packageManager, 'run', 'typecheck', '--pretty', 'false'], {
+        cwd: project,
+        env,
+        maxBuffer: 128 * 1024 * 1024,
+      });
+      const packageEvidence = await verifyGamePackage(
+        project,
+        packageManager,
+        env,
+        resolve(temporaryRoot, `${template}-game-web.zip`),
+      );
       const devUrl = await waitForDev(project, packageManager, env);
-      templates.push({ id: template, commands: ['new', 'doctor', 'test', 'build', 'dev'], devUrl });
+      templates.push({
+        id: template,
+        commands: [
+          'project new',
+          'project check',
+          'project test',
+          'typecheck',
+          'project build',
+          'project package',
+          'dev start',
+        ],
+        package: packageEvidence,
+        devUrl,
+      });
     }
-    return { commands: ['sdk.install', 'init'], templates };
+    passed = true;
+    return { commands: ['sdk install', 'project init'], templates };
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    if (passed)
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    else process.stderr.write(`npm carrier failure evidence: ${temporaryRoot}\n`);
     await new Promise((accept, reject) =>
       registry.close((error) => (error === undefined ? accept() : reject(error))),
     );
   }
 }
 
-const carrierConsumer = await verifyCarrierConsumer();
-const report = [];
-for (const item of ordered) {
+async function ensureDistTag(item) {
+  const response = await fetchWithRetry(
+    `https://registry.npmjs.org/-/package/${encodeURIComponent(item.manifest.name)}/dist-tags`,
+    { headers: { accept: 'application/json', 'cache-control': 'no-cache' } },
+  );
+  if (!response.ok) throw new Error(`npm-dist-tags-probe-failed: ${item.manifest.name}`);
+  const tags = await response.json();
+  if (tags[tag] === version) return 'verified';
+  await execFileAsync('npm', ['dist-tag', 'add', `${item.manifest.name}@${version}`, tag], {
+    env: { ...process.env },
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return 'updated';
+}
+
+const carrierConsumer =
+  candidate === undefined
+    ? await verifyCarrierConsumer()
+    : { status: 'skipped', reason: 'sealed-candidate', candidateId: candidate.candidateId };
+async function publishItem(item) {
   if (checkOnly) {
-    report.push({
-      name: item.manifest.name,
-      version,
-      integrity: item.integrity,
-      status: 'checked',
-    });
-    continue;
+    return { name: item.manifest.name, version, integrity: item.integrity, status: 'checked' };
   }
+  const startedAt = Date.now();
   const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(item.manifest.name)}/${encodeURIComponent(version)}`;
   const current = await fetchWithRetry(registryUrl, {
     headers: { accept: 'application/json' },
   });
+  let entry;
   if (current.ok) {
     const metadata = await current.json();
     if (metadata.dist?.integrity !== item.integrity) {
       throw new Error(`npm-version-already-published-with-different-bytes: ${item.manifest.name}`);
     }
-    report.push({
+    const distTagStatus = await ensureDistTag(item);
+    entry = {
       name: item.manifest.name,
       version,
       integrity: item.integrity,
       status: 'existing',
+      distTagStatus,
+    };
+  } else {
+    if (current.status !== 404) throw new Error(`npm-registry-probe-failed: ${item.manifest.name}`);
+    await execFileAsync('npm', ['publish', item.path, '--access', 'public', '--tag', tag], {
+      env: { ...process.env },
+      maxBuffer: 16 * 1024 * 1024,
     });
-    continue;
+    entry = { name: item.manifest.name, version, integrity: item.integrity, status: 'published' };
   }
-  if (current.status !== 404) throw new Error(`npm-registry-probe-failed: ${item.manifest.name}`);
-  await execFileAsync('npm', ['publish', item.path, '--access', 'public', '--tag', tag], {
-    env: { ...process.env },
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  report.push({
-    name: item.manifest.name,
-    version,
-    integrity: item.integrity,
-    status: 'published',
-  });
+  process.stderr.write(
+    `npm ${entry.status} ${item.manifest.name}@${version} in ${Date.now() - startedAt}ms\n`,
+  );
+  return entry;
 }
+
+// Registry publication is dominated by per-request latency, so focused
+// packages publish through a bounded pool. The umbrella and carrier stay
+// strictly after them: `@forgeax/engine@version` must never resolve before
+// every dependency it pins exists on the registry.
+const report = await mapConcurrent(ordered.slice(0, -2), publishItem, 8);
+for (const item of ordered.slice(-2)) report.push(await publishItem(item));
+const registry = checkOnly
+  ? undefined
+  : await waitForNpmPublications(
+      ordered.map((item) => ({
+        name: item.manifest.name,
+        version,
+        integrity: item.integrity,
+      })),
+      { tag },
+    );
 process.stdout.write(
-  `${JSON.stringify({ ok: true, version, tag, packageCount: packageArchives.length, carrier: basename(carrierPath), carrierConsumer, packages: report })}\n`,
+  `${JSON.stringify({ ok: true, version, tag, packageCount: packageArchives.length, carrier: basename(carrierPath), carrierConsumer, registry, packages: report })}\n`,
 );

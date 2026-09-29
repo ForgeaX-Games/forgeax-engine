@@ -90,31 +90,24 @@ export function validateGameProject(raw: string): GuidResult<GameProject, GamePr
       );
     }
 
-    // 2c: GuidString refinement failure → forge-guid-malformed (D-2 translation)
-    const guidFieldIssues = zodErrors.filter(
-      (i) => Array.isArray(i.path) && i.path.includes('defaultScene'),
+    const guidIssue = zodErrors.find(
+      (issue) => issue.path[0] === 'roots' && issue.path.length === 2,
     );
-    if (guidFieldIssues.length > 0) {
-      const rawInput =
-        typeof (parsed as Record<string, unknown>).defaultScene === 'string'
-          ? String((parsed as Record<string, unknown>).defaultScene)
-          : '';
+    if (guidIssue) {
+      const field = String(guidIssue.path[1]);
+      const roots = (parsed as { roots?: Record<string, unknown> }).roots;
       return err(
         'forge-guid-malformed',
-        'defaultScene to be a valid 36-char RFC 4122 dash-form UUID',
-        'use a valid scene GUID; find it in the scene pack.json assets[].guid where kind=scene',
-        {
-          field: 'defaultScene',
-          rawInput,
-        },
+        'a canonical root plugin asset UUID',
+        'repair the named root asset reference',
+        { field: `roots.${field}`, rawInput: String(roots?.[field] ?? '') },
       );
     }
 
-    // 2b: missing required fields or wrong types
     return err(
       'forge-schema-invalid',
       'forge.json to satisfy GameProjectSchema',
-      'check forge.json against GameProjectSchema (z.infer for types); required fields: id, name, schemaVersion (all strings)',
+      'check forge.json against GameProjectSchema (z.infer for types); required fields: id, name, schemaVersion=3.0.0, and roots',
       { path: FORGE_JSON, zodErrors },
     );
   }
@@ -161,7 +154,7 @@ export async function loadGameProject(
     return err(
       'forge-missing',
       'forge.json file to exist at the game root',
-      'verify the game directory contains forge.json; if this is a new game, scaffold via the Studio UI or create a forge.json with id, name, schemaVersion fields',
+      'verify the game directory contains forge.json; if this is a new game, scaffold via the Studio UI or create a schema 3.0 forge.json with id, name, schemaVersion=3.0.0, and roots',
       { path: FORGE_JSON },
     );
   }
@@ -190,93 +183,10 @@ export function loadGameProjectSync(
     return err(
       'forge-missing',
       'forge.json file to exist at the game root',
-      'verify the game directory contains forge.json; if this is a new game, scaffold via the Studio UI or create a forge.json with id, name, schemaVersion fields',
+      'verify the game directory contains forge.json; if this is a new game, scaffold via the Studio UI or create a schema 3.0 forge.json with id, name, schemaVersion=3.0.0, and roots',
       { path: FORGE_JSON },
     );
   }
 
   return validateGameProject(raw);
-}
-
-// ── resolveDefaultScene: {read, resolveGuid} dual injection (AC-07) ─────────
-
-/** Resolved scene asset with GUID and kind='scene' confirmation. */
-export interface ResolvedScene {
-  readonly guid: string;
-  readonly kind: 'scene';
-}
-
-/**
- * Resolve the defaultScene GUID to a scene asset using the injected resolveGuid.
- *
- * ## Dual injection (AC-07)
- *
- * - `read`: same `(path)=>Promise<string>` as loadGameProject — reads forge.json.
- * - `resolveGuid`: resolves a GUID string to an asset with `kind` field.
- *   Signature: `(guid: string) => Promise<{ok:true, value:{kind:string, guid:string}} | {ok:false, error:unknown}>`
- *
- * `loadGameProject` does NOT call resolveGuid; resolveDefaultScene calls both
- * independently (charter SSOT: two-layer separation, format vs resolve).
- *
- * ## Return paths
- *
- * | Condition | ok | code |
- * |:--|:--|:--|
- * | loadGameProject returns !ok | false | propagated from loader |
- * | no defaultScene | false | `forge-scene-unresolved` |
- * | resolveGuid returns !ok | false | `forge-scene-unresolved` |
- * | resolveGuid returns asset.kind !== 'scene' | false | `forge-scene-unresolved` |
- * | resolveGuid returns asset.kind === 'scene' | true | — |
- */
-export async function resolveDefaultScene(opts: {
-  read: (path: string) => Promise<string>;
-  resolveGuid: (
-    guid: string,
-  ) => Promise<{ ok: true; value: { kind: string; guid: string } } | { ok: false; error: unknown }>;
-}): Promise<GuidResult<ResolvedScene, GameProjectError>> {
-  const { read, resolveGuid } = opts;
-
-  // 1. Load the game project
-  const gpResult = await loadGameProject(read);
-  if (!gpResult.ok) {
-    return gpResult; // propagate loader error
-  }
-
-  // 2. Check if defaultScene exists
-  const gp = gpResult.value;
-  const defaultSceneGuid = gp.defaultScene;
-  if (defaultSceneGuid === undefined || defaultSceneGuid === null) {
-    return err(
-      'forge-scene-unresolved',
-      'a defaultScene field in forge.json to resolve',
-      'add a defaultScene with a valid scene asset GUID to forge.json, or select a scene at runtime',
-      { guid: '' },
-    );
-  }
-
-  // 3. Resolve the GUID
-  const guidStr = defaultSceneGuid as string;
-  const resolveResult = await resolveGuid(guidStr);
-
-  if (!resolveResult.ok) {
-    return err(
-      'forge-scene-unresolved',
-      'the defaultScene GUID to resolve to an existing scene asset',
-      "verify the defaultScene GUID matches a scene asset's pack.json assets[].guid (where kind=scene)",
-      { guid: guidStr },
-    );
-  }
-
-  // 4. Verify kind === 'scene'
-  const asset = resolveResult.value;
-  if (asset.kind !== 'scene') {
-    return err(
-      'forge-scene-unresolved',
-      'the defaultScene GUID to point to a scene asset (kind=scene)',
-      `resolved asset kind is "${asset.kind}", not "scene"; verify the GUID points to a scene pack entry`,
-      { guid: guidStr },
-    );
-  }
-
-  return ok({ guid: guidStr, kind: 'scene' });
 }

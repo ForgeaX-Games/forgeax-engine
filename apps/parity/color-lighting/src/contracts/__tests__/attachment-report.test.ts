@@ -18,7 +18,7 @@ const attachment: AttachmentReport = {
     size: { width: 1, height: 1 },
     rawHash: 'linear',
     frameId: 1,
-    pipelineId: 'forgeax::hdrp',
+    pipelineId: 'forgeax::standard',
     backendId: 'dawn',
   },
   finalDisplay: {
@@ -29,7 +29,7 @@ const attachment: AttachmentReport = {
     size: { width: 1, height: 1 },
     rawHash: 'display',
     frameId: 1,
-    pipelineId: 'forgeax::hdrp',
+    pipelineId: 'forgeax::standard',
     backendId: 'dawn',
   },
   attachmentReadbackStatus: 'complete',
@@ -42,11 +42,11 @@ const attachment: AttachmentReport = {
 describe('attachment report contract', () => {
   it('derives complete only from complete evidence and execution', () => {
     expect(deriveAttachmentReportStatus(attachment)).toBe('complete');
-    expect(deriveAttachmentReportStatus({ ...attachment, missingPipelineIds: ['forgeax::hdrp'] })).toBe('failed');
+    expect(deriveAttachmentReportStatus({ ...attachment, missingPipelineIds: ['forgeax::standard'] })).toBe('failed');
   });
 
   it('requires attachment evidence fields in the report schema', () => {
-    const producer = (pipelineId: 'forgeax::urp' | 'forgeax::hdrp', runtimeId: 'browser' | 'dawn') => ({
+    const producer = (pipelineId: 'forgeax::standard', runtimeId: 'browser' | 'dawn') => ({
       pipelineId,
       runtimeId,
       backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
@@ -57,7 +57,7 @@ describe('attachment report contract', () => {
         implementation: 'forgeax',
         version: 'workspace',
         renderer: runtimeId === 'browser' ? 'webgpu' : 'wgpu',
-        adapterId: `${runtimeId}-${pipelineId}`,
+        adapterId: `${runtimeId}-standard`,
       },
       semantic: 'linear-hdr',
       source: 'live-producer',
@@ -71,7 +71,7 @@ describe('attachment report contract', () => {
         size: { width: 1, height: 1 },
         rawHash: 'c'.repeat(64),
         frameId: 1,
-        pipelineId,
+        pipelineId: 'forgeax::standard' as const,
         backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
       },
       finalDisplay: {
@@ -82,7 +82,7 @@ describe('attachment report contract', () => {
         size: { width: 1, height: 1 },
         rawHash: 'd'.repeat(64),
         frameId: 1,
-        pipelineId,
+        pipelineId: 'forgeax::standard' as const,
         backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
       },
     });
@@ -93,12 +93,12 @@ describe('attachment report contract', () => {
       invocationId: 'm4-invocation',
       sceneCaseIdentity: { sourceHash: 'a'.repeat(64), semanticHash: 'b'.repeat(64) },
       attachmentEvidence: {
-        producers: [producer('forgeax::urp', 'browser'), producer('forgeax::hdrp', 'dawn')],
+        producers: [producer('forgeax::standard', 'browser'), producer('forgeax::standard', 'dawn')],
         attachmentReadbackStatus: 'complete',
         capabilityStatus: 'supported',
         executionStatus: 'complete',
         verdict: 'passed',
-        capturedPipelineIds: ['urp', 'hdrp'],
+        capturedPipelineIds: ['standard'],
         missingPipelineIds: [],
       },
       verdict: 'passed',

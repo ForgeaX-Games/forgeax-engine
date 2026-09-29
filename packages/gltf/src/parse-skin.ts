@@ -8,10 +8,10 @@
 //   - plan-strategy D-1 (3-asset separation: IBM / skin binding / animation clip)
 //   - plan-strategy D-2 (skin index dedupe via reimport reuse managed by toAssetPack)
 //   - requirements AC-03 (skin index dedupe), AC-05 (jointPaths + Name missing fail-fast)
-//   - requirements AC-10 (IR extension), AC-27 (BindPose static AABB)
-//   - plan-strategy D-11 (BindPose AABB importer-phase, per-frame zero cost)
+//   - requirements AC-10 (IR extension)
 //   - charter P3 (fail-fast on invalid data)
 
+import { parseConservativeAnimatedBounds, type ShadowCapsuleSet } from '@forgeax/engine-types';
 import { decodeF32Accessor } from './accessor/decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
@@ -33,12 +33,22 @@ export interface GltfSkeletonRecord {
   readonly inverseBindMatrices: Float32Array;
   /** Per-joint Name path from scene root (parallel to joints array). */
   readonly jointPaths: readonly string[];
+  /** Producer-authored conservative animated local bounds when supplied. */
+  readonly bounds?: Float32Array;
+  /** Bind-space shadow capsules fitted from the skinned primitives. */
+  readonly shadowCapsules?: ShadowCapsuleSet;
 }
 
 interface SkinJson {
   readonly name?: string;
   readonly joints: readonly number[];
   readonly inverseBindMatrices?: number;
+  /** glTF source metadata authored by the ForgeaX asset producer. */
+  readonly extras?: {
+    readonly forgeax?: {
+      readonly conservativeAnimatedBounds?: unknown;
+    };
+  };
 }
 
 interface NodeJson {
@@ -185,53 +195,18 @@ export function parseSkin(
       jointPaths.push(pathResult.value.join('/'));
     }
 
+    const bounds = parseConservativeAnimatedBounds(
+      skin.extras?.forgeax?.conservativeAnimatedBounds,
+    );
     records.push({
       jointCount: joints.length,
       inverseBindMatrices: ibm,
       jointPaths,
+      ...(bounds === undefined ? {} : { bounds }),
     });
   }
 
   return ok(records);
-}
-
-/**
- * Compute the BindPose static AABB for a skinned mesh's vertex positions.
- *
- * At bind pose, joint_bind = IBM^{-1}, so skinning collapses:
- *   world_pos = Sum(w_i * joint_bind_i * IBM_i * local_pos) = local_pos
- * Therefore the BindPose AABB is simply the local position bounds.
- *
- * Per-frame zero cost: stored in mesh asset metadata at importer time.
- * Dynamic AABB for animated poses is deferred to OOS-skin-dyn-bounds.
- *
- * Returns { min: [x,y,z], max: [x,y,z] } or undefined if positions is empty.
- */
-export function computeBindPoseAABB(positions: Float32Array):
-  | {
-      readonly min: readonly [number, number, number];
-      readonly max: readonly [number, number, number];
-    }
-  | undefined {
-  if (positions.length < 3) return undefined;
-  let minX = positions[0] ?? 0;
-  let minY = positions[1] ?? 0;
-  let minZ = positions[2] ?? 0;
-  let maxX = minX;
-  let maxY = minY;
-  let maxZ = minZ;
-  for (let i = 3; i < positions.length; i += 3) {
-    const x = positions[i] ?? 0;
-    const y = positions[i + 1] ?? 0;
-    const z = positions[i + 2] ?? 0;
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-    if (z > maxZ) maxZ = z;
-  }
-  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
 }
 
 /** Re-export MAX_JOINTS for use by downstream modules. */

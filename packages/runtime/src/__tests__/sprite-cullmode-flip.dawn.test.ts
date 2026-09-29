@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // sprite-cullmode-flip.dawn.test.ts -
 // feat-20260608-tilemap-object-layer-rendering M2 / m2-t5.
 //
@@ -47,9 +48,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function doReadPixels(device: GPUDevice, renderTarget: GPUTexture): Promise<Uint8Array> {
   const bytesPerPixel = 4;
@@ -229,12 +228,11 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     const synth = buildSyntheticRgba();
     const synthPod = {
       kind: 'texture' as const,
-      width: synth.width,
-      height: synth.height,
+      shape: { viewDimension: '2d' as const, extent: { width: synth.width, height: synth.height } },
       format: 'rgba8unorm-srgb' as const,
       data: synth.data,
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     };
     const textureHandle = worldFlip.allocSharedRef('TextureAsset', synthPod as never);
     const samplerHandle = worldFlip.allocSharedRef('SamplerAsset', {
@@ -382,12 +380,11 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     const synth = buildSyntheticRgba();
     const synthPod = {
       kind: 'texture' as const,
-      width: synth.width,
-      height: synth.height,
+      shape: { viewDimension: '2d' as const, extent: { width: synth.width, height: synth.height } },
       format: 'rgba8unorm-srgb' as const,
       data: synth.data,
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     };
     const textureHandle = worldFlipBoth.allocSharedRef('TextureAsset', synthPod as never);
     const samplerHandle = worldFlipBoth.allocSharedRef('SamplerAsset', {

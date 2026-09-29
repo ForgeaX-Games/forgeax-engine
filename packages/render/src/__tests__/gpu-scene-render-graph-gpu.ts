@@ -76,7 +76,12 @@ fn fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 `;
 
-const material = { materialHandle: 1 } as MaterialSnapshot;
+const material = {
+  baseColor: new Float32Array([1, 1, 1]),
+  metallic: 0,
+  roughness: 1,
+  materialHandle: 1,
+} as MaterialSnapshot;
 
 function snapshot(entityKey: number, translationX: number): RenderableSnapshot {
   const world = new Float32Array(16);
@@ -94,6 +99,15 @@ function snapshot(entityKey: number, translationX: number): RenderableSnapshot {
     materialBindingSources: ['engine-default'],
     worldId: 0,
     entityKey,
+  };
+}
+
+function updateSnapshot(value: RenderableSnapshot) {
+  return {
+    kind: 'update' as const,
+    worldId: value.worldId,
+    entityKey: value.entityKey,
+    snapshot: value,
   };
 }
 
@@ -119,10 +133,10 @@ export async function runGpuSceneGraph(): Promise<GpuSceneGraphEvidence> {
   scene
     .sync(
       projection.apply([
-        { kind: 'create', snapshot: snapshot(10, -3) },
-        { kind: 'create', snapshot: snapshot(11, -0.5) },
-        { kind: 'create', snapshot: snapshot(12, 0.5) },
-        { kind: 'create', snapshot: snapshot(13, 3) },
+        updateSnapshot(snapshot(10, -3)),
+        updateSnapshot(snapshot(11, -0.5)),
+        updateSnapshot(snapshot(12, 0.5)),
+        updateSnapshot(snapshot(13, 3)),
       ]),
     )
     .unwrap();

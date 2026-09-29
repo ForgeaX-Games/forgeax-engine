@@ -23,6 +23,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
@@ -33,7 +34,7 @@ const HEIGHT = 512;
 // This is the naga_oil-composed result of alpha-test.wgsl with
 // `#import forgeax_view::common::{View, Mesh, view, meshes}` resolved.
 // The struct layouts byte-for-byte match packages/shader/src/common.wgsl
-// (View 176 B / Mesh mat4+mat3 via 256 B per-entity stride).
+// (View 176 B / Mesh world mat4 via 256 B per-entity stride).
 // When the engine provides a `composeCustomShader` API, this constant
 // can be replaced with a runtime `composeShader()` call.
 const COMPOSED_ALPHA_TEST_WGSL = `
@@ -47,7 +48,6 @@ struct View {
 
 struct Mesh {
   worldFromLocal : mat4x4<f32>,
-  normalMatrix   : mat3x3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view : View;
@@ -313,12 +313,14 @@ const WINDOW_GUID = '019e3969-1d48-75c7-81de-822f424ec949';
 function makeTexAsset(decoded) {
   return {
     kind: 'texture',
-    width: decoded.width,
-    height: decoded.height,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: decoded.width, height: decoded.height },
+    },
     format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
     data: decoded.bytes,
     colorSpace: decoded.colorSpace,
-    mipmap: decoded.mipmap,
+    mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
 }
 
@@ -542,8 +544,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -663,6 +665,8 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+emitSmokeReceipt('app-learn-render-4-advanced-opengl-3-blending/smoke', framesObserved);
 
 console.log(
   `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,

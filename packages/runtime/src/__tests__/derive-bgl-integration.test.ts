@@ -50,7 +50,7 @@ const standardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'occlusionStrength', type: 'f32', default: 1 },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
-  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
+  { name: 'clearcoatRoughness', type: 'f32', default: 1 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
@@ -87,6 +87,17 @@ const builtinSchemas: ReadonlyArray<{ id: string; schema: readonly ParamSchemaEn
 ];
 
 describe('derive(schema) integration over 5 built-in shader families (M3 w11)', () => {
+  it('derives array and volume texture schemas without a second binding path', () => {
+    for (const schema of [
+      [{ name: 'layers', type: 'texture2d_array' as const }],
+      [{ name: 'volume', type: 'texture3d' as const }],
+    ]) {
+      const out = derive(schema);
+      expect(out.bglEntries.map((entry) => entry.binding)).toEqual([0, 1, 2]);
+      expect(out.resourceBindings[1]?.name).toBe(schema[0]?.name);
+      expect(out.textureFieldNames).toContain(schema[0]?.name);
+    }
+  });
   it('(a) every built-in shader derives a well-formed BGL with consistent userRegionBindingEnd', () => {
     for (const { id, schema } of builtinSchemas) {
       const out = derive(schema);
@@ -168,13 +179,13 @@ describe('derive(schema) integration over 5 built-in shader families (M3 w11)', 
 // Layout (verified against pbr-pipeline.ts + default-standard-pbr.material.json):
 //   user-region:    binding 0 (UBO, 15 numeric run-merged) + 4 sampler/texture pairs
 //                   = 9 entries, userRegionBindingEnd = 9
-//   ibl injection:  binding 9..15 (7 entries: irradiance/prefilter cube + brdfLut 2d +
-//                   3 samplers + intensity uniform)
-//   lightmap inj.:  binding 16..19 (4 entries: emissive sampler+tex + occlusion sampler+tex)
-//   total:          20 entries, bindings 0..19 dense.
+//   ibl injection:  binding 9..14 (6 entries: irradiance/prefilter cube + brdfLut 2d +
+//                   2 samplers + intensity uniform)
+//   transmission:   binding 15..16 (2 entries: backdrop sampler + texture)
+//   total:          17 entries, bindings 0..16 dense.
 //
 // Invariant: injection start == userRegionBindingEnd (NOT hardcoded 7);
-//           injection order ibl-then-lightmap (D-8).
+//           injection order ibl-then-transmission (D-8).
 
 // Exact paramSchema from packages/shader/src/default-standard-pbr.material.json:68-77
 // (15 numeric entries + 4 texture2d entries).
@@ -191,12 +202,12 @@ const defaultStandardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'occlusionStrength', type: 'f32', default: 1 },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
-  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
-  { name: 'specularTint', type: 'vec3', default: [1, 1, 1] },
+  { name: 'clearcoatRoughness', type: 'f32', default: 1 },
+  { name: 'specularColor', type: 'vec3', default: [1, 1, 1] },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
-  { name: 'specularTintTexture', type: 'texture2d' },
+  { name: 'specularColorTexture', type: 'texture2d' },
 ];
 
 describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
@@ -223,7 +234,7 @@ describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
     expect(out.textureFieldNames.has('baseColorTexture')).toBe(true);
     expect(out.textureFieldNames.has('metallicRoughnessTexture')).toBe(true);
     expect(out.textureFieldNames.has('normalTexture')).toBe(true);
-    expect(out.textureFieldNames.has('specularTintTexture')).toBe(true);
+    expect(out.textureFieldNames.has('specularColorTexture')).toBe(true);
 
     // sampler map: each texture has a paired sampler.
     expect(out.samplerForTexture.size).toBe(4);
@@ -232,10 +243,10 @@ describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
       'metallicRoughnessTexture_sampler',
     );
     expect(out.samplerForTexture.get('normalTexture')).toBe('normalTexture_sampler');
-    expect(out.samplerForTexture.get('specularTintTexture')).toBe('specularTintTexture_sampler');
+    expect(out.samplerForTexture.get('specularColorTexture')).toBe('specularColorTexture_sampler');
   });
 
-  it('w1 full pipeline: derive + ibl injection + lightmap injection = 20 entries dense 0..19', () => {
+  it('w1 full pipeline: derive + ibl injection + transmission injection = 17 entries dense 0..16', () => {
     const out = derive(defaultStandardPbrSchema);
     // Same cast as append-injection.test.ts — forgeax shim → @webgpu/types via
     // explicit two-step `as unknown as`, exempt from RHI gate j.
@@ -243,22 +254,22 @@ describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
 
     // Injection start = userRegionBindingEnd (NOT a hardcoded 7 literal).
     const afterIbl = appendInjection(userBgl, 'ibl');
-    expect(afterIbl.length).toBe(7);
+    expect(afterIbl.length).toBe(6);
     expect(afterIbl[0]?.binding).toBe(out.userRegionBindingEnd); // 9
 
     const mergedAfterIbl = [...userBgl, ...afterIbl];
 
-    const afterLightmap = appendInjection(mergedAfterIbl, 'lightmap');
-    expect(afterLightmap.length).toBe(4);
-    expect(afterLightmap[0]?.binding).toBe(mergedAfterIbl.length); // 16
+    const afterTransmission = appendInjection(mergedAfterIbl, 'transmission');
+    expect(afterTransmission.length).toBe(2);
+    expect(afterTransmission[0]?.binding).toBe(mergedAfterIbl.length); // 15
 
-    const fullSet = [...mergedAfterIbl, ...afterLightmap];
-    expect(fullSet.length).toBe(20);
+    const fullSet = [...mergedAfterIbl, ...afterTransmission];
+    expect(fullSet.length).toBe(17);
 
-    // Bindings 0..17 dense, no gaps.
+    // Bindings 0..16 dense, no gaps.
     const bindings = fullSet.map((e) => e.binding);
-    expect(new Set(bindings).size).toBe(20);
-    for (let i = 0; i < 20; i++) {
+    expect(new Set(bindings).size).toBe(17);
+    for (let i = 0; i < 17; i++) {
       expect(bindings).toContain(i);
     }
 
@@ -266,14 +277,14 @@ describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
     // This is the key invariant: if derive produces a different userRegionBindingEnd
     // (e.g. 9 for a 4-texture schema), injection starts at that value, not at 7.
     expect(afterIbl[0]?.binding).toBe(out.userRegionBindingEnd);
-    expect(afterLightmap[0]?.binding).toBe(out.userRegionBindingEnd + afterIbl.length);
+    expect(afterTransmission[0]?.binding).toBe(out.userRegionBindingEnd + afterIbl.length);
 
-    // D-8: injection order is ibl-then-lightmap.
-    // IBL entries (7) precede lightmap entries (4) after the user-region.
+    // D-8: injection order is ibl-then-transmission.
+    // IBL entries (6) precede transmission entries (2) after the user-region.
     const iblBindings = afterIbl.map((e) => e.binding);
-    const lightmapBindings = afterLightmap.map((e) => e.binding);
+    const transmissionBindings = afterTransmission.map((e) => e.binding);
     for (const b of iblBindings) {
-      for (const lb of lightmapBindings) {
+      for (const lb of transmissionBindings) {
         expect(b).toBeLessThan(lb as number);
       }
     }
@@ -304,7 +315,7 @@ describe('built-in PBR derive+injection regression fence (M1 w1)', () => {
 // 4 standard user-region textures. derive() already handles arbitrary texture
 // counts (it is the SSOT) — this test characterises that the 4th texture earns
 // a distinct sampler/texture binding pair and that the engine-injection region
-// (IBL / lightmap) shifts its start binding by exactly one sampler/texture slot
+// (IBL / transmission) shifts its start binding by exactly one sampler/texture slot
 // pair relative to the 3-texture baseline. The point of failure is NOT derive()
 // (which is correct today) but the pipeline-layout build path that until M2 did
 // not consume bglEntries — that gap is closed by w5/w6.
@@ -326,7 +337,7 @@ const parallax4TextureSchema: readonly ParamSchemaEntry[] = [
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
-  { name: 'specularTintTexture', type: 'texture2d' },
+  { name: 'specularColorTexture', type: 'texture2d' },
   { name: 'heightTexture', type: 'texture2d' },
 ];
 
@@ -343,7 +354,7 @@ describe('5-texture custom schema derive: heightTexture binding + injection shif
     expect(out.bglEntries.length).toBe(11);
 
     // heightTexture is the 5th texture: sampler at binding 9, texture at binding 10.
-    // (after baseColor 1/2, MR 3/4, normal 5/6, specular tint 7/8).
+    // (after baseColor 1/2, MR 3/4, and normal 5/6).
     const heightSampler = out.bglEntries[9];
     const heightTexture = out.bglEntries[10];
     expect(heightSampler?.binding).toBe(9);
@@ -372,16 +383,16 @@ describe('5-texture custom schema derive: heightTexture binding + injection shif
     expect(afterIbl[0]?.binding).toBe(11);
 
     const mergedAfterIbl = [...userBgl, ...afterIbl];
-    const afterLightmap = appendInjection(mergedAfterIbl, 'lightmap');
-    // Lightmap follows IBL: 11 + 7 = 18.
-    expect(afterLightmap[0]?.binding).toBe(18);
+    const afterTransmission = appendInjection(mergedAfterIbl, 'transmission');
+    // Transmission follows IBL: 11 + 6 = 17.
+    expect(afterTransmission[0]?.binding).toBe(17);
 
-    // Full set: 11 user-region + 7 ibl + 4 lightmap = 22 entries, dense 0..21.
-    const fullSet = [...mergedAfterIbl, ...afterLightmap];
-    expect(fullSet.length).toBe(22);
+    // Full set: 11 user-region + 6 ibl + 2 transmission = 19 entries, dense 0..18.
+    const fullSet = [...mergedAfterIbl, ...afterTransmission];
+    expect(fullSet.length).toBe(19);
     const bindings = fullSet.map((e) => e.binding);
-    expect(new Set(bindings).size).toBe(22);
-    for (let i = 0; i < 22; i++) {
+    expect(new Set(bindings).size).toBe(19);
+    for (let i = 0; i < 19; i++) {
       expect(bindings).toContain(i);
     }
   });

@@ -3,6 +3,8 @@
 // its Worker + WASM path with a real TTF when plain Node has no Worker global.
 
 import { chromium } from 'playwright';
+import { stripVTControlCharacters } from 'node:util';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
@@ -27,7 +29,7 @@ let baseUrl;
 vite.stdout.on('data', (chunk) => {
   const text = chunk.toString();
   process.stdout.write(`[vite] ${text}`);
-  baseUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
+  baseUrl ??= stripVTControlCharacters(text).match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
 });
 vite.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
@@ -37,7 +39,7 @@ try {
   while (baseUrl === undefined && Date.now() < deadline) await sleep(200);
   if (baseUrl === undefined) throw new Error('Vite did not become ready in 30s');
 
-  browser = await chromium.launch({ headless: true, channel: 'chrome' });
+  browser = await chromium.launch({ headless: true, channel: browserLaunch.channel });
   const page = await browser.newPage();
   const pageErrors = [];
   const consoleErrors = [];

@@ -35,6 +35,7 @@ describe('engine-ui dual entry', () => {
   });
 
   it('keeps importer and browser surfaces independently callable', () => {
+    expect(createUiImporter().key).toBe('ui');
     expect(typeof importUiSource).toBe('function');
     expect(typeof mountUi).toBe('function');
   });

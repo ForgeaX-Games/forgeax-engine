@@ -23,7 +23,7 @@ import { Update } from '../schedule-token';
 //   - packages/ecs/src/__tests__/world-array-reflection.test.ts
 //   - packages/ecs/src/__tests__/world-array-view.test.ts
 //   - packages/ecs/src/__tests__/world-buffer-fields.test.ts
-//   - packages/ecs/src/__tests__/world-core.test.ts
+//   - packages/ecs/src/__tests__/world-health.contract.test.ts
 //   - packages/ecs/src/__tests__/world-inspect-systems.test.ts
 //   - packages/ecs/src/__tests__/world-integration.test.ts
 //   - packages/ecs/src/__tests__/world-managed-refs-non-null.test.ts
@@ -935,7 +935,7 @@ import { handleNumeric } from './utils/handle-numeric';
   describe('generation retirement (AC-03, E-08)', () => {
     // These tests verify the retirement *constants* and *encoding* behavior.
     // The actual World-level retirement logic (not pushing to free list) is
-    // tested in world-core.test.ts (w11).
+    // tested in the World lifecycle contract suite (w11).
 
     it('ENTITY_MAX_GENERATION equals 255', () => {
       expect(ENTITY_MAX_GENERATION).toBe(255);
@@ -1044,7 +1044,7 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 }
 {
-  // --- from world-core.test.ts ---
+  // --- World lifecycle coverage ---
   describe('World.spawn', () => {
     it('single-component spawn returns a valid Entity handle', () => {
       const world = new World();

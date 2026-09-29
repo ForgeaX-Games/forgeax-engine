@@ -13,8 +13,74 @@
 
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expect, it } from 'vitest';
+import { projectDirectionalShadowInspection } from '../../../render/src/assembly/directional-shadow-inspection';
+import { resolveDirectionalShadowBackendAdmission } from '../../../render/src/render-pipeline';
 
 describe('createRenderer without navigator.gpu (browser-no-webgpu)', () => {
+  it('requires the shared backend admission truth table for WebGL2 fallback and capable failure', async () => {
+    const module = (await import('../../../render/src/render-pipeline')) as Record<string, unknown>;
+    const resolver = module.resolveDirectionalShadowBackendAdmission;
+    expect(typeof resolver).toBe('function');
+    const resolve = resolver as (input: {
+      backendKind: 'webgpu' | 'wgpu-webgl2';
+      requested: 'pcssMedium' | 'pcssHigh';
+      candidate: 'accepted' | 'failed';
+      lastKnownGood?: 'pcf3' | 'pcf5';
+    }) => {
+      effective: string;
+      status: string;
+      fallbackReason?: string;
+    };
+    expect(
+      resolve({ backendKind: 'wgpu-webgl2', requested: 'pcssMedium', candidate: 'accepted' }),
+    ).toMatchObject({
+      effective: 'pcf3',
+      status: 'fallback',
+      fallbackReason: 'webgl2-unsupported',
+    });
+    expect(
+      resolve({
+        backendKind: 'webgpu',
+        requested: 'pcssHigh',
+        candidate: 'failed',
+        lastKnownGood: 'pcf3',
+      }),
+    ).toMatchObject({ effective: 'pcf3', status: 'rejected', fallbackReason: 'candidate-failed' });
+  });
+
+  it('keeps capable candidate failure explicit while retaining the LKG inspection facts', () => {
+    const inspection = projectDirectionalShadowInspection({
+      admission: resolveDirectionalShadowBackendAdmission({
+        backendKind: 'webgpu',
+        requested: 'pcssHigh',
+        candidate: 'failed',
+        lastKnownGood: 'pcf3',
+      }),
+      cascadeCount: 4,
+      mapSize: 2048,
+      shadowMapBytes: 67_108_864,
+      writerPasses: 4,
+      blockerTaps: 0,
+      filterTapUpperBound: 9,
+      seamTapUpperBound: 9,
+      deviceGeneration: 2,
+      graphGeneration: 6,
+      error: {
+        code: 'shadow-candidate-failed',
+        expected: 'the capable backend candidate compiles and validates',
+        hint: 'fix the authoring input, then retry or recover',
+      },
+    });
+    expect(inspection).toMatchObject({
+      effective: 'pcf3',
+      status: 'rejected',
+      fallbackReason: 'candidate-failed',
+      lastKnownGood: true,
+      graphGeneration: 6,
+      error: { hint: expect.stringContaining('retry') },
+    });
+  });
+
   it('navigator.gpu is absent or non-functional in this browser environment', async () => {
     const nav = globalThis.navigator as { gpu?: GPU };
     if (nav.gpu === undefined) return;

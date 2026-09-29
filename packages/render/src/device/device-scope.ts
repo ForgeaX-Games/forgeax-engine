@@ -46,12 +46,23 @@ interface OwnedResource {
   readonly cleanup: (value: unknown) => void | Promise<void>;
 }
 
+function idempotentCleanup<T>(
+  cleanup: (value: T) => void | Promise<void>,
+): (value: T) => void | Promise<void> {
+  let cleaned = false;
+  return (value: T) => {
+    if (cleaned) return;
+    cleaned = true;
+    return cleanup(value);
+  };
+}
+
 export class DeviceScope {
   readonly generation: number;
   readonly owner: string;
   readonly parent: DeviceScope | undefined;
   private lifecycleState: DeviceScopeState = 'active';
-  private readonly resources: OwnedResource[] = [];
+  private readonly resources = new Map<ResourceRef<unknown>, OwnedResource>();
   private readonly children: DeviceScope[] = [];
 
   private constructor(generation: number, owner: string, parent?: DeviceScope) {
@@ -77,9 +88,18 @@ export class DeviceScope {
     return [...this.children];
   }
 
+  /** Create a renderer-owned child scope without exposing a second device owner. */
+  createChild(owner: string): DeviceScope {
+    if (this.lifecycleState !== 'active') {
+      throw new Error('Cannot create a child DeviceScope from an inactive scope.');
+    }
+    if (owner.length === 0) throw new TypeError('DeviceScope child owner must not be empty.');
+    return new DeviceScope(this.generation, owner, this);
+  }
+
   ref<T>(kind: DeviceResourceKind, value: T): ResourceRef<T> {
     const ref = new DeviceResourceRef(kind, this.owner, this.generation, value);
-    this.resources.push({ ref: ref as DeviceResourceRef<unknown>, cleanup: () => undefined });
+    this.resources.set(ref, { ref, cleanup: () => undefined });
     return ref;
   }
 
@@ -96,7 +116,7 @@ export class DeviceScope {
   }
 
   resourceDelta(): number {
-    return this.resources.length;
+    return this.resources.size;
   }
 
   /** @internal */
@@ -106,16 +126,22 @@ export class DeviceScope {
     cleanup: (value: T) => void | Promise<void>,
   ): ResourceRef<T> {
     const ref = new DeviceResourceRef(kind, this.owner, this.generation, value);
-    this.resources.push({
-      ref: ref as DeviceResourceRef<unknown>,
-      cleanup: cleanup as (resource: unknown) => void | Promise<void>,
+    this.resources.set(ref, {
+      ref,
+      cleanup: idempotentCleanup(cleanup) as (resource: unknown) => void | Promise<void>,
     });
     return ref;
   }
 
+  /** @internal Remove ownership only after the resource's cleanup succeeded. */
+  _release(ref: ResourceRef<unknown>): void {
+    this.resources.delete(ref);
+  }
+
   /** @internal */
   _clearResources(): OwnedResource[] {
-    const resources = this.resources.splice(0);
+    const resources = [...this.resources.values()];
+    this.resources.clear();
     for (const resource of resources.reverse()) {
       try {
         const pending = resource.cleanup(resource.ref.value);
@@ -128,23 +154,45 @@ export class DeviceScope {
     return resources;
   }
 
+  /** Mark an active child as retiring without releasing in-flight resources. */
+  beginRetire(): void {
+    if (this.lifecycleState === 'active') this.lifecycleState = 'retiring';
+  }
+
+  private clearChildren(): void {
+    for (const child of [...this.children].reverse()) {
+      child.retire();
+    }
+  }
+
+  private detachChild(child: DeviceScope): void {
+    const index = this.children.indexOf(child);
+    if (index >= 0) this.children.splice(index, 1);
+  }
+
   retire(): void {
-    if (this.lifecycleState !== 'active') return;
+    if (this.lifecycleState !== 'active' && this.lifecycleState !== 'retiring') return;
     this.lifecycleState = 'retiring';
+    this.clearChildren();
     this._clearResources();
     this.lifecycleState = 'retired';
+    this.parent?.detachChild(this);
   }
 
   abandon(): void {
     if (this.lifecycleState !== 'active') return;
     this.lifecycleState = 'abandoned';
+    this.clearChildren();
     this._clearResources();
+    this.parent?.detachChild(this);
   }
 
   dispose(): void {
     if (this.lifecycleState === 'disposed') return;
     this.lifecycleState = 'disposed';
+    this.clearChildren();
     this._clearResources();
+    this.parent?.detachChild(this);
   }
 
   async replace(
@@ -163,6 +211,9 @@ export class DeviceScope {
       replacement.dispose();
       return transaction.failure('dispose');
     }
+    // The replacement is now the new owner. Detach it before retiring the
+    // old parent so parent cleanup cannot retire the just-published child.
+    this.detachChild(replacement);
     this.retire();
     return ok(replacement);
   }
@@ -172,7 +223,7 @@ export class DeviceScope {
     return {
       owner: this.owner,
       generation: this.generation,
-      resourceCount: this.resources.length,
+      resourceCount: this.resources.size,
     };
   }
 }
@@ -203,6 +254,7 @@ export interface LifecycleTransactionOptions {
 interface CreatedResource {
   readonly spec: LifecycleResourceSpec<unknown>;
   readonly value: unknown;
+  readonly cleanup: (value: unknown) => void | Promise<void>;
 }
 
 export class LifecycleTransaction {
@@ -236,10 +288,10 @@ export class LifecycleTransaction {
         }
         const value = await spec.create();
         if (!this.scope.isAlive()) {
-          await this.cleanupOne(spec, value, created);
+          await this.cleanupOne(value, created, idempotentCleanup(spec.cleanup));
           return this.failure('dispose');
         }
-        created.push({ spec, value });
+        created.push({ spec, value, cleanup: idempotentCleanup(spec.cleanup) });
       } catch (cause) {
         const cleanupFailures = await this.cleanupCreated(created);
         return this.failure('create', spec.kind, cleanupFailures, cause);
@@ -282,7 +334,7 @@ export class LifecycleTransaction {
       const item = created[index];
       if (item === undefined) continue;
       try {
-        await item.spec.cleanup(item.value);
+        await item.cleanup(item.value);
       } catch (cause) {
         failures.push({ resourceKind: item.spec.kind, cause });
       }
@@ -291,13 +343,13 @@ export class LifecycleTransaction {
   }
 
   private async cleanupOne(
-    spec: LifecycleResourceSpec<unknown>,
     value: unknown,
     created: readonly CreatedResource[],
+    cleanup: (value: unknown) => void | Promise<void>,
   ): Promise<void> {
     await this.cleanupCreated(created);
     try {
-      await spec.cleanup(value);
+      await cleanup(value);
     } catch {
       // The terminal dispose result is intentionally bounded; prior cleanup
       // evidence remains in the transaction failure shape.

@@ -6,6 +6,7 @@
     "declarationMap": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "types": ["node"],
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
@@ -18,6 +19,7 @@
     { "path": "../pack" },
     { "path": "../import" },
     { "path": "../runtime" },
-    { "path": "../picking" }
+    { "path": "../picking" },
+    { "path": "../skinning" }
   ]
 }

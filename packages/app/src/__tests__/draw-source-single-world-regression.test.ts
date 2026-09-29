@@ -40,6 +40,7 @@ interface DrawCall {
 function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const calls: DrawCall[] = [];
   const renderer = {
+    state: () => 'alive' as const,
     attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
     draw(request: RenderFrameInput): { ok: true; value: undefined } {
       calls.push({ request });

@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 // sprite-nineslice-mesh-bind.dawn.test.ts -- feat-20260527-sprite-nineslice
 // M2 / w13. dawn-node smoke that the HANDLE_NINESLICE_QUAD GPU buffers are
 // resident and bind cleanly when a sprite material declares non-zero `slices`.
@@ -31,9 +32,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD bind)', () => {
   it('sprite + slices=[.25,.25,.25,.25] renders one frame with 0 RhiError', async () => {
@@ -126,11 +125,10 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     }
     const texAsset: TextureAsset = {
       kind: 'texture',
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm-srgb',
       colorSpace: 'srgb',
-      mipmap: false,
+      mips: { kind: 'none' },
       data: pixels,
     };
     const texHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texAsset);

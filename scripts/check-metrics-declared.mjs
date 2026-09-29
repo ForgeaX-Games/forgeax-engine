@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // check-metrics-declared.mjs (M3 w9) - drift detector for forgeax.metrics SSOT.
 // Walks getEquivalentWorkspaces() and asserts each member declares forgeax.metrics
-// per forgeax-metrics.schema.json. Fires 3 of 6 MetricErrorCode union members
+// per schemas/forgeax-metrics.schema.json. Fires 3 of 6 MetricErrorCode union members
 // ('metric-status-not-ok' is M5 generic-runner territory; the 2 parity members
 // 'pixel-parity-threshold-exceeded' / 'pixel-parity-capture-failed' are
 // scripts/bench/pixel-parity.mjs territory — feat-20260512 M2 T-009).
@@ -48,11 +48,11 @@ function fail(code, expected, hint) {
   process.exit(1);
 }
 const root = resolve(args.root ?? process.cwd());
-const schemaPath = resolve(args.schema ?? `${root}/forgeax-metrics.schema.json`);
+const schemaPath = resolve(args.schema ?? `${root}/schemas/forgeax-metrics.schema.json`);
 process.chdir(root);
-const SCHEMA_EXP = 'forgeax-metrics.schema.json is well-formed JSON Schema 2020-12';
+const SCHEMA_EXP = 'schemas/forgeax-metrics.schema.json is well-formed JSON Schema 2020-12';
 const schemaHint = (e, kind) =>
-  `validate with: python -m json.tool forgeax-metrics.schema.json; ${kind}Error: ${e.message}`;
+  `validate with: python -m json.tool schemas/forgeax-metrics.schema.json; ${kind}Error: ${e.message}`;
 let schemaJson;
 try {
   schemaJson = JSON.parse(readFileSync(schemaPath, 'utf8'));
@@ -95,7 +95,7 @@ for (const member of getEquivalentWorkspaces()) {
       'metric-kind-unknown',
       KIND_EXP,
       bad
-        ? `check typo at ${member}.forgeax.metrics.${bad}; valid kinds listed in forgeax-metrics.schema.json`
+        ? `check typo at ${member}.forgeax.metrics.${bad}; valid kinds listed in schemas/forgeax-metrics.schema.json`
         : `at ${member}: ${JSON.stringify(validate.errors)}`,
     );
   }

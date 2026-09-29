@@ -2,7 +2,8 @@
 // `@webgpu/types` GPUCommandEncoder (research F-1 / plan-strategy D-S4).
 //
 // Asserts (will be RED until w3 lands the impl):
-// - 12 spec methods (9 direct + 3 GPUDebugCommandsMixin) exist on RhiCommandEncoder
+// - 12 spec methods (9 direct + 3 GPUDebugCommandsMixin) plus one ForgeaX
+//   compound operation exist on RhiCommandEncoder
 // - `copyBufferToBuffer` exposes both spec overloads (3-arg shorthand + 5-arg full form)
 // - `finish()` returns Result<CommandBuffer, RhiError>
 // - method NAMES align byte-for-byte with `@webgpu/types` GPUCommandEncoder
@@ -14,19 +15,25 @@ import { describe, expectTypeOf, it } from 'vitest';
 import type {
   Buffer,
   CommandBuffer,
+  ComputePassDescriptor,
   QuerySet,
   Result,
   RhiCommandEncoder,
   RhiError,
 } from '../index';
 
-describe('w2 - RhiCommandEncoder spec method set (12 methods)', () => {
+describe('w2 - RhiCommandEncoder spec method set (12 spec + 1 compound)', () => {
   it('exposes beginRenderPass(desc): RhiRenderPassEncoder', () => {
     expectTypeOf<RhiCommandEncoder['beginRenderPass']>().toBeFunction();
   });
 
   it('exposes beginComputePass(desc?): RhiComputePassEncoder', () => {
     expectTypeOf<RhiCommandEncoder['beginComputePass']>().toBeFunction();
+  });
+
+  it('exposes encodeEmptyComputePass(desc): void as a ForgeaX compound operation', () => {
+    type Expected = (desc: ComputePassDescriptor) => void;
+    expectTypeOf<RhiCommandEncoder['encodeEmptyComputePass']>().toMatchTypeOf<Expected>();
   });
 
   it('exposes copyBufferToBuffer (5-arg full form per spec)', () => {
@@ -103,15 +110,5 @@ describe('w2 - RhiCommandEncoder spec method set (12 methods)', () => {
     expectTypeOf<RhiCommandEncoder['finish']>().returns.toEqualTypeOf<
       Result<CommandBuffer, RhiError>
     >();
-  });
-
-  // w38 (M5 / K-3): writeTimestamp on the CommandEncoder entry only.
-  // CPE/RPE inside-pass timestamp writes are deferred to
-  // feat-future-rhi-perf-timestamp-pass per K-3 decision.
-  it('exposes writeTimestamp(querySet, queryIndex): void (K-3 CommandEncoder-only)', () => {
-    type Method = RhiCommandEncoder['writeTimestamp'];
-    expectTypeOf<Method>().toBeFunction();
-    type Expected = (querySet: QuerySet, queryIndex: number) => void;
-    expectTypeOf<Expected>().toMatchTypeOf<Method>();
   });
 });

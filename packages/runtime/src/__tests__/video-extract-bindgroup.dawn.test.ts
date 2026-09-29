@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // feat-20260623-world-space-video-asset M4 / w13 — AC-06: a VideoAsset GUID
 // embedded in a MaterialAsset.values texture field flows through the
 // extract layer and produces a bind group without blowing up.
@@ -45,7 +46,8 @@ import {
   MeshFilter as SourceMeshFilter,
   MeshRenderer as SourceMeshRenderer,
 } from '../../../render/src/components';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -165,9 +167,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function bootDawn(): Promise<DawnHarness | null> {
   const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
@@ -314,7 +314,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     ).toEqual([]);
   });
 
-  // AC-10 PRODUCTION-PATH assertion: with no VideoElementProvider registered
+  // AC-10 PRODUCTION-PATH assertion: with no VideoSourceProvider registered
   // (dawn has no HTMLVideoElement) and no high-perf GPUExternalTexture capability,
   // the REAL per-frame upload path (render-system-record videoTextureView) hits
   // the double-miss and MUST fire the structured VideoUploadUnsupportedError on
@@ -365,7 +365,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     });
 
     const world = new World();
-    // NB: NO VIDEO_ELEMENT_PROVIDER_KEY resource inserted -> the production
+    // NB: NO VIDEO_SOURCE_PROVIDER_KEY resource inserted -> the production
     // upload path resolves element===undefined; high-perf path is absent on
     // dawn -> genuine AC-10 double-miss.
     const matHandle = world.allocSharedRef('MaterialAsset', materialPayload);

@@ -1,6 +1,7 @@
 // view-ubo-layout.browser.test.ts - feat-20260518-pbr-direct-lighting-mvp
-// feat-20260531-skybox-env-background M2 / w4 (TDD red): VIEW_UBO_BYTES
-// 112 -> 176 -> 240 layout (worldViewProj 64 B + lightDir 16 B + lightColor
+// feat-20260827-directional-csm-pcss-quality M1: VIEW_UBO_BYTES is 1168 (fog lanes appended)
+// while the View slot is 1280 B. The prefix layout is unchanged and the
+// directional shadow carrier reuses the existing tail pad.
 // 16 B + cameraPos 16 B + lightSpaceMatrix 64 B + inverseViewProj 64 B;
 // std140 vec3 padded to 16-byte boundaries).
 //
@@ -31,6 +32,7 @@
 // (w15, AC-12 / AC-14); this gate locks the byte layout itself.
 
 import { describe, expect, it } from 'vitest';
+import { VIEW_UNIFORM_BYTES } from '../../../render/src/record/view-ubo';
 
 const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
@@ -44,14 +46,16 @@ const VIEW_UBO_OFFSETS = {
   lightSpaceMatrix: 112,
   inverseViewProj: 176,
 } as const;
-const VIEW_UBO_BYTES = 240;
+const VIEW_UBO_BYTES = VIEW_UNIFORM_BYTES;
+const DIRECTIONAL_FILTER_OFFSET = 512;
+const SPOT_LIGHT_VIEW_PROJ_OFFSET = 528;
 
-describe('w4 view UBO 240 B std140 layout (AC-06, browser)', () => {
-  it.skipIf(!browserReady)('host write payload is exactly 240 bytes (60 floats)', () => {
-    // The host (render-system-record.ts) builds a Float32Array(60) and
+describe('w4 view UBO 292-f32 std140 layout (AC-06, browser)', () => {
+  it.skipIf(!browserReady)('host write payload is exactly 1168 bytes (292 floats)', () => {
+    // The host (view-ubo.ts) builds a Float32Array(292) and
     // emits a single queue.writeBuffer. Asserting the size lock here keeps
     // the host shape and shader ABI in agreement before the GPU sees it.
-    const payload = new Float32Array(60);
+    const payload = new Float32Array(VIEW_UBO_BYTES / 4);
     expect(payload.byteLength).toBe(VIEW_UBO_BYTES);
   });
 
@@ -63,17 +67,17 @@ describe('w4 view UBO 240 B std140 layout (AC-06, browser)', () => {
     expect(VIEW_UBO_OFFSETS.lightSpaceMatrix).toBe(112);
     expect(VIEW_UBO_OFFSETS.inverseViewProj).toBe(176);
     // Buffer total = inverseViewProj offset + mat4 (64 B) = 240.
-    expect(VIEW_UBO_OFFSETS.inverseViewProj + 64).toBe(VIEW_UBO_BYTES);
+    expect(VIEW_UBO_OFFSETS.inverseViewProj + 64).toBe(240);
   });
 
   it.skipIf(!browserReady)(
     'host packs lightDir / lightColor / cameraPos at canonical std140 slots',
     () => {
       // Canonical packing order documented in plan-strategy D-4: the host
-      // builds a 60-float buffer mirroring the shader-side `View` struct
+      // builds a 240-float buffer mirroring the shader-side `View` struct
       // field order. AC-06: existing field offsets unchanged -- tail append
       // only.
-      const payload = new Float32Array(60);
+      const payload = new Float32Array(VIEW_UBO_BYTES / 4);
       // worldViewProj = identity for this assertion (mat4 in [0..16))
       payload[0] = 1; // m00
       payload[5] = 1; // m11
@@ -133,7 +137,7 @@ describe('w4 view UBO 240 B std140 layout (AC-06, browser)', () => {
     // calculation.
     const inverseProjF32Index = VIEW_UBO_OFFSETS.inverseViewProj / 4;
     expect(inverseProjF32Index).toBe(44);
-    const payload = new Float32Array(60);
+    const payload = new Float32Array(VIEW_UBO_BYTES / 4);
     // Place an identity mat4 at inverseViewProj slot [44..59]
     payload[44] = 1;
     payload[49] = 1;
@@ -143,6 +147,14 @@ describe('w4 view UBO 240 B std140 layout (AC-06, browser)', () => {
     expect(payload[49]).toBe(1);
     expect(payload[54]).toBe(1);
     expect(payload[59]).toBe(1);
+  });
+
+  it.skipIf(!browserReady)('shadow tail keeps the directional carrier before spot matrices', () => {
+    expect(DIRECTIONAL_FILTER_OFFSET).toBe(126 * 4 + 8);
+    expect(SPOT_LIGHT_VIEW_PROJ_OFFSET).toBe(132 * 4);
+    expect(SPOT_LIGHT_VIEW_PROJ_OFFSET - DIRECTIONAL_FILTER_OFFSET).toBe(16);
+    expect(SPOT_LIGHT_VIEW_PROJ_OFFSET + 4 * 4 * 16).toBe(784);
+    expect(VIEW_UBO_BYTES).toBe(1168);
   });
 
   it.skipIf(!browserReady)(

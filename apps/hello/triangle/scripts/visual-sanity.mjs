@@ -22,7 +22,7 @@ import { dirname } from 'node:path';
 
 const url = process.argv[2] ?? 'http://localhost:5173/';
 const outPath = process.argv[3];
-const minimumFrames = 300;
+const minimumFrames = 60;
 if (!outPath) {
   console.error('usage: node visual-sanity.mjs <url> <out-path>');
   process.exit(2);

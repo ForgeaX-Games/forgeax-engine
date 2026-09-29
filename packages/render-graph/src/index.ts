@@ -14,10 +14,13 @@ export {
   RenderGraphError,
   type RenderGraphErrorCode,
   type RenderGraphErrorDetail,
+  type RenderSurfaceFailureDetail,
   type ResourceAllocFailedDetail,
   type Result,
   type ResultErr,
   type ResultOk,
+  type SurfaceFailureCode,
+  type SurfaceFailureKind,
 } from './errors.js';
 export type {
   BufferRole,
@@ -65,6 +68,8 @@ export {
 export type {
   CompiledRenderGraph,
   CompiledRenderGraphInfo,
+  CompiledResourceByteSizeUnknownReason,
+  CompiledResourceDescriptor,
   ComputeGraphPass,
   CopyGraphPass,
   GraphAccess,
@@ -92,6 +97,11 @@ export type {
   RasterGraphPass,
   RenderGraphCompileOptions,
   RenderGraphFrame,
+  RenderGraphGenerationAllocationEntry,
+  RenderGraphGenerationAllocationInspection,
   RenderGraphPassExecution,
+  RenderGraphPassInstrumentation,
+  RenderGraphPassInstrumentationScope,
   RenderGraphPassRunner,
+  RenderGraphResourceAllocationInspection,
 } from './types.js';

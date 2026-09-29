@@ -4,17 +4,17 @@ import { buildIntrospectDoc } from '../introspect';
 
 describe('execution report structural root', () => {
   const execution = {
-    report: () => ({ actualTier: 'shared', world: { health: 'healthy' } }),
+    report: () => ({ workers: { kernels: { enabled: true } }, world: { health: 'healthy' } }),
   };
 
   it('is available to eval without importing the App owner', async () => {
-    const result = await executeScript('execution.report().actualTier', {
+    const result = await executeScript('execution.report().workers.kernels.enabled', {
       world: {},
       renderer: {},
       assets: {},
       execution,
     });
-    expect(result).toEqual({ ok: true, value: 'shared' });
+    expect(result).toEqual({ ok: true, value: true });
   });
 
   it('projects the provider without adding an RPC method', () => {

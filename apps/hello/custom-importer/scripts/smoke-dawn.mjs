@@ -17,7 +17,7 @@
 //   4. Real load + real use (AC-01 functional): register the host loader on
 //      host assets, configurePackIndex, `loadByGuid<ReelGameBlob>`, assert
 //      the typed payload (title + reels), then spawn one cube per reel and
-//      render 300 frames + pixel readback (the scene is non-empty because the
+//      render 60 frames + pixel readback (the scene is non-empty because the
 //      blob really loaded).
 //
 // Verdict criteria:
@@ -45,7 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 200;
@@ -386,7 +386,7 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

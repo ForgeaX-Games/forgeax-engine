@@ -31,8 +31,8 @@
 // Why array<f32> (variable) and not array<f32, N> (fixed) for regions?
 // The length `frameCount * 4` is data-dependent: `frameCount` is itself a
 // per-entity column read at runtime, not a schema-time literal. Same
-// shape as M1 `Instances.transforms: 'array<f32>'` whose length depends
-// on the live instance count; D-6 codifies the precedent.
+// shape as the renderer-owned 3D instance collection snapshot whose length
+// depends on the live instance count; the owners remain separate.
 //
 // dt accumulator clock model (requirements section 2.5 q6 + plan-strategy
 // section 2 D-5):
@@ -53,7 +53,7 @@
 //
 // 4-step recipe (charter F1 progressive disclosure — minimum walk-cycle
 // host code; full demo lands in M6 hello-sprite-atlas):
-//   1. Build atlas via `forgeax-engine-remote-asset atlas --input <glob> --name <prefix> --output <dir>`
+//   1. Build atlas via `forgeax asset atlas --input <glob> --name <prefix> --output <dir> --root <project>`
 //      (M5 build-time hook); load the emitted `<name>.atlas.png` plus
 //      `<name>.atlas.meta.json` sidecar.
 //   2. Register the sprite material referencing the atlas

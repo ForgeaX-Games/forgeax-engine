@@ -10,8 +10,8 @@
 //
 // AI users spawn with the assets-runtime constants `HANDLE_CUBE` /
 // `HANDLE_TRIANGLE` (now branded `Handle<'MeshAsset','shared'>` to
-// match the schema-derived shape); custom mesh registration is owned by
-// feat-future-asset-system (this MVP only exposes builtin handles).
+// match the schema-derived shape). A loaded or custom MeshAsset payload is
+// bound by allocating a World shared reference before publishing this field.
 //
 // Naming flavor: unity-style "MeshFilter / MeshRenderer" pair, but the forgeax
 // pair does NOT mirror Unity's filter-toggle semantics - MeshFilter only
@@ -22,12 +22,13 @@
 // query never matches -> entity is silently absent from the
 // RenderableSnapshot[] (NO default-material fallback, NO onError fire);
 // case B (MeshRenderer.material omitted at spawn) -> mid-grey
-// defaultMaterialSnapshot fallback (no onError); case C (material handle
+// defaultMaterialSnapshot fallback (no onError); an unbound scalar shared<T>
+// field (slot 0) is also not a renderable; case C (non-zero material handle
 // unresolved) -> RhiError 'asset-not-registered' (mirrors the
 // MeshFilter.assetHandle dangling-ref path).
 //
 // charter mapping: proposition 1 (single import) + proposition 4 (explicit
-// failure: missing or unregistered handle fires onError 'asset-not-registered'
+// failure: a non-zero unregistered handle fires onError 'asset-not-registered'
 // with .detail = { assetHandle } + cross-asset brand mismatch is a TS
 // compile-time error) + proposition 5 (consistent abstraction: the schema
 // vocab `'shared<T>'` is the SSOT for AssetRegistry-owned handles across
@@ -39,12 +40,13 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * Mesh filter (geometry asset reference).
  *
  * `assetHandle` carries a `Handle<'MeshAsset', 'shared'>` (u32-stored)
- * pointing into `engine.assets: AssetRegistry`. Use the predefined
- * constants `HANDLE_CUBE` / `HANDLE_TRIANGLE` exported from
- * `@forgeax/engine-render`; custom-mesh registration is OOS in MVP (see
- * feat-future-asset-system).
+ * pointing to a mesh payload in the current World shared-reference / builtin
+ * handle namespace. An omitted field defaults to slot `0`, the unbound
+ * sentinel; an entity with that value is not emitted as a renderable. Use the
+ * predefined constants `HANDLE_CUBE` / `HANDLE_TRIANGLE` for builtins and
+ * allocate a World shared reference for a loaded mesh payload.
  *
- * Error path: if the handle is not registered at draw time, RenderSystem
+ * Error path: if a non-zero handle is not registered at draw time, RenderSystem
  * fires `Renderer.onError` with
  * `RhiError({ code: 'asset-not-registered', detail: { assetHandle } })`
  * and skips this entity (other entities continue rendering; charter

@@ -1,5 +1,7 @@
 import type { Renderer } from '@forgeax/engine-render';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expect, it } from 'vitest';
+import { createApp } from '../create-app';
 
 describe('app-facing renderer lifecycle', () => {
   it('consumes the three lifecycle Result boundaries without casts', async () => {
@@ -20,5 +22,25 @@ describe('app-facing renderer lifecycle', () => {
     renderer.dispose();
     renderer.dispose();
     expect(events).toEqual(['dispose', 'dispose']);
+  });
+
+  it('returns construction failures through the Runtime Result boundary', async () => {
+    const result = await createRenderer(null as never);
+    expect(result.ok).toBe(false);
+  });
+
+  it('returns EngineEnvironmentError through the canvas Result path', async () => {
+    const canvas = {
+      tagName: 'CANVAS',
+      isConnected: true,
+      width: 16,
+      height: 16,
+      getContext: () => null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    } as unknown as HTMLCanvasElement;
+    const result = await createApp(canvas, { rhi: undefined });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(EngineEnvironmentError);
   });
 });

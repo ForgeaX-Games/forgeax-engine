@@ -5,6 +5,7 @@ import {
   validateManifest,
   verifyEvidenceLayers,
   verifyRequiredCells,
+  verifySurfaceEvidence,
 } from '../render-evidence-manifest.mjs';
 
 const sourceSha = 'b'.repeat(40);
@@ -19,6 +20,53 @@ function cell(id, backendKind, verdict = backendKind === 'rhi-null' ? 'structura
     backendIdentity: `${backendKind}-identity`,
     status: 'pass',
     verdict,
+  };
+}
+
+const SURFACE_CELL_IDS = ['default-base', 'custom-base', 'default-physical', 'custom-physical'];
+
+const SURFACE_BACKENDS = ['browser-webgpu', 'dawn-native', 'webgl2'];
+
+function surfaceBackend(cellId, backend, status = 'pass') {
+  const unavailable = status === 'unavailable';
+  return {
+    backend,
+    sourceSha,
+    buildId: 'build-1',
+    adapter: unavailable ? null : `${backend}-adapter`,
+    lane: unavailable ? `${backend}-lane` : `${backend}-lane`,
+    status,
+    pass: unavailable ? null : cellId.endsWith('physical') ? 'forward' : 'deferred',
+    materialGuid: 'guid-rusted-iron',
+    publicationGeneration: 7,
+    closure: 'forgeax_material::surface_v1',
+    rootPlan: cellId.endsWith('physical') ? 'physical-forward' : 'base-deferred',
+    samples: unavailable ? [] : [0.2, 0.1, 0.05, 1],
+    observed: unavailable ? null : 'readback captured',
+    verdict: unavailable ? 'blocked' : 'pixel',
+    confidence: unavailable ? 0 : 0.95,
+    provenance: unavailable
+      ? null
+      : {
+          sourceSha,
+          buildId: 'build-1',
+          frameId: 42,
+          artifact: 'rusted-iron-cooked',
+        },
+    ...(unavailable ? { blocker: `${backend} adapter unavailable` } : {}),
+  };
+}
+
+function surfaceEvidence() {
+  return {
+    sourceSha,
+    buildId: 'build-1',
+    epsilon: 0.05,
+    cells: SURFACE_CELL_IDS.map((id) => ({
+      id,
+      expectation: `${id} pass policy and pixels`,
+      backends: SURFACE_BACKENDS.map((backend) => surfaceBackend(id, backend)),
+    })),
   };
 }
 
@@ -56,6 +104,7 @@ function validManifest() {
       cell('dawn-shader', 'dawn'),
       cell('chromium-pack', 'chromium'),
     ],
+    surfaceEvidence: surfaceEvidence(),
     visualRecords: [
       {
         target: 'standard-lighting',
@@ -144,4 +193,26 @@ test('rejects a malformed visual record', () => {
 
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /falsifier|visual/i);
+});
+
+test('requires the four Standard cells and three backend lanes', () => {
+  const manifest = validManifest();
+  manifest.surfaceEvidence.cells[0].backends.pop();
+
+  const result = verifySurfaceEvidence(manifest);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /backend|three|lane/i);
+});
+
+test('requires unavailable lanes to carry a blocker and pass lanes to carry readback provenance', () => {
+  const manifest = validManifest();
+  manifest.surfaceEvidence.cells[0].backends[0].status = 'unavailable';
+  manifest.surfaceEvidence.cells[0].backends[0].blocker = undefined;
+  manifest.surfaceEvidence.cells[1].backends[1].samples = [];
+
+  const result = verifySurfaceEvidence(manifest);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /blocker|samples|readback/i);
 });

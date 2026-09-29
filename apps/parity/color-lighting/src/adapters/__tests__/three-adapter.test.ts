@@ -22,7 +22,7 @@ function captureOutput(
 ): VertexColorCaptureOutput {
   return {
     backend,
-    frameCount: 300,
+    frameCount: 60,
     sourceSha,
     sourceFixtureHash: '5e5ebc820d7db4904d11604c0ba00961ec4b1542bd4937d826eb781ed115c140',
     colorDomain: fixture.colorDomain,

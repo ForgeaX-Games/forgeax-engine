@@ -29,6 +29,8 @@ export interface ArchetypeGraph {
   /** Global generation counter. Incremented on each new archetype. */
   generation: number;
   tables: Table[];
+  activeTables: Set<Table>;
+  activeTablesByComponent: Map<ComponentId, Set<Table>>;
   tableDedupByKey: Map<string, TableId>;
   tableGeneration: number;
   sparseTags: Map<ComponentId, SparseTagSet>;
@@ -44,6 +46,8 @@ export function createArchetypeGraph(shared = false): ArchetypeGraph {
     dedupByKey: new Map(),
     generation: 0,
     tables: [],
+    activeTables: new Set(),
+    activeTablesByComponent: new Map(),
     tableDedupByKey: new Map(),
     tableGeneration: 0,
     sparseTags: new Map(),
@@ -67,7 +71,17 @@ export function getOrCreateTable(
   const key = tableKey(tableComponents.map((component) => componentOwner.componentId(component)));
   const existingId = graph.tableDedupByKey.get(key);
   if (existingId !== undefined) return getTable(graph, existingId);
-  const table = createTable(tableComponents, graph.tables.length, graph.shared);
+  const directories = [graph.activeTables];
+  for (const component of tableComponents) {
+    const id = componentOwner.componentId(component);
+    let directory = graph.activeTablesByComponent.get(id);
+    if (directory === undefined) {
+      directory = new Set();
+      graph.activeTablesByComponent.set(id, directory);
+    }
+    directories.push(directory);
+  }
+  const table = createTable(tableComponents, graph.tables.length, graph.shared, directories);
   graph.tables.push(table);
   graph.tableDedupByKey.set(key, table.id);
   graph.tableGeneration += 1;

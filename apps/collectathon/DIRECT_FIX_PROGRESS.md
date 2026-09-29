@@ -498,7 +498,7 @@ fixed-camera screenshots + a temporary `window.__cg.guardians()` introspector, s
 ### Engine fix #3 — ChildOf kinematic colliders pinned at the world origin (`packages/physics-rapier3d`)
 **The "guardians kill in ~3s" half was NOT a tuning issue — it was a 3rd engine bug.** Live proof:
 at spawn (player at origin) the player's `CollidingEntities` listed **all three** guardian attack
-sensors at once, while those sensors' ECS `Transform.world` correctly showed them 7-13m away at
+sensors at once, while those sensors' ECS `GlobalTransform.world` correctly showed them 7-13m away at
 their bodies. Once the player roamed off-origin, an armed guardian could close to **0.93m** and
 still register **zero** overlap.
 
@@ -507,7 +507,7 @@ Root cause: `rapier-physics-world-3d.ts` `physicsSyncBackend` kinematic mirror f
 `(0,0,0)`) therefore had its Rapier collider **pinned at the world origin forever** — only its ECS
 Transform followed the parent (via `propagateTransforms`). This single bug caused BOTH #19 symptoms:
 spawn-camp kills (player sits on the stuck sensors) + un-hittable chasers (sensors never leave
-origin). Fix: drive the kinematic mirror from `Transform.world` translation (column-major mat4
+origin). Fix: drive the kinematic mirror from `GlobalTransform.world` translation (column-major mat4
 elements 12/13/14) instead of local pos; physics runs `after: propagateTransforms`, so the world
 column is fresh. New regression test (a ChildOf kinematic sensor overlaps a probe at the parent
 world pos, not the origin); the pre-existing AC-10a test now registers `propagateTransforms` (which

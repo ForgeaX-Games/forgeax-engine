@@ -1,7 +1,12 @@
 // @forgeax/engine-net -- NetSession host-neutral World integration.
 
 import { err, ok, type Result } from '@forgeax/engine-types';
-import type { NetEndpoint, NetEndpointConnector, PeerId } from '../endpoint/endpoint';
+import type {
+  EndpointEvent,
+  NetEndpoint,
+  NetEndpointConnector,
+  PeerId,
+} from '../endpoint/endpoint';
 import { type EndpointError, isEndpointError } from '../endpoint/errors';
 import type { AuthorityCoordinator, PublishedPacket } from '../replication/authority';
 import { decodeReplicationPacket, encodeReplicationPacket } from '../replication/codec';
@@ -112,6 +117,8 @@ export class NetSession {
   #pendingConnect: { readonly abort: () => void } | undefined;
   #retryTimer: { cancel(): void } | undefined;
   readonly #ledger = new Map<number, Uint8Array>();
+  #deferredEvents: EndpointEvent[] = [];
+  #deferReplicaMessages = false;
   #disposed = false;
 
   constructor(config: NetSessionConfig) {
@@ -152,6 +159,8 @@ export class NetSession {
     this.#sessionAnnounced = false;
     this.#pendingFullPeers.clear();
     this.#rawMessages = [];
+    this.#deferredEvents = [];
+    this.#deferReplicaMessages = false;
     this.#clearRecoveryWork();
     this.#endpoint?.close();
   }
@@ -188,6 +197,8 @@ export class NetSession {
     this.#sessionAnnounced = false;
     this.#pendingFullPeers.clear();
     this.#rawMessages = [];
+    this.#deferredEvents = [];
+    this.#deferReplicaMessages = false;
   }
 
   #attemptRecovery(): void {
@@ -242,6 +253,12 @@ export class NetSession {
     this.#sequence = 0;
     this.#acknowledgedSequence = 0;
     this.#ledger.clear();
+    // Keep the replacement endpoint's first message behind one receive tick.
+    // A connector may deliver peer-connected and the fresh baseline in the
+    // same poll; exposing resyncing for one frame makes the lifecycle state
+    // observable and prevents a baseline from being consumed in the connect
+    // callback's first update.
+    this.#deferReplicaMessages = this.#replica !== undefined;
     this.#setState({ kind: 'resyncing', sessionId: this.#sessionId, epoch: this.#epoch });
   }
 
@@ -365,7 +382,11 @@ export class NetSession {
     const errors: NetError[] = [];
     if (this.#disposed || this.#state.kind === 'failed' || this.#state.kind === 'retired')
       return errors;
-    for (const event of this.#endpoint?.poll() ?? []) {
+    const events = [...this.#deferredEvents, ...(this.#endpoint?.poll() ?? [])];
+    this.#deferredEvents = [];
+    const deferMessages = this.#deferReplicaMessages;
+    this.#deferReplicaMessages = false;
+    for (const event of events) {
       if (event.kind === 'peer-connected') {
         this.#peerIds.add(event.peerId);
         if (this.#replica !== undefined) this.#bindSession(this.#sessionId, event.peerId);
@@ -378,6 +399,8 @@ export class NetSession {
           this.#beginRecovery();
           this.advanceRecovery();
         }
+      } else if (deferMessages) {
+        this.#deferredEvents.push(event);
       } else this.#receiveMessage(event.peerId, event.data, errors);
     }
     return errors;
@@ -597,6 +620,8 @@ export class NetSession {
     this.#sessionAnnounced = false;
     this.#pendingFullPeers.clear();
     this.#rawMessages = [];
+    this.#deferredEvents = [];
+    this.#deferReplicaMessages = false;
     if (this.#state.kind !== 'retired')
       this.#setState({ kind: 'retired', sessionId: this.#sessionId, reason: 'disposed' });
   }

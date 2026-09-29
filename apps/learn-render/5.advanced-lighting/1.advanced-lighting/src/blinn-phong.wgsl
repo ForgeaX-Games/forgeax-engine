@@ -1,6 +1,6 @@
 #define_import_path learn_render::5_1_blinn_phong
 
-#import forgeax_view::common::{View, Mesh, view, meshes}
+#import forgeax_view::common::{transformNormal, View, Mesh, view, meshes}
 
 // blinn-phong.wgsl — LO 5.1 Blinn-Phong per-fragment shading.
 //
@@ -48,7 +48,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   var out : VsOut;
   out.clip = view.worldViewProj * world;
   out.worldPos = world.xyz;
-  out.worldNormal = normalize(meshes[idx].normalMatrix * in.normal);
+  out.worldNormal = normalize(transformNormal(meshes[idx].worldFromLocal, in.normal));
   out.uv = in.uv;
   return out;
 }

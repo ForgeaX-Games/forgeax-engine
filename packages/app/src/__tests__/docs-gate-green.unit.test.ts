@@ -1,7 +1,7 @@
 // @perf-budget-skip: intentional documentation subprocess gate.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -57,5 +57,15 @@ describe('M5 active-documentation token-first gate', () => {
     const result = runDocsGate();
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain('Active-documentation token-first gate passed');
+  });
+
+  it('keeps the M3 recovery contracts discoverable from the owner READMEs', () => {
+    const appReadme = readFileSync(resolve(repoRoot, 'packages/app/README.md'), 'utf8');
+    const inputReadme = readFileSync(resolve(repoRoot, 'packages/input/README.md'), 'utf8');
+    expect(appReadme).toContain('report.frame');
+    expect(appReadme).toContain('inFlight = submitted - completed');
+    expect(inputReadme).toContain('InputSnapshot');
+    expect(inputReadme).toContain('onLockError');
+    expect(inputReadme).toContain('document.hasFocus()');
   });
 });

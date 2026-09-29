@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // stencil-outline-pixel.dawn.test.ts -- bug-20260611-stencil-testing-outline-regression.
 //
 // Regression tripwire for PR #344 (pipeline-driven pass selector + ShadowCaster
@@ -54,9 +55,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function doReadPixels(device: GPUDevice, renderTarget: GPUTexture): Promise<Uint8Array> {
   const bytesPerPixel = 4;

@@ -18,6 +18,7 @@ import { createFrameLoop } from '../internal/frame-loop';
 
 function makeSpyRenderer(): Renderer {
   return {
+    state: () => 'alive' as const,
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
     attach: () => ({ ok: true, value: undefined }),

@@ -2,7 +2,7 @@
 // apps/learn-render/6.pbr/2.ibl-irradiance/scripts/smoke-dawn.mjs
 //
 // Thin shim over apps/learn-render/6.pbr/_shared/ibl-smoke-shared.mjs.
-// Verdict (300 frame + reference PNG mean abs delta <= 0.05; AC-12 + AC-18):
+// Verdict (60 frame + reference PNG mean abs delta <= 0.05; AC-12 + AC-18):
 // the shared driver loads real newport_loft.hdr (CC BY-NC carve-out) via the
 // declarative loadByGuid<EquirectAsset> + Skylight{equirect} path (the engine
 // projects the cubemap + IBL internally), runs SMOKE_MIN_FRAMES draw calls,
@@ -11,13 +11,14 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sharedPath = resolve(here, '..', '..', '_shared', 'ibl-smoke-shared.mjs');
 const { runIblSmoke, warmUpng } = await import(sharedPath);
 
 await warmUpng();
-await runIblSmoke({
+const framesObserved = await runIblSmoke({
   demoKind: 'irradiance',
   demoId: 'learn-render-ibl-irradiance',
   referencePath: resolve(
@@ -35,4 +36,5 @@ await runIblSmoke({
   mode: 'verify',
   distDir: resolve(here, '..', 'dist'),
 });
+emitSmokeReceipt('app-learn-render-6-pbr-2-ibl-irradiance/smoke', framesObserved);
 process.exit(0);

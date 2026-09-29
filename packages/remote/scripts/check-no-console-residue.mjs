@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// M3 grep-zero verification: assert `@forgeax/engine-console` and
-// `forgeax-engine-console-` are absent from source + package.json + gate
+// M3 grep-zero verification: assert the retired console package names are
+// absent from source + package.json + gate
 // + CI layer. Allowlisted paths:
 //   (a) apps/** (M5 migrates these)
 //   (b) *.md + README.md (M6 rewrites docs)
@@ -84,7 +84,7 @@ function main() {
     }
   }
 
-  // Also check package.json files for forgeax-engine-console- prefix
+  // Also check package.json files for the retired console prefix
   // (the first grep already covers *.json but double-check with explicit path)
   try {
     const pkgDirs = readdirSync(join(process.cwd(), 'packages'));
@@ -108,7 +108,7 @@ function main() {
   }
 
   if (hits.length > 0) {
-    process.stderr.write(`[fail] AC-06 + plan-strategy §7 M3: residual @forgeax/engine-console / forgeax-engine-console- hits outside allowlisted paths:\n`);
+    process.stderr.write(`[fail] AC-06 + plan-strategy §7 M3: residual retired console names outside allowlisted paths:\n`);
     for (const h of hits) {
       process.stderr.write(`  ${h}\n`);
     }
@@ -116,7 +116,7 @@ function main() {
     process.stderr.write(`  hits: ${hits.length}\n`);
     exitCode = 1;
   } else {
-    process.stdout.write(`[ok] AC-06 + plan-strategy §7 M3: zero @forgeax/engine-console / forgeax-engine-console- residues outside allowlisted paths (apps M5, *.md M6, test snapshots)\n`);
+    process.stdout.write(`[ok] AC-06 + plan-strategy §7 M3: zero retired console names outside allowlisted paths (apps M5, *.md M6, test snapshots)\n`);
   }
 
   process.exit(exitCode);

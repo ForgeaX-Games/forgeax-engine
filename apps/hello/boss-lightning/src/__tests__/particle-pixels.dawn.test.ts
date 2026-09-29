@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,14 +7,13 @@ import { classifyDawnErrors, READINESS_FRAME_LIMIT } from '../../scripts/smoke-d
 const smokePath = resolve(import.meta.dirname, '../../scripts/smoke-dawn.mjs');
 
 describe('Boss Lightning Dawn pixel probe contract', () => {
-  it('requires separate billboard and mesh zones plus the 300-frame draw probe', () => {
+  it('requires separate billboard and mesh zones plus the budgeted draw probe', () => {
     const source = readFileSync(smokePath, 'utf8');
     expect(source).toContain('copyTextureToBuffer');
     expect(source).toContain('billboardZone');
     expect(source).toContain('meshZone');
     expect(source).toContain('billboard');
     expect(source).toContain('mesh');
-    expect(source).toContain('TARGET_FRAMES = 300');
     expect(source).toContain('queuedIntents');
     expect(source).toContain('runtimeDiagnostics');
     expect(source).toContain('billboardEnergy');
@@ -24,6 +24,40 @@ describe('Boss Lightning Dawn pixel probe contract', () => {
     expect(source).toContain('persistentErrors');
     expect(source).toContain('recovery');
     expect(source).toContain('process.exit(0)');
+  });
+
+  it('uses the shared default and requested budgets without changing the benchmark window', () => {
+    const source = readFileSync(smokePath, 'utf8');
+    const declarations = source.match(
+      /^const TARGET_FRAMES = [^\n]+;\nconst frameLimit = [^\n]+;$/m,
+    )?.[0];
+    expect(declarations).toBeDefined();
+    const helper = new URL('../../../../shared/scripts/smoke-receipt.mjs', import.meta.url).href;
+    const checkBudgets = (code: string) => {
+      for (const requested of [undefined, '300']) {
+        for (const benchmarkMode of [false, true]) {
+          const env = { ...process.env };
+          delete env.SMOKE_MIN_FRAMES;
+          if (requested !== undefined) env.SMOKE_MIN_FRAMES = requested;
+          const output = execFileSync(process.execPath, [
+            '--input-type=module',
+            '--eval',
+            `import { smokeFrameBudget } from ${JSON.stringify(helper)};
+const benchmarkMode = ${benchmarkMode};
+${code}
+console.log(frameLimit);`,
+          ], { env, encoding: 'utf8' });
+          expect(Number(output.trim())).toBe(benchmarkMode ? 90 : Number(requested ?? 60));
+        }
+      }
+    };
+    checkBudgets(declarations!);
+    const hardCoded = declarations!.replace(
+      /^const TARGET_FRAMES = [^\n]+;/m,
+      'const TARGET_FRAMES = 60;',
+    );
+    expect(hardCoded).not.toBe(declarations);
+    expect(() => checkBudgets(hardCoded)).toThrow();
   });
 
   it('keeps the depth provider and soft-particle oracle explicit', () => {

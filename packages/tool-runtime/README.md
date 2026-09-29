@@ -3,7 +3,9 @@
 AI tools follow one discoverable proposition: `list -> describe -> run -> terminal`.
 This focused package owns the realm-neutral contract only. A contribution keeps its
 descriptor and executor together, while DevKit and other hosts provide the authority
-and physical realm.
+and physical realm. `ToolRealm` distinguishes resident Node `host`, browser
+`frontend`, simulation `engine`, and build-time `build`; the Plugin loader uses
+the same vocabulary.
 
 Preview descriptors may add a portable `preview` contract containing `realm`, a
 `ToolSubjectRef`, and a `SnapshotRef`; `evidence` remains the required

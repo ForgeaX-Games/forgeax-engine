@@ -139,7 +139,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
     describe('bridge.ts Name attachment (M4 w11/w12)', () => {
       it('AC-06 attaches Name component when node.name is non-empty', () => {
         const scene = gltfDocToSceneAsset(baseDoc(), ctx);
-        const node = scene.entities[0];
+        const node = scene.entities['node-0'];
         expect(node?.components.Name).toEqual({ value: 'InstancedBox' });
       });
 
@@ -149,7 +149,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           nodes: [{ ...baseDoc().nodes[0], name: undefined } as never],
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        const node = scene.entities[0];
+        const node = scene.entities['node-0'];
         expect(node?.components.Name).toBeUndefined();
       });
 
@@ -159,13 +159,13 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           nodes: [{ ...baseDoc().nodes[0], name: '' } as never],
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        const node = scene.entities[0];
+        const node = scene.entities['node-0'];
         expect(node?.components.Name).toBeUndefined();
       });
 
       it('AC-08 mesh / material / scene names do NOT route into Name on the node', () => {
         const scene = gltfDocToSceneAsset(baseDoc(), ctx);
-        for (const node of scene.entities) {
+        for (const node of Object.values(scene.entities)) {
           const name = node.components.Name;
           if (name !== undefined) {
             expect(name.value).not.toBe('MeshFoo');
@@ -179,7 +179,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
     describe('bridge.ts Instances attachment (M4 w11/w12)', () => {
       it('AC-10 attaches Instances with transforms.length === N*16', () => {
         const scene = gltfDocToSceneAsset(baseDoc(), ctx);
-        const node = scene.entities[0];
+        const node = scene.entities['node-0'];
         expect(node?.components.Instances).toBeDefined();
         const inst = node?.components.Instances;
         if (inst !== undefined) {
@@ -201,15 +201,12 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           ],
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        const transforms = scene.entities[0]?.components.Instances?.transforms as Float32Array;
-        for (let i = 0; i < seed.length; i++) {
-          expect(transforms[i]).toBe(seed[i]);
-        }
+        expect(scene.entities['node-0']?.components.Instances).toEqual({ transforms: seed });
       });
 
       it('AC-11 1 entity carries MeshFilter+MeshRenderer+Instances (no flatten)', () => {
         const scene = gltfDocToSceneAsset(baseDoc(), ctx);
-        const candidates = scene.entities.filter(
+        const candidates = Object.values(scene.entities).filter(
           (n) =>
             n.components.MeshFilter !== undefined &&
             n.components.MeshRenderer !== undefined &&
@@ -224,7 +221,17 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           nodes: [{ ...baseDoc().nodes[0], instancing: undefined } as never],
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities[0]?.components.Instances).toBeUndefined();
+        expect(scene.entities['node-0']?.components.Instances).toBeUndefined();
+      });
+
+      it('preserves authored instancing without a Renderer', () => {
+        const scene = gltfDocToSceneAsset(baseDoc(), {
+          meshHandles: ctx.meshHandles,
+          materialHandles: ctx.materialHandles,
+        });
+        expect(scene.entities['node-0']?.components.Instances).toEqual({
+          transforms: baseDoc().nodes[0]?.instancing?.transforms,
+        });
       });
     });
   });
@@ -341,11 +348,11 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(20)]]),
         };
         const scene: SceneAsset = gltfDocToSceneAsset(twoLevelDoc, ctx);
-        expect(scene.entities.length).toBe(2);
-        expect(scene.entities[0]?.components.MeshFilter?.assetHandle).toBe(10);
-        expect(scene.entities[1]?.components.MeshFilter?.assetHandle).toBe(11);
-        expect(scene.entities[0]?.localId).toBe(0);
-        expect(scene.entities[1]?.localId).toBe(1);
+        expect(Object.keys(scene.entities).length).toBe(2);
+        expect(scene.entities['node-0']?.components.MeshFilter?.assetHandle).toBe(10);
+        expect(scene.entities['node-1']?.components.MeshFilter?.assetHandle).toBe(11);
+        expect(scene.entities['node-0']).toBeDefined();
+        expect(scene.entities['node-1']).toBeDefined();
       });
 
       it('visits full three-level hierarchy in DFS order', () => {
@@ -358,10 +365,10 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(20)]]),
         };
         const scene: SceneAsset = gltfDocToSceneAsset(threeLevelDoc, ctx);
-        expect(scene.entities.length).toBe(3);
-        expect(scene.entities[0]?.localId).toBe(0);
-        expect(scene.entities[1]?.localId).toBe(1);
-        expect(scene.entities[2]?.localId).toBe(2);
+        expect(Object.keys(scene.entities).length).toBe(3);
+        expect(scene.entities['node-0']).toBeDefined();
+        expect(scene.entities['node-1']).toBeDefined();
+        expect(scene.entities['node-2']).toBeDefined();
       });
 
       it('includes child entities with Name components from node.name', () => {
@@ -373,8 +380,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(20)]]),
         };
         const scene: SceneAsset = gltfDocToSceneAsset(twoLevelDoc, ctx);
-        expect(scene.entities[0]?.components.Name?.value).toBe('root');
-        expect(scene.entities[1]?.components.Name?.value).toBe('child');
+        expect(scene.entities['node-0']?.components.Name?.value).toBe('root');
+        expect(scene.entities['node-1']?.components.Name?.value).toBe('child');
       });
     });
   });
@@ -623,8 +630,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         };
         const scene: SceneAsset = gltfDocToSceneAsset(helloGltfDoc, ctx);
         expect(scene.kind).toBe('scene');
-        expect(scene.entities.length).toBeGreaterThanOrEqual(1);
-        const meshNode = scene.entities[0];
+        expect(Object.keys(scene.entities).length).toBeGreaterThanOrEqual(1);
+        const meshNode = scene.entities['node-0'];
         expect(meshNode?.components.MeshFilter?.assetHandle).toBe(1);
         const renderer = meshNode?.components.MeshRenderer;
         expect(renderer).toBeDefined();
@@ -642,7 +649,9 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(7)]]),
         };
         const scene = gltfDocToSceneAsset(helloGltfDoc, ctx);
-        const cameraNode = scene.entities.find((n) => n.components.Camera !== undefined);
+        const cameraNode = Object.values(scene.entities).find(
+          (n) => n.components.Camera !== undefined,
+        );
         expect(cameraNode).toBeDefined();
       });
     });
@@ -704,9 +713,9 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           ]),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(1);
+        expect(Object.keys(scene.entities).length).toBe(1);
 
-        const entityNode = scene.entities[0];
+        const entityNode = scene.entities['node-0'];
         expect(entityNode).toBeDefined();
         expect(entityNode?.components.MeshFilter?.assetHandle).toBe(10);
         expect(entityNode?.components.MeshRenderer).toBeDefined();
@@ -752,8 +761,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(7)]]),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(1);
-        const node = scene.entities[0];
+        expect(Object.keys(scene.entities).length).toBe(1);
+        const node = scene.entities['node-0'];
         expect(node?.components.MeshFilter?.assetHandle).toBe(1);
         expect(node?.components.MeshRenderer).toBeDefined();
       });
@@ -797,8 +806,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map(),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(1);
-        const node = scene.entities[0];
+        expect(Object.keys(scene.entities).length).toBe(1);
+        const node = scene.entities['node-0'];
         expect(node?.components.Transform).toBeDefined();
         expect(node?.components.MeshFilter).toBeUndefined();
         expect(node?.components.MeshRenderer).toBeUndefined();
@@ -873,9 +882,13 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           ]),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(2);
-        const nodeA = scene.entities.find((n) => n.components.Name?.value === 'NodeA');
-        const nodeB = scene.entities.find((n) => n.components.Name?.value === 'NodeB');
+        expect(Object.keys(scene.entities).length).toBe(2);
+        const nodeA = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'NodeA',
+        );
+        const nodeB = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'NodeB',
+        );
         expect(nodeA?.components.MeshRenderer?.materials).toEqual([]);
         expect(nodeB?.components.MeshRenderer?.materials).toEqual([]);
       });
@@ -943,11 +956,15 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(7)]]),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(3);
+        expect(Object.keys(scene.entities).length).toBe(3);
 
-        const rootNode = scene.entities.find((n) => n.components.Name?.value === 'Root');
-        const childNode = scene.entities.find((n) => n.components.Name?.value === 'Child');
-        const grandchildNode = scene.entities.find(
+        const rootNode = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'Root',
+        );
+        const childNode = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'Child',
+        );
+        const grandchildNode = Object.values(scene.entities).find(
           (n) => n.components.Name?.value === 'Grandchild',
         );
         expect(rootNode).toBeDefined();
@@ -958,8 +975,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(childNode?.components.MeshFilter).toBeUndefined();
         expect(grandchildNode?.components.MeshFilter).toBeDefined();
 
-        expect(childNode?.components.ChildOf?.parent).toBe(rootNode?.localId);
-        expect(grandchildNode?.components.ChildOf?.parent).toBe(childNode?.localId);
+        expect(childNode?.components.ChildOf?.parent).toBe('node-0');
+        expect(grandchildNode?.components.ChildOf?.parent).toBe('node-1');
       });
     });
 
@@ -1014,9 +1031,11 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           materialHandles: new Map([[0, fakeMaterialHandle(7)]]),
         };
         const scene = gltfDocToSceneAsset(doc, ctx);
-        expect(scene.entities.length).toBe(2);
+        expect(Object.keys(scene.entities).length).toBe(2);
 
-        const childNode = scene.entities.find((n) => n.components.Name?.value === 'Child');
+        const childNode = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'Child',
+        );
         expect(childNode?.components.Transform).toBeDefined();
         const t = childNode?.components.Transform;
         // Local TRS: child node carries its own [2, 0, 0]; parent's [5, 0, 0]
@@ -1076,12 +1095,16 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         };
         const scene = gltfDocToSceneAsset(doc as unknown as GltfDoc, ctx);
 
-        const cameraNode = scene.entities.find((n) => n.components.Name?.value === 'CameraNode');
+        const cameraNode = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'CameraNode',
+        );
         expect(cameraNode).toBeDefined();
         expect(cameraNode?.components.Camera).toBeDefined();
         expect(cameraNode?.components.Camera?.fov).toBe(0.7853981633974483);
 
-        const boxNode = scene.entities.find((n) => n.components.Name?.value === 'BoxNode');
+        const boxNode = Object.values(scene.entities).find(
+          (n) => n.components.Name?.value === 'BoxNode',
+        );
         expect(boxNode?.components.Camera).toBeUndefined();
       });
     });

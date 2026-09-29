@@ -1,4 +1,4 @@
-import { defineToolPlugin, type Plugin, type ToolPlugin } from '@forgeax/engine-plugin';
+import type { Plugin } from '@forgeax/engine-plugin';
 import {
   type ArtifactRef,
   defineToolCapability,
@@ -72,8 +72,14 @@ export function previewHostPlugin(host: PreviewHost): Plugin {
   };
 }
 
-export function bindPreviewHost(plugin: ToolPlugin, host: PreviewHost): ToolPlugin {
-  return defineToolPlugin(previewHostPlugin(host), plugin.tools);
+export function bindPreviewHost(plugin: Plugin, host: PreviewHost): Plugin {
+  return {
+    name: 'forgeax:preview-session',
+    apply(ctx) {
+      ctx.plugin(previewHostPlugin(host));
+      ctx.plugin(plugin);
+    },
+  };
 }
 
 export function createPreviewHost(input: PreviewHostMechanisms): PreviewHost {

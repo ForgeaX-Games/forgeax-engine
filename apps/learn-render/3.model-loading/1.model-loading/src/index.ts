@@ -64,7 +64,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // concurrent loads down to a single gltfImporter pass per meta sidecar).
   const appRes = await createApp(
     target,
-    {},
+    import.meta.env.DEV && runtimeBinding !== undefined ? { assetRuntimeBinding: runtimeBinding } : {},
     // Host-explicit dev transport (OOS-1): a DDC miss for an unimported Sponza
     // texture triggers an on-demand POST /__import import against the dev server.
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
@@ -198,7 +198,7 @@ function spawnLights(world: World): void {
         // Scaled by 0.008 to match Sponza root scale (was cm-space
         // 4500/2200; world-space after gltf root transform applies).
         shadowDistance: 36,
-        depthBias: 0.005,
+        depthBias: 0.00001,
       },
     },
   );

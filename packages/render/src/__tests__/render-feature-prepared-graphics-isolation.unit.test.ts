@@ -2,9 +2,10 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
-import type { RenderFeaturePlan } from '../features/plan';
+import { createRenderFeatureHost } from '../features/host';
+import type { RenderFeatureWorkPlan } from '../features/plan';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = { backendKind: 'null' } as unknown as Readonly<RhiCaps>;
 
@@ -12,7 +13,7 @@ function ordinaryFeature(identity: string): RenderFeature<{ readonly work: true 
   return {
     identity,
     extract: () => ok({ work: true }),
-    plan: () => ok({ resources: [], passes: [] }),
+    plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
   };
 }
 
@@ -24,12 +25,13 @@ function preparedFeature(
     identity,
     extract: () => ok({ work: true }),
     plan: () => {
-      if (mode === 'empty') return ok({ resources: [], passes: [] });
+      if (mode === 'empty')
+        return ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
       if (mode === 'invalid') {
         return err(new RenderFeatureStageFailedError(identity, 0, 'plan', 'next-frame'));
       }
-      const value: RenderFeaturePlan = { resources: [], passes: [] };
-      return ok(value);
+      const value: RenderFeatureWorkPlan = { resources: [], passes: [] };
+      return ok({ work: [{ scope: { view: 'main' }, ...value }] });
     },
   };
 }
@@ -40,7 +42,7 @@ describe('prepared graphics feature isolation', () => {
       preparedFeature('synthetic.failed', 'invalid'),
       ordinaryFeature('synthetic.healthy'),
     ]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
@@ -59,7 +61,7 @@ describe('prepared graphics feature isolation', () => {
 
   it('treats an empty feature as successful no-work without a phantom graphics pass', () => {
     const host = createRenderFeatureHost([preparedFeature('synthetic.empty', 'empty')]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 2,

@@ -83,6 +83,28 @@ describe('ensureWasm (shared lib)', () => {
     });
   });
 
+  it('invokes the fetcher when markers exist but freshness validation rejects the bundle', async () => {
+    const pkg = await tempPkgDir();
+    await Promise.all([writeFile(join(pkg, 'a.wasm'), ''), writeFile(join(pkg, 'b.wasm'), '')]);
+    const spawn = vi.fn(() => ({ status: 0 }));
+    const log = vi.fn();
+
+    expect(
+      ensureWasm({
+        ...CFG,
+        presenceMarkers: [join(pkg, 'a.wasm'), join(pkg, 'b.wasm')],
+        ready: false,
+        env: {},
+        spawn,
+        log,
+      }),
+    ).toBe(0);
+    expect(spawn).toHaveBeenCalledWith(process.execPath, ['/fixture/fetch-wasm.mjs'], {
+      stdio: 'inherit',
+    });
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('already present'));
+  });
+
   it('keeps installation successful when fetching fails', async () => {
     const pkg = await tempPkgDir();
     const log = vi.fn();
@@ -100,5 +122,26 @@ describe('ensureWasm (shared lib)', () => {
       expect.stringContaining('pnpm -F @forgeax/engine-fbx fetch-wasm'),
     );
     expect(log).toHaveBeenLastCalledWith(expect.stringContaining('OS-native fallbacks'));
+  });
+
+  it('keeps stale bundles uncertified when the replacement fetch is unavailable', async () => {
+    const pkg = await tempPkgDir();
+    await Promise.all([writeFile(join(pkg, 'a.wasm'), ''), writeFile(join(pkg, 'b.wasm'), '')]);
+    const log = vi.fn();
+
+    expect(
+      ensureWasm({
+        ...CFG,
+        presenceMarkers: [join(pkg, 'a.wasm'), join(pkg, 'b.wasm')],
+        ready: false,
+        env: {},
+        spawn: vi.fn(() => ({ status: 1 })),
+        log,
+      }),
+    ).toBe(0);
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('already present'));
+    expect(log).toHaveBeenLastCalledWith(
+      expect.stringContaining('pnpm -F @forgeax/engine-fbx fetch-wasm'),
+    );
   });
 });

@@ -15,6 +15,7 @@ export interface LocalExecutionControl extends ExecutionControl {
 export interface LocalExecutionReportProviders {
   readonly audio?: () => AudioState;
   readonly world?: () => ExecutionReport['world'];
+  readonly frame?: () => ExecutionReport['frame'];
 }
 
 export function createLocalExecutionControl(
@@ -30,6 +31,7 @@ export function createLocalExecutionControl(
       cloneExecutionReport({
         ...current,
         world: providers.world?.() ?? current.world,
+        frame: providers.frame?.() ?? current.frame,
         audio: executionAudioReport(providers.audio?.()),
       }),
     rebuild: async () =>

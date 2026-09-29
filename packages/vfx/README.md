@@ -8,7 +8,7 @@ Runtime-safe contract for code-first GPU particle effects. Authors write emitter
 ## Ownership
 
 The machine-readable asset boundary is
-[`asset-authority.schema.json`](../../asset-authority.schema.json). Author source
+[`schemas/asset-authority.schema.json`](../../schemas/asset-authority.schema.json). Author source
 and its WGSL module are authoritative; native cook produces the Pack payload and
 asset-local program artifact, while Catalog and runtime state are derived
 projections. Lifecycle evidence therefore runs from source validation through a
@@ -24,10 +24,10 @@ artifact must be cold-cooked instead of being treated as current.
 ## Author source
 
 ```ts
-import { defineParticleEffectSourceV2 } from '@forgeax/engine-vfx';
+import { defineParticleEffectSourceV3 } from '@forgeax/engine-vfx';
 
-export const sparks = defineParticleEffectSourceV2({
-  schemaVersion: 2,
+export const sparks = defineParticleEffectSourceV3({
+  schemaVersion: 3,
   emitters: [{
     id: 'sparks',
     capacity: 100_000,
@@ -57,6 +57,52 @@ A mesh renderer selects exactly one draw surface with `submesh` (default `0`):
 `{ kind: 'mesh', mesh, material, submesh: 2 }`. An out-of-range index fails
 preparation instead of silently drawing another submesh.
 
+## Program v3 data plane
+
+The minimum-fidelity slice exposes a schema-driven Program v3 authoring boundary
+through `defineParticleEffectSourceV3`. Its fixed Core record is 112 bytes
+(`VfxParticle`); effect snapshot values live in `VfxParameters`, while optional
+`VfxCustom` values use a persistent GPU storage record capped at four
+`vec4`-equivalent lanes. The compiler derives the WGSL declarations, reflection,
+host stride, and renderer projections from these schemas. Reflected member
+offsets preserve authored WGSL declaration order. Custom storage array stride
+uses the struct's natural WGSL alignment; the vec4 lane count is a budget,
+not an extra padding requirement (one scalar has a 4-byte stride).
+
+```ts
+import { defineParticleEffectSourceV3 } from '@forgeax/engine-vfx';
+
+export const effect = defineParticleEffectSourceV3({
+  schemaVersion: 3,
+  emitters: [{
+    id: 'embers', capacity: 4096, backend: { required: 'gpu' }, space: 'world',
+    bounds: { kind: 'sphere', center: [0, 0, 0], radius: 8 },
+    schedule: { rate: 120 }, program: { module: 'embers.vfx.wgsl' },
+    renderers: [{
+      kind: 'billboard', material: 'ember-material', sorting: 'view-depth',
+      materialInputs: ['heat'],
+    }],
+  }],
+});
+```
+
+Program v3 keeps the existing bounded `channels`/`events` and sub-emitter
+path. The unused `vfx:channel` Data Interface token is not part of the v3
+vocabulary; `camera`, single-sample `scene-depth`, and `noise` are
+generation-owned resources and must be supplied by the renderer host.
+Scene-depth is intentionally accepted only with `sampleCount: 1`; no implicit
+MSAA resolve is performed.
+
+Mesh renderers expose semantic Quaternion/Scale3 attributes and Standard
+lighting/shadow intent. Mesh and billboard both support `none`, `view-depth`,
+`view-distance`, `custom-ascending`, and `custom-descending` sorting; custom
+sorting requires an explicit scalar `attributes.sort` from `VfxCustom`.
+Stable `timeScale: 0` players emit no simulation intents. Reset, replay,
+visibility restart, parameter patches and channel inputs still execute at zero delta. Billboard, Ribbon, Trail, and Beam retain their
+topology-specific projection paths. Invalid or missing semantic/material input
+references fail at cook time, and undeclared Parameters, Custom, and data
+interface resources do not allocate a GPU binding.
+
 ## Batch B renderers and control
 
 ```ts
@@ -65,7 +111,7 @@ renderers: [
     kind: 'billboard', material: SPARK_MATERIAL, blend: 'additive',
     capacity: 4096, overflow: 'drop-oldest',
     textureSheet: { columns: 4, rows: 4, frameRate: 12 },
-    pivot: [0.5, 0.25], softParticle: { distance: 0.4 }, sorting: 'back-to-front',
+    pivot: [0.5, 0.25], softParticle: { fadeDistance: 0.4 }, sorting: 'view-depth',
   },
   { kind: 'ribbon', stripKey: 'alive-index', capacity: 1024, overflow: 'drop-newest', width: 0.2 },
   { kind: 'trail', historyLength: 8, capacity: 1024, overflow: 'drop-oldest', width: 0.15 },
@@ -92,13 +138,13 @@ scene-depth provider. Capacity overflow is reported through inspection.
 
 fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {
   let angle = vfx_random_spawn(ctx, 0u) * 6.2831853;
-  (*particle).velocity = vec4<f32>(cos(angle), 2.0, sin(angle), 0.0);
+  (*particle).velocity = vec3<f32>(cos(angle), 2.0, sin(angle));
   (*particle).lifetime = 1.5;
 }
 
 fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {
   (*particle).velocity.y -= 9.8 * ctx.delta;
-  (*particle).size_rotation.z += ctx.delta * 2.0;
+  (*particle).sprite_rotation += ctx.delta * 2.0;
   vfx_integrate(ctx, particle);
 }
 ```
@@ -107,11 +153,13 @@ The managed shell exposes this stable particle surface:
 
 | Field | Meaning |
 |:--|:--|
-| `position.xyz` | Emitter-local or world position; `.w` is available to author code |
-| `velocity.xyz` | Velocity used by `vfx_integrate`; `.w` is available to author code |
+| `position` | Emitter-local or world position |
+| `velocity` | Velocity used by `vfx_integrate` |
 | `color` | Linear HDR color and alpha |
-| `size_rotation.xy` | Billboard width/height; mesh uses `.x` as uniform scale |
-| `size_rotation.z` | Rotation in radians |
+| `sprite_size` | Billboard width/height |
+| `sprite_rotation` | Billboard rotation in radians |
+| `mesh_orientation` / `mesh_scale` | Mesh Quaternion (x, y, z, w) and Scale3 |
+| `material_random` | Stable material random scalar |
 | `age`, `lifetime` | Engine advances age and kills at `age >= lifetime` |
 | `alive` | Set to `0u` for explicit death |
 | `id` | Stable spawn identity for addressable random |
@@ -164,7 +212,8 @@ responsibility.
 
 > [!IMPORTANT]
 > The descriptor is an inspection/read-model contract, not a second authoring
-> language. Source v2 plus `.vfx.wgsl` remain authoritative.
+> language. Program v3 source plus `.vfx.wgsl` is authoritative. Older payloads
+> are rejected at the loader boundary and must be cold-cooked before publication.
 
 ## Runtime invariants
 
@@ -183,6 +232,8 @@ program/layout fingerprints, parameter generation, pending patch count, channel
 counters, `cameraVisible`, `sessionEnabled`, phase/global ticks, schedule, bounds, renderer/stage metadata and the latest
 committed tick intent per emitter. Observation never selects a single global
 “latest intent,” so two players and multi-emitter effects remain distinguishable.
+The renderer may use `forEachEmitterSource()` to refresh frustum visibility from
+live emitters even when a paused player has no pending fixed-tick intent.
 
 ## Culling policy
 
@@ -204,11 +255,16 @@ Camera culling and editor preview masking are independent runtime axes:
 
 | Code | Repair |
 |:--|:--|
-| `vfx-source-version-unsupported` | Migrate behavior to WGSL and cold-cook schema v2 |
+| `vfx-source-version-unsupported` | Migrate behavior to WGSL and cold-cook the supported schema |
 | `vfx-source-invalid` | Repair `detail.path`; unknown and unsupported fields fail closed |
-| `vfx-asset-v2-program-missing` | Republish the asset-local `particle-effect/program.json` artifact |
-| `vfx-asset-v2-fingerprint-mismatch` | Cold-cook payload and program atomically |
+| `vfx-asset-version-unsupported` | Cold-cook the older source and publish a Program v3 payload |
+| `vfx-asset-v3-program-missing` | Republish the Program v3 asset-local `particle-effect/program.json` artifact |
+| `vfx-asset-v3-fingerprint-mismatch` | Cold-cook the v3 payload and program atomically |
 | `vfx-effect-unavailable` | Load the shared effect before the first FixedUpdate |
 | `vfx-intent-queue-overflow` | Recover the Renderer or restart the player; inspect render readiness |
 
-Device recovery discards the old render generation, clears VFX GPU state, and restarts players from source inputs. No stale handle or CPU particle mirror survives recovery.
+Device recovery discards the old render generation and reconstructs each active
+retained emitter from its deterministic committed fixed-tick inputs on the first
+submitted replacement-device frame. Recovery does not advance World time,
+publish channel events, allocate a play cycle, or reset the authored player.
+No stale handle or CPU particle mirror survives recovery.

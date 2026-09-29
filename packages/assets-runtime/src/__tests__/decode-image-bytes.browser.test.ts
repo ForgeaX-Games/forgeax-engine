@@ -30,7 +30,6 @@ import { World } from '@forgeax/engine-ecs';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { decodeImageBytes } from '../decode-image-bytes';
-import { numMipLevels } from '../mipmap-generator';
 
 // 1x1 red PNG (RGBA 8-bit). Universally decodable by browser createImageBitmap.
 const PNG_1X1_RED_BASE64 =
@@ -50,14 +49,13 @@ describe('decodeImageBytes browser real-PNG happy path (AC-01)', () => {
     if (!result.ok) return;
     const pod = result.value;
     expect(pod.kind).toBe('texture');
-    expect(pod.width).toBeGreaterThan(0);
-    expect(pod.height).toBeGreaterThan(0);
+    expect(pod.shape.extent.width).toBeGreaterThan(0);
+    expect(pod.shape.extent.height).toBeGreaterThan(0);
     // RGBA8 tight-packed: width * height * 4 bytes.
-    expect(pod.data.length).toBe(pod.width * pod.height * 4);
+    expect(pod.data.length).toBe(pod.shape.extent.width * pod.shape.extent.height * 4);
     expect(pod.format).toBe('rgba8unorm-srgb');
     expect(pod.colorSpace).toBe('srgb');
-    expect(pod.mipmap).toBe(true);
-    expect(pod.mipLevelCount).toBe(numMipLevels({ width: pod.width, height: pod.height }));
+    expect(pod.mips).toEqual({ kind: 'generate' });
   });
 
   it('AC-01: opts.colorSpace="linear" + opts.mipmap=false narrows format + mipLevelCount', async () => {
@@ -70,8 +68,7 @@ describe('decodeImageBytes browser real-PNG happy path (AC-01)', () => {
     const pod = result.value;
     expect(pod.format).toBe('rgba8unorm');
     expect(pod.colorSpace).toBe('linear');
-    expect(pod.mipmap).toBe(false);
-    expect(pod.mipLevelCount).toBe(1);
+    expect(pod.mips).toEqual({ kind: 'none' });
   });
 });
 

@@ -3,12 +3,13 @@ import type { CapabilityStatus, CaseVerdict, ExecutionStatus } from '../report/s
 
 export type ColorDomain = 'linearHdr' | 'linearLdr' | 'displayEncoded';
 export type PrimaryMetric = 'rgba' | 'alpha' | 'occupancy';
-export type PipelineIdentity = 'urp' | 'hdrp';
-export type LightKind = 'directional' | 'point' | 'spot';
+export type PipelineIdentity = 'standard';
+export type LightKind = 'directional' | 'point' | 'spot' | 'rect-area';
 
 export interface SceneCasePipeline {
   readonly identity: PipelineIdentity;
-  readonly engineId: 'forgeax::urp' | 'forgeax::hdrp';
+  readonly engineId: 'forgeax::standard';
+  readonly renderPath: 'forward' | 'deferred';
 }
 
 export interface SceneCaseLight {
@@ -20,6 +21,11 @@ export interface SceneCaseLight {
   readonly direction?: readonly [number, number, number];
   readonly innerConeDeg?: number;
   readonly outerConeDeg?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly center?: readonly [number, number, number];
+  readonly axisX?: readonly [number, number, number];
+  readonly axisY?: readonly [number, number, number];
 }
 
 export interface SceneCaseImport {
@@ -45,6 +51,36 @@ export interface SceneCaseComparison {
   readonly primaryMetric: PrimaryMetric;
 }
 
+export interface ExtendedLightingCase {
+  readonly topology: 'extendedLighting';
+  readonly carrier: 'rect-area' | 'spot-modifiers' | 'probe' | 'recovery';
+  readonly iesSliceCount: number;
+  readonly cookieSliceCount: number;
+  readonly cookieMatrixCount: number;
+  readonly expectedComposition: 'brdf*range*cone*ies*cookie*shadow';
+  readonly cookieColorDomain: 'linear';
+  readonly evidencePlan: {
+    readonly expectations: readonly string[];
+    readonly identity: { readonly fixtureId: string; readonly sourceKey: string };
+    readonly numericRoi: {
+      readonly analyticMax: number;
+      readonly roiMax: number;
+      readonly epsilon: number;
+      readonly colorDomain: 'linearHdr';
+    };
+    readonly recordReceipt: {
+      readonly status: 'not-run' | 'ready' | 'recovered';
+      readonly byteLength: 160;
+      readonly maxBytes: 160;
+    };
+    readonly resourceReceipt: {
+      readonly status: 'not-run' | 'candidate' | 'accepted' | 'lkg' | 'recovered';
+      readonly topology: 'extendedLighting';
+    };
+    readonly falsifiers: readonly { readonly id: string; readonly expectedFailure: string }[];
+  };
+}
+
 export interface SceneCase {
   readonly caseId: string;
   readonly required: boolean;
@@ -53,6 +89,7 @@ export interface SceneCase {
   readonly light?: SceneCaseLight;
   readonly import?: SceneCaseImport;
   readonly comparison?: SceneCaseComparison;
+  readonly extendedLighting?: ExtendedLightingCase;
   readonly scene: SceneDefinition;
   readonly budget: SceneCaseBudget;
 }
@@ -113,7 +150,7 @@ export interface VertexColorProducerSample {
 
 export interface VertexColorCaptureOutput {
   readonly backend: VertexColorBackend;
-  readonly frameCount: 300;
+  readonly frameCount: 60;
   readonly sourceSha: string;
   readonly sourceFixtureHash: string;
   readonly colorDomain: VertexColorDomain;
@@ -139,7 +176,7 @@ export interface VertexColorCaseReport {
   readonly sourceSha: string;
   readonly sourceFixtureHash: string;
   readonly colorDomain: VertexColorDomain;
-  readonly frameCount: 300;
+  readonly frameCount: 60;
   readonly epsilon: { readonly rgb: 0.05; readonly alpha: 0.05 };
   readonly producers: { readonly forgeax: VertexColorProducerIdentity; readonly three: VertexColorProducerIdentity };
   readonly samples: readonly VertexColorSampleObservation[];
@@ -229,7 +266,7 @@ export type ValidationResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: ValidationError };
 
-export type PipelineEvidencePipelineId = 'forgeax::urp' | 'forgeax::hdrp';
+export type PipelineEvidencePipelineId = 'forgeax::standard';
 export type PipelineEvidenceRuntimeId = 'browser' | 'dawn';
 
 export interface PipelineEvidenceObservation {
@@ -296,8 +333,8 @@ export interface CrossRuntimeAttachmentReport {
   readonly capabilityStatus: 'supported';
   readonly executionStatus: 'complete' | 'partial';
   readonly verdict: 'passed' | 'failed';
-  readonly capturedPipelineIds: readonly ('urp' | 'hdrp')[];
-  readonly missingPipelineIds: readonly ('urp' | 'hdrp')[];
+  readonly capturedPipelineIds: readonly 'standard'[];
+  readonly missingPipelineIds: readonly 'standard'[];
 }
 
 export interface CrossRuntimeCaseReport {

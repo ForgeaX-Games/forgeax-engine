@@ -1,15 +1,32 @@
 import type {
   FrameObservationRequest,
   FrameReceipt,
+  RenderError as PublicRenderError,
+  SunCardinalityError as PublicSunCardinalityError,
+  ReflectionProbeInspection,
+  ReflectionProbeSelectionInspection,
   RendererState,
   RenderFrameInput,
   RenderInspection,
+  RenderIntentInvalidDetail,
   RenderWorldLease,
+  SsrSpatialInspection,
 } from '@forgeax/engine-render';
-import { Camera, type Tonemap, visibilityStateFromU32 } from '@forgeax/engine-render';
+import {
+  ANTIALIAS_TAA,
+  Atmosphere,
+  Camera,
+  Fog,
+  type Tonemap,
+  visibilityStateFromU32,
+} from '@forgeax/engine-render';
 import { GlyphText, Tilemap } from '@forgeax/engine-render/authoring';
+import { expectTypeOf } from 'vitest';
 
 void Camera;
+void Atmosphere;
+void Fog;
+void ANTIALIAS_TAA;
 void visibilityStateFromU32(0);
 void GlyphText;
 void Tilemap;
@@ -42,6 +59,20 @@ const alive: RendererState = 'alive';
 void alive;
 
 declare const inspection: RenderInspection;
+const reflectionInspection: ReflectionProbeInspection = inspection.reflectionProbes;
+const reflectionSelection: ReflectionProbeSelectionInspection = reflectionInspection.selection;
+void reflectionSelection;
+const ssrInspection: SsrSpatialInspection = inspection.ssr;
+void ssrInspection;
+type IntentError = Extract<PublicRenderError, { readonly code: 'render-intent-invalid' }>;
+expectTypeOf<IntentError['detail']>().toEqualTypeOf<RenderIntentInvalidDetail>();
+type PublicSunCardinalityCode = Extract<PublicRenderError['code'], 'sun-cardinality'>;
+expectTypeOf<PublicSunCardinalityCode>().toEqualTypeOf<'sun-cardinality'>();
+expectTypeOf<PublicSunCardinalityError['code']>().toEqualTypeOf<'sun-cardinality'>();
+expectTypeOf<PublicSunCardinalityError['detail']>().toEqualTypeOf<{
+  readonly field: 'sun';
+  readonly value: number;
+}>();
 const backendKind: RenderInspection['capabilities']['backendKind'] =
   inspection.capabilities.backendKind;
 void backendKind;
@@ -80,6 +111,10 @@ type _ForbiddenRendererIdentity = Extract<
 >;
 const noLegacyRendererIdentity: never = null as unknown as _ForbiddenRendererIdentity;
 void noLegacyRendererIdentity;
+
+declare const cameraData: import('@forgeax/engine-render').CameraData;
+const historyVersion: number = cameraData.historyVersion;
+void historyVersion;
 
 // The host assembly factory belongs to engine-runtime, not the render barrel.
 // @ts-expect-error createRenderer is not a public render export

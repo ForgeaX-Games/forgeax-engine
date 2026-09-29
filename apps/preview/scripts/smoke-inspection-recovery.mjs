@@ -30,7 +30,7 @@ const browser = await chromium.launch({
     '--enable-unsafe-webgpu',
     '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
     '--use-vulkan=swiftshader',
-    '--disable-vulkan-surface',
+    '--use-angle=swiftshader',
     '--ignore-gpu-blocklist',
     '--disable-gpu-driver-bug-workarounds',
     '--disable-dawn-features=disallow_unsafe_apis',
@@ -89,7 +89,7 @@ try {
   const before = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
   if (!before.ok || before.value.state.phase !== 'Play') throw new Error(`baseline projection failed: ${JSON.stringify(before)}`);
   const hudTargetStatus = await page.evaluate(() => {
-    const host = document.querySelector('[data-ui-asset="019f8354-6386-4386-849d-f2ab4b96229c"]');
+    const host = document.querySelector('[data-ui-asset="9e976cdd-1923-57d9-b08c-4ab0bd18a16b"]');
     return host?.shadowRoot?.querySelector('[data-ui-slot="target-status"]')?.textContent ?? null;
   });
   if (hudTargetStatus !== 'TARGET · RedBox · 100/100 HP · +10') {
@@ -186,7 +186,7 @@ try {
   if (
     vfxBefore?.available !== true ||
     vfxBefore.mode !== 'hit' ||
-    vfxBefore.guid !== '019e9c00-0000-7000-8000-000000000010' ||
+    vfxBefore.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' ||
     vfxBefore.emitterCount !== 2 ||
     vfxBefore.emitterStatuses.some((status) => status !== 'ready') ||
     vfxBefore.errorCode !== null
@@ -221,7 +221,7 @@ try {
     !vfxChargeTrigger.ok ||
     !afterVfxCharge.ok ||
     afterVfxCharge.value.vfxHit?.mode !== 'charge' ||
-    afterVfxCharge.value.vfxHit?.guid !== '019e9c00-0000-7000-8000-000000000020' ||
+    afterVfxCharge.value.vfxHit?.guid !== 'e696463c-b254-5efb-95df-5a44ebe3b508' ||
     afterVfxCharge.value.vfxHit?.playing !== true ||
     afterVfxCharge.value.vfxHit?.seed !== 2 ||
     afterVfxCharge.value.vfxHit?.triggers !== 2 ||
@@ -244,7 +244,7 @@ try {
     !vfxHitAfterCharge.ok ||
     !afterVfxHitAfterCharge.ok ||
     afterVfxHitAfterCharge.value.vfxHit?.mode !== 'hit' ||
-    afterVfxHitAfterCharge.value.vfxHit?.guid !== '019e9c00-0000-7000-8000-000000000010' ||
+    afterVfxHitAfterCharge.value.vfxHit?.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' ||
     afterVfxHitAfterCharge.value.vfxHit?.seed !== 3 ||
     afterVfxHitAfterCharge.value.vfxHit?.triggers !== 3 ||
     afterVfxHitAfterCharge.value.vfxHit?.emitterStatuses.some((status) => status !== 'ready') ||
@@ -510,7 +510,7 @@ try {
     || afterReset.value.worldScoreText?.fontSource !== 'legacy-pack'
     || afterReset.value.worldScoreText?.toggles !== 0
     || afterReset.value.vfxHit?.mode !== 'hit'
-    || afterReset.value.vfxHit?.guid !== '019e9c00-0000-7000-8000-000000000010'
+    || afterReset.value.vfxHit?.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9'
     || afterReset.value.vfxHit?.playing !== false
     || afterReset.value.vfxHit?.seed !== 0
     || afterReset.value.vfxHit?.triggers !== 0

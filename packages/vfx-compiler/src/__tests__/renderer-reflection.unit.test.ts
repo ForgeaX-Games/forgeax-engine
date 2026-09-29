@@ -4,7 +4,7 @@ import { reflectVfxRenderer } from '../reflection.js';
 describe('Batch B renderer reflection', () => {
   it('derives topology and independent bounded output metadata', () => {
     const reflected = reflectVfxRenderer([
-      { kind: 'billboard', material: 'vfx', sorting: 'back-to-front' },
+      { kind: 'billboard', material: 'vfx', sorting: 'view-depth' },
       { kind: 'ribbon', material: 'vfx', stripKey: 'alive-index', capacity: 32 },
       { kind: 'trail', material: 'vfx', historyLength: 8, capacity: 32 },
       { kind: 'beam', material: 'vfx', endpointField: 'velocity', capacity: 16 },

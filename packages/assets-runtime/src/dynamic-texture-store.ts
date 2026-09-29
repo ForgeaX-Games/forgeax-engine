@@ -1,34 +1,9 @@
-// @forgeax/engine-assets-runtime — DynamicTextureStore: transient per-frame GPU
-// textures for video sources (feat-20260623-world-space-video-asset M4 / w15).
-//
-// D-3: video frames are re-uploaded every frame — the opposite of the static
-// "upload once / cache forever" semantics GpuResourceStore.ensureResident
-// implements. Routing video through ensureResident would either poison its
-// permanent cache (AC-08) or crash it (its `switch (pod.kind)` has no `video`
-// arm). So video gets its OWN store with a transient lifecycle, exactly the way
-// cube-texture upload is an eager independent path that never enters the
-// ensureResident switch (research Finding 7 precedent).
-//
-// This store does NOT import GpuResourceStore and accepts NO static texture
-// handle — it is keyed solely by the VideoAsset clip handle. Each key owns a
-// single GPUTexture sized to the source video; the texture is recreated only
-// when the source dimensions change (a steady-size clip allocates once and is
-// re-written in place every frame via copyExternalImageToTexture). The view is
-// re-fetched after each upload so the bind group always samples the latest
-// frame.
-//
-// Charter P3: every failure returns a structured Result (never throws for an
-// expected GPU failure); the per-frame caller (record stage videoTextureView)
-// fires the RhiError on the engine error channel and falls back to the default
-// view for that frame.
-
 import type { Result, RhiDevice, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
 import type { Handle } from '@forgeax/engine-types';
-import { handleSlot } from '@forgeax/engine-types';
 
 /**
- * The host-owned external image the engine copies a video frame from
+ * The host-owned external image the engine copies an image from
  * (HTMLVideoElement / VideoFrame / ImageBitmap / canvas). Mirrors the `source`
  * member of the WebGPU `GPUCopyExternalImageSourceInfo` the RHI
  * `copyExternalImageToTexture` consumes; aliased here so the store does not pull
@@ -37,17 +12,17 @@ import { handleSlot } from '@forgeax/engine-types';
 export type CopyExternalImageSource = GPUCopyExternalImageSourceInfo['source'];
 
 /**
- * GPUTextureUsage bits a video destination texture needs: COPY_DST (the
+ * GPUTextureUsage bits an external-image destination texture needs: COPY_DST (the
  * copyExternalImageToTexture write target), TEXTURE_BINDING (sampled in the
  * material bind group), and RENDER_ATTACHMENT (required by the WebGPU spec for
  * a copyExternalImageToTexture destination). Mirrors the literals
  * gpu-resource-store.ts uses for its upload textures (no shared const exists to
  * import without coupling the two stores — D-3 keeps them independent).
  */
-const VIDEO_TEXTURE_USAGE = 0x2 | 0x4 | 0x10;
+const DYNAMIC_TEXTURE_USAGE = 0x2 | 0x4 | 0x10;
 
-/** rgba8unorm-srgb: a video frame decodes to sRGB; sampling returns linear. */
-const VIDEO_TEXTURE_FORMAT = 'rgba8unorm-srgb' as const;
+/** rgba8unorm-srgb: Canvas and decoded video color are sRGB; sampling returns linear. */
+const DYNAMIC_TEXTURE_FORMAT = 'rgba8unorm-srgb' as const;
 
 /**
  * The minimal RHI device surface DynamicTextureStore needs. Declared structurally
@@ -61,7 +36,7 @@ export interface DynamicTextureDevice {
       readonly height: number;
       readonly depthOrArrayLayers: number;
     };
-    readonly format: typeof VIDEO_TEXTURE_FORMAT;
+    readonly format: typeof DYNAMIC_TEXTURE_FORMAT;
     readonly usage: number;
     readonly label?: string;
   }): Result<Texture, RhiError>;
@@ -116,21 +91,25 @@ export function adaptDynamicTextureDevice(device: RhiDevice): DynamicTextureDevi
   };
 }
 
+type DynamicTextureKey = Handle<'VideoAsset', 'shared'> | object;
+
 interface TransientEntry {
   texture: Texture;
   view: TextureView;
   width: number;
   height: number;
+  version?: number | undefined;
+  unsubscribe?: (() => void) | undefined;
 }
 
 /**
- * Transient per-frame texture store for video sources. Independent of
+ * Transient texture store for video frames and versioned Canvas sources. Independent of
  * GpuResourceStore: it neither imports nor reaches into the static residency
  * cache (AC-08 / D-3).
  */
 export class DynamicTextureStore {
   private device: DynamicTextureDevice | undefined = undefined;
-  private readonly entries = new Map<number, TransientEntry>();
+  private readonly entries = new Map<DynamicTextureKey, TransientEntry>();
 
   /**
    * Wire the GPU device the store uploads through. Called once after the
@@ -146,8 +125,8 @@ export class DynamicTextureStore {
   }
 
   /**
-   * Upload one video frame for `clip` from the host-owned source image
-   * (HTMLVideoElement / VideoFrame / ImageBitmap), (re)allocating the transient
+   * Upload an image for `key` from the caller-owned source image
+   * (HTMLVideoElement / VideoFrame / ImageBitmap / Canvas), (re)allocating the transient
    * texture when its size changes, and return the current-frame view to bind.
    *
    * Returns `undefined` (not an error) when the device is not yet wired or the
@@ -156,26 +135,52 @@ export class DynamicTextureStore {
    * device rejects the allocation or the copy (charter P3).
    */
   uploadFrame(
-    clip: Handle<'VideoAsset', 'shared'>,
+    key: DynamicTextureKey,
     source: CopyExternalImageSource,
     width: number,
     height: number,
+    options?: {
+      readonly version?: number | undefined;
+      readonly signal?: AbortSignal | undefined;
+      readonly flipY?: boolean;
+    },
   ): Result<TextureView, RhiError> | undefined {
     const device = this.device;
     if (device === undefined) return undefined;
-    if (width <= 0 || height <= 0) return undefined;
+    if (options?.signal?.aborted) {
+      this.release(key);
+      return undefined;
+    }
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0)
+      return undefined;
 
-    const id = handleSlot(clip);
-    const ensured = this.ensureEntry(device, id, width, height);
+    const previous = this.entries.get(key);
+    const sameSize = previous?.width === width && previous.height === height;
+    if (sameSize && options?.version !== undefined && previous.version === options.version)
+      return ok(previous.view);
+    const ensured = sameSize ? ok(previous) : this.createEntry(device, width, height);
     if (!ensured.ok) return ensured;
     const entry = ensured.value;
-
-    const copyRes = device.queue.copyExternalImageToTexture(
-      { source, flipY: true },
+    const copied = device.queue.copyExternalImageToTexture(
+      { source, flipY: options?.flipY ?? true },
       { texture: entry.texture },
       { width, height, depthOrArrayLayers: 1 },
     );
-    if (!copyRes.ok) return copyRes;
+    if (!copied.ok) {
+      if (entry !== previous) device.destroyTexture(entry.texture);
+      return copied;
+    }
+    entry.version = options?.version;
+    if (entry !== previous) {
+      this.release(key);
+      this.entries.set(key, entry);
+      const signal = options?.signal;
+      if (signal !== undefined) {
+        const release = () => this.release(key);
+        signal.addEventListener('abort', release, { once: true });
+        entry.unsubscribe = () => signal.removeEventListener('abort', release);
+      }
+    }
     return ok(entry.view);
   }
 
@@ -184,51 +189,41 @@ export class DynamicTextureStore {
    * else undefined. The record stage reads this when assembling the bind group
    * (a frame that has not uploaded yet falls back to the default view).
    */
-  getView(clip: Handle<'VideoAsset', 'shared'>): TextureView | undefined {
-    return this.entries.get(handleSlot(clip))?.view;
+  getView(key: DynamicTextureKey): TextureView | undefined {
+    return this.entries.get(key)?.view;
   }
 
-  /** Destroy every transient texture + drop the map (renderer teardown). */
+  /** Release one source without disturbing other videos or canvases. */
+  release(key: DynamicTextureKey): void {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return;
+    entry.unsubscribe?.();
+    this.device?.destroyTexture(entry.texture);
+    this.entries.delete(key);
+  }
+
+  /** Renderer teardown or device replacement invalidates all uploaded versions. */
   destroyAll(): void {
-    const device = this.device;
-    for (const entry of this.entries.values()) {
-      device?.destroyTexture(entry.texture);
-    }
-    this.entries.clear();
+    for (const key of this.entries.keys()) this.release(key);
   }
 
-  /**
-   * Get the entry for `id`, (re)allocating its texture + view when absent or
-   * when the source dimensions changed. A same-size re-upload reuses the
-   * existing texture (allocate-once for a steady clip; the per-frame cost is the
-   * copyExternalImageToTexture write, not a texture create).
-   */
-  private ensureEntry(
+  private createEntry(
     device: DynamicTextureDevice,
-    id: number,
     width: number,
     height: number,
   ): Result<TransientEntry, RhiError> {
-    const existing = this.entries.get(id);
-    if (existing !== undefined && existing.width === width && existing.height === height) {
-      return ok(existing);
-    }
-    if (existing !== undefined) device.destroyTexture(existing.texture);
-
-    const texRes = device.createTexture({
+    const texture = device.createTexture({
       size: { width, height, depthOrArrayLayers: 1 },
-      format: VIDEO_TEXTURE_FORMAT,
-      usage: VIDEO_TEXTURE_USAGE,
-      label: `video-transient-${id}`,
+      format: DYNAMIC_TEXTURE_FORMAT,
+      usage: DYNAMIC_TEXTURE_USAGE,
+      label: 'dynamic-texture',
     });
-    if (!texRes.ok) return texRes;
-    const viewRes = device.createTextureView(texRes.value, {});
-    if (!viewRes.ok) {
-      device.destroyTexture(texRes.value);
-      return viewRes;
+    if (!texture.ok) return texture;
+    const view = device.createTextureView(texture.value, {});
+    if (!view.ok) {
+      device.destroyTexture(texture.value);
+      return view;
     }
-    const entry: TransientEntry = { texture: texRes.value, view: viewRes.value, width, height };
-    this.entries.set(id, entry);
-    return ok(entry);
+    return ok({ texture: texture.value, view: view.value, width, height });
   }
 }

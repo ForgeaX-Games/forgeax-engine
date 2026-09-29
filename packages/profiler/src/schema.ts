@@ -1,7 +1,6 @@
-// Ajv ships this entry as CommonJS. Use the named constructor so Vite's
-// native ESM dev server does not assume a synthetic default export when the
-// profiler is imported by the browser runtime.
-import { Ajv2020 } from 'ajv/dist/2020.js';
+import * as AjvCoreModule from 'ajv/dist/core.js';
+import * as AddMetaSchema2020Module from 'ajv/dist/refs/json-schema-2020-12/index.js';
+import * as Draft2020Module from 'ajv/dist/vocabularies/draft2020.js';
 import schemaDocument from '../schema/profile-capture.schema.json' with { type: 'json' };
 import type { ProfileCapture, ProfileRecord } from './generated/profile-capture.js';
 import type { ProfileResult } from './types.js';
@@ -13,7 +12,44 @@ export type ProfileArtifactError = {
   readonly detail: { readonly path: string; readonly message: string };
 };
 
-const validator = new Ajv2020({ allErrors: true, strict: true }).compile(schemaDocument);
+// Ajv publishes this entry as CommonJS. Native Node ESM exposes the CJS module
+// object as `default`, while Vite's browser interop exposes the constructor
+// directly. Normalize that boundary once so both config-time and browser-time
+// imports instantiate the same constructor.
+function resolveCommonJsDefault<T>(
+  moduleDefault: unknown,
+  isExpected: (value: unknown) => value is T,
+): T {
+  if (isExpected(moduleDefault)) return moduleDefault;
+  const nestedDefault = (moduleDefault as { default?: unknown } | null)?.default;
+  if (isExpected(nestedDefault)) return nestedDefault;
+  throw new TypeError('Ajv CommonJS export shape is unsupported');
+}
+
+const AjvCore = resolveCommonJsDefault(
+  AjvCoreModule.default,
+  (value): value is typeof AjvCoreModule.default => typeof value === 'function',
+);
+const addMetaSchema2020 = resolveCommonJsDefault(
+  AddMetaSchema2020Module.default,
+  (value): value is typeof AddMetaSchema2020Module.default => typeof value === 'function',
+);
+const draft2020 = resolveCommonJsDefault(
+  Draft2020Module.default,
+  (value): value is typeof Draft2020Module.default => Array.isArray(value),
+);
+
+const ajv = new AjvCore({
+  allErrors: true,
+  dynamicRef: true,
+  meta: false,
+  next: true,
+  strict: true,
+  unevaluated: true,
+});
+for (const vocabulary of draft2020) ajv.addVocabulary(vocabulary);
+addMetaSchema2020.call(ajv, false);
+const validator = ajv.compile(schemaDocument);
 
 function error(
   code: ProfileArtifactError['code'],

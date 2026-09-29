@@ -113,3 +113,76 @@ describe('DynamicTextureStore', () => {
     expect(res?.ok).toBe(false);
   });
 });
+
+describe('versioned Canvas uploads', () => {
+  it('uploads initially and when dirty, restores on replacement, and releases on disposal', () => {
+    const counters = { created: 0, destroyed: 0, copies: 0 };
+    const store = new DynamicTextureStore();
+    store.configureGpuDevice(makeDevice(counters));
+    const key = {},
+      lifetime = new AbortController();
+    const upload = (version: number) =>
+      store.uploadFrame(key, SOURCE, 8, 8, { version, signal: lifetime.signal });
+    expect(upload(1)?.ok).toBe(true);
+    expect(upload(1)?.ok).toBe(true);
+    expect(counters.copies).toBe(1);
+    expect(upload(2)?.ok).toBe(true);
+    expect(counters).toEqual({ created: 1, destroyed: 0, copies: 2 });
+    store.configureGpuDevice(makeDevice(counters));
+    expect(upload(2)?.ok).toBe(true);
+    expect(counters).toEqual({ created: 2, destroyed: 1, copies: 3 });
+    lifetime.abort();
+    expect(store.getView(key)).toBeUndefined();
+    expect(upload(3)).toBeUndefined();
+    expect(counters.destroyed).toBe(2);
+    store.destroyAll();
+    expect(counters.destroyed).toBe(2);
+  });
+
+  it.each([
+    'allocation',
+    'view',
+    'copy',
+  ])('keeps the old view when resized %s fails and retries the same version', (failure) => {
+    const counters = { created: 0, destroyed: 0, copies: 0 };
+    const device = makeDevice(counters);
+    const create = device.createTexture.bind(device),
+      view = device.createTextureView.bind(device),
+      copy = device.queue.copyExternalImageToTexture.bind(device.queue);
+    let reject = false;
+    const failed = { ok: false, error: { code: 'rhi-not-available' } } as const;
+    device.createTexture = (desc) =>
+      reject && failure === 'allocation' ? (failed as never) : create(desc);
+    device.createTextureView = (texture, desc) =>
+      reject && failure === 'view' ? (failed as never) : view(texture, desc);
+    device.queue.copyExternalImageToTexture = (source, target, size) =>
+      reject && failure === 'copy' ? (failed as never) : copy(source, target, size);
+    const store = new DynamicTextureStore(),
+      key = {};
+    store.configureGpuDevice(device);
+    const first = store.uploadFrame(key, SOURCE, 8, 8, { version: 1 });
+    if (!first?.ok) throw new Error('first upload failed');
+    reject = true;
+    expect(store.uploadFrame(key, SOURCE, 16, 16, { version: 2 })?.ok).toBe(false);
+    expect(store.getView(key)).toBe(first.value);
+    expect(counters.destroyed).toBe(failure === 'allocation' ? 0 : 1);
+    reject = false;
+    expect(store.uploadFrame(key, SOURCE, 16, 16, { version: 2 })?.ok).toBe(true);
+    expect(store.getView(key)).not.toBe(first.value);
+    store.destroyAll();
+    expect(counters.created).toBe(counters.destroyed);
+  });
+
+  it('never publishes an uninitialized view after an initial copy failure', () => {
+    const counters = { created: 0, destroyed: 0, copies: 0 },
+      device = makeDevice(counters);
+    device.queue.copyExternalImageToTexture = () =>
+      ({ ok: false, error: { code: 'rhi-not-available' } }) as never;
+    const store = new DynamicTextureStore(),
+      key = {};
+    store.configureGpuDevice(device);
+    expect(store.uploadFrame(key, SOURCE, 8, 8, { version: 1 })?.ok).toBe(false);
+    expect(store.getView(key)).toBeUndefined();
+    expect(counters.created).toBe(counters.destroyed);
+  });
+});

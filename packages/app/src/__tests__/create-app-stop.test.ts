@@ -34,6 +34,7 @@ function makeRendererStubForStop(): StubRenderer {
   const releaseSurfaceSpy = vi.fn(() => ok(undefined));
   const restoreSurfaceSpy = vi.fn(() => ok(undefined));
   const renderer = {
+    state: () => 'alive' as const,
     backend: 'webgpu' as const,
     ready,
     draw(): { ok: true; value: undefined } {
@@ -53,6 +54,32 @@ function makeRendererStubForStop(): StubRenderer {
     dispose: disposeSpy,
   } as unknown as Renderer;
   return { renderer, disposeSpy, releaseSurfaceSpy, restoreSurfaceSpy };
+}
+
+function makeRendererStubWithPendingReceipt(): {
+  readonly renderer: Renderer;
+  readonly disposeSpy: ReturnType<typeof vi.fn>;
+  readonly settle: () => void;
+} {
+  let settle!: () => void;
+  const completed = new Promise<{ ok: true; value: undefined }>((resolve) => {
+    settle = () => resolve({ ok: true, value: undefined });
+  });
+  const disposeSpy = vi.fn<() => void>();
+  const renderer = {
+    state: () => 'alive' as const,
+    backend: 'webgpu' as const,
+    ready: Promise.resolve({ ok: true, value: undefined }),
+    draw: vi.fn(() => ({
+      ok: true as const,
+      value: { frameId: 1, deviceGeneration: 0, completed },
+    })),
+    attach: () => ({ ok: true as const, value: { dispose: () => {} } }),
+    detachWorld: () => {},
+    subscribe: () => () => {},
+    dispose: disposeSpy,
+  } as unknown as Renderer;
+  return { renderer, disposeSpy, settle };
 }
 
 describe('create-app-stop.test.ts', () => {
@@ -137,6 +164,37 @@ describe('create-app-stop.test.ts', () => {
 
       app.stop();
       expect(disposeSpy).not.toHaveBeenCalled();
+    });
+
+    it('dispose() drains pending frame receipts before releasing the Renderer fiber', async () => {
+      const { renderer, disposeSpy, settle } = makeRendererStubWithPendingReceipt();
+      const result = await createApp({
+        renderer,
+        world: new World(),
+        plugins: [
+          {
+            name: 'test-renderer-owner',
+            apply(ctx) {
+              ctx.effect(() => () => renderer.dispose(), 'test/renderer');
+            },
+          },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const app = result.value;
+
+      expect(app.start().ok).toBe(true);
+      expect(app.pause().ok).toBe(true);
+      expect(app.stepFrame(1 / 60).ok).toBe(true);
+
+      const disposing = app.dispose();
+      await Promise.resolve();
+      expect(disposeSpy).not.toHaveBeenCalled();
+
+      settle();
+      await disposing;
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -392,8 +450,9 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
-      // biome-ignore lint/suspicious/noExplicitAny: vitest mock for AudioContext constructor
-      globalThis.AudioContext = vi.fn(() => makeMockAudioContextForApp()) as any;
+      globalThis.AudioContext = vi.fn(function AudioContextMock() {
+        return makeMockAudioContextForApp();
+      }) as unknown as typeof AudioContext;
 
       const rafStub = installRafStub();
 
@@ -458,6 +517,7 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         expect(rafStub.tickFn).not.toBeNull();
         rafStub.tickFn?.();
 
+        expect(world.execution.health).toBe('healthy');
         expect(playSpy).toHaveBeenCalledTimes(1);
 
         app.stop();
@@ -477,8 +537,9 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
-      // biome-ignore lint/suspicious/noExplicitAny: vitest mock for AudioContext constructor
-      globalThis.AudioContext = vi.fn(() => makeMockAudioContextForApp()) as any;
+      globalThis.AudioContext = vi.fn(function AudioContextMock() {
+        return makeMockAudioContextForApp();
+      }) as unknown as typeof AudioContext;
 
       const rafStub = installRafStub();
 
@@ -543,8 +604,9 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
-      // biome-ignore lint/suspicious/noExplicitAny: vitest mock for AudioContext constructor
-      globalThis.AudioContext = vi.fn(() => makeMockAudioContextForApp()) as any;
+      globalThis.AudioContext = vi.fn(function AudioContextMock() {
+        return makeMockAudioContextForApp();
+      }) as unknown as typeof AudioContext;
 
       const rafStub = installRafStub();
 

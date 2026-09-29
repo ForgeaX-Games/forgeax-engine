@@ -24,6 +24,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
@@ -168,7 +169,8 @@ const { buildEngineShaderManifest } = await import(
   '@forgeax/engine-vite-plugin-shader'
 );
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -201,12 +203,11 @@ const MARBLE_GUID = '019e3969-1d46-7933-b14d-4faee5635ad6';
 function makeTexAsset(decoded) {
   return {
     kind: 'texture',
-    width: decoded.width,
-    height: decoded.height,
+    shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
     format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
     data: decoded.bytes,
     colorSpace: decoded.colorSpace,
-    mipmap: decoded.mipmap,
+    mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
 }
 
@@ -298,8 +299,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -420,6 +421,8 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+emitSmokeReceipt('app-learn-render-4-advanced-opengl-4-face-culling/smoke', framesObserved);
 
 console.log(
   `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, interior wall sites above threshold=${meshedCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,

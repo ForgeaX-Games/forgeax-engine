@@ -160,6 +160,34 @@ describe('validateMeshPayload', () => {
       ),
     ).toBeNull();
   });
+
+  it('uses the geometry projection for optional vertex colors', () => {
+    const attributes = {
+      position: new Float32Array(9),
+      normal: new Float32Array(9),
+      uv: new Float32Array(6),
+      tangent: new Float32Array(12),
+      color: new Float32Array(12),
+    };
+    expect(
+      validateMeshPayload(
+        mesh({
+          vertices: new Float32Array(3 * 16),
+          indices: Uint16Array.of(0, 1, 2),
+          attributes,
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 3,
+              vertexCount: 3,
+              topology: 'triangle-list',
+              materialSlot: 0,
+            },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
 });
 
 function tileset(over: Partial<TilesetAsset>): TilesetAsset {

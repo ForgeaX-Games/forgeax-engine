@@ -1,7 +1,13 @@
 import { err, ok, type Result } from '../result.js';
-import type { MaterialAsset, MaterialParameter, MaterialPass, MaterialValue } from './asset.js';
+import {
+  type MaterialAsset,
+  type MaterialParameter,
+  type MaterialValue,
+  materialChildForbiddenFields,
+} from './asset.js';
 import type { MaterialError } from './errors.js';
 import { createMaterialError } from './errors.js';
+import { materialPhysicalContractResult } from './standard-layer-plan.js';
 
 export type MaterialTable = Readonly<Record<string, MaterialAsset>>;
 
@@ -11,10 +17,18 @@ export interface ResolvedMaterial {
   readonly asset: MaterialAsset;
 }
 
+function assetGuidBytesToDashForm(value: Uint8Array): string {
+  const hex = Array.from(value, (byte) => byte.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex
+    .slice(6, 8)
+    .join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
+}
+
 export function materialGuidText(value: string | Uint8Array): string {
-  return typeof value === 'string'
-    ? value
-    : Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  // Pack producers and Catalog rows use RFC 4122 dashed GUID text. Keep the
+  // same canonical spelling when a typed AssetGuid crosses into the shared
+  // resolver; otherwise a child parent reference cannot address its root row.
+  return typeof value === 'string' ? value : assetGuidBytesToDashForm(value);
 }
 
 function valueType(value: MaterialValue): string {
@@ -41,6 +55,7 @@ function parameterTypeMatches(parameter: MaterialParameter, value: MaterialValue
     case 'color':
       return Array.isArray(value) && value.length === 4;
     case 'texture':
+    case 'texture_cube':
       // Runtime asset handles are branded numbers at the type level. The
       // brand is erased before a material reaches the resolver, so numeric
       // handles must remain valid texture values alongside structured
@@ -100,20 +115,6 @@ function validateValues(
   return ok(true);
 }
 
-function mergePasses(
-  inherited: readonly MaterialPass[] | undefined,
-  override: readonly MaterialPass[] | undefined,
-): readonly MaterialPass[] | undefined {
-  if (inherited === undefined && override === undefined) return undefined;
-  const passes = [...(inherited ?? [])];
-  for (const next of override ?? []) {
-    const index = passes.findIndex((current) => current.name === next.name);
-    if (index === -1) passes.push(next);
-    else passes[index] = next;
-  }
-  return passes;
-}
-
 function mergeMaterial(parent: MaterialAsset, child: MaterialAsset): MaterialAsset {
   const values: Record<string, MaterialValue> = {};
   for (const [name, value] of Object.entries(parent.values ?? {})) {
@@ -123,18 +124,39 @@ function mergeMaterial(parent: MaterialAsset, child: MaterialAsset): MaterialAss
     if (value === null) delete values[name];
     else values[name] = value;
   }
-  const passes = mergePasses(parent.passes, child.passes);
+  const particleInputs = parent.particleInputs ?? child.particleInputs;
   return {
     kind: 'material',
-    ...((child.colorSpace ?? parent.colorSpace) !== undefined
-      ? { colorSpace: child.colorSpace ?? parent.colorSpace }
-      : {}),
-    ...(passes !== undefined && passes.length > 0
-      ? { passes: passes as NonNullable<MaterialAsset['passes']> }
-      : {}),
+    ...(parent.colorSpace !== undefined ? { colorSpace: parent.colorSpace } : {}),
+    ...(parent.passes !== undefined && parent.passes.length > 0 ? { passes: parent.passes } : {}),
     ...(parent.parameters !== undefined ? { parameters: parent.parameters } : {}),
+    ...(particleInputs === undefined ? {} : { particleInputs }),
+    ...(parent.surface === undefined ? {} : { surface: parent.surface }),
     ...(Object.keys(values).length > 0 ? { values } : {}),
   };
+}
+
+function validateChildParameters(
+  material: string,
+  parent: readonly MaterialParameter[] | undefined,
+  child: readonly MaterialParameter[] | undefined,
+): Result<true, MaterialError> {
+  if (child === undefined) return ok(true);
+  const parentByName = new Map((parent ?? []).map((parameter) => [parameter.name, parameter]));
+  const extras = child.filter((parameter) => !parentByName.has(parameter.name)).map((p) => p.name);
+  const conflicts = child
+    .filter((parameter) => parentByName.get(parameter.name)?.type !== parameter.type)
+    .map((parameter) => parameter.name);
+  if (extras.length === 0 && conflicts.length === 0) return ok(true);
+  return err(
+    materialPhysicalContractResult({
+      material,
+      layer: 'root',
+      ...(extras.length === 0 ? {} : { missing: extras }),
+      ...(conflicts.length === 0 ? {} : { conflicting: conflicts }),
+      reason: 'child-parameter',
+    }),
+  );
 }
 
 function resolveChain(
@@ -182,8 +204,27 @@ function resolveChain(
     return ok({ leaf, chain: [id], asset: { ...current, values } });
   }
 
+  const forbidden = materialChildForbiddenFields(current);
+  if (forbidden.length > 0) {
+    return err(
+      createMaterialError('material-child-contract-invalid', {
+        code: 'material-child-contract-invalid',
+        material: id,
+        parent,
+        forbidden,
+        action: 'remove-forbidden-fields',
+      }),
+    );
+  }
+
   const parentResult = resolveChain(parent, leaf, table, [...stack, id]);
   if (!parentResult.ok) return parentResult;
+  const parameterContract = validateChildParameters(
+    id,
+    parentResult.value.asset.parameters,
+    current.parameters,
+  );
+  if (!parameterContract.ok) return parameterContract;
   const valid = validateValues(id, current.values ?? {}, parentResult.value.asset.parameters);
   if (!valid.ok) return valid;
   const merged = mergeMaterial(parentResult.value.asset, current);

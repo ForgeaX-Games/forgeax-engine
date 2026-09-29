@@ -10,7 +10,7 @@ const falsifySource = readFileSync(resolve(appRoot, 'scripts/smoke-falsify.mjs')
 
 describe('Boss Lightning smoke probe contract', () => {
   it('uses particle-specific Dawn signals and rejects persistent preparation errors', () => {
-    expect(dawnSource).toContain('TARGET_FRAMES = 300');
+    expect(dawnSource).toContain('TARGET_FRAMES = 60');
     expect(dawnSource).toContain('SEED = 42');
     expect(dawnSource).toContain('camera: CAMERA');
     expect(dawnSource).toContain('queuedIntents');

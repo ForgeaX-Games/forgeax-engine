@@ -1,8 +1,16 @@
 // fbx-importer.ts — TS wrapper around the ufbx WASM parser.
 
-import type { ImportContext, Importer, ImportResult } from '@forgeax/engine-types';
+import {
+  type ImportContext,
+  type Importer,
+  type ImportResult,
+  readConservativeAnimatedBounds,
+  type SkeletonPod,
+} from '@forgeax/engine-types';
+import { deriveFbxAnimatedBounds } from './animated-bounds';
 import { fbxErr } from './errors.js';
 import { initFbxWasm, parseFbx } from './index.js';
+import { parseFbxLodGroup } from './lod/parse-lod-group.js';
 import {
   type FbxRawAnimDoc,
   parseAnimationClips,
@@ -10,10 +18,11 @@ import {
 } from './parse-animation-clip.js';
 import { type FbxRawMaterial, parseMaterial } from './parse-material.js';
 import { type FbxRawDocument, type FbxRawMesh, parseMesh } from './parse-mesh.js';
-import { type FbxRawNodes, parseScene } from './parse-scene.js';
+import { type FbxRawLodGroup, type FbxRawNodes, parseScene } from './parse-scene.js';
 import { type FbxRawSkeletonDoc, parseSkeleton } from './parse-skeleton.js';
 import { type FbxRawSkinDoc, parseSkin } from './parse-skin.js';
 import { parseTextures } from './parse-texture.js';
+import { deriveFbxShadowCapsules } from './shadow-capsules';
 import { toAssetPack } from './to-asset-pack.js';
 
 export interface FbxSourceKeyOutput {
@@ -51,6 +60,19 @@ export function deriveFbxSourceKeys(outputs: readonly FbxSourceKeyOutput[]): Fbx
     seen.add(key);
   }
   return { ok: true, keys: keys as string[] };
+}
+
+/**
+ * Apply the explicit sidecar producer row when an FBX source cannot carry
+ * ForgeaX extras. Missing or malformed rows preserve the parsed raw value (or
+ * no bounds), so the renderer never receives a guessed bind-pose AABB.
+ */
+export function applyFbxImportSettingsBounds(
+  skeleton: SkeletonPod,
+  importSettings: Readonly<Record<string, unknown>>,
+): SkeletonPod {
+  const bounds = readConservativeAnimatedBounds(importSettings, 0);
+  return bounds === undefined ? skeleton : { ...skeleton, bounds };
 }
 
 export const fbxImporter: Importer = {
@@ -99,6 +121,18 @@ export const fbxImporter: Importer = {
     const meshes = rawMeshes.map((raw, i) => parseMesh(raw, i));
 
     const scene = parseScene(doc as unknown as FbxRawNodes);
+    const rawLodGroups =
+      (doc as unknown as { lodGroups?: readonly FbxRawLodGroup[] }).lodGroups ?? [];
+    const lodGroups = [];
+    for (const rawGroup of rawLodGroups) {
+      const parsed = parseFbxLodGroup(rawGroup);
+      if (!parsed.ok) {
+        const wrapper = new Error(`${parsed.error.code}: ${parsed.error.expected}`);
+        (wrapper as { cause?: unknown }).cause = parsed.error;
+        throw wrapper;
+      }
+      lodGroups.push(parsed.value);
+    }
 
     const texturesModule = doc as unknown as { textures?: readonly unknown[] };
     const textures = parseTextures({ textures: texturesModule.textures as never });
@@ -110,7 +144,7 @@ export const fbxImporter: Importer = {
         ? materialDocs.map((raw, i) => parseMaterial(raw, i))
         : [parseMaterial({ kind: 'fallback' }, 0)];
 
-    const skeleton = parseSkeleton(doc);
+    const authoredSkeleton = applyFbxImportSettingsBounds(parseSkeleton(doc), ctx.importSettings);
     const skin = parseSkin(doc);
     const animationTargets = resolveAnimationTargetIds(
       (doc as unknown as FbxRawNodes).nodes ?? [],
@@ -124,6 +158,14 @@ export const fbxImporter: Importer = {
       throw wrapper;
     }
     const animationClips = parseAnimationClips(doc);
+    const skeleton = deriveFbxShadowCapsules(
+      deriveFbxAnimatedBounds(authoredSkeleton, doc as typeof doc & FbxRawNodes, animationClips),
+      doc,
+    );
+    const standardMaterialGuid =
+      typeof ctx.importSettings?.standardMaterialGuid === 'string'
+        ? ctx.importSettings.standardMaterialGuid
+        : undefined;
 
     return {
       ok: true,
@@ -137,7 +179,9 @@ export const fbxImporter: Importer = {
           skin,
           animationClips,
           subAssets: ctx.subAssets,
+          ...(standardMaterialGuid === undefined ? {} : { standardMaterialGuid }),
           ...(ctx.sourceOverrides === undefined ? {} : { sourceOverrides: ctx.sourceOverrides }),
+          ...(lodGroups.length === 0 ? {} : { lodGroups }),
         }),
         sourceDependencies: [],
       },

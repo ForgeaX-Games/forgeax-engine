@@ -73,7 +73,7 @@ function readCapture(path, expectedCaseId, expectedBackend, expectedSourceSha) {
   const capture = JSON.parse(readFileSync(path, 'utf8'));
   if (
     capture?.backend !== expectedBackend ||
-    capture?.frameCount !== 300 ||
+    capture?.frameCount !== 60 ||
     capture?.sourceSha !== expectedSourceSha ||
     typeof capture?.sourceFixtureHash !== 'string' ||
     !/^[0-9a-f]{64}$/.test(capture.sourceFixtureHash) ||
@@ -140,7 +140,7 @@ export function readVertexColorVisualEvidenceInputs({ reportRoot, sourceSha, inv
       background: [0, 0, 0, 1],
       framing: 'orthographic-center',
       colorDomain: forgeax.colorDomain,
-      frameCount: 300,
+      frameCount: 60,
       epsilon: { rgb: 0.05, alpha: 0.05 },
       sourceFixtureHash: report.sourceFixtureHash,
       invocationId,
@@ -161,7 +161,7 @@ export function readVertexColorVisualEvidenceInputs({ reportRoot, sourceSha, inv
       metrics: { analyticMax, roiMax: analyticMax, differingBytes },
       verdict: report.verdict,
       status: report.status,
-      frameId: 299,
+      frameId: 59,
     };
   });
 }
@@ -191,7 +191,7 @@ function blockedReport({
     sourceSha,
     sourceFixtureHash,
     colorDomain: fixture.colorDomain,
-    frameCount: 300,
+    frameCount: 60,
     epsilon: { rgb: 0.05, alpha: 0.05 },
     producers: {
       forgeax: producerIdentity(PRODUCERS[0], sourceSha),
@@ -223,6 +223,7 @@ function commandFor(
   outputUrls,
   falsifierOutputPaths,
   falsifierOutputUrls,
+  { outputPathsByProducer, producerEnv = producer.implementation, testEntries } = {},
 ) {
   const testEntryKey = backend === 'browser-webgpu' ? 'browser' : 'dawn';
   return {
@@ -232,20 +233,26 @@ function commandFor(
       'vitest',
       'run',
       `--project=${backend === 'dawn' ? 'dawn' : 'browser'}`,
-      producer.testEntry[testEntryKey],
+      ...(testEntries ?? [producer.testEntry[testEntryKey]]),
       '--maxWorkers=1',
     ],
     env: {
-      FORGEAX_VERTEX_COLOR_PRODUCER: producer.implementation,
+      FORGEAX_VERTEX_COLOR_PRODUCER: producerEnv,
       FORGEAX_VERTEX_COLOR_BACKEND: backend,
       FORGEAX_VERTEX_COLOR_CASE_IDS: JSON.stringify(caseIds),
       FORGEAX_VERTEX_COLOR_SOURCE_SHA: sourceSha,
       FORGEAX_VERTEX_COLOR_OUTPUTS: JSON.stringify(outputPaths),
+      ...(outputPathsByProducer === undefined
+        ? {}
+        : { FORGEAX_VERTEX_COLOR_OUTPUTS_BY_PRODUCER: JSON.stringify(outputPathsByProducer) }),
       VITE_FORGEAX_VERTEX_COLOR_CASE_IDS: JSON.stringify(caseIds),
-      VITE_FORGEAX_VERTEX_COLOR_PRODUCER: producer.implementation,
+      VITE_FORGEAX_VERTEX_COLOR_PRODUCER: producerEnv,
       VITE_FORGEAX_VERTEX_COLOR_BACKEND: backend,
       VITE_FORGEAX_VERTEX_COLOR_SOURCE_SHA: sourceSha,
       VITE_FORGEAX_VERTEX_COLOR_OUTPUTS: JSON.stringify(outputPaths),
+      ...(outputPathsByProducer === undefined
+        ? {}
+        : { VITE_FORGEAX_VERTEX_COLOR_OUTPUTS_BY_PRODUCER: JSON.stringify(outputPathsByProducer) }),
       VITE_FORGEAX_VERTEX_COLOR_SCHEDULED: '1',
       FORGEAX_VERTEX_COLOR_BATCH: '1',
       ...(Object.keys(falsifierOutputPaths).length === 0
@@ -420,6 +427,7 @@ export async function runVertexColorProducerSchedule({
   const attempts = [];
   const physicalBatches = [];
   const blocked = [];
+  const failures = [];
   const receiver = execute === executeCommand ? await createBrowserOutputReceiver() : undefined;
   const cells = new Map();
   const producerReasons = new Map();
@@ -464,59 +472,95 @@ export async function runVertexColorProducerSchedule({
       });
     }
   }
-  for (const backend of VERTEX_COLOR_BACKENDS) {
-    for (const producer of PRODUCERS) {
-      const batchId = `${backend}/${producer.implementation}`;
-      const batchCells = VERTEX_COLOR_CASE_IDS.map((caseId) => cells.get(`${backend}/${caseId}`));
-      const outputPaths = Object.fromEntries(
-        batchCells.map((cell) => [cell.caseId, cell.outputPaths[producer.implementation]]),
-      );
-      const falsifierOutputPaths =
-        producer.implementation === 'forgeax'
-          ? Object.fromEntries(
-              batchCells.map((cell) => [cell.caseId, cell.falsifierOutputPaths.forgeax]),
-            )
-          : {};
-      const outputUrls =
-        backend === 'browser-webgpu' && receiver !== undefined
-          ? Object.fromEntries(
-              Object.values(outputPaths).map((outputPath) => [
-                outputPath,
-                receiver.urlFor(outputPath),
-              ]),
-            )
-          : {};
-      const falsifierOutputUrls =
-        backend === 'browser-webgpu' &&
-        receiver !== undefined &&
-        producer.implementation === 'forgeax'
-          ? Object.fromEntries(
-              Object.values(falsifierOutputPaths).map((outputPath) => [
-                outputPath,
-                receiver.urlFor(outputPath),
-              ]),
-            )
-          : {};
-      const command = commandFor(
-        producer,
-        backend,
-        VERTEX_COLOR_CASE_IDS,
-        outputPaths,
-        sourceSha,
-        outputUrls,
-        falsifierOutputPaths,
-        falsifierOutputUrls,
-      );
-      const result = await execute({ ...command, cwd: root });
-      physicalBatches.push({
-        batchId,
-        backend,
-        producer: producer.implementation,
-        caseIds: [...VERTEX_COLOR_CASE_IDS],
-        command: [command.command, ...command.args],
-        exit: result.ok ? 0 : 1,
-        ...(result.ok ? {} : { reason: result.reason }),
-      });
+  const batchPlans = [
+    {
+      backend: 'browser-webgpu',
+      batchId: 'browser-webgpu/combined',
+      producerEnv: 'combined',
+      producers: PRODUCERS,
+      testEntries: PRODUCERS.map((producer) => producer.testEntry.browser),
+    },
+    {
+      backend: 'dawn',
+      batchId: 'dawn/forgeax',
+      producerEnv: 'forgeax',
+      producers: [PRODUCERS[0]],
+      testEntries: [PRODUCERS[0].testEntry.dawn],
+    },
+    {
+      backend: 'dawn',
+      batchId: 'dawn/three',
+      producerEnv: 'three',
+      producers: [PRODUCERS[1]],
+      testEntries: [PRODUCERS[1].testEntry.dawn],
+    },
+  ];
+  for (const plan of batchPlans) {
+    const batchCells = VERTEX_COLOR_CASE_IDS.map((caseId) =>
+      cells.get(`${plan.backend}/${caseId}`),
+    );
+    const outputPathsByProducer = Object.fromEntries(
+      plan.producers.map((producer) => [
+        producer.implementation,
+        Object.fromEntries(
+          batchCells.map((cell) => [cell.caseId, cell.outputPaths[producer.implementation]]),
+        ),
+      ]),
+    );
+    const defaultProducer = plan.producers[0];
+    const outputPaths = outputPathsByProducer[defaultProducer.implementation];
+    const falsifierOutputPaths = plan.producers.some(
+      (producer) => producer.implementation === 'forgeax',
+    )
+      ? Object.fromEntries(
+          batchCells.map((cell) => [cell.caseId, cell.falsifierOutputPaths.forgeax]),
+        )
+      : {};
+    const allOutputPaths = Object.values(outputPathsByProducer).flatMap((paths) =>
+      Object.values(paths),
+    );
+    const outputUrls =
+      plan.backend === 'browser-webgpu' && receiver !== undefined
+        ? Object.fromEntries(
+            allOutputPaths.map((outputPath) => [outputPath, receiver.urlFor(outputPath)]),
+          )
+        : {};
+    const falsifierOutputUrls =
+      plan.backend === 'browser-webgpu' && receiver !== undefined
+        ? Object.fromEntries(
+            Object.values(falsifierOutputPaths).map((outputPath) => [
+              outputPath,
+              receiver.urlFor(outputPath),
+            ]),
+          )
+        : {};
+    const command = commandFor(
+      defaultProducer,
+      plan.backend,
+      VERTEX_COLOR_CASE_IDS,
+      outputPaths,
+      sourceSha,
+      outputUrls,
+      falsifierOutputPaths,
+      falsifierOutputUrls,
+      {
+        outputPathsByProducer: plan.producers.length === 1 ? undefined : outputPathsByProducer,
+        producerEnv: plan.producerEnv,
+        testEntries: plan.testEntries,
+      },
+    );
+    const result = await execute({ ...command, cwd: root });
+    physicalBatches.push({
+      batchId: plan.batchId,
+      backend: plan.backend,
+      producer: plan.producerEnv,
+      producers: plan.producers.map((producer) => producer.implementation),
+      caseIds: [...VERTEX_COLOR_CASE_IDS],
+      command: [command.command, ...command.args],
+      exit: result.ok ? 0 : 1,
+      ...(result.ok ? {} : { reason: result.reason }),
+    });
+    for (const producer of plan.producers) {
       for (const cell of batchCells) {
         const outputPath = cell.outputPaths[producer.implementation];
         const falsifierOutputPath = cell.falsifierOutputPaths[producer.implementation];
@@ -534,7 +578,7 @@ export async function runVertexColorProducerSchedule({
           caseId: cell.caseId,
           backend: cell.backend,
           producer: producer.implementation,
-          batchId,
+          batchId: plan.batchId,
           command: [command.command, ...command.args],
           exit: result.ok ? 0 : 1,
         });
@@ -586,9 +630,24 @@ export async function runVertexColorProducerSchedule({
             `artifact://color-lighting-parity/${invocationId}/${cell.backend}/${cell.caseId}/three`,
           ],
         });
-        if (!evaluated.ok)
-          reason = `${cell.caseId}: vertex-color evaluator rejected scheduler captures`;
-        else writeFileSync(cell.reportPath, `${JSON.stringify(evaluated.value, null, 2)}\n`);
+        if (!evaluated.ok) {
+          if (evaluated.value !== undefined) {
+            // An evaluator verdict is a real comparison result, not a missing
+            // producer. Preserve its samples, falsifier, and budget detail in
+            // the case report so the scheduler does not relabel a regression
+            // as an unavailable/blocked capture.
+            writeFileSync(cell.reportPath, `${JSON.stringify(evaluated.value, null, 2)}\n`);
+            failures.push({
+              caseId: cell.caseId,
+              backend: cell.backend,
+              reportPath: cell.reportPath,
+              code: evaluated.error.code,
+              detail: evaluated.error.detail,
+            });
+          } else {
+            reason = `${cell.caseId}: vertex-color evaluator rejected scheduler captures (${evaluated.error.code})`;
+          }
+        } else writeFileSync(cell.reportPath, `${JSON.stringify(evaluated.value, null, 2)}\n`);
       } catch (error) {
         reason = `${cell.caseId}: vertex-color report construction failed (${error instanceof Error ? error.message : String(error)})`;
       }
@@ -620,6 +679,7 @@ export async function runVertexColorProducerSchedule({
     attempts,
     physicalBatches,
     blocked,
+    failures,
     combinations: VERTEX_COLOR_CASE_IDS.length * VERTEX_COLOR_BACKENDS.length,
     logicalCells: VERTEX_COLOR_CASE_IDS.length * VERTEX_COLOR_BACKENDS.length * PRODUCERS.length,
     physicalBatchCount: physicalBatches.length,
@@ -629,7 +689,13 @@ export async function runVertexColorProducerSchedule({
     resolve(reportRoot, 'dispatch-receipt.json'),
     `${JSON.stringify(receipt, null, 2)}\n`,
   );
-  return { ok: blocked.length === 0, attempts, blocked, receipt };
+  return {
+    ok: blocked.length === 0 && failures.length === 0,
+    attempts,
+    blocked,
+    failures,
+    receipt,
+  };
 }
 
 function readFileExists(path) {

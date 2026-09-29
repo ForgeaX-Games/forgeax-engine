@@ -1,6 +1,7 @@
 import type { World } from '@forgeax/engine-ecs';
 import { err, ok } from '@forgeax/engine-types';
 import { RenderFeatureStageFailedError } from '../../errors/render';
+import type { RenderFeatureWorkPlan } from '../plan';
 import type { RenderFeature, RenderFeaturePlan } from '../types';
 
 export const MORPH_MAX_TARGETS = 8;
@@ -289,9 +290,9 @@ export function createBuiltinMorphFeature(options: MorphFeatureOptions): MorphFe
       });
     },
     plan: (data) => {
-      if (data.draws.length === 0) return ok({ resources: [], passes: [] });
+      if (data.draws.length === 0) return ok({ work: [] });
       const program = 'morph.compute-program';
-      const resources: RenderFeaturePlan['resources'][number][] = [
+      const resources: RenderFeatureWorkPlan['resources'][number][] = [
         {
           kind: 'compute-program',
           name: program,
@@ -311,7 +312,7 @@ export function createBuiltinMorphFeature(options: MorphFeatureOptions): MorphFe
           },
         },
       ];
-      const passes: RenderFeaturePlan['passes'][number][] = [];
+      const passes: RenderFeatureWorkPlan['passes'][number][] = [];
       for (const [index, draw] of data.draws.entries()) {
         const prefix = `morph.draw-${index}`;
         const source = `${prefix}.source`;
@@ -370,7 +371,7 @@ export function createBuiltinMorphFeature(options: MorphFeatureOptions): MorphFe
           ],
         });
       }
-      return ok<RenderFeaturePlan>({ resources, passes });
+      return ok<RenderFeaturePlan>({ work: [{ scope: 'frame', resources, passes }] });
     },
   };
   return feature;

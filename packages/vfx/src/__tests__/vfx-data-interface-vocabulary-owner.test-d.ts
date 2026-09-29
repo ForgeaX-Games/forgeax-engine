@@ -8,14 +8,12 @@ import type {
 
 describe('VFX Data Interface vocabulary owner', () => {
   it('preserves the exact kinds, binding types, and tokens', () => {
-    expectTypeOf<VfxDataInterfaceKind>().toEqualTypeOf<
-      'camera' | 'scene-depth' | 'noise' | 'channel'
-    >();
+    expectTypeOf<VfxDataInterfaceKind>().toEqualTypeOf<'camera' | 'scene-depth' | 'noise'>();
     expectTypeOf<VfxDataInterfaceBindingType>().toEqualTypeOf<
-      'uniform' | 'sampled-depth' | 'sampled-float' | 'storage-read'
+      'uniform' | 'sampled-depth' | 'sampled-float'
     >();
     expectTypeOf<VfxDataInterfaceToken>().toEqualTypeOf<
-      'vfx:camera' | 'vfx:scene-depth' | 'vfx:noise' | 'vfx:channel'
+      'vfx:camera' | 'vfx:scene-depth' | 'vfx:noise'
     >();
   });
 
@@ -27,8 +25,5 @@ describe('VFX Data Interface vocabulary owner', () => {
     expectTypeOf<
       VfxDataInterfaceProvider<'noise'>['bindingType']
     >().toEqualTypeOf<'sampled-float'>();
-    expectTypeOf<
-      VfxDataInterfaceProvider<'channel'>['bindingType']
-    >().toEqualTypeOf<'storage-read'>();
   });
 });

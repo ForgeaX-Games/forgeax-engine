@@ -34,6 +34,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 import { chromium } from 'playwright';
+import { observeViteHttpReadiness } from '../../../../scripts/lib/vite-http-readiness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
@@ -140,19 +141,15 @@ const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-video-cutscene', 'dev'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-let portUrl = null;
-viteProc.stdout.on('data', (chunk) => {
-  const s = chunk.toString();
-  process.stdout.write(`[vite] ${s}`);
-  const m = s.match(/Local:\s+(http:\/\/[^\s]+)/);
-  if (m) portUrl = m[1];
+const viteReadiness = observeViteHttpReadiness(viteProc, {
+  timeoutEnvName: 'FORGEAX_VIDEO_CUTSCENE_SERVER_READINESS_TIMEOUT_MS',
 });
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
-
-const deadline = Date.now() + 30000;
-while (!portUrl && Date.now() < deadline) await sleep(200);
-if (!portUrl) {
-  console.error('FAIL: vite did not become ready in 30s');
+let portUrl;
+let serverReadyElapsedMs;
+try {
+  ({ origin: portUrl, elapsedMs: serverReadyElapsedMs } = await viteReadiness.wait());
+} catch (error) {
+  console.error(`FAIL: ${error instanceof Error ? error.message : String(error)}`);
   viteProc.kill();
   process.exit(2);
 }
@@ -206,7 +203,14 @@ async function overlayState() {
 
 await page.goto(portUrl, { waitUntil: 'networkidle', timeout: 30000 });
 await page.waitForSelector('#canvas', { timeout: 10000 });
-await page.waitForTimeout(3000);
+// Shader/device initialization can outlive networkidle. Wait for the App's
+// completed-frame projection before sending input or sampling the canvas.
+await page.waitForFunction(
+  () => typeof globalThis.__forgeax_video_cutscene__?.playCutscene === 'function' &&
+    Number(document.documentElement.dataset.forgeaxFrameCompleted) > 0,
+  undefined,
+  { timeout: 30000 },
+);
 
 // STRUCTURAL GATE part 1: overlay hidden at boot.
 if ((await overlayState()) !== 'hidden') {
@@ -224,6 +228,7 @@ try {
       const el = document.getElementById('video-overlay');
       return !!el && getComputedStyle(el).display !== 'none';
     },
+    undefined,
     { timeout: 5000 },
   );
 } catch {
@@ -234,6 +239,7 @@ console.log('[smoke-browser] STRUCTURAL: overlay visible after trigger');
 // Let the video paint a frame, then capture during the overlay period.
 await page.waitForTimeout(400);
 const overlayStats = await shootAndDecode('during-cutscene');
+const pausedFrame = await page.evaluate(() => Number(document.documentElement.dataset.forgeaxFrameCompleted));
 
 // VISUAL GATE: the overlay frame must differ from the canvas-only frame.
 // The cutscene video is full-screen and animated, so its mean color differs
@@ -262,12 +268,18 @@ try {
       const el = document.getElementById('video-overlay');
       return !!el && getComputedStyle(el).display === 'none';
     },
+    undefined,
     { timeout: 15000 },
   );
 } catch {
   fail('overlay never hid again (video.onended -> resume timing broken; AC-11 remove timing).');
 }
 console.log('[smoke-browser] STRUCTURAL: overlay hidden again after video ended (resume)');
+await page.waitForFunction(
+  (previous) => Number(document.documentElement.dataset.forgeaxFrameCompleted) > previous,
+  pausedFrame,
+  { timeout: 10000 },
+);
 const afterStats = await shootAndDecode('after-cutscene');
 
 if (pageErrors.length > 0) {
@@ -292,6 +304,7 @@ writeFileSync(
 );
 
 console.log('\n[smoke-browser] GREEN - cutscene double gate passed.');
+console.log(`  SERVER: HTTP ready after ${serverReadyElapsedMs}ms`);
 console.log(`  VISUAL: overlay vs canvas-only color delta=${colorDelta.toFixed(2)}`);
 console.log('  STRUCTURAL: overlay hidden -> visible -> hidden in order');
 console.log(`  visualSSOT: ${SCREENSHOT_DIR}/before-cutscene.png, during-cutscene.png, after-cutscene.png`);

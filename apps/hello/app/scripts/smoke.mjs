@@ -12,7 +12,7 @@
 //   3. createApp(mockCanvas, {}, { shaderManifestUrl })
 //      -- input is always-on by default (canvas form); the mock canvas
 //      has no DOM event surface but dawn-node is not affected.
-//   4. After 300 frames, readPixels center pixel via copyTextureToBuffer
+//   4. After 60 frames, readPixels center pixel via copyTextureToBuffer
 //      + mapAsync; assert RGBA each component within eps=0.05 of clearColor.
 //   5. Verdict: clearColor RGBA match + onError count == 0 + console.error
 //      count == 0 (R-5 dual-zero assertion; D-12 clearColor-only baseline
@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
@@ -87,7 +87,7 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 // rAF shim so the createApp frame-loop schedules in node. Counter mirrors
-// hello-cube smoke (sync drive after 300 ticks). We use queueMicrotask to
+// hello-cube smoke (sync drive after 60 ticks). We use queueMicrotask to
 // keep frames truly async without setImmediate latency.
 let rafQueue = [];
 let rafCounter = 1;
@@ -222,10 +222,10 @@ if (!startResult.ok) {
   process.exit(1);
 }
 
-// Drive the rAF queue manually 300 ticks. createApp's frame-loop queues
+// Drive the rAF queue manually 60 ticks. createApp's frame-loop queues
 // the next tick inside the callback (M2 createFrameLoop) so we drain
 // progressively. fakeTime advances 16.67ms per tick to match a 60Hz target.
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const startTs = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

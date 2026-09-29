@@ -22,6 +22,7 @@ import {
   StaleEntityError,
   SystemFailedError,
 } from './errors';
+import type { WorldExecutionState } from './execution/shared-kernel';
 import { isRelationshipTarget, relationshipRole } from './relationship-index';
 import type { ComponentData, EcsError } from './world';
 import { type WorldInternal, worldInternal } from './world-internal';
@@ -73,6 +74,7 @@ export interface CommandBuffer {
 /** Minimal world interface needed by CommandBuffer for entity allocation. */
 export interface WorldForCommands {
   readonly [worldInternal]: WorldInternal;
+  readonly execution: WorldExecutionState;
   /**
    * Allocate a pending entity index, returning [entity handle, index slot].
    * @internal
@@ -569,6 +571,11 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
     throw error;
   }
   let applied = 0;
+  // Once the preflight boundary has passed, a command may have touched
+  // storage even when its Result is an error (for example relationship
+  // maintenance after a row was appended). `applied` is intentionally not
+  // used as the poison decision: it only counts commands that returned ok.
+  let mutationStarted = false;
   let commandIndex = -1;
   let currentCommand: Command | undefined;
   let lastCommittedCommand: CommandCommitEvidence | null = null;
@@ -590,6 +597,7 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
       currentCommand = cmd;
       switch (cmd.type) {
         case 'spawn':
+          mutationStarted = true;
           requireSuccess(
             world[worldInternal].materializePendingEntity(cmd.entity, cmd.componentDatas),
           );
@@ -598,16 +606,19 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
           lastCommittedCommand = { index: commandIndex, kind: cmd.type };
           break;
         case 'despawn':
+          mutationStarted = true;
           requireSuccess(world.despawn(cmd.entity));
           applied += 1;
           lastCommittedCommand = { index: commandIndex, kind: cmd.type };
           break;
         case 'addComponent':
+          mutationStarted = true;
           requireSuccess(world.addComponent(cmd.entity, cmd.componentData));
           applied += 1;
           lastCommittedCommand = { index: commandIndex, kind: cmd.type };
           break;
         case 'removeComponent':
+          mutationStarted = true;
           requireSuccess(world.removeComponent(cmd.entity, cmd.component));
           applied += 1;
           lastCommittedCommand = { index: commandIndex, kind: cmd.type };
@@ -618,7 +629,7 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
   } catch (error) {
     buffer.abort(error);
     if (error instanceof CommandFailedError) throw error;
-    if (applied === 0) {
+    if (!mutationStarted && applied === 0) {
       throw commandFailure(
         buffer,
         Math.max(commandIndex, 0),
@@ -626,14 +637,16 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
         error,
       );
     }
-    const poison = world[worldInternal].poisonExecution;
-    poison({
-      code: 'shared-kernel-failed',
-      kernelName: 'CommandBuffer.flush',
-      cause: error,
-      partialWrite: true,
-      retryable: false,
-    });
+    if (world.execution.health === 'healthy') {
+      const poison = world[worldInternal].poisonExecution;
+      poison({
+        code: 'shared-kernel-failed',
+        kernelName: 'CommandBuffer.flush',
+        cause: error,
+        partialWrite: true,
+        retryable: false,
+      });
+    }
     throw new SystemFailedError(
       buffer._systemName,
       buffer._scheduleName,

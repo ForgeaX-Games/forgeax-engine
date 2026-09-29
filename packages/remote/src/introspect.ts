@@ -15,8 +15,10 @@ export interface RemoteRootValues {
   readonly rhiCapture?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
-  /** Read-only World-owned simulation summary; no restore/replay operation. */
+  /** Host-owned simulation operations and realm Context. */
   readonly simulation?: unknown;
+  /** Read-only projection of the DevKit plugin desired/live tree. */
+  readonly plugins?: unknown;
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
 }
 
@@ -82,7 +84,11 @@ function projectRoot(name: string, value: unknown): RootProjection {
     simulation: {
       type: 'SimulationInspection',
       description:
-        'A read-only World-owned simulation record, participant, trace, and report summary.',
+        'The Host simulation projection, including its current World and native pluginContext when provided.',
+    },
+    plugins: {
+      type: 'PluginProjection',
+      description: 'The desired and live plugin Entry/Fiber projection owned by DevKit.',
     },
   };
   const descriptor = descriptions[name] ?? { type: 'unknown', description: 'A live eval root.' };

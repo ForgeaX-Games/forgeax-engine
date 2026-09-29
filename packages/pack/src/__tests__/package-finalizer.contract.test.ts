@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { Hash } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
 import {
   finalizePackageProduct,
+  finalizePackageTransportSource,
   type PackageProduct,
   packageTransportRevision,
-  upgradeLegacyAuthoredPack,
 } from '../package-finalizer.js';
 
 const GUID = '019e3969-1d48-7c3b-ac24-6d68f457065f';
@@ -37,55 +38,68 @@ function product(overrides: Partial<PackageProduct> = {}): PackageProduct {
 }
 
 describe('engine-pack terminal product and finalizer contract', () => {
-  it('upgrades legacy material payloads at the Pack v1 transport boundary', () => {
-    const upgraded = upgradeLegacyAuthoredPack({
-      schemaVersion: '1.0.0',
-      assets: [
-        {
-          guid: GUID,
-          kind: 'material',
-          payload: {
-            kind: 'material',
-            passes: [
-              {
-                name: 'Forward',
-                shader: 'forgeax::default-unlit',
-                tags: { LightMode: 'Forward' },
-                queue: 2000,
-              },
-            ],
-            paramValues: { baseColor: [0.6, 0.6, 0.6, 1] },
-          },
-        },
-      ],
-    });
-
-    expect(upgraded).toMatchObject({
-      schemaVersion: '2.0.0',
-      assets: [
-        {
-          kind: 'material',
-          payload: {
-            kind: 'material',
-            passes: [
-              {
-                name: 'Forward',
-                program: { module: 'forgeax::default-unlit' },
-                renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-              },
-            ],
-            values: { baseColor: [0.6, 0.6, 0.6, 1] },
-          },
-        },
-      ],
-    });
-    const materialPayload = upgraded.assets?.[0]?.payload as {
-      readonly passes?: readonly Record<string, unknown>[];
+  it('shares artifact integrity with transport revision within one finalization', async () => {
+    const input = product();
+    const body = input.assets[0]?.artifacts.source?.bytes;
+    if (body === undefined) throw new Error('missing artifact fixture');
+    const policy = {
+      base: '/',
+      packagePath: 'texture.pack.json',
+      artifactPath: (guid: string, key: string) => `${guid}/${key}.bin`,
     };
-    expect(upgraded.assets?.[0]?.payload).not.toHaveProperty('paramValues');
-    expect(materialPayload.passes?.[0]).not.toHaveProperty('shader');
-    expect(materialPayload.passes?.[0]).not.toHaveProperty('tags');
-    expect(materialPayload.passes?.[0]).not.toHaveProperty('queue');
+    const revision = packageTransportRevision(input);
+    const expected = await finalizePackageProduct(input, policy);
+    if (!expected.ok) throw expected.error;
+    const update = vi.spyOn(Hash.prototype, 'update');
+    try {
+      const finalized = await finalizePackageTransportSource(input, policy);
+      expect(finalized.sourceRevision).toBe(revision);
+      expect(finalized.pack).toEqual(expected.value.pack);
+      expect(finalized.digest).toBe(expected.value.digest);
+      // One content hash and one package stream; no second identical content hash.
+      expect(update.mock.calls.filter(([data]) => data === body)).toHaveLength(2);
+    } finally {
+      update.mockRestore();
+    }
+  });
+
+  it('rehashes mutable artifact subviews on each independent finalization', async () => {
+    const storage = new Uint8Array([99, 1, 2, 3, 77]);
+    const body = storage.subarray(1, 4);
+    const asset = product().assets[0];
+    if (asset === undefined) throw new Error('missing asset fixture');
+    const input = product({
+      assets: [
+        {
+          ...asset,
+          artifacts: {
+            body: { mediaType: 'application/octet-stream', bytes: body },
+            tail: { mediaType: 'application/octet-stream', bytes: storage.subarray(2, 4) },
+          },
+        },
+      ],
+    });
+    const policy = {
+      base: '/',
+      packagePath: 'mesh.pack.json',
+      artifactPath: (_guid: string, key: string) => `${key}.bin`,
+    };
+    const first = await finalizePackageTransportSource(input, policy);
+    expect(first.pack.assets[0]?.artifacts.body?.integrity).toBeDefined();
+    expect(first.pack.assets[0]?.artifacts.tail?.integrity).toBeDefined();
+    storage[0] = 88;
+    const outside = await finalizePackageTransportSource(input, policy);
+    expect(outside).toEqual(first);
+    body[0] = 4;
+    const changed = await finalizePackageTransportSource(input, policy);
+    expect(changed.sourceRevision).not.toBe(first.sourceRevision);
+    expect(changed.digest).not.toBe(first.digest);
+    expect(changed.pack.assets[0]?.artifacts.body?.integrity).not.toEqual(
+      first.pack.assets[0]?.artifacts.body?.integrity,
+    );
+    expect(changed.pack.assets[0]?.artifacts.tail?.integrity).toEqual(
+      first.pack.assets[0]?.artifacts.tail?.integrity,
+    );
   });
 
   it('finalizes one complete product with source identity and receipts', async () => {
@@ -153,5 +167,60 @@ describe('engine-pack terminal product and finalizer contract', () => {
     };
     expect(published.assets[0]?.artifacts.body.byteLength).toBe(body.byteLength);
     expect(writes.get(`${GUID}/body.bin`)).toBe(body);
+  });
+
+  it('publishes a mesh LOD relation and keeps the lower mesh in the closure', async () => {
+    const lodGuid = '019e3969-1d48-7c3b-ac24-6d68f4570660';
+    const root = product().assets[0];
+    if (root === undefined) throw new Error('test product asset is missing');
+    const result = await finalizePackageProduct(
+      product({
+        assets: [
+          {
+            ...root,
+            kind: 'mesh',
+            payload: {
+              kind: 'mesh',
+              lods: [{ mesh: lodGuid, screenCoverage: 0.5 }],
+            },
+            refs: [lodGuid],
+          },
+          {
+            ...root,
+            guid: lodGuid,
+            kind: 'mesh',
+            payload: { kind: 'mesh' },
+            refs: [],
+          },
+        ],
+        receipts: [
+          {
+            guid: GUID,
+            origin: 'sourceMeta',
+            status: 'succeeded',
+            inputFingerprint: 'sha256:source',
+          },
+          {
+            guid: lodGuid,
+            origin: 'sourceMeta',
+            status: 'succeeded',
+            inputFingerprint: 'sha256:source',
+          },
+        ],
+      }),
+      {
+        base: '/',
+        packagePath: 'mesh.pack.json',
+        artifactPath: (guid, key) => `${guid}/${key}.bin`,
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const publishedRoot = result.value.pack.assets.find((asset) => asset.guid === GUID);
+    expect(publishedRoot?.refs).toEqual([lodGuid]);
+    expect(publishedRoot?.payload).toMatchObject({
+      lods: [{ mesh: lodGuid, screenCoverage: 0.5 }],
+    });
+    expect(result.value.pack.assets.map((asset) => asset.guid)).toContain(lodGuid);
   });
 });

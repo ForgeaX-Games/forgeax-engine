@@ -22,11 +22,11 @@ describe('real Preview UI scenario matrix', () => {
 
   it('binds both real Pack identities and authored Settings defaults', () => {
     expect(REAL_UI_ASSETS.hud).toMatchObject({
-      guid: '019f8354-6386-4386-849d-f2ab4b96229c',
+      guid: '9e976cdd-1923-57d9-b08c-4ab0bd18a16b',
       name: 'hud.pack.json',
     });
     expect(REAL_UI_ASSETS.settings).toMatchObject({
-      guid: '019f8354-6386-4387-849d-f2ab4b9622a0',
+      guid: 'b0ac90e0-bd8f-5875-9b22-eda3b885c21b',
       name: 'settings.pack.json',
     });
     expect(REAL_UI_SETTINGS_DEFAULTS).toEqual({

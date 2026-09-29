@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/hello-taa-feature-evidence/2",
+  "title": "hello-taa raw feature evidence",
+  "$comment": "The CI admission envelope is defined under $defs.ciArtifactJoin and is consumed by scripts/ci/join-auto-exposure-evidence.mjs. The raw producer shape above deliberately remains observation-only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "featureId", "source", "build", "backend", "runner", "executionMode", "resolution", "frames", "frameIdentity", "stages", "workloads", "fixtureIdentity", "visualEvidence", "status"],
+  "properties": {
+    "schemaVersion": { "const": "hello-taa-auto-exposure-evidence/2" },
+    "featureId": { "const": "feat-20260827-auto-exposure-hdr-color-grading" },
+    "source": { "$ref": "#/$defs/digestRef" },
+    "build": { "$ref": "#/$defs/digestRef" },
+    "backend": { "enum": ["browser-webgpu", "dawn-node", "rhi-null"] },
+    "runner": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "minLength": 1 }, "id": { "type": "string", "minLength": 1 } } },
+    "executionMode": { "enum": ["physical", "simulated"] },
+    "resolution": { "$ref": "#/$defs/resolution" },
+    "frames": { "type": "integer", "minimum": 60 },
+    "frameIdentity": { "type": "object", "additionalProperties": false, "required": ["first", "last", "sequenceSha256"], "properties": { "first": { "type": "integer", "minimum": 0 }, "last": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 0 }, "contiguous": { "type": "boolean" }, "sequenceSha256": { "$ref": "#/$defs/hash" } } },
+    "stages": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "object", "additionalProperties": false, "required": ["id", "domain", "readback"], "properties": { "id": { "enum": ["linear-hdr", "linear-ldr", "final-srgb"] }, "domain": { "enum": ["linear-HDR", "linear-LDR", "final-sRGB"] }, "readback": { "type": "object", "additionalProperties": false, "required": ["rawHash", "frame"], "properties": { "rawHash": { "$ref": "#/$defs/hash" }, "frame": { "type": "integer", "minimum": 0 } } }, "metadata": { "type": "object", "additionalProperties": true } } } },
+    "workloads": { "type": "array", "minItems": 3, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "executed"], "properties": { "kind": { "enum": ["manual", "auto", "positive-lut"] }, "executed": { "const": true }, "exposureMode": { "type": "string" }, "generation": { "type": "integer", "minimum": 0 }, "strength": { "type": "number", "minimum": 0, "maximum": 1 }, "sourceKey": { "type": "string", "minLength": 1 } } } },
+    "fixtureIdentity": { "type": "object", "additionalProperties": false, "required": ["asset", "camera", "light", "input"], "properties": { "asset": { "$ref": "#/$defs/identity" }, "camera": { "$ref": "#/$defs/identity" }, "light": { "$ref": "#/$defs/identity" }, "input": { "$ref": "#/$defs/identity" } } },
+    "scene": { "$ref": "#/$defs/canonicalScene" },
+    "visualEvidence": { "type": "array", "minItems": 3, "items": { "type": "object", "additionalProperties": false, "required": ["id", "png", "observed", "verdict", "confidence"], "properties": { "id": { "enum": ["exposure-adaptation-card", "white-balance-card", "lut-output-card"] }, "png": { "type": "string", "minLength": 1 }, "observed": { "type": "string", "minLength": 1 }, "verdict": { "enum": ["pass", "fail", "blocked", "unavailable"] }, "confidence": { "enum": ["high", "medium", "low"] } } } },
+    "status": { "enum": ["observation", "blocked", "failed"] },
+    "exposure": { "type": "object" },
+    "lut": { "type": "object" },
+    "provenance": { "type": "object" },
+    "timing": { "type": "object" },
+    "resourceGrowth": { "type": "object", "additionalProperties": false, "required": ["stableFrames", "byteLengthDelta", "bindGroupDelta", "resourceCountDelta", "liveResourceDelta", "allocationCount", "peakLiveCount", "mapCount", "readbackCount"], "properties": { "stableFrames": { "type": "integer", "minimum": 0 }, "byteLengthDelta": { "type": "integer" }, "bindGroupDelta": { "type": "integer" }, "resourceCountDelta": { "type": "integer" }, "liveResourceDelta": { "type": "integer" }, "allocationCount": { "type": "integer", "minimum": 0 }, "peakLiveCount": { "type": "integer", "minimum": 0 }, "mapCount": { "type": "integer", "minimum": 0 }, "readbackCount": { "type": "integer", "minimum": 0 } } }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "integrity": { "type": "string", "pattern": "^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$" },
+    "digestRef": { "type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" } } },
+    "identity": { "type": "object", "additionalProperties": false, "required": ["id", "sha256"], "properties": { "id": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" } } },
+    "resolution": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } } },
+    "canonicalScene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "asset", "camera", "light", "input", "clearColor"],
+      "properties": {
+        "source": { "type": "object", "additionalProperties": false, "required": ["path", "scenario"], "properties": { "path": { "type": "string", "minLength": 1 }, "scenario": { "type": "string", "minLength": 1 } } },
+        "asset": { "type": "object", "additionalProperties": false, "required": ["primitive", "material", "colorSpace", "barLayout", "transform", "sourceIdentity"], "properties": { "primitive": { "type": "string", "minLength": 1 }, "material": { "type": "string", "minLength": 1 }, "colorSpace": { "type": "string", "minLength": 1 }, "barLayout": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["offset", "color"], "properties": { "offset": { "type": "number" }, "color": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } } } } }, "transform": { "type": "object", "additionalProperties": false, "required": ["y", "z", "scale"], "properties": { "y": { "type": "number" }, "z": { "type": "number" }, "scale": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } } } }, "sourceIdentity": { "$ref": "#/$defs/identity" } } },
+        "camera": { "type": "object", "additionalProperties": false, "required": ["projection", "fov", "aspect", "near", "far", "position", "rotation", "sourceIdentity"], "properties": { "projection": { "type": "string", "minLength": 1 }, "fov": { "type": "number" }, "aspect": { "type": "number" }, "near": { "type": "number" }, "far": { "type": "number" }, "position": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } }, "rotation": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } }, "sourceIdentity": { "$ref": "#/$defs/identity" } } },
+        "light": { "type": "object", "additionalProperties": false, "required": ["kind", "direction", "color", "intensity", "sourceIdentity"], "properties": { "kind": { "type": "string", "minLength": 1 }, "direction": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } }, "color": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } }, "intensity": { "type": "number" }, "sourceIdentity": { "$ref": "#/$defs/identity" } } },
+        "input": { "type": "object", "additionalProperties": false, "required": ["kind", "visualCase", "motion", "camera", "sourceIdentity"], "properties": { "kind": { "type": "string", "minLength": 1 }, "visualCase": { "type": "string", "minLength": 1 }, "motion": { "type": "string", "minLength": 1 }, "camera": { "type": "string", "minLength": 1 }, "sourceIdentity": { "$ref": "#/$defs/identity" } } },
+        "clearColor": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number" } }
+      }
+    },
+    "ciFrameIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first", "last", "count", "contiguous", "sequenceSha256"],
+      "properties": {
+        "first": { "type": "integer", "minimum": 0 },
+        "last": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 1 },
+        "contiguous": { "const": true },
+        "sequenceSha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "ciJoinIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["testedRevision", "source", "build", "fixtureIdentity", "frameIdentity", "resolution"],
+      "properties": {
+        "testedRevision": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },
+        "source": { "$ref": "#/$defs/digestRef" },
+        "build": { "$ref": "#/$defs/digestRef" },
+        "fixtureIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["asset", "camera", "light", "input"],
+          "properties": {
+            "asset": { "$ref": "#/$defs/identity" },
+            "camera": { "$ref": "#/$defs/identity" },
+            "light": { "$ref": "#/$defs/identity" },
+            "input": { "$ref": "#/$defs/identity" }
+          }
+        },
+        "frameIdentity": { "$ref": "#/$defs/ciFrameIdentity" },
+        "resolution": { "$ref": "#/$defs/resolution" }
+      }
+    },
+    "ciGateIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["testedRevision", "source", "build", "fixtureIdentity", "frameIdentity", "resolution", "backend", "runner"],
+      "properties": {
+        "testedRevision": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },
+        "source": { "$ref": "#/$defs/digestRef" },
+        "build": { "$ref": "#/$defs/digestRef" },
+        "fixtureIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["asset", "camera", "light", "input"],
+          "properties": {
+            "asset": { "$ref": "#/$defs/identity" },
+            "camera": { "$ref": "#/$defs/identity" },
+            "light": { "$ref": "#/$defs/identity" },
+            "input": { "$ref": "#/$defs/identity" }
+          }
+        },
+        "frameIdentity": { "$ref": "#/$defs/ciFrameIdentity" },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "backend": { "type": "string", "minLength": 1 },
+        "runner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "type": "string", "minLength": 1 },
+            "id": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "ciArtifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256", "testedRevision"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "testedRevision": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" }
+      }
+    },
+    "ciGateShell": {
+      "type": "object",
+      "required": ["ciState", "identity", "artifact"],
+      "properties": {
+        "ciState": { "enum": ["success", "failure", "blocked", "no_checks", "skipped", "missing"] },
+        "identity": { "$ref": "#/$defs/ciGateIdentity" },
+        "artifact": { "$ref": "#/$defs/ciArtifactRef" }
+      }
+    },
+    "ciRawProducerGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status", "verdictSource", "executionMode", "workloads", "domains", "domainHashes"],
+          "properties": {
+            "status": { "enum": ["observation", "blocked", "failed"] },
+            "verdictSource": { "const": "producer-observation" },
+            "executionMode": { "enum": ["physical", "simulated"] },
+            "workloads": { "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["manual", "auto", "positive-lut"] } },
+            "domains": { "const": ["linear-HDR", "linear-LDR", "final-sRGB"] },
+            "domainHashes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["linear-HDR", "linear-LDR", "final-sRGB"],
+              "properties": {
+                "linear-HDR": { "$ref": "#/$defs/hash" },
+                "linear-LDR": { "$ref": "#/$defs/hash" },
+                "final-sRGB": { "$ref": "#/$defs/hash" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ciValidatorGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status", "verdictSource", "executionMode", "derivedFrom"],
+          "properties": {
+            "status": { "enum": ["pass", "blocked", "failed"] },
+            "verdictSource": { "const": "validator" },
+            "executionMode": { "enum": ["physical", "simulated"] },
+            "derivedFrom": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["browser", "dawn"],
+              "properties": {
+                "browser": { "$ref": "#/$defs/hash" },
+                "dawn": { "$ref": "#/$defs/hash" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ciTimingGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["qualified", "blocked", "failed", "ineligible"] },
+            "source": { "type": "string", "minLength": 1 },
+            "passes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "logicalStages": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "physicalGpu": { "type": "boolean" },
+            "timestampQuery": { "type": "boolean" },
+            "deferred": { "type": "boolean" },
+            "reason": { "type": "string", "minLength": 1 },
+            "resolutions": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "1080p": { "$ref": "#/$defs/ciTimingSample1080p" },
+                "4K": { "$ref": "#/$defs/ciTimingSample4K" }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "status": { "const": "qualified" } } },
+              "then": {
+                "required": ["source", "passes", "logicalStages", "physicalGpu", "timestampQuery", "resolutions"],
+                "properties": {
+                  "source": { "const": "renderer-gpu-pass-timing" },
+                  "passes": { "const": ["meter", "lut"] },
+                  "logicalStages": { "const": ["clear", "histogram", "adapt"] },
+                  "physicalGpu": { "const": true },
+                  "timestampQuery": { "const": true },
+                  "resolutions": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["1080p", "4K"],
+                    "properties": {
+                      "1080p": { "$ref": "#/$defs/ciTimingSample1080p" },
+                      "4K": { "$ref": "#/$defs/ciTimingSample4K" }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "status": { "const": "blocked" } } },
+              "then": {
+                "required": ["source", "physicalGpu", "timestampQuery", "deferred", "reason"],
+                "properties": {
+                  "source": { "const": "renderer-gpu-pass-timing-deferred" },
+                  "physicalGpu": { "const": false },
+                  "timestampQuery": { "const": false },
+                  "deferred": { "const": true },
+                  "reason": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ciTimingSample1080p": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p95Ms", "sampleCount", "windowComplete"],
+      "properties": { "p95Ms": { "type": "number", "minimum": 0, "maximum": 0.35 }, "sampleCount": { "type": "integer", "minimum": 1 }, "windowComplete": { "const": true } }
+    },
+    "ciTimingSample4K": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p95Ms", "sampleCount", "windowComplete"],
+      "properties": { "p95Ms": { "type": "number", "minimum": 0, "maximum": 0.8 }, "sampleCount": { "type": "integer", "minimum": 1 }, "windowComplete": { "const": true } }
+    },
+    "ciThreeGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["pass", "blocked", "failed", "not-applicable"] },
+            "referencePackage": { "type": "string", "minLength": 1 },
+            "referenceVersion": { "type": "string", "minLength": 1 },
+            "referenceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },
+            "referenceIntegrity": { "$ref": "#/$defs/integrity" },
+            "overallParityClaim": { "type": "boolean" },
+            "roiEpsilon": { "type": "number", "minimum": 0 },
+            "notApplicable": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["feature", "reason"], "properties": { "feature": { "type": "string", "minLength": 1 }, "reason": { "type": "string", "minLength": 1 } } } }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "status": { "const": "pass" } } },
+              "then": {
+                "required": ["referencePackage", "referenceVersion", "referenceCommit", "referenceIntegrity", "overallParityClaim", "roiEpsilon", "notApplicable"],
+                "properties": {
+                  "referencePackage": { "const": "three" },
+                  "referenceVersion": { "const": "0.184.0" },
+                  "referenceCommit": {},
+                  "referenceIntegrity": {},
+                  "overallParityClaim": { "const": false },
+                  "roiEpsilon": { "type": "number", "maximum": 0.05 },
+                  "notApplicable": { "type": "array", "minItems": 1 }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ciRosterGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["pass", "blocked", "failed"] },
+            "executed": { "type": "boolean" },
+            "entryCount": { "type": "integer", "minimum": 0 },
+            "rosterSha256": { "$ref": "#/$defs/hash" },
+            "deferred": { "type": "boolean" },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "status": { "const": "pass" } } },
+              "then": {
+                "required": ["executed", "entryCount", "rosterSha256"],
+                "properties": {
+                  "executed": { "const": true },
+                  "entryCount": { "type": "integer", "minimum": 1 },
+                  "rosterSha256": {}
+                }
+              }
+            },
+            {
+              "if": { "properties": { "status": { "const": "blocked" } } },
+              "then": {
+                "required": ["deferred", "reason"],
+                "properties": {
+                  "deferred": { "const": true },
+                  "reason": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ciProbeGate": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/ciGateShell" },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["pass", "blocked", "failed"] },
+            "workflowDispatch": { "type": "boolean" },
+            "payloadSha256": { "$ref": "#/$defs/hash" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "status": { "const": "pass" } } },
+              "then": {
+                "required": ["workflowDispatch", "payloadSha256"],
+                "properties": { "workflowDispatch": { "const": true }, "payloadSha256": {} }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ciArtifactJoinGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browser", "dawn", "featureValidator", "qualifiedTiming", "threeAc27", "canonicalRoster", "sharedProbe"],
+      "properties": {
+        "browser": { "$ref": "#/$defs/ciRawProducerGate" },
+        "dawn": { "$ref": "#/$defs/ciRawProducerGate" },
+        "featureValidator": { "$ref": "#/$defs/ciValidatorGate" },
+        "qualifiedTiming": { "$ref": "#/$defs/ciTimingGate" },
+        "threeAc27": { "$ref": "#/$defs/ciThreeGate" },
+        "canonicalRoster": { "$ref": "#/$defs/ciRosterGate" },
+        "sharedProbe": { "$ref": "#/$defs/ciProbeGate" }
+      }
+    },
+    "ciArtifactJoin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "featureId", "identity", "gates", "status"],
+      "properties": {
+        "schemaVersion": { "const": "forgeax-auto-exposure-ci-join/1" },
+        "featureId": { "const": "feat-20260827-auto-exposure-hdr-color-grading" },
+        "identity": { "$ref": "#/$defs/ciJoinIdentity" },
+        "gates": { "$ref": "#/$defs/ciArtifactJoinGates" },
+        "status": { "enum": ["pass", "blocked", "failed"] },
+        "acceptance": { "enum": ["feature-gates-admitted", "feature-function-admitted-performance-deferred", "blocked"] },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "path", "detail"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1 },
+              "path": { "type": "string" },
+              "detail": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

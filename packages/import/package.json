@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Build-time asset import runner + ImporterRegistry (the build-time half of the import/load split). Dispatches a *.meta.json sidecar by its top-level `importer` string key to a registered Importer, enforces the GUID import-stable iron law, and writes the DDC (.pack.json / .bin). Build-time only — never bundled into the player runtime (AC-06). Mirrors the LoaderRegistry (runtime) + Console Registry register/get/fail-fast injection shape.",
+  "description": "Asset import and Pack production: build-time filesystem/DDC adapters and a browser-safe, opt-in runtime producer share identity, output encoding and validation contracts.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -36,7 +36,9 @@
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-tool-runtime": "workspace:*",
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
@@ -46,15 +48,15 @@
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "build-time-only package (import runner + ImporterRegistry); never enters the player runtime bundle (AC-06), so no shipped-size budget applies"
+        "reason": "runtime producer is opt-in; its shipped closure is measured by consuming App/SDK gates, with no independent package threshold yet"
       },
       "fps": {
         "enabled": false,
-        "reason": "build-time package; no runtime canvas or frame loop"
+        "reason": "data production has no canvas or frame loop"
       },
       "bench": {
         "enabled": false,
-        "reason": "import runner is one-shot build-time work (not a hot path); no perf-critical bench in this package"
+        "reason": "import and runtime generation are explicit operations; no standalone performance threshold is registered yet"
       },
       "gate": {
         "enabled": false,

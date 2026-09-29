@@ -55,3 +55,14 @@ describe('BoundedEventQueue', () => {
     expect(queue.disconnectReason).toBe('socket closed');
   });
 });
+
+it('bounds retained payload bytes independently from event count and resets after drain', () => {
+  const queue = new BoundedEventQueue(10, 2);
+  expect(queue.enqueue(message(1))).toBe(true);
+  expect(queue.enqueue(message(2))).toBe(true);
+  queue.drain();
+  expect(queue.enqueue(message(3))).toBe(true);
+  expect(queue.enqueue(message(4))).toBe(true);
+  expect(queue.enqueue(message(5))).toBe(false);
+  expect(queue.closed).toBe(true);
+});

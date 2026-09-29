@@ -1,9 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeReferencePng } from '../../../shared/png-codec.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { setupGpuShim } from '../../triangle/scripts/smoke-helpers.mjs';
-import { classifyDawnErrors, READINESS_FRAME_LIMIT } from './smoke-diagnostics.mjs';
+import { classifyDawnErrors, normalizeReadbackRgba, READINESS_FRAME_LIMIT } from './smoke-diagnostics.mjs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
@@ -18,7 +20,7 @@ const benchmarkAdapterClass = /(?:^|\/)lvp(?:_|\.)/.test(
 )
   ? 'software-reference'
   : 'hardware';
-const TARGET_FRAMES = 300;
+const TARGET_FRAMES = Math.max(60, Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10));
 const frameLimit = benchmarkMode ? 90 : TARGET_FRAMES;
 const SEED = 42;
 const CAMERA = { position: [0, 1.2, 7.5], target: [0, 0.8, 0] };
@@ -58,6 +60,21 @@ globalThis.fetch = async request => {
 };
 
 const shim = await setupGpuShim({ width: WIDTH, height: HEIGHT, rerunCmd });
+let sceneDepthTexture;
+let sceneDepthView;
+const sceneDepthResource = () => {
+  const device = shim.sharedDevice;
+  if (device === undefined) return undefined;
+  if (sceneDepthView === undefined) {
+    sceneDepthTexture = device.createTexture({
+      size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+      format: 'depth24plus',
+      usage: 0x04 | 0x10,
+    });
+    sceneDepthView = sceneDepthTexture.createView();
+  }
+  return { kind: 'texture-view', value: sceneDepthView };
+};
 const manifest = JSON.parse(readFileSync(resolve(distRoot, 'shaders/manifest.json'), 'utf8'));
 const { createWorldContext, World } = await import('@forgeax/engine-ecs');
 const { mat4 } = await import('@forgeax/engine-math');
@@ -92,16 +109,7 @@ const camera = {
       position: new Float32Array(transform.value.pos),
       right: new Float32Array([1, 0, 0]),
       up: new Float32Array([0, 1, 0]),
-      viewProjection: mat4.computeViewProj(
-        mat4.create(),
-        transform.value.pos,
-        [0, 0.8, 0],
-        [0, 1, 0],
-        cameraValue.value.fov,
-        cameraValue.value.aspect,
-        cameraValue.value.near,
-        cameraValue.value.far,
-      ),
+      viewProjection: mat4.multiply(mat4.create(), mat4.perspectiveReverseZ(mat4.create(), cameraValue.value.fov, cameraValue.value.aspect, cameraValue.value.near, cameraValue.value.far), mat4.lookAt(mat4.create(), transform.value.pos, [0, 0.8, 0], [0, 1, 0])),
     };
   },
 };
@@ -110,7 +118,11 @@ const host = createVfxRuntimeHost({
   ...(m35Mode ? { maxQueuedTicks: 1 } : {}),
   providers: [
     createCameraProvider({ available: () => true }),
-    createSceneDepthProvider({ available: () => falsifier !== missingDepth }),
+    createSceneDepthProvider({
+      available: () => falsifier !== missingDepth,
+      sampleCount: 1,
+      resource: sceneDepthResource,
+    }),
   ],
 });
 const constructed = await constructRuntimeRendererHost(
@@ -120,6 +132,22 @@ const constructed = await constructRuntimeRendererHost(
 );
 if (!constructed.ok) throw constructed.error;
 const renderer = constructed.value.renderer;
+// Observe the real prepared-resource path, not a CPU particle approximation.
+const persistentBuffers = new Map();
+const observedDevice = shim.sharedDevice;
+const nativeCreateBuffer = observedDevice.createBuffer.bind(observedDevice);
+if (!benchmarkMode && !m11Mode && !m35Mode) {
+  observedDevice.createBuffer = descriptor => {
+    const tracked = /^vfx\.state-/.test(descriptor.label ?? '') &&
+      /\.(particles|history|custom|counters|indirect)$/.test(descriptor.label);
+    const buffer = nativeCreateBuffer(tracked ? { ...descriptor, usage: descriptor.usage | 0x04 } : descriptor);
+    if (tracked) {
+      const prior = persistentBuffers.get(descriptor.label);
+      persistentBuffers.set(descriptor.label, { buffer, size: descriptor.size, creations: (prior?.creations ?? 0) + 1 });
+    }
+    return buffer;
+  };
+}
 const assets = constructed.value.assets;
 const errors = [];
 let currentFrame = -1;
@@ -224,8 +252,10 @@ const topologyShowcases = [
   { kind: 'trail', x: 0 },
   { kind: 'beam', x: 2.2 },
 ];
-const sourceEmitter = loaded.value.program.emitters[0];
 for (const showcase of benchmarkMode || m35Mode ? [] : topologyShowcases) {
+  const sourceEmitter = loaded.value.program.emitters.find(emitter =>
+    emitter.renderers.some(renderer => renderer.kind === showcase.kind));
+  if (sourceEmitter === undefined) throw new Error(`Missing authored ${showcase.kind} emitter`);
   const showcaseEmitter = {
     ...sourceEmitter,
     id: `showcase-${showcase.kind}`,
@@ -295,6 +325,27 @@ let lastCommitted;
 let eventSubmitted = false;
 const runtime = world.getResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
 const frameDurations = [];
+let device;
+let target;
+const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
+const benchmarkBeamEvidenceFrame = 20;
+let benchmarkBeamEvidencePixels;
+async function readRenderTargetPixels() {
+  if (device === undefined || target === undefined) throw new Error('Dawn render target unavailable');
+  const readback = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: target },
+    { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const pixels = new Uint8Array(readback.getMappedRange().slice(0));
+  readback.unmap();
+  readback.destroy();
+  return normalizeReadbackRgba(pixels, WIDTH, HEIGHT, bytesPerRow, target.format);
+}
 function recordDraw(leases) {
   const cameraLease = leases[0];
   if (cameraLease === undefined) throw new Error('recordDraw requires a camera lease');
@@ -495,9 +546,18 @@ if (m35Mode) {
     }
     const drawn = recordDraw([mainLease]);
     if (!drawn.ok) throw new Error(`Boss Lightning draw failed at frame ${frame}`);
+    if (!benchmarkMode && !m11Mode) {
+      const presentation = recordDraw([mainLease]);
+      if (!presentation.ok) throw new Error(`Render-only Boss Lightning frame failed at ${frame}`);
+    }
     await new Promise(resolve => setImmediate(resolve));
     if (benchmarkMode) {
       await shim.sharedDevice?.queue.onSubmittedWorkDone();
+      if (frame === benchmarkBeamEvidenceFrame) {
+        device = shim.sharedDevice;
+        target = shim.renderTarget;
+        benchmarkBeamEvidencePixels = await readRenderTargetPixels();
+      }
       if (frame >= 30) frameDurations.push(performance.now() - frameStart);
     }
     queuedIntents = runtime.snapshot().length;
@@ -566,23 +626,49 @@ if (falsifier === 'strike-only') {
   process.exit(1);
 }
 
-const device = shim.sharedDevice;
-const target = shim.renderTarget;
+if (persistentBuffers.size > 0) {
+  const snapshot = async () => {
+    const result = new Map();
+    for (const [name, entry] of persistentBuffers) {
+      if (entry.creations !== 1) throw new Error(`Persistent GPU allocation replaced: ${name} (${entry.creations})`);
+      const readback = nativeCreateBuffer({ size: entry.size, usage: 0x01 | 0x08 });
+      const encoder = observedDevice.createCommandEncoder();
+      encoder.copyBufferToBuffer(entry.buffer, 0, readback, 0, entry.size);
+      observedDevice.queue.submit([encoder.finish()]);
+      await readback.mapAsync(0x01);
+      result.set(name, Buffer.from(readback.getMappedRange().slice(0)));
+      readback.unmap(); readback.destroy();
+    }
+    return result;
+  };
+  const before = await snapshot();
+  for (let frame = 0; frame < 3; frame++) {
+    if (!recordDraw([mainLease]).ok) throw new Error('Paused VFX presentation failed');
+  }
+  const after = await snapshot();
+  let livingInstances = 0;
+  for (const [name, bytes] of before) {
+    if (!bytes.equals(after.get(name))) throw new Error(`Render-only frame mutated GPU state: ${name}`);
+    if (name.endsWith('.indirect')) {
+      for (let offset = 4; offset < bytes.length; offset += 20) livingInstances += bytes.readUInt32LE(offset);
+    }
+  }
+  if (livingInstances === 0) throw new Error('Persistent GPU particle proof has no living indirect instances');
+  observedDevice.createBuffer = nativeCreateBuffer;
+  console.log(`[smoke-dawn] Fixed/render separation: PASS buffers=${before.size} livingInstances=${livingInstances}`);
+}
+device = device ?? shim.sharedDevice;
+target = target ?? shim.renderTarget;
 if (device === undefined || target === undefined) throw new Error('Dawn render target unavailable');
 await device.queue.onSubmittedWorkDone();
-const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
-const readback = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
-const encoder = device.createCommandEncoder();
-encoder.copyTextureToBuffer(
-  { texture: target },
-  { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
-  { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
-);
-device.queue.submit([encoder.finish()]);
-await readback.mapAsync(0x01);
-const pixels = new Uint8Array(readback.getMappedRange().slice(0));
-readback.unmap();
-readback.destroy();
+const pixels = benchmarkBeamEvidencePixels ?? (await readRenderTargetPixels());
+if (process.env.BOSS_LIGHTNING_DAWN_SCREENSHOT !== undefined) {
+  const tight = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y += 1) {
+    tight.set(pixels.subarray(y * bytesPerRow, y * bytesPerRow + WIDTH * 4), y * WIDTH * 4);
+  }
+  writeFileSync(process.env.BOSS_LIGHTNING_DAWN_SCREENSHOT, writeReferencePng(tight, WIDTH, HEIGHT));
+}
 
 function zoneEnergy(x0, x1, y0, y1) {
   let energy = 0;
@@ -595,6 +681,11 @@ function zoneEnergy(x0, x1, y0, y1) {
   return energy / ((x1 - x0) * (y1 - y0));
 }
 
+// This crop is the authored beam's projected spawn-to-endpoint envelope at the
+// Dawn smoke resolution; keeping it tight prevents unrelated scene pixels from
+// satisfying the topology oracle.
+const beamZone = { x0: 75, x1: 125, y0: 30, y1: 130 };
+
 function topologyPixelEvidence() {
   const counts = { ribbon: 0, trail: 0, beam: 0 };
   for (let y = 0; y < HEIGHT; y += 1) {
@@ -604,8 +695,22 @@ function topologyPixelEvidence() {
       const green = pixels[offset + 1] / 255;
       const blue = pixels[offset + 2] / 255;
       if (blue > 0.45 && green > red * 1.35) counts.ribbon += 1;
-      if (red > 0.45 && red > green * 1.1 && green > blue * 1.25) counts.trail += 1;
-      if (blue > 0.45 && red > green * 1.35 && blue > green * 1.35) counts.beam += 1;
+      if (
+        (red > 0.45 && red > green * 1.1 && green > blue * 1.25) ||
+        (green > 0.45 && blue > 0.35 && green > red * 1.5)
+      ) counts.trail += 1;
+      if (
+        x >= beamZone.x0 &&
+        x < beamZone.x1 &&
+        y >= beamZone.y0 &&
+        y < beamZone.y1 &&
+        pixels[offset + 3] > 5 &&
+        ((red > 0.75 && blue > 0.65 && green < 0.4 && red > green * 1.5) ||
+          (blue > 0.45 && blue > green * 1.4 && red < blue * 0.5) ||
+          (blue > 0.65 && green > 0.55 && blue >= red && green >= red))
+      ) {
+        counts.beam += 1;
+      }
     }
   }
   return counts;
@@ -622,7 +727,7 @@ const durationPercentile = percentile =>
 const topologyZones = {
   ribbon: zoneEnergy(25, 80, 75, 145),
   trail: zoneEnergy(75, 125, 75, 145),
-  beam: zoneEnergy(125, 180, 75, 145),
+  beam: zoneEnergy(beamZone.x0, beamZone.x1, beamZone.y0, beamZone.y1),
 };
 if (m35Mode) {
   if (healthyWorld === undefined || m35Recovery === undefined) {
@@ -680,6 +785,7 @@ const result = {
   billboardEnergy,
   meshEnergy,
   topologyPixels,
+  readbackFormat: target.format,
   ...(benchmarkMode
     ? {
         benchmark: {
@@ -725,7 +831,7 @@ const result = {
   subEmitterVisible,
   queueCleared,
   mainEffectRunning,
-  arcNovaLayerRunning: loaded.value.program.emitters.filter(item => item.id.startsWith('charge-') || item.id.startsWith('release-') || item.id.startsWith('decay-') || item.id.startsWith('impact-violet') || item.id.startsWith('impact-cross')).length === 8,
+  arcNovaLayerRunning: ['charge-arcane-dial', 'impact-violet-shock'].every(id => loaded.value.program.emitters.some(item => item.id === id)),
   stageReadiness: stageObservation.stageReadiness,
   stageOutput: stageObservation.stageOutput,
   stageDependencies: lastKnownGoodPlan.ok
@@ -796,4 +902,5 @@ if (
   process.exit(1);
 }
 console.log(`[smoke-dawn] PASS ${JSON.stringify(result)}`);
+if (!benchmarkMode) emitSmokeReceipt('hello-boss-lightning/smoke', result.frames);
 process.exit(0);

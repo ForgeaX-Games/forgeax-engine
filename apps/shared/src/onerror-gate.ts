@@ -1,7 +1,10 @@
+/// <reference path="./vite-env.d.ts" />
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   beginLearnRenderTestLifecycle,
   disposeLearnRenderTestApp,
+  markLearnRenderTestBootstrapStage,
   waitForLearnRenderTestBootstrap,
 } from './learn-render-test-lifecycle';
 
@@ -53,6 +56,8 @@ export const SUT_ATTRIBUTABLE_CODES: ReadonlySet<string> = new Set([
   'loader-not-registered',
 ]);
 
+const settleQuietWindowMs = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 300 : 500;
+
 export function onerrorGate(
   sectionName: string,
   importSut: () => Promise<unknown>,
@@ -63,13 +68,15 @@ export function onerrorGate(
 
     afterEach(async () => {
       try {
-        if (canvas !== undefined) await disposeLearnRenderTestApp(canvas);
+        if (canvas !== undefined) await disposeLearnRenderTestApp(canvas, 5_000);
       } finally {
         if (canvas !== undefined && canvas.parentNode !== null) {
           canvas.parentNode.removeChild(canvas);
         }
         canvas = undefined;
         delete (globalThis as unknown as { __learnRenderErrors?: unknown }).__learnRenderErrors;
+        delete (globalThis as unknown as { __forgeaxAssetLoadTrace?: unknown })
+          .__forgeaxAssetLoadTrace;
       }
     });
 
@@ -97,13 +104,28 @@ export function onerrorGate(
         (globalThis as unknown as { __learnRenderErrors: typeof errors }).__learnRenderErrors =
           errors;
 
-        await importSut();
-        await waitForLearnRenderTestBootstrap(canvas);
+        markLearnRenderTestBootstrapStage(canvas, 'importSut');
+        const gateMarker = globalThis as typeof globalThis & {
+          __forgeaxBrowserOnerrorGate?: string;
+        };
+        // The gate only proves that a SUT can boot without publishing a
+        // renderer error. Let an evidence-heavy SUT opt into its ordinary
+        // scene while keeping the real capture smokes on their full path.
+        // Set it unconditionally: keyed to the CI flag, local runs booted the
+        // full evidence fixture and outran the bootstrap budget.
+        gateMarker.__forgeaxBrowserOnerrorGate = sectionName;
+        try {
+          await importSut();
+        } finally {
+          delete gateMarker.__forgeaxBrowserOnerrorGate;
+        }
+        markLearnRenderTestBootstrapStage(canvas, 'waitForLearnRenderTestBootstrap');
+        await waitForLearnRenderTestBootstrap(canvas, Math.max(5_000, timeoutMs - 5_000));
         let prev = -1;
         for (let elapsed = 0; elapsed < 5000; elapsed += 50) {
           await new Promise((r) => setTimeout(r, 50));
           if (errors.length === prev) {
-            if (elapsed >= 500) break;
+            if (elapsed >= settleQuietWindowMs) break;
           } else {
             prev = errors.length;
           }

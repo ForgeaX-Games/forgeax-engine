@@ -1,20 +1,18 @@
 // @forgeax/engine-render - Camera (projection variant + ortho extension).
 //
-// Schema: 9 f32 columns — perspective quartet (fov + aspect + near + far)
-// + projection discriminator (0 = perspective, 1 = orthographic) + ortho
-// quartet (left + right + bottom + top). The view matrix continues to be
-// derived from the entity's Transform (AC-06 case B fires
+// Schema: projection, output, Bloom, and lifecycle columns. The view matrix
+// continues to be derived from the entity's Transform (AC-06 case B fires
 // 'render-system-no-camera' when 0 such entities exist).
 //
 // Projection discriminator:
 //   projection === 0 → perspective path; RenderSystem builds
-//                      mat4.perspective(out, fov, aspect, near, far).
+//                      mat4.perspectiveReverseZ(out, fov, aspect, near, far).
 //                      WebGPU [0, 1] NDC z; perspective reverse-Z hook is
 //                      a future spin-off path (plan-strategy §R-7) kept
 //                      outside M3 scope — the short-name mat4.perspective
 //                      already writes [0, 1] NDC, matching the ortho branch.
 //   projection === 1 → orthographic path; RenderSystem builds
-//                      mat4.orthographic(out, left, right, bottom, top,
+//                      mat4.orthographicReverseZ(out, left, right, top, bottom,
 //                      near, far) (WebGPU [0, 1] NDC; same z convention).
 //
 // Naming convention: forgeax uses the bare `Camera` name (no `Component`
@@ -42,6 +40,180 @@ export type CameraProjection = 'perspective' | 'orthographic';
 export const CAMERA_PROJECTION_PERSPECTIVE = 0;
 /** Numeric encoding of orthographic projection (schema value for `projection`). */
 export const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
+
+/** Closed public exposure authoring contract shared by all camera routes. */
+export type CameraExposure =
+  | { readonly kind: 'manual'; readonly multiplier: number }
+  | {
+      readonly kind: 'auto';
+      readonly fallback: number;
+      readonly compensationEv: number;
+      readonly rangeEv: readonly [min: number, max: number];
+      readonly rates: readonly [up: number, down: number];
+    };
+
+/** Numeric encoding of manual exposure in the Camera SoA column. */
+export const CAMERA_EXPOSURE_MODE_MANUAL = 0;
+/** Numeric encoding of GPU-adapted exposure in the Camera SoA column. */
+export const CAMERA_EXPOSURE_MODE_AUTO = 1;
+
+/** Product-supported white-balance temperature range in Kelvin. */
+export const CAMERA_TEMPERATURE_MIN = 1000;
+export const CAMERA_TEMPERATURE_MAX = 40000;
+/** Product-supported normalized tint range. */
+export const CAMERA_TINT_MIN = -1;
+export const CAMERA_TINT_MAX = 1;
+
+/** Closed validation failures for the Camera authoring/column boundary. */
+export type CameraErrorCode =
+  | 'camera-exposure-invalid'
+  | 'camera-color-grading-invalid'
+  | 'camera-exposure-mode-invalid'
+  | 'camera-tonemap-invalid'
+  | 'camera-antialias-invalid'
+  | 'camera-bloom-invalid'
+  | 'camera-transparency-invalid';
+
+export interface CameraErrorDetail {
+  readonly field: string;
+  readonly actual: number | string;
+  readonly expected: string;
+}
+
+/** Structured Camera error; callers can branch on the closed `code` union. */
+export class CameraError<Code extends CameraErrorCode = CameraErrorCode> extends Error {
+  readonly code: Code;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: CameraErrorDetail;
+
+  constructor(code: Code, field: string, actual: number | string, expected: string, hint: string) {
+    super(`${code}: ${field}=${String(actual)}; expected ${expected}`);
+    this.name = 'CameraError';
+    this.code = code;
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = Object.freeze({ field, actual, expected });
+  }
+}
+
+function actualValue(value: unknown): number | string {
+  if (typeof value === 'number' || typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function cameraError<Code extends CameraErrorCode>(
+  code: Code,
+  field: string,
+  actual: unknown,
+  expected: string,
+  hint: string,
+): CameraError<Code> {
+  return new CameraError(code, field, actualValue(actual), expected, hint);
+}
+
+function finitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+/** Validate the closed exposure union before it is projected into columns. */
+export function validateCameraExposure(exposure: CameraExposure): CameraExposure {
+  if (typeof exposure !== 'object' || exposure === null) {
+    throw cameraError(
+      'camera-exposure-invalid',
+      'value',
+      exposure,
+      'an object with kind manual or auto',
+      'choose one member of the CameraExposure union',
+    );
+  }
+  if (exposure.kind === 'manual') {
+    if (!finitePositive(exposure.multiplier)) {
+      throw cameraError(
+        'camera-exposure-invalid',
+        'multiplier',
+        exposure.multiplier,
+        'a finite number greater than zero',
+        'set Camera.exposure to a positive finite manual multiplier',
+      );
+    }
+    return exposure;
+  }
+  if (exposure.kind === 'auto') {
+    const [min, max] = exposure.rangeEv;
+    const [up, down] = exposure.rates;
+    if (
+      !finitePositive(exposure.fallback) ||
+      !Number.isFinite(exposure.compensationEv) ||
+      !Number.isFinite(min) ||
+      !Number.isFinite(max) ||
+      min > max ||
+      !Number.isFinite(up) ||
+      !Number.isFinite(down) ||
+      up < 0 ||
+      down < 0
+    ) {
+      throw cameraError(
+        'camera-exposure-invalid',
+        'auto',
+        JSON.stringify(exposure),
+        'finite fallback/compensation, an ordered range, and non-negative rates',
+        'inspect fallback, compensationEv, rangeEv, and rates before rebuilding the camera',
+      );
+    }
+    return exposure;
+  }
+  throw cameraError(
+    'camera-exposure-invalid',
+    'kind',
+    (exposure as { readonly kind?: unknown }).kind,
+    "'manual' or 'auto'",
+    'choose one member of the CameraExposure union',
+  );
+}
+
+/** Validate the Camera-owned white-balance and LUT authoring fields. */
+export function validateCameraColorGrading(
+  temperature: number,
+  tint: number,
+  colorLutStrength: number,
+): void {
+  if (
+    !Number.isFinite(temperature) ||
+    temperature < CAMERA_TEMPERATURE_MIN ||
+    temperature > CAMERA_TEMPERATURE_MAX
+  ) {
+    throw cameraError(
+      'camera-color-grading-invalid',
+      'temperature',
+      temperature,
+      `a finite value in [${CAMERA_TEMPERATURE_MIN}, ${CAMERA_TEMPERATURE_MAX}]`,
+      'set Camera.temperature to a supported Kelvin value',
+    );
+  }
+  if (!Number.isFinite(tint) || tint < CAMERA_TINT_MIN || tint > CAMERA_TINT_MAX) {
+    throw cameraError(
+      'camera-color-grading-invalid',
+      'tint',
+      tint,
+      `a finite value in [${CAMERA_TINT_MIN}, ${CAMERA_TINT_MAX}]`,
+      'set Camera.tint to a normalized value between -1 and 1',
+    );
+  }
+  if (!Number.isFinite(colorLutStrength) || colorLutStrength < 0 || colorLutStrength > 1) {
+    throw cameraError(
+      'camera-color-grading-invalid',
+      'colorLutStrength',
+      colorLutStrength,
+      'a finite value in [0, 1]',
+      'set Camera.colorLutStrength to zero to disable the LUT or a blend in [0, 1]',
+    );
+  }
+}
 
 /**
  * Map a `camera.projection` numeric value to the closed `CameraProjection`
@@ -152,7 +324,13 @@ export function tonemapToU32(mode: Tonemap): number {
     case 'none':
       return TONEMAP_NONE;
   }
-  throw new RangeError(`Invalid tonemap mode: ${String(mode)}.`);
+  throw cameraError(
+    'camera-tonemap-invalid',
+    'tonemap',
+    mode,
+    'one of the closed Tonemap values',
+    'select a supported Camera tonemap mode',
+  );
 }
 
 /**
@@ -160,19 +338,20 @@ export function tonemapToU32(mode: Tonemap): number {
  * (feat-20260528-fxaa-post-processing / w2;
  *  feat-20260604-learn-render-4-10-anti-aliasing-msaa adds `'msaa'`).
  *
- * Four members:
+ * Supported modes:
  *   `'none'` - default; no anti-aliasing (zero-overhead opt-out path)
  *   `'fxaa'` - FXAA 3.11 fullscreen post-processing pass (screen-space, shading-aliasing)
  *   `'msaa'` - 4x hardware multi-sample anti-aliasing (geometry-edge coverage).
  *              Active on both HDR and LDR-swap-chain paths, so a default Camera
  *              (`tonemap='none'`) with `antialias='msaa'` is NOT a silent no-op.
+ *   `'smaa'` - SMAA 1x Medium, spatial three-pass color-edge anti-aliasing.
  *   `'taa'`  - temporal anti-aliasing; renderer temporal projection owns its
  *              jitter and successful-submit history contract.
  *
  * MSAA and FXAA are orthogonal: MSAA resolves geometry-edge aliasing, FXAA
  * resolves shading/high-frequency aliasing. TAA is mutually exclusive with both.
  */
-export type Antialias = 'none' | 'fxaa' | 'msaa' | 'taa';
+export type Antialias = 'none' | 'fxaa' | 'msaa' | 'taa' | 'smaa';
 
 /** Numeric encoding of anti-alias disabled (schema value for `antialias`). */
 export const ANTIALIAS_NONE = 0;
@@ -182,6 +361,8 @@ export const ANTIALIAS_FXAA = 1;
 export const ANTIALIAS_MSAA = 2;
 /** Numeric encoding of temporal anti-aliasing (schema value for `antialias`). */
 export const ANTIALIAS_TAA = 3;
+/** SMAA 1x Medium: spatial color edges, area weights, linear neighborhood blend. */
+export const ANTIALIAS_SMAA = 4;
 
 /**
  * Map a `camera.antialias` numeric value to the closed `Antialias`
@@ -192,8 +373,49 @@ export function antialiasFromF32(value: number): Antialias {
   if (value === ANTIALIAS_FXAA) return 'fxaa';
   if (value === ANTIALIAS_MSAA) return 'msaa';
   if (value === ANTIALIAS_TAA) return 'taa';
-  throw new RangeError(
-    `Invalid antialias value: ${value}. Expected ${ANTIALIAS_NONE} (none), ${ANTIALIAS_FXAA} (fxaa), ${ANTIALIAS_MSAA} (msaa), or ${ANTIALIAS_TAA} (taa).`,
+  if (value === ANTIALIAS_SMAA) return 'smaa';
+  throw cameraError(
+    'camera-antialias-invalid',
+    'antialias',
+    value,
+    `${ANTIALIAS_NONE}, ${ANTIALIAS_FXAA}, ${ANTIALIAS_MSAA}, ${ANTIALIAS_TAA}, or ${ANTIALIAS_SMAA}`,
+    'select a supported Camera antialias mode',
+  );
+}
+
+/**
+ * How a view composites its transparent draws.
+ *
+ *   `'sorted'`           - default; exact back-to-front sorted blending.
+ *   `'weighted-blended'` - weighted blended order-independent transparency
+ *                          (McGuire-Bavoil). Coverage is exact; color is a
+ *                          depth-weighted average, so the result is an
+ *                          approximation that does not depend on draw order.
+ *
+ * Draws that cannot accumulate (see the render README OIT section) stay in the
+ * sorted pass, recorded after the OIT composite. `renderer.inspect()` reports
+ * the resolved mode and every kept draw's reason.
+ */
+export type Transparency = 'sorted' | 'weighted-blended';
+
+/** Numeric encoding of sorted transparency (schema value for `transparency`). */
+export const TRANSPARENCY_SORTED = 0;
+/** Numeric encoding of weighted blended OIT (schema value for `transparency`). */
+export const TRANSPARENCY_WEIGHTED_BLENDED = 1;
+
+/**
+ * Map a `camera.transparency` numeric value to the closed `Transparency`
+ * union. Invalid values fail-fast with structured error (charter P3).
+ */
+export function transparencyFromF32(value: number): Transparency {
+  if (value === TRANSPARENCY_SORTED) return 'sorted';
+  if (value === TRANSPARENCY_WEIGHTED_BLENDED) return 'weighted-blended';
+  throw cameraError(
+    'camera-transparency-invalid',
+    'transparency',
+    value,
+    `${TRANSPARENCY_SORTED} or ${TRANSPARENCY_WEIGHTED_BLENDED}`,
+    'select Camera transparency TRANSPARENCY_SORTED or TRANSPARENCY_WEIGHTED_BLENDED',
   );
 }
 
@@ -203,10 +425,10 @@ export function antialiasFromF32(value: number): Antialias {
  *
  * Two members:
  *   `'off'` - default; no bloom post-processing (zero-overhead opt-out path)
- *   `'on'`  - bloom bright-pass + separable blur + composite pipeline
+ *   `'on'`  - five-level HDR extraction/downsample/tent-upsample pipeline
  *
- * Bloom is a discrete enum (0/1) — illegal values fail-fast with RangeError
- * (charter P3), matching antialiasFromF32 precedent.
+ * Bloom is a discrete enum (0/1) — illegal values fail-fast with the closed
+ * CameraError contract (charter P3), matching antialiasFromF32 precedent.
  */
 export type BloomEnabled = 'off' | 'on';
 
@@ -215,6 +437,19 @@ export const BLOOM_DISABLED = 0;
 /** Numeric encoding of bloom enabled (schema value for `bloom`). */
 export const BLOOM_ENABLED = 1;
 
+/** Bloom intensity is a linear HDR add-back multiplier. */
+export const CAMERA_BLOOM_INTENSITY_MIN = 0;
+export const CAMERA_BLOOM_INTENSITY_MAX = 8;
+/** Bloom threshold is expressed in scene-linear Rec.709 luminance. */
+export const CAMERA_BLOOM_THRESHOLD_MIN = 0;
+export const CAMERA_BLOOM_THRESHOLD_MAX = 65504;
+/** Soft-knee transition width relative to the threshold. */
+export const CAMERA_BLOOM_SOFT_KNEE_MIN = 0;
+export const CAMERA_BLOOM_SOFT_KNEE_MAX = 1;
+/** Coarse pyramid contribution. This is a blend, not a blur radius. */
+export const CAMERA_BLOOM_SCATTER_MIN = 0;
+export const CAMERA_BLOOM_SCATTER_MAX = 0.95;
+
 /**
  * Map a `camera.bloom` numeric value to the closed `BloomEnabled` string-literal
  * union. Invalid values fail-fast with structured error (charter P3).
@@ -222,9 +457,56 @@ export const BLOOM_ENABLED = 1;
 export function bloomEnabledFromF32(value: number): BloomEnabled {
   if (value === BLOOM_DISABLED) return 'off';
   if (value === BLOOM_ENABLED) return 'on';
-  throw new RangeError(
-    `Invalid bloom value: ${value}. Expected ${BLOOM_DISABLED} (off) or ${BLOOM_ENABLED} (on).`,
+  throw cameraError(
+    'camera-bloom-invalid',
+    'bloom',
+    value,
+    `${BLOOM_DISABLED} or ${BLOOM_ENABLED}`,
+    'select Camera bloom off or on',
   );
+}
+
+function validateBloomRange(field: string, value: number, min: number, max: number): void {
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw cameraError(
+      'camera-bloom-invalid',
+      field,
+      value,
+      `a finite value in [${min}, ${max}]`,
+      `set Camera.${field} to a finite value in [${min}, ${max}]`,
+    );
+  }
+}
+
+/** Validate the complete Camera-owned Bloom contract at the extract boundary. */
+export function validateCameraBloom(
+  bloom: number,
+  threshold: number,
+  intensity: number,
+  softKnee: number,
+  scatter: number,
+): BloomEnabled {
+  const enabled = bloomEnabledFromF32(bloom);
+  validateBloomRange(
+    'bloomThreshold',
+    threshold,
+    CAMERA_BLOOM_THRESHOLD_MIN,
+    CAMERA_BLOOM_THRESHOLD_MAX,
+  );
+  validateBloomRange(
+    'bloomIntensity',
+    intensity,
+    CAMERA_BLOOM_INTENSITY_MIN,
+    CAMERA_BLOOM_INTENSITY_MAX,
+  );
+  validateBloomRange(
+    'bloomSoftKnee',
+    softKnee,
+    CAMERA_BLOOM_SOFT_KNEE_MIN,
+    CAMERA_BLOOM_SOFT_KNEE_MAX,
+  );
+  validateBloomRange('bloomScatter', scatter, CAMERA_BLOOM_SCATTER_MIN, CAMERA_BLOOM_SCATTER_MAX);
+  return enabled;
 }
 
 /**
@@ -256,12 +538,12 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  *                              transparent black; an explicit alpha remains
  *                              visible through this public field.
  *
- * MVP supports a single active camera (the first archetype iteration hit;
- * N>1 fires 'render-system-multi-camera' + uses first). Multi-viewport is
- * OOS (see feat-future-multi-viewport). The orthographic path reuses the
+ * CameraView opts cameras into simultaneous, ordered viewport/target output.
+ * Without CameraView, ActiveCamera selects the single display view. The orthographic path reuses the
  * same near / far as the perspective path — both variants share the single
- * Camera archetype (17 scalar f32 columns + one historyVersion u32 column +
- * the `clearColor` array<f32,4> column + the `autoAspect` bool column).
+ * Camera archetype (30 schema fields, including the Bloom controls, one
+ * historyVersion u32 column, the `clearColor` array<f32,4> column, and the
+ * `autoAspect` bool column).
  *
  * @example Perspective camera at (0, 0, 3) looking down -Z (zero-config tonemap):
  *   world.spawn(
@@ -313,13 +595,27 @@ export const Camera = defineComponent('Camera', {
   top: { type: 'f32', default: 1 },
   tonemap: { type: 'f32', default: 0 },
   exposure: { type: 'f32', default: 1.0 },
+  exposureMode: { type: 'f32', default: CAMERA_EXPOSURE_MODE_MANUAL },
+  compensationEv: { type: 'f32', default: 0 },
+  rangeEv: { type: 'array<f32, 2>', default: new Float32Array([-8, 8]) },
+  rates: { type: 'array<f32, 2>', default: new Float32Array([3, 1]) },
   whitePoint: { type: 'f32', default: 4.0 },
+  temperature: { type: 'f32', default: 6504 },
+  tint: { type: 'f32', default: 0 },
+  colorLut: { type: 'shared<TextureAsset>', default: 0 as never },
+  colorLutStrength: { type: 'f32', default: 0 },
   antialias: { type: 'f32', default: 0 },
+  transparency: { type: 'f32', default: TRANSPARENCY_SORTED },
   historyVersion: { type: 'u32', default: 0 },
   bloom: { type: 'f32', default: 0 },
   bloomThreshold: { type: 'f32', default: 1.0 },
   bloomIntensity: { type: 'f32', default: 1.0 },
-  bloomBlurRadius: { type: 'f32', default: 4.0 },
+  bloomSoftKnee: { type: 'f32', default: 0.5 },
+  bloomScatter: { type: 'f32', default: 0.7 },
+  // M1 target camera role: zero means this camera is eligible for display;
+  // non-zero shared targets are auxiliary producers whose views and receipt
+  // promotion remain owned by Renderer.
+  target: { type: 'shared<RenderTarget>', simulationTransient: true },
   // feat-20260709 M3 / D-3: clear-color is one inline `array<f32,4>` column.
   // The earlier 4-scalar form (clearR/G/B/A) was chosen when this was believed
   // to be the only SoA-safe shape; the Transform (pos/quat/scale) and light
@@ -345,15 +641,89 @@ export const Camera = defineComponent('Camera', {
 
 // ─── Camera POD type (derived from Camera token — single source, AC-07) ─────
 //
-// ShapeOf<SchemaOf<typeof Camera>> resolves the 20-field POD from the Camera
+// ShapeOf<SchemaOf<typeof Camera>> resolves the 30-field POD from the Camera
 // token's schema, which is itself derived from Camera.fields[k].type (D-A7).
 // This replaces the hand-maintained CameraDataPod interface — the field set
 // lives exclusively in the Camera component definition above.
-type CameraPod = ShapeOf<SchemaOf<typeof Camera>>;
+export type CameraData = ShapeOf<SchemaOf<typeof Camera>>;
+type CameraPod = CameraData;
+
+/** Project the Camera SoA columns back into the public closed union. */
+export function cameraExposureFromColumns(
+  input: Pick<CameraData, 'exposureMode' | 'exposure' | 'compensationEv' | 'rangeEv' | 'rates'>,
+): CameraExposure {
+  if (input.exposureMode === CAMERA_EXPOSURE_MODE_MANUAL) {
+    return validateCameraExposure({ kind: 'manual', multiplier: input.exposure });
+  }
+  if (input.exposureMode === CAMERA_EXPOSURE_MODE_AUTO) {
+    return validateCameraExposure({
+      kind: 'auto',
+      fallback: input.exposure,
+      compensationEv: input.compensationEv,
+      rangeEv: [input.rangeEv[0] ?? -8, input.rangeEv[1] ?? 8],
+      rates: [input.rates[0] ?? 3, input.rates[1] ?? 1],
+    });
+  }
+  throw cameraError(
+    'camera-exposure-mode-invalid',
+    'exposureMode',
+    input.exposureMode,
+    `${CAMERA_EXPOSURE_MODE_MANUAL} or ${CAMERA_EXPOSURE_MODE_AUTO}`,
+    'set Camera.exposureMode to the manual or auto encoding',
+  );
+}
+
+function cameraExposureColumns(
+  exposure: CameraExposure,
+): Pick<CameraData, 'exposureMode' | 'exposure' | 'compensationEv' | 'rangeEv' | 'rates'> {
+  const checked = validateCameraExposure(exposure);
+  if (checked.kind === 'manual') {
+    return {
+      exposureMode: CAMERA_EXPOSURE_MODE_MANUAL,
+      exposure: checked.multiplier,
+      compensationEv: 0,
+      rangeEv: new Float32Array([-8, 8]),
+      rates: new Float32Array([3, 1]),
+    };
+  }
+  return {
+    exposureMode: CAMERA_EXPOSURE_MODE_AUTO,
+    exposure: checked.fallback,
+    compensationEv: checked.compensationEv,
+    rangeEv: new Float32Array(checked.rangeEv),
+    rates: new Float32Array(checked.rates),
+  };
+}
+
+interface CameraColorGradingOpts {
+  exposure?: CameraExposure;
+  temperature?: number;
+  tint?: number;
+  colorLut?: CameraPod['colorLut'];
+  colorLutStrength?: number;
+}
+
+function cameraColorGradingColumns(
+  opts: CameraColorGradingOpts,
+): ReturnType<typeof cameraExposureColumns> &
+  Pick<CameraData, 'temperature' | 'tint' | 'colorLut' | 'colorLutStrength'> {
+  const exposure = opts.exposure ?? { kind: 'manual', multiplier: 1 };
+  const temperature = opts.temperature ?? 6504;
+  const tint = opts.tint ?? 0;
+  const colorLutStrength = opts.colorLutStrength ?? 0;
+  validateCameraColorGrading(temperature, tint, colorLutStrength);
+  return {
+    ...cameraExposureColumns(exposure),
+    temperature,
+    tint,
+    colorLut: opts.colorLut ?? (0 as CameraPod['colorLut']),
+    colorLutStrength,
+  };
+}
 
 // ─── Camera factory functions (w13 SSOT refactoring) ─────────────────────
 //
-// Standalone factory functions that return 20-field CameraPod objects
+// Standalone factory functions that return 29-field CameraPod objects
 // matching the Camera component column shape. Not static methods because
 // TypeScript const-namespace merge is not supported, and Object.assign
 // would break the Camera token's reference identity (archetype columns /
@@ -391,6 +761,11 @@ interface CameraPerspectiveOpts {
    * receive aspect-sync regardless of this flag.
    */
   autoAspect?: boolean;
+  exposure?: CameraExposure;
+  temperature?: number;
+  tint?: number;
+  colorLut?: CameraPod['colorLut'];
+  colorLutStrength?: number;
 }
 
 interface CameraOrthographicOpts {
@@ -400,6 +775,11 @@ interface CameraOrthographicOpts {
   top: number;
   near?: number;
   far?: number;
+  exposure?: CameraExposure;
+  temperature?: number;
+  tint?: number;
+  colorLut?: CameraPod['colorLut'];
+  colorLutStrength?: number;
 }
 
 /**
@@ -469,6 +849,7 @@ export function perspective(opts: CameraPerspectiveOpts): CameraPod {
     far: opts.far ?? 100,
     projection: CAMERA_PROJECTION_PERSPECTIVE,
     ...(opts.autoAspect !== undefined ? { autoAspect: opts.autoAspect } : {}),
+    ...cameraColorGradingColumns(opts),
   };
 }
 
@@ -508,5 +889,6 @@ export function orthographic(opts: CameraOrthographicOpts): CameraPod {
     right: opts.right,
     bottom: opts.bottom,
     top: opts.top,
+    ...cameraColorGradingColumns(opts),
   };
 }

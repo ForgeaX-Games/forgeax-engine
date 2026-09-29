@@ -11,6 +11,15 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const appsRoot = resolve(repoRoot, 'apps');
 const violations = [];
+// Feature Lab rows that exercise the runtime catalog binding API itself (binding
+// construction, scoped refresh, sourceKey-identified texture residency) own a
+// standalone binding by design; every other app routes through the shared helper.
+const catalogBindingFixtures = new Set([
+  'apps/feature-lab/src/features/post-processing/3d-lut-color-grading.ts',
+  'apps/feature-lab/src/node-features/asset-identity/hot-content-catalog-refresh.ts',
+  'apps/feature-lab/src/node-features/asset-identity/runtime-binding-ssot.ts',
+  'apps/feature-lab/src/node-features/import-loading/dev-pack-routes.ts',
+]);
 
 function sourceWithoutComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -62,12 +71,13 @@ function visitAppConfigs(directory) {
       const hasStandaloneBindingConstruction = /\bcreateStandaloneRuntimeAssetBinding\s*\(/.test(
         source,
       );
-      if (hasRuntimeBindingCall) {
+      const bindingFixture = catalogBindingFixtures.has(sourceLabel);
+      if (hasRuntimeBindingCall && !bindingFixture) {
         violations.push(
           `${sourceLabel}: call configureRuntimeAssetCatalog(...) instead of configureRuntimeBinding(...)`,
         );
       }
-      if (hasStandaloneBindingConstruction) {
+      if (hasStandaloneBindingConstruction && !bindingFixture) {
         violations.push(
           `${sourceLabel}: app source must consume runtimeBinding from @forgeax/apps-shared/asset-runtime-config; do not construct a second binding`,
         );

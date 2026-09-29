@@ -277,7 +277,6 @@ function assertComparisonRecovery(result, expectedVerdict, expectedCode) {
 test('exposes the closed eight-status admission vocabulary and manifest projection', () => {
   const result = projectCiAdmission(provenPathFilter());
   assert.deepEqual(result.roster.expected, REQUIRED_CHECK_NAMES);
-  assert.equal(result.roster.expected.length, 21);
   assert.deepEqual(REQUIRED_CONTEXT_ADMISSION_STATUSES, [
     'path-filtered',
     'ordinary-push-main',

@@ -69,7 +69,16 @@ export async function writeProvenance() {
   return manifest;
 }
 
-export async function verifyProvenance() {
+export function assertCurrentSourceContentKey(manifest, expectedSourceContentKey) {
+  if (manifest.sourceContentKey !== expectedSourceContentKey) {
+    throw new Error(
+      `provenance sourceContentKey does not match current source content key ` +
+        `(manifest=${manifest.sourceContentKey}; current=${expectedSourceContentKey})`,
+    );
+  }
+}
+
+export async function verifyProvenance({ expectedSourceContentKey } = {}) {
   let manifest;
   try {
     manifest = JSON.parse(await readFile(MANIFEST, 'utf8'));
@@ -79,6 +88,9 @@ export async function verifyProvenance() {
   if (manifest.schemaVersion !== 'wgpu-wasm-provenance/1') {
     throw new Error('provenance manifest schemaVersion is not wgpu-wasm-provenance/1');
   }
+  const currentSourceContentKey =
+    expectedSourceContentKey ?? `sha256-${(await resolveAsset()).sha256}`;
+  assertCurrentSourceContentKey(manifest, currentSourceContentKey);
   const artifact = await fileFact(join(PKG, 'wgpu_wasm_bg.wasm'));
   const glue = await fileFact(join(PKG, 'wgpu_wasm.js'));
   if (artifact.sha256 !== manifest.artifactSha256 || artifact.bytes !== manifest.artifactBytes) {
@@ -96,7 +108,11 @@ export async function verifyProvenance() {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   writeProvenance()
-    .then((manifest) => verifyProvenance().then(() => console.log(JSON.stringify(manifest))))
+    .then((manifest) =>
+      verifyProvenance({ expectedSourceContentKey: manifest.sourceContentKey }).then(() =>
+        console.log(JSON.stringify(manifest)),
+      ),
+    )
     .catch((error) => {
       console.error(error.message || error);
       process.exit(1);

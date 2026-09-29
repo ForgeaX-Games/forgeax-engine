@@ -164,7 +164,7 @@ function makeLights(): MockObj {
     shadowMapSize: 0,
     depthBias: 0,
     normalBias: 0,
-    pcfKernelSize: 0,
+    directionalShadowQuality: undefined,
     pointShadow: [],
   };
 }
@@ -174,13 +174,12 @@ function makeFrameState(): MockObj {
     frameNumber: 1,
     compiledFrameGraph: null,
     compiledFrameGraphTopologyKey: null,
+    compiledFrameGraphGeneration: 0,
     retiredCompiledFrameGraphs: new Set(),
     instanceBuffers: new Map(),
     transientInstanceBuffers: [],
     warnedZeroLightStandard: false,
     warnedMultiLightDirectional: false,
-    warnedMultiLightPoint: false,
-    warnedMultiLightSpot: false,
     warnedSkyboxTonemapNone: false,
     warnedMissingBaseColorTextureHandles: new Set<number>(),
     warnedNineSliceScaleEntities: new Set<number>(),
@@ -193,8 +192,7 @@ function makeFrameState(): MockObj {
     installedPipelineHandle: 0,
     activePipeline: { buildGraph: () => null, execute: () => undefined },
     installedPipelineConfig: undefined,
-    isHdrpActive: false,
-    hdrpOncePerFrameFired: new Set(),
+    standardOncePerFrameFired: new Set(),
     pointShadowAtlas: null,
     pointShadowSnapshots: [],
     lastFoldBucketCount: 0,
@@ -230,6 +228,232 @@ function callRecordFrame(
   void bindGroupCounts;
   acquireSwapChainTarget(internals, internals.getPipelineState());
 }
+
+type DirectionalShadowAdmission = {
+  readonly requested: 'off' | 'pcf1' | 'pcf3' | 'pcf5' | 'pcssMedium' | 'pcssHigh';
+  readonly effective:
+    | 'off'
+    | 'pcf1'
+    | 'pcf3'
+    | 'pcf5'
+    | 'pcssMedium'
+    | 'pcssHigh'
+    | 'rhi-null-structural';
+  readonly status: 'accepted' | 'fallback' | 'rejected';
+  readonly fallbackReason?: 'webgl2-unsupported' | 'rhi-null-structural' | 'candidate-failed';
+  readonly lastKnownGood: boolean;
+  readonly pixelEvidence: 'available' | 'not-available';
+};
+
+async function resolveDirectionalShadowAdmission(input: {
+  readonly backendKind: 'webgpu' | 'wgpu-webgl2' | 'null';
+  readonly requested: DirectionalShadowAdmission['requested'];
+  readonly candidate: 'accepted' | 'failed';
+  readonly lastKnownGood?: Exclude<
+    DirectionalShadowAdmission['effective'],
+    'off' | 'rhi-null-structural'
+  >;
+}): Promise<DirectionalShadowAdmission> {
+  const module = (await import('../../../render/src/render-pipeline')) as Record<string, unknown>;
+  const resolver = module.resolveDirectionalShadowBackendAdmission;
+  expect(typeof resolver).toBe('function');
+  return (resolver as (value: typeof input) => DirectionalShadowAdmission)(input);
+}
+
+describe('M3 backend admission and fallback truthfulness', () => {
+  it('keeps an explicitly disabled Directional shadow off without fabricating a candidate', async () => {
+    await expect(
+      resolveDirectionalShadowAdmission({
+        backendKind: 'webgpu',
+        requested: 'off',
+        candidate: 'failed',
+      }),
+    ).resolves.toMatchObject({
+      requested: 'off',
+      effective: 'off',
+      status: 'accepted',
+      lastKnownGood: false,
+      pixelEvidence: 'not-available',
+    });
+  });
+
+  it('admits a production WebGPU/Dawn candidate without converting PCSS to PCF', async () => {
+    await expect(
+      resolveDirectionalShadowAdmission({
+        backendKind: 'webgpu',
+        requested: 'pcssMedium',
+        candidate: 'accepted',
+      }),
+    ).resolves.toMatchObject({
+      requested: 'pcssMedium',
+      effective: 'pcssMedium',
+      status: 'accepted',
+      lastKnownGood: false,
+      pixelEvidence: 'available',
+    });
+  });
+
+  it.each([
+    ['pcssMedium', 'pcf3'],
+    ['pcssHigh', 'pcf5'],
+  ] as const)('maps WebGL2 %s to fixed effective %s', async (requested, effective) => {
+    await expect(
+      resolveDirectionalShadowAdmission({
+        backendKind: 'wgpu-webgl2',
+        requested,
+        candidate: 'accepted',
+      }),
+    ).resolves.toMatchObject({
+      requested,
+      effective,
+      status: 'fallback',
+      fallbackReason: 'webgl2-unsupported',
+      pixelEvidence: 'available',
+    });
+  });
+
+  it('projects RhiNull as structural evidence and never as pixel evidence', async () => {
+    await expect(
+      resolveDirectionalShadowAdmission({
+        backendKind: 'null',
+        requested: 'pcssHigh',
+        candidate: 'accepted',
+      }),
+    ).resolves.toMatchObject({
+      requested: 'pcssHigh',
+      effective: 'rhi-null-structural',
+      status: 'fallback',
+      fallbackReason: 'rhi-null-structural',
+      pixelEvidence: 'not-available',
+    });
+  });
+
+  it('rejects a capable candidate failure while retaining compatible LKG', async () => {
+    const result = await resolveDirectionalShadowAdmission({
+      backendKind: 'webgpu',
+      requested: 'pcssHigh',
+      candidate: 'failed',
+      lastKnownGood: 'pcf3',
+    });
+    expect(result).toMatchObject({
+      requested: 'pcssHigh',
+      effective: 'pcf3',
+      status: 'rejected',
+      fallbackReason: 'candidate-failed',
+      lastKnownGood: true,
+      pixelEvidence: 'available',
+    });
+    expect(result.effective).not.toBe('pcf5');
+  });
+
+  it('keeps falsifiers observable instead of allowing fake effective mappings', async () => {
+    const result = await resolveDirectionalShadowAdmission({
+      backendKind: 'wgpu-webgl2',
+      requested: 'pcssMedium',
+      candidate: 'accepted',
+    });
+    expect(result.fallbackReason).toBe('webgl2-unsupported');
+    expect(result.effective).toBe('pcf3');
+    expect(result).not.toMatchObject({ effective: 'pcssMedium' });
+  });
+});
+
+describe('M3 bounded Directional shadow inspection', () => {
+  it('requires one detached projection with bounded tap and generation facts', async () => {
+    const module = (await import(
+      '../../../render/src/assembly/directional-shadow-inspection'
+    )) as Record<string, unknown>;
+    const project = module.projectDirectionalShadowInspection;
+    expect(typeof project).toBe('function');
+    const result = (project as (input: Record<string, unknown>) => Record<string, unknown>)({
+      admission: {
+        requested: 'pcssHigh',
+        effective: 'pcssHigh',
+        status: 'accepted',
+        pixelEvidence: 'available',
+      },
+      cascadeCount: 4,
+      mapSize: 2048,
+      shadowMapBytes: 67_108_864,
+      writerPasses: 4,
+      blockerTaps: 16,
+      filterTapUpperBound: 32,
+      seamTapUpperBound: 96,
+      deviceGeneration: 2,
+      graphGeneration: 7,
+    });
+    expect(result).toMatchObject({
+      requested: 'pcssHigh',
+      effective: 'pcssHigh',
+      cascadeCount: 4,
+      mapSize: 2048,
+      blockerTaps: 16,
+      filterTapUpperBound: 32,
+      seamTapUpperBound: 96,
+      deviceGeneration: 2,
+      graphGeneration: 7,
+    });
+    expect(Object.keys(result)).not.toContain('perPixel');
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('projects production facts instead of fixed request, taps, or generations', async () => {
+    const module = (await import(
+      '../../../render/src/assembly/directional-shadow-inspection'
+    )) as Record<string, unknown>;
+    const projectSource = module.projectDirectionalShadowInspectionSource;
+    expect(typeof projectSource).toBe('function');
+    const project = projectSource as (input: Record<string, unknown>) => Record<string, unknown>;
+    const first = project({
+      requested: 'pcf3',
+      candidate: 'accepted',
+      cascadeCount: 3,
+      mapSize: 1024,
+      shadowMapBytes: 12_582_912,
+      writerPasses: 3,
+      deviceGeneration: 4,
+      graphGeneration: 11,
+      shadowReady: true,
+    });
+    const second = project({
+      requested: 'pcssHigh',
+      candidate: 'failed',
+      lastKnownGood: 'pcf3',
+      cascadeCount: 4,
+      mapSize: 2048,
+      shadowMapBytes: 67_108_864,
+      writerPasses: 4,
+      deviceGeneration: 5,
+      graphGeneration: 12,
+      shadowReady: false,
+    });
+    expect(first).toMatchObject({
+      requested: 'pcf3',
+      effective: 'pcf3',
+      status: 'accepted',
+      filterTapUpperBound: 9,
+      seamTapUpperBound: 9,
+      cascadeCount: 3,
+      mapSize: 1024,
+      deviceGeneration: 4,
+      graphGeneration: 11,
+    });
+    expect(second).toMatchObject({
+      requested: 'pcssHigh',
+      effective: 'pcf3',
+      status: 'rejected',
+      lastKnownGood: true,
+      blockerTaps: 16,
+      filterTapUpperBound: 32,
+      seamTapUpperBound: 96,
+      cascadeCount: 4,
+      mapSize: 2048,
+      deviceGeneration: 5,
+      graphGeneration: 12,
+    });
+    expect(second).not.toMatchObject({ requested: 'pcf3', status: 'accepted', shadowMapBytes: 0 });
+  });
+});
 
 // ── w5: surface retry — reconfigure + retry once (AC-03) ─────────────────────
 
@@ -344,6 +568,72 @@ describe('Surface retry (w5)', () => {
     // AC-05: normal hot path — getCurrentTexture once, reconfigure zero
     expect(ctxCalls.n).toBe(1);
     expect(cfgCalls.n).toBe(0);
+  });
+
+  it('keeps an existing configured LKG when a reconfigure candidate fails proof validation', () => {
+    const cfgCalls = { n: 0 };
+    const ctxCalls = { n: 0 };
+    const ps = makePipelineState();
+    const reg = new HealthListenerRegistry();
+    const mockCtx = {
+      ...makeSurfaceCtx(cfgCalls, ctxCalls, 1),
+      presentationProof: { descriptor: true, acquisition: false, validation: true },
+    };
+    const pipelineState = ps as unknown as Parameters<typeof acquireSwapChainTarget>[1];
+    const dev = makeMockDevice(ps);
+    dev.caps = { backendKind: 'wgpu-webgl2', storageBuffer: false };
+    const errors: unknown[] = [];
+
+    // biome-ignore lint/suspicious/noExplicitAny: mock internals
+    const internals: any = {
+      canvas: { width: 800, height: 600 },
+      device: dev,
+      context: mockCtx,
+      getPipelineState: () => ps,
+      errorRegistry: {
+        add: () => () => {},
+        fire: (error: unknown) => errors.push(error),
+        clear: () => {},
+      },
+      healthRegistry: reg,
+    };
+
+    const target = acquireSwapChainTarget(internals, pipelineState);
+
+    expect(target).toBeNull();
+    expect(cfgCalls.n).toBe(1);
+    expect(ctxCalls.n).toBe(1);
+    expect(ps.perPassResources.configured).toBe(true);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('keeps the first surface failure unconfigured and skips the retry', () => {
+    const cfgCalls = { n: 0 };
+    const ctxCalls = { n: 0 };
+    const ps = makePipelineState();
+    ps.perPassResources.configured = false;
+    const mockCtx = {
+      ...makeSurfaceCtx(cfgCalls, ctxCalls, 1),
+      presentationProof: { descriptor: true, acquisition: false, validation: true },
+    };
+    const pipelineState = ps as unknown as Parameters<typeof acquireSwapChainTarget>[1];
+    const dev = makeMockDevice(ps);
+    dev.caps = { backendKind: 'wgpu-webgl2', storageBuffer: false };
+
+    // biome-ignore lint/suspicious/noExplicitAny: mock internals
+    const internals: any = {
+      canvas: { width: 800, height: 600 },
+      device: dev,
+      context: mockCtx,
+      getPipelineState: () => ps,
+      errorRegistry: { add: () => () => {}, fire: () => {}, clear: () => {} },
+      healthRegistry: new HealthListenerRegistry(),
+    };
+
+    expect(acquireSwapChainTarget(internals, pipelineState)).toBeNull();
+    expect(cfgCalls.n).toBe(1);
+    expect(ctxCalls.n).toBe(1);
+    expect(ps.perPassResources.configured).toBe(false);
   });
 });
 

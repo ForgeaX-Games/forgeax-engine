@@ -1,6 +1,6 @@
 #define_import_path forgeax::vfx-render.particles.trail
-#import forgeax_view::common::{View, FogViewParams, FogRay, view}
-#import forgeax_view::fog::{apply_fog}
+#import forgeax_view::common::{View, view}
+#import forgeax_view::fog::{translucent_fog, ndc_world}
 
 struct SegmentInput {
   @location(0) start: vec3<f32>,
@@ -13,29 +13,7 @@ struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) color: vec4<f32>,
   @location(1) clip_position: vec3<f32>,
-}
-
-fn fogWorldPoint(ndc: vec3<f32>) -> vec3<f32> {
-  let homogeneous = view.inverseViewProj * vec4<f32>(ndc, 1.0);
-  let divisor = select(1.0, homogeneous.w, abs(homogeneous.w) > 0.000001);
-  return homogeneous.xyz / divisor;
-}
-
-fn fogRayFromNdc(ndc: vec3<f32>) -> FogRay {
-  let worldPosition = fogWorldPoint(ndc);
-  let nearPosition = fogWorldPoint(vec3<f32>(ndc.xy, 0.0));
-  let farPosition = fogWorldPoint(vec3<f32>(ndc.xy, 1.0));
-  let perspective = view.temporalProjection.z < 0.5;
-  let perspectiveVector = worldPosition - view.cameraPos;
-  let orthographicVector = farPosition - nearPosition;
-  let direction = normalize(select(orthographicVector, perspectiveVector, perspective));
-  let origin = select(nearPosition, view.cameraPos, perspective);
-  let ray_distance = select(
-    max(dot(worldPosition - nearPosition, direction), 0.0),
-    length(perspectiveVector),
-    perspective,
-  );
-  return FogRay(origin, direction, ray_distance);
+  @location(2) uv: vec2<f32>,
 }
 
 @vertex
@@ -61,17 +39,18 @@ fn vs_main(input: SegmentInput, @builtin(vertex_index) vertexIndex: u32) -> Vert
   output.position = vec4<f32>(clipPosition, 1.0);
   output.color = input.color;
   output.clip_position = clipPosition;
+  output.uv = corner;
   return output;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  let base = vec4<f32>(0.8, 0.35, 0.1, 1.0);
-  let alpha = base.a * input.color.a;
-  let fogged = apply_fog(
-    view.fog,
-    fogRayFromNdc(input.clip_position),
-    vec4<f32>(base.rgb * input.color.rgb, alpha),
-  );
-  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  // Keep the topology's authored particle color authoritative and feather
+  // the strip edge. A solid quad makes short history segments read as a
+  // block when several particles overlap; this analytic cross-section keeps
+  // the existing clip-space ABI while providing a continuous wake.
+  let edge = 1.0 - smoothstep(0.58, 1.0, abs(input.uv.y));
+  let alpha = input.color.a * edge;
+  let fogged = translucent_fog(view, ndc_world(view, input.clip_position), input.color.rgb * alpha, alpha);
+  return vec4<f32>(fogged, alpha);
 }

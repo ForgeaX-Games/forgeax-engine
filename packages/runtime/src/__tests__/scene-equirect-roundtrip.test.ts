@@ -24,21 +24,11 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { Skylight } from '@forgeax/engine-render';
-import type {
-  EquirectAsset,
-  Handle,
-  LocalEntityId,
-  SceneAsset,
-  SceneEntity,
-} from '@forgeax/engine-types';
+import type { EquirectAsset, Handle, SceneAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 import { registerSceneComponents } from './helpers/register-scene-components';
-
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
 
 // A minimal valid EquirectAsset POD (kind:'equirect', single 2D rgba16float
 // image). The roundtrip never decodes the bytes; a tiny tight-packed buffer is
@@ -72,14 +62,13 @@ describe('scene equirect roundtrip + instantiate handle resolution (M3 / w15)', 
     // A scene whose single Skylight references the equirect source by GUID
     // string — the post-parseScenePayload intermediate state where handle
     // fields hold GUID strings awaiting resolution.
-    const entities: SceneEntity[] = [
-      {
-        localId: localId(0),
+    const entities = {
+      'entity-0': {
         components: {
           Skylight: { equirect: EQUIRECT_GUID, intensity: 1.0 },
         },
-      } as unknown as SceneEntity,
-    ];
+      },
+    };
     const scene: SceneAsset = { kind: 'scene', entities };
 
     const sceneHandle = world.allocSharedRef('SceneAsset', scene);

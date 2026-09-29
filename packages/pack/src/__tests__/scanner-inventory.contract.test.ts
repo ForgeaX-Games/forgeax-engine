@@ -88,17 +88,14 @@ describe('engine-pack scanner inventory contract', () => {
     await writeFile(scriptablePath, '// scanner fixture');
 
     const scriptablePackageId = guid('019e3969-1d48-7c3b-ac24-6d68f4570662');
-    const scriptableAssetGuid = guid('019e3969-1d48-7c3b-ac24-6d68f4570663');
     const result = await scanInventory([root], {
       scriptablePack: {
         executor: {
           load: async () => ({
             default: {
-              schemaVersion: '1.0.0',
+              schemaVersion: '2.0.0',
               packageId: scriptablePackageId,
-              assets: { effect: { guid: scriptableAssetGuid, kind: 'scene' } },
-              externalAssets: {},
-              build: () => ({ ok: true, value: {} }),
+              build: () => ({ ok: true, value: { effect: { kind: 'scene', entities: {} } } }),
             },
           }),
         },
@@ -123,14 +120,12 @@ describe('engine-pack scanner inventory contract', () => {
       format: 'pack.ts',
       sourcePath: scriptablePath,
       value: {
-        importer: 'pack-ts',
         packageId: '019e3969-1d48-7c3b-ac24-6d68f4570662',
-        subAssets: [{ sourceKey: 'effect', kind: 'scene' }],
       },
     });
     expect(
-      scriptableDeclaration?.format === 'pack.ts' ? scriptableDeclaration.meta : undefined,
-    ).toBe(scriptableDeclaration?.format === 'pack.ts' ? scriptableDeclaration.value : undefined);
+      scriptableDeclaration?.format === 'pack.ts' ? scriptableDeclaration.value : undefined,
+    ).not.toHaveProperty('subAssets');
   });
 
   it('releases the ScriptablePack loader for the path-only scan contract', async () => {
@@ -140,18 +135,15 @@ describe('engine-pack scanner inventory contract', () => {
     await writeFile(scriptablePath, '// scanner fixture');
 
     const packageId = guid('019e3969-1d48-7c3b-ac24-6d68f4570664');
-    const assetGuid = guid('019e3969-1d48-7c3b-ac24-6d68f4570665');
     let disposals = 0;
     const result = await scan([root], {
       scriptablePack: {
         executor: {
           load: async () => ({
             default: {
-              schemaVersion: '1.0.0',
+              schemaVersion: '2.0.0',
               packageId,
-              assets: { effect: { guid: assetGuid, kind: 'scene' } },
-              externalAssets: {},
-              build: () => ({ ok: true, value: {} }),
+              build: () => ({ ok: true, value: { effect: { kind: 'scene', entities: {} } } }),
             },
           }),
           dispose: async () => {
@@ -163,5 +155,10 @@ describe('engine-pack scanner inventory contract', () => {
 
     expect(result.ok).toBe(true);
     expect(disposals).toBe(1);
+  });
+
+  it('characterizes the public scanner inventory vocabulary', () => {
+    expect(typeof scan).toBe('function');
+    expect(typeof scanInventory).toBe('function');
   });
 });

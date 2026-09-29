@@ -33,6 +33,8 @@ import {
   type Result,
   type RhiAdapter,
   type RhiCanvasContext,
+  type RhiCanvasSurfaceDescriptorFacts,
+  type RhiCanvasSurfacePresentationProof,
   type RhiDevice,
   type RhiError,
   type Texture,
@@ -117,6 +119,29 @@ export type GpuCanvasContextLike = {
   getCurrentTexture(): unknown;
 };
 
+/** Configure-time presentation evidence; it does not include pixel readback. */
+export interface RawSurfacePresentationProof {
+  readonly descriptor: boolean;
+  readonly acquisition: boolean;
+  readonly validation: boolean;
+  readonly surfaceIdentity?: string;
+  readonly requested?: RhiCanvasSurfaceDescriptorFacts;
+  readonly validated?: RhiCanvasSurfaceDescriptorFacts;
+}
+
+type SurfaceProofContext = GpuCanvasContextLike & {
+  readonly probeSurfacePresentation?: () => RhiCanvasSurfacePresentationProof;
+};
+
+type MutableCanvasContext = Omit<RhiCanvasContext, 'presentationProof'> & {
+  presentationProof?: RhiCanvasSurfacePresentationProof;
+};
+
+/** Presentation proof is conjunctive; partial probes must fail closed. */
+export function validateSurfacePresentationProof(proof: RawSurfacePresentationProof): boolean {
+  return proof.descriptor && proof.acquisition && proof.validation;
+}
+
 /**
  * Build a `RhiCanvasContext` over a raw GPUCanvasContext. The forgeax form
  * (K-4) keeps the spec method names but routes failures through `Result`:
@@ -131,7 +156,7 @@ export type GpuCanvasContextLike = {
  *     `device.createTextureView(canvasContext.getCurrentTexture().unwrap(),{})`).
  */
 export function makeCanvasContext(
-  rawContext: GpuCanvasContextLike,
+  rawContext: SurfaceProofContext,
   // bug-20260610 v19: optional canvas reference. The WebGPU spec form does
   // not include width/height in `GPUCanvasConfiguration` — the canvas's own
   // `.width / .height` attributes are the surface size. The wgpu-wasm shim
@@ -146,17 +171,23 @@ export function makeCanvasContext(
   // presents after the synchronous record/submit stack; the next acquire and
   // teardown remain idempotent fallbacks if the task is interrupted.
   let pendingSurfaceTexture: { present: () => void } | null = null;
+  let pendingPresentationError: unknown;
   let surfaceDescriptor: { format?: unknown; usage?: unknown } = {};
+  let presentationProof: RhiCanvasSurfacePresentationProof | undefined;
 
   function presentPendingSurfaceTexture(): void {
+    const previousError = pendingPresentationError;
+    pendingPresentationError = undefined;
+    if (previousError !== undefined) throw previousError;
     const pending = pendingSurfaceTexture;
     pendingSurfaceTexture = null;
     if (pending === null || typeof pending.present !== 'function') return;
     try {
       pending.present();
-    } catch {
-      // Detach the wrapper even when present fails so it cannot outlive the
-      // surface and be dropped against a dead wgpu surface.
+    } catch (error) {
+      // Preserve the concrete wasm/device cause for the next owner boundary;
+      // silently dropping it turns a present failure into a later acquire panic.
+      pendingPresentationError = error;
     }
   }
 
@@ -166,8 +197,10 @@ export function makeCanvasContext(
       pendingSurfaceTexture = null;
       try {
         surfaceTexture.present();
-      } catch {
-        // A later acquisition or teardown may already have released it.
+      } catch (error) {
+        // Surface presentation is asynchronous on this backend. Keep its
+        // structured cause until the next synchronous RHI boundary observes it.
+        pendingPresentationError = error;
       }
     });
   }
@@ -204,7 +237,7 @@ export function makeCanvasContext(
     }
   }
 
-  return {
+  const context: MutableCanvasContext = {
     configure(desc: CanvasConfiguration): Result<void, RhiError> {
       try {
         // Reconfiguration invalidates the old surface image. Release it
@@ -247,18 +280,32 @@ export function makeCanvasContext(
         }
         rawContext.configure(mirrored as unknown as GPUCanvasConfiguration);
         surfaceDescriptor = { format: mirrored.format, usage: mirrored.usage };
+        presentationProof = rawContext.probeSurfacePresentation?.();
+        if (presentationProof === undefined) {
+          delete context.presentationProof;
+        } else {
+          context.presentationProof = presentationProof;
+        }
         return ok(undefined);
       } catch (e) {
         return webgpuRuntimeError(e);
       }
     },
     unconfigure(): void {
+      // The final frame has no subsequent getCurrentTexture() call to drive
+      // the normal auto-present path. Release it before wgpu destroys the
+      // surface, or wasm-bindgen can drop a SurfaceTexture against a dead
+      // Surface during renderer/page teardown. A failed present must not keep
+      // the raw surface configured: teardown still owns the unconfigure call
+      // and must run it even when the first cleanup step reports a cause.
       try {
-        // The final frame has no subsequent getCurrentTexture() call to drive
-        // the normal auto-present path. Release it before wgpu destroys the
-        // surface, or wasm-bindgen can drop a SurfaceTexture against a dead
-        // Surface during renderer/page teardown.
         presentPendingSurfaceTexture();
+      } catch {
+        // Spec-aligned silent return — unconfigure is idempotent. The surface
+        // is terminal from this owner's perspective, so the present cause is
+        // not replayed into a replacement configuration.
+      }
+      try {
         rawContext.unconfigure();
       } catch {
         // Spec-aligned silent return — unconfigure is idempotent.
@@ -302,6 +349,7 @@ export function makeCanvasContext(
       }
     },
   };
+  return context;
 }
 
 // Re-export so index.ts re-export chain stays linear.

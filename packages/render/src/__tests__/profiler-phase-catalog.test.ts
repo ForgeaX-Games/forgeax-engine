@@ -12,11 +12,17 @@ describe('Render profiler phase catalog ownership', () => {
   it('matches the profiler receiver set and includes nested record owners', () => {
     const profiler = createProfiler();
     expect(profiler.registerPhaseCatalog('render', RENDER_PHASE_CATALOG).ok).toBe(true);
-    expect(RENDER_PHASE_CATALOG).toHaveLength(5 + RENDER_RECORD_PHASE_CATALOG.length);
+    expect(RENDER_PHASE_CATALOG).toHaveLength(6 + RENDER_RECORD_PHASE_CATALOG.length);
     expect(new Set(RENDER_PHASE_CATALOG).size).toBe(RENDER_PHASE_CATALOG.length);
     expect(new Set(RENDER_PHASE_CATALOG)).toEqual(new Set(profiler.phaseCatalog.render));
     expect(RENDER_RECORD_PHASE_CATALOG).toEqual(
       expect.arrayContaining([
+        'record/occlusion-query-submit',
+        'record/occlusion-global-advance',
+        'record/gpu-driven-prepare',
+        'record/gpu-driven-prepare/plan',
+        'record/gpu-driven-prepare/filter',
+        'record/gpu-driven-prepare/shadow-views',
         'record/graph-execute/g-buffer/material-bind-groups',
         'record/graph-execute/g-buffer/pipeline-selection',
         'record/graph-execute/g-buffer/draw-submit',
@@ -25,8 +31,14 @@ describe('Render profiler phase catalog ownership', () => {
         'record/graph-execute/forward/pipeline-selection',
         'record/graph-execute/forward/draw-submit',
         'record/graph-execute/forward/geometry-loop',
+        'record/graph-execute/depth-pyramid',
+        'record/graph-execute/ssr-trace',
+        'record/graph-execute/ssr-temporal',
+        'record/graph-execute/ssr-reflection-mip',
+        'record/graph-execute/ssr-compose',
       ]),
     );
+    expect(RENDER_PHASE_CATALOG).toEqual(expect.arrayContaining(['occlusion-prepare']));
     expect(RENDER_SCENE_STATE_PHASE_CATALOG).toEqual(
       expect.arrayContaining([
         'record/scene-state/fold-buckets',

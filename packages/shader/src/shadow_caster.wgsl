@@ -1,33 +1,82 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis SKINNING_DISABLED
+#pragma variant_axis GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+#pragma variant_axis GPU_DRIVEN_SCENE_INDEX_EXPLICIT
+#pragma variant_axis ALPHA_MASK
+#pragma variant_axis VERTEX_COLOR_AVAILABLE
+#pragma material_slot surface
+#import forgeax_material::displacement::{displaceVertex, displacedNormal}
+#define_import_path forgeax::default-shadow-caster
+#import forgeax_clipping::planes::{applyViewClipping, applyLocalClipping}
+#import forgeax_material::slot::surface::{evaluate_surface, evaluate_standard_surface}
+#import forgeax_material::surface_v1::{SurfaceInput, SurfaceData}
+#import forgeax_material::parameters::{material}
 
-// @forgeax/engine-shader shadow_caster.wgsl
-// feat-20260520-directional-light-shadow-mapping M1c / w9 (D-9 / AC-09):
-// vertex-only depth pass for directional shadow map. No fragment stage --
-// the GPU writes depth automatically from gl_Position.z (depth32float RT).
-//
-// feat-20260613-csm-cascaded-shadow-maps M5 / w28: per-cascade
-// lightViewProj selection. Each cascade pass writes a different
-// `shadowCasterCascade.index` (0..3) before encoder submit; the vertex
-// shader reads it to pick `view.lightViewProj_A..D`. The atlas tile UV
-// inset is already baked into each lightViewProj host-side
-// (render-system-extract.ts), so the per-cascade viewport on the depth
-// pass clips rasterization to the correct atlas tile while the matrix
-// itself maps NDC straight into atlas-space [0,1]^2.
-//
-// Reuses:
-//   @group(0) binding(0) view : View                 -- common.wgsl
-//   @group(0) binding(5) shadowCasterCascade         -- common.wgsl
-//   @group(2) binding(0) meshes : array<Mesh>        -- common.wgsl
-//   @group(3) binding(0) instances : array<InstanceData>  -- common.wgsl
-//
-// Vertex layout: matches the 12F procedural layout of every mesh
-// (position vec3, normal vec3, uv vec2, tangent vec4; 48 B stride).
+#import forgeax_view::common::{applyLodCoverage, View, Mesh, InstanceData, ShadowCasterCascade, view, shadowCasterCascade, sampleMaterialTexture}
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+#import forgeax_view::common::{sceneIndexDraw, SCENE_INDEX_LOCAL_IDENTITY}
+#else
+#import forgeax_view::common::{meshes, instances}
+#endif
 
-#import forgeax_view::common::{View, Mesh, InstanceData, ShadowCasterCascade, view, shadowCasterCascade, meshes, instances}
+// The depth pass shares the Standard Surface contract with Forward/Deferred.
+// Alpha-mask and GPU scene-index variants add only producer-owned bindings;
+// ordinary casters keep the same four-slot pipeline layout.
 
 struct VsInput {
   @location(0) position : vec3<f32>,
+  @location(1) normal : vec3<f32>,
+  @location(2) uv : vec2<f32>,
+  @location(3) tangent : vec4<f32>,
+#if VERTEX_COLOR_AVAILABLE == true
+  @location(13) color : vec4<f32>,
+#endif
+  @location(6) uv1 : vec2<f32>,
+  @location(7) uv2 : vec2<f32>,
+  @location(8) uv3 : vec2<f32>,
+  @location(9) uv4 : vec2<f32>,
+  @location(10) uv5 : vec2<f32>,
+  @location(11) uv6 : vec2<f32>,
+  @location(12) uv7 : vec2<f32>,
+#if SKINNING_DISABLED == false
+  @location(4) skinIndex : vec4<u32>,
+  @location(5) skinWeight : vec4<f32>,
+#endif
 };
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) positionOS : vec3<f32>,
+  @location(1) positionWS : vec3<f32>,
+  @location(2) normalWS : vec3<f32>,
+  @location(3) tangentWS : vec4<f32>,
+  @location(4) surfaceUv : vec2<f32>,
+  @location(5) uv1 : vec2<f32>,
+  @location(6) uv2 : vec2<f32>,
+  @location(7) uv3 : vec2<f32>,
+  @location(8) uv4 : vec2<f32>,
+  @location(9) uv5 : vec2<f32>,
+  @location(10) uv6And7 : vec4<f32>,
+#if VERTEX_COLOR_AVAILABLE == true
+  @location(12) color : vec4<f32>,
+#endif
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  @location(11) @interpolate(flat) materialAddress : vec2<u32>,
+#endif
+};
+
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+@group(1) @binding(46) var<storage, read> sceneMaterials : array<MaterialParameters>;
+@group(3) @binding(2) var<storage, read> visibleItems : array<vec4<u32>>;
+#endif
+
+#if SKINNING_DISABLED == false
+#if STORAGE_BUFFER_AVAILABLE == true
+@group(2) @binding(1) var<storage, read> palette : array<mat4x4<f32>>;
+#else
+@group(2) @binding(1) var<uniform> palette : array<mat4x4<f32>, 255>;
+#endif
+#endif
 
 fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
   switch (layer) {
@@ -38,17 +87,155 @@ fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
   }
 }
 
-@vertex
-fn vs_main(in : VsInput, @builtin(instance_index) idx : u32) -> @builtin(position) vec4<f32> {
-  let worldPos = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(in.position, 1.0);
-  // feat-20260625-spot-light-shadow-mapping M2 / w10 (D-1): spot shadow passes
-  // set `isSpot = 1u` and write their perspective matrix into
-  // `spotLightViewProj`; directional cascade passes keep `isSpot = 0u` and read
-  // `view.lightViewProj_A..D` via `index`. Routing on the discriminant keeps
-  // the spot matrix out of the directional View UBO (no same-frame contention).
-  if (shadowCasterCascade.isSpot == 1u) {
-    return shadowCasterCascade.spotLightViewProj * worldPos;
+fn standardVertexPosition(in : VsInput) -> vec3<f32> {
+#ifdef DISPLACEMENT_TEXTURE_AVAILABLE
+  if (standardUsesDisplacementTexture()) {
+    return displaceVertex(in.position, in.normal, displacementTexture, displacementTexture_sampler,
+      material.displacementScale, material.displacementBias,
+      material.displacementTextureCoordinatesTransform, material.displacementTextureCoordinatesMetadata,
+      array<vec2<f32>, 8>(in.uv, in.uv1, in.uv2, in.uv3, in.uv4, in.uv5, in.uv6, in.uv7));
   }
-  let lvp = _cascadeLightViewProj(shadowCasterCascade.index);
-  return lvp * worldPos;
+#endif
+  return in.position;
+}
+
+fn shadowVertex(in : VsInput, idx : u32) -> VsOut {
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // visible = (scene instance row, material row, palette base, LOD fade).
+  let visible = visibleItems[idx];
+  let materialIndex = visible.y;
+  let lodFadeBits = visible.w;
+  let sceneDraw = sceneIndexDraw(visible.x);
+  material = sceneMaterials[materialIndex];
+#if SKINNING_DISABLED == false
+  let paletteBase = visible.z;
+  // The palette already carries world space; keep the shared scene rows bound.
+  _ = sceneDraw.world;
+#endif
+#else
+  let paletteBase = 0u;
+#endif
+  let localPosition = standardVertexPosition(in);
+#if SKINNING_DISABLED == false
+  let skinMatrix = palette[paletteBase + in.skinIndex.x] * in.skinWeight.x +
+    palette[paletteBase + in.skinIndex.y] * in.skinWeight.y +
+    palette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
+    palette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
+  let worldPos = skinMatrix * vec4<f32>(localPosition, 1.0);
+  let worldNormal = normalize((skinMatrix * vec4<f32>(in.normal, 0.0)).xyz);
+  let worldTangent = normalize((skinMatrix * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
+#else
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  let worldMatrix = sceneDraw.world * SCENE_INDEX_LOCAL_IDENTITY;
+#else
+  let worldMatrix = meshes[0u].worldFromLocal * instances[idx].localFromInstance;
+#endif
+  let worldPos = worldMatrix * vec4<f32>(localPosition, 1.0);
+  let worldNormal = normalize((worldMatrix * vec4<f32>(in.normal, 0.0)).xyz);
+  let worldTangent = normalize((worldMatrix * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
+#endif
+
+  var out : VsOut;
+  if (shadowCasterCascade.isSpot == 1u) {
+    out.clip = shadowCasterCascade.spotLightViewProj * worldPos;
+  } else {
+    out.clip = _cascadeLightViewProj(shadowCasterCascade.index) * worldPos;
+  }
+  out.positionOS = localPosition;
+  out.positionWS = worldPos.xyz;
+  out.normalWS = worldNormal;
+  out.tangentWS = vec4<f32>(worldTangent, in.tangent.w);
+  out.surfaceUv = in.uv;
+  out.uv1 = in.uv1;
+  out.uv2 = in.uv2;
+  out.uv3 = in.uv3;
+  out.uv4 = in.uv4;
+  out.uv5 = in.uv5;
+  out.uv6And7 = vec4<f32>(in.uv6, in.uv7);
+#if VERTEX_COLOR_AVAILABLE == true
+  out.color = in.color;
+#endif
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  out.materialAddress = vec2<u32>(materialIndex, lodFadeBits);
+#endif
+  return out;
+}
+
+@vertex
+fn vs_main(in : VsInput, @builtin(instance_index) idx : u32) -> VsOut {
+  return shadowVertex(in, idx);
+}
+
+// Scene-index shadow batches use a receipt-owned entry point so the indirect
+// lane cannot silently reinterpret the visible stream as instance indices.
+@vertex
+fn vs_scene_index(in : VsInput, @builtin(instance_index) idx : u32) -> VsOut {
+  return shadowVertex(in, idx);
+}
+
+fn evaluateShadowSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // Keep custom shadow helpers on the same producer-selected scene row as the
+  // Standard Surface path. The scene compiler maps `material` to a private
+  // per-invocation provider for this variant.
+  material = sceneMaterials[in.materialAddress.x];
+  applyLodCoverage(in.clip.xy, bitcast<f32>(in.materialAddress.y));
+#endif
+
+  applyViewClipping(in.positionWS, true);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.positionWS, true, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+  let viewDirectionWS = normalize(view.cameraPos - in.positionWS);
+  let input = SurfaceInput(
+    in.positionOS,
+    in.positionWS,
+    normalize(cross(dpdy(in.positionWS), dpdx(in.positionWS))) * select(-1.0, 1.0, frontFacing),
+    in.normalWS,
+    in.tangentWS,
+    viewDirectionWS,
+    in.surfaceUv,
+    in.uv1,
+    in.uv2,
+    in.uv3,
+    in.uv4,
+    in.uv5,
+    in.uv6And7.xy,
+    in.uv6And7.zw,
+#if VERTEX_COLOR_AVAILABLE == true
+    in.color,
+#else
+    vec4<f32>(1.0),
+#endif
+    frontFacing,
+    vec4<f32>(0.0), vec4<f32>(0.0),
+  );
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+#if ALPHA_MASK == true
+  return evaluate_standard_surface(input, sceneMaterials[in.materialAddress.x]);
+#else
+  return evaluate_surface(input);
+#endif
+#else
+  return evaluate_surface(input);
+#endif
+}
+
+fn alphaTestShadowSurface(surface : SurfaceData) {
+  if (surface.alphaClipThreshold > 0.0 && surface.opacity <= surface.alphaClipThreshold) {
+    discard;
+  }
+}
+
+// The depth-only pass has no color target; alpha clipping still runs through
+// the selected Standard Surface before depth is committed.
+@fragment
+fn fs_shadow(in : VsOut, @builtin(front_facing) frontFacing : bool) {
+  alphaTestShadowSurface(evaluateShadowSurface(in, frontFacing));
+}
+
+// Keep fs_main available for material consumers that explicitly request it.
+@fragment
+fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) {
+  alphaTestShadowSurface(evaluateShadowSurface(in, frontFacing));
 }

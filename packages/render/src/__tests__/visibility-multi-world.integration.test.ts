@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
 import { resolveVisibility } from '../extract/visibility';
 import type { MaterialSnapshot, RenderableSnapshot } from '../render-system-extract';
-import { extractFrames } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 import { RenderScene } from '../scene/render-scene';
 
 const sceneMaterial = {} as MaterialSnapshot;

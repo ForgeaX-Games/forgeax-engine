@@ -31,7 +31,13 @@ export function createRenderAssetPort(
       const artifact = shaderRegistry.findMaterialArtifact(shaderId);
       if (!artifact.ok) return [];
       return artifact.value.paramSchema
-        .filter((parameter) => parameter.type === 'texture2d')
+        .filter(
+          (parameter) =>
+            parameter.type === 'texture2d' ||
+            parameter.type === 'texture_cube' ||
+            parameter.type === 'texture_depth_2d' ||
+            parameter.type === 'texture_cube_array',
+        )
         .map((parameter) => parameter.name);
     },
   };

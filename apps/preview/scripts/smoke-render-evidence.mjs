@@ -16,7 +16,7 @@ import { PNG } from 'pngjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const ARTIFACT_DIR = resolve(
-  process.env.FORGEAX_RENDER_EVIDENCE_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/render-evidence'),
+  process.env.FORGEAX_RENDER_EVIDENCE_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/render-evidence'),
 );
 const PORT = Number.parseInt(process.env.FORGEAX_RENDER_EVIDENCE_PORT ?? '5187', 10);
 const production = process.env.FORGEAX_RENDER_EVIDENCE_MODE === 'production';

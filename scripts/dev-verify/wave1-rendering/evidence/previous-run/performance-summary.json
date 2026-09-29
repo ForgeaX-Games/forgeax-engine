@@ -1,0 +1,1212 @@
+{
+  "method": "Union of raw GPU timestamp intervals, not additive or exclusive pass costs. Fixed ordinals 121-420; ceil((n-1)*q) percentile index.",
+  "runs": [
+    {
+      "file": "none-baseline-a.json.gz",
+      "decodedSha256": "d2fd9bd21c3117707e28e8c64d7369f656f95d5619404c79e148c27b99c45a35",
+      "artifactSha256": "acccae26747d30444c7547a885403128d0677141834c29392ebbba5b9a3f6fb8",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "965f2a0f6a6320bbbeb12fb9c438fe14d5b564292fb6b5d3e6d0b783bd64e7eb"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "none",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 5.24288,
+        "p95": 8.650752
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.393216,
+          "p95": 0.589824
+        },
+        "skybox": {
+          "p50": 0.131072,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 1.114112,
+          "p95": 1.6384
+        },
+        "standard-scene-data": {
+          "p50": 1.376256,
+          "p95": 2.031616
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.196608,
+          "p95": 0.393216
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.131072
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.96608,
+          "p95": 3.342336
+        },
+        "ssr-temporal": {
+          "p50": 0.65536,
+          "p95": 1.769472
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0.065536,
+          "p95": 0.196608
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 4.849664,
+          "p95": 8.126464
+        },
+        "forward": {
+          "p50": 4.849664,
+          "p95": 8.126464
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "output-transform": {
+          "p50": 4.9152,
+          "p95": 8.388608
+        },
+        "debug-overlay": {
+          "p50": 4.9152,
+          "p95": 8.388608
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-baseline-a.json.gz",
+      "decodedSha256": "c1d3c9f8fea69626d3ad92f884964dff56f9e106f5a5b681b0b6470bb4c071dc",
+      "artifactSha256": "231a44244ec7855d220646bdce2d93face3563db8fdb108b60e87ac708b552b8",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "965f2a0f6a6320bbbeb12fb9c438fe14d5b564292fb6b5d3e6d0b783bd64e7eb"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 14.024704,
+        "p95": 24.90368
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.262144,
+          "p95": 0.458752
+        },
+        "skybox": {
+          "p50": 0.131072,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.65536,
+          "p95": 1.245184
+        },
+        "standard-scene-data": {
+          "p50": 0.851968,
+          "p95": 1.572864
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.32768
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.6384,
+          "p95": 3.2768
+        },
+        "ssr-temporal": {
+          "p50": 1.114112,
+          "p95": 2.228224
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0.065536,
+          "p95": 0.131072
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 4.128768,
+          "p95": 8.781824
+        },
+        "forward": {
+          "p50": 4.128768,
+          "p95": 8.84736
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 13.76256,
+          "p95": 23.527424
+        },
+        "output-transform": {
+          "p50": 13.828096,
+          "p95": 24.576
+        },
+        "debug-overlay": {
+          "p50": 13.828096,
+          "p95": 24.641536
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-baseline-b.json.gz",
+      "decodedSha256": "052c4d7a6f90c6b5e1436a92e840629663ee413d58289e99c451b6b67c28983e",
+      "artifactSha256": "546a891c833bdcd7394c490f2ae32730f7b60aa89a47c631a7f9eacfdd15fe1d",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "965f2a0f6a6320bbbeb12fb9c438fe14d5b564292fb6b5d3e6d0b783bd64e7eb"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 11.993088,
+        "p95": 21.364736
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.196608,
+          "p95": 0.458752
+        },
+        "skybox": {
+          "p50": 0.065536,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.524288,
+          "p95": 1.179648
+        },
+        "standard-scene-data": {
+          "p50": 0.720896,
+          "p95": 1.507328
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.262144
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.376256,
+          "p95": 2.94912
+        },
+        "ssr-temporal": {
+          "p50": 0.917504,
+          "p95": 1.900544
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 3.670016,
+          "p95": 7.20896
+        },
+        "forward": {
+          "p50": 3.735552,
+          "p95": 7.20896
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 11.730944,
+          "p95": 20.905984
+        },
+        "output-transform": {
+          "p50": 11.862016,
+          "p95": 21.037056
+        },
+        "debug-overlay": {
+          "p50": 11.862016,
+          "p95": 21.037056
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-candidate-a.json.gz",
+      "decodedSha256": "9651dec0705cfba0f16f236d2e5f45ed1617e14ee7ec0d2996ce01c964243573",
+      "artifactSha256": "36952a7dbbff3ccb7db55cb832963fc339b489e6dad74e17c6d70dfd1f0c1ecd",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "60e8404e6b3015ff3f3da1c90e6451a20bf1bf5ccdd66c998eac24d3f3f2ef36"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 9.699328,
+        "p95": 18.546688
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.196608,
+          "p95": 0.458752
+        },
+        "skybox": {
+          "p50": 0.065536,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.65536,
+          "p95": 1.31072
+        },
+        "standard-scene-data": {
+          "p50": 0.851968,
+          "p95": 1.703936
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.262144
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.572864,
+          "p95": 3.211264
+        },
+        "ssr-temporal": {
+          "p50": 1.114112,
+          "p95": 2.555904
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0.065536,
+          "p95": 0.196608
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.131072
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.131072
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 4.128768,
+          "p95": 8.912896
+        },
+        "forward": {
+          "p50": 4.128768,
+          "p95": 8.978432
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 9.306112,
+          "p95": 17.760256
+        },
+        "output-transform": {
+          "p50": 9.371648,
+          "p95": 18.087936
+        },
+        "debug-overlay": {
+          "p50": 9.371648,
+          "p95": 18.153472
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-candidate-b.json.gz",
+      "decodedSha256": "63d2120223efafe399eac19a54c88af0ff02333fc39be5f750e8c74596dc15ca",
+      "artifactSha256": "2fe0a916fba0f0fd1fc4e55be15f0376e63715ee2359603c6fb0b13bd19b7f4b",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "60e8404e6b3015ff3f3da1c90e6451a20bf1bf5ccdd66c998eac24d3f3f2ef36"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 9.895936,
+        "p95": 18.612224
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.262144,
+          "p95": 0.524288
+        },
+        "skybox": {
+          "p50": 0.131072,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.65536,
+          "p95": 1.31072
+        },
+        "standard-scene-data": {
+          "p50": 0.851968,
+          "p95": 1.769472
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.393216
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.572864,
+          "p95": 3.211264
+        },
+        "ssr-temporal": {
+          "p50": 1.114112,
+          "p95": 2.29376
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0.065536,
+          "p95": 0.196608
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 4.25984,
+          "p95": 8.912896
+        },
+        "forward": {
+          "p50": 4.25984,
+          "p95": 8.912896
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 9.437184,
+          "p95": 17.956864
+        },
+        "output-transform": {
+          "p50": 9.568256,
+          "p95": 18.219008
+        },
+        "debug-overlay": {
+          "p50": 9.568256,
+          "p95": 18.35008
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-final-a.json.gz",
+      "decodedSha256": "cbc715d732dfed8517438f5e340d92c60e8c2f5dbba91db80679f2b0f4ecfb92",
+      "artifactSha256": "dfb742729cb7e5ad02addde529a07d82cb06e0d9698a0fcb4bf58e1d97d85c7c",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "ec481125d2ae841b9a228ff66bdc260fb67a10904876a99802252635cd30378a"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 8.650752,
+        "p95": 16.449536
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.196608,
+          "p95": 0.458752
+        },
+        "skybox": {
+          "p50": 0.065536,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.65536,
+          "p95": 1.179648
+        },
+        "standard-scene-data": {
+          "p50": 0.786432,
+          "p95": 1.507328
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.262144
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.572864,
+          "p95": 2.883584
+        },
+        "ssr-temporal": {
+          "p50": 0.98304,
+          "p95": 1.900544
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 3.801088,
+          "p95": 7.274496
+        },
+        "forward": {
+          "p50": 3.801088,
+          "p95": 7.20896
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 8.323072,
+          "p95": 15.925248
+        },
+        "output-transform": {
+          "p50": 8.454144,
+          "p95": 16.121856
+        },
+        "debug-overlay": {
+          "p50": 8.454144,
+          "p95": 16.187392
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    },
+    {
+      "file": "taa-final-b.json.gz",
+      "decodedSha256": "79d618ea1485e285898372cfe866dceba7fc967930733ec2a3b475db8373f2ce",
+      "artifactSha256": "ecc0697793d805af754d2d167fac1bb4ffa7a7b39c7b951549b23e7a3a347a8e",
+      "source": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+      "shaderIdentity": {
+        "traceShaderSha256": "6992c91fecad7d711d212cb82b0f2e676a9f11247122eef24cf1995e453a48c3",
+        "composeShaderSha256": "2fe5d65eac2f018e3bfad55df0492b99301adf9f948b26e91b75e8b6a812da0c",
+        "shaderManifestSha256": "da52b4293d75a462371f32e59afd847f9137a37695207036744d70e41b9b9414"
+      },
+      "adapter": {
+        "vendor": "apple",
+        "architecture": "metal-3",
+        "device": "apple-m4-pro",
+        "description": "Metal driver on macOS Version 26.4.1 (Build 25E253)",
+        "isFallbackAdapter": false
+      },
+      "host": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "node": "v26.4.0"
+      },
+      "scene": {
+        "revision": "textured-reflection-scenes-v6",
+        "name": "tiles",
+        "width": 1920,
+        "height": 1080
+      },
+      "antialias": "taa",
+      "sampleFrames": 300,
+      "firstOrdinal": 121,
+      "lastOrdinal": 420,
+      "unionMs": {
+        "p50": 8.84736,
+        "p95": 16.449536
+      },
+      "passIntervalMs": {
+        "spot-shadow": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "g-buffer": {
+          "p50": 0.196608,
+          "p95": 0.458752
+        },
+        "skybox": {
+          "p50": 0.065536,
+          "p95": 0.393216
+        },
+        "lighting": {
+          "p50": 0.65536,
+          "p95": 1.179648
+        },
+        "standard-scene-data": {
+          "p50": 0.786432,
+          "p95": 1.507328
+        },
+        "ssr-hiz-seed": {
+          "p50": 0.131072,
+          "p95": 0.262144
+        },
+        "ssr-hiz-reduce-1": {
+          "p50": 0.065536,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-hiz-reduce-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-trace": {
+          "p50": 1.572864,
+          "p95": 2.94912
+        },
+        "ssr-temporal": {
+          "p50": 1.048576,
+          "p95": 1.900544
+        },
+        "ssr-reflection-mip-1": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-2": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-3": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-4": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-5": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-6": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-7": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-8": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-reflection-mip-9": {
+          "p50": 0,
+          "p95": 0.065536
+        },
+        "ssr-compose": {
+          "p50": 3.866624,
+          "p95": 7.20896
+        },
+        "forward": {
+          "p50": 3.866624,
+          "p95": 7.20896
+        },
+        "linear-hdr-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "reflection-fallback-observation": {
+          "p50": 0,
+          "p95": 0
+        },
+        "taa-resolve": {
+          "p50": 8.51968,
+          "p95": 15.925248
+        },
+        "output-transform": {
+          "p50": 8.650752,
+          "p95": 16.121856
+        },
+        "debug-overlay": {
+          "p50": 8.650752,
+          "p95": 16.121856
+        }
+      },
+      "gpuErrors": [],
+      "errors": []
+    }
+  ]
+}

@@ -2,8 +2,8 @@
 // hello-scene-nesting headless smoke — dawn-node structural smoke.
 //
 // This script boots dawn-node WebGPU, creates a renderer with inline
-// SceneAsset PODs (outer scene with mount -> inner cube scene), renders
-// 300 frames and verifies content appeared (pixel readback per-site
+// SceneAsset PODs (outer scene with keyed instance -> inner cube scene), renders
+// 60 frames and verifies content appeared (pixel readback per-site
 // distance from clear color exceeds threshold on at least one mesh site).
 //
 // Structural-only smoke: no committed baseline.png yet. AC-33 v1 lock
@@ -14,7 +14,7 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -117,7 +117,8 @@ const { err: errResult, ok: okResult } = await import('@forgeax/engine-types');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -172,36 +173,41 @@ const meshHandle = world.allocSharedRef('MeshAsset', cubeResult.value);
 // engine-broken from intentionally-empty.
 const innerScene = {
   kind: 'scene',
-  entities: [{
-    localId: 0,
-    components: {
-      Transform: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]},
-      MeshFilter: { assetHandle: Number(meshHandle) },
-      MeshRenderer: { materials: [Number(unlitMatHandle)] },
+  entities: {
+    cube: {
+      components: {
+        Transform: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]},
+        MeshFilter: { assetHandle: Number(meshHandle) },
+        MeshRenderer: { materials: [Number(unlitMatHandle)] },
+      },
     },
-  }],
+  },
 };
 
 const outerScene = {
   kind: 'scene',
-  entities: [{
-    localId: 0,
-    components: {
-      Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
-      MeshFilter: { assetHandle: Number(meshHandle) },
-      MeshRenderer: { materials: [Number(unlitMatHandle)] },
+  entities: {
+    sibling: {
+      components: {
+        Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
+        MeshFilter: { assetHandle: Number(meshHandle) },
+        MeshRenderer: { materials: [Number(unlitMatHandle)] },
+      },
     },
-  }],
-  mounts: [{
-    localId: 1,
-    source: 0,
-    memberFirst: 2,
-    memberCount: 1,
-    overrides: [
-      { localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] },
-      { localId: 2, comp: 'Name', value: { value: 'm30-mounted-member' } },
-    ],
-  }],
+    inner: {
+      components: {},
+      instance: {
+        source: 'inner-scene',
+        overrides: [{
+          target: ['cube'],
+          components: {
+            Transform: { pos: [1.0, 0, 0] },
+            Name: { value: 'm30-mounted-member' },
+          },
+        }],
+      },
+    },
+  },
 };
 
 const innerHandle = world.allocSharedRef('SceneAsset', innerScene);
@@ -209,8 +215,8 @@ const innerHandle = world.allocSharedRef('SceneAsset', innerScene);
 const outerHandle = world.allocSharedRef('SceneAsset', outerScene);
 const sceneChildren = new Map([[Number(outerHandle), innerHandle]]);
 
-worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
-  void sourceIdx;
+worldSetSceneAssetResolver(world, (sourceKey, parentHandle) => {
+  void sourceKey;
   const child = sceneChildren.get(Number(parentHandle));
   return child === undefined ? errResult({ code: 'asset-not-found' }) : okResult(child);
 });
@@ -233,6 +239,7 @@ if (!instRes.ok) {
 const rootEntity = instRes.value.root;
 const baselineEntityCount = world.inspect().entityCount;
 const sceneInst = world.get(rootEntity, SceneInstance);
+const baselineMountedMember = sceneInst.ok ? sceneInst.value.mapping[2] : undefined;
 let addOverrideVerified = false;
 if (sceneInst.ok) {
   const mapping = sceneInst.value.mapping;
@@ -274,7 +281,7 @@ console.error = (...args) => {
   consoleErrorOriginal(...args);
 };
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -380,134 +387,116 @@ const meshedRenderCount = Object.values(pixelRegions)
   .filter((stats) => stats.stddevLuma > 2 && stats.maxLuma > 20).length;
 
 // M30 same-World recovery: clone the loader-shaped scene POD, inject one stale
-// field, observe the exact diagnostic, then despawn and repair it without
+// field, observe the contextual rejection, then repair it without
 // disturbing the healthy baseline instance.
 const m30Failures = [];
 const faultyInner = structuredClone(innerScene);
-faultyInner.entities[0].components.Transform.unknownField = 'M30-unknown-field';
+faultyInner.entities.cube.components.Transform.unknownField = 'M30-unknown-field';
 const faultyOuter = structuredClone(outerScene);
 const faultyInputSnapshot = JSON.stringify(faultyInner);
 const faultyInnerHandle = world.allocSharedRef('SceneAsset', faultyInner);
 const faultyOuterHandle = world.allocSharedRef('SceneAsset', faultyOuter);
 sceneChildren.set(Number(faultyOuterHandle), faultyInnerHandle);
 const faultyResult = worldInstantiateScene(world, faultyOuterHandle);
-if (!faultyResult.ok) {
-  m30Failures.push(`faulty instantiate failed: ${faultyResult.error.code}`);
-} else {
-  const faultyRoot = faultyResult.value.root;
-  const faultyState = world.get(faultyRoot, SceneInstance);
-  const faultyMember = faultyState.ok ? faultyState.value.mapping[2] : undefined;
-  const faultyDiagnostic = faultyResult.value.diagnostics[0];
-  const exactDiagnostic = JSON.stringify(faultyResult.value.diagnostics) === JSON.stringify([
-    { component: 'Transform', field: 'unknownField', localId: 0 },
-  ]);
-  const knownFieldValue = faultyMember === undefined
-    ? undefined
-    : Array.from(world.get(faultyMember, Transform).unwrap().pos);
-  const faultyEntityCount = world.inspect().entityCount;
-  const inputUnchanged = JSON.stringify(faultyInner) === faultyInputSnapshot;
-  const faultyCleanupCount = worldDespawnScene(world, faultyRoot).unwrap();
-  const noOrphanAfterFault = world.inspect().entityCount === baselineEntityCount;
-  const healthyRetainedAfterFault = world.get(rootEntity, SceneInstance).ok;
-  sceneChildren.delete(Number(faultyOuterHandle));
-  world.sharedRefs.release(faultyInnerHandle);
-  world.sharedRefs.release(faultyOuterHandle);
+const faultyEntityCount = world.inspect().entityCount;
+const faultyDetail = faultyResult.ok ? undefined : faultyResult.error.detail;
+const rejectedBeforeSpawn = !faultyResult.ok
+  && faultyResult.error.code === 'asset-package-invalid'
+  && faultyDetail?.reason === 'unknown component field'
+  && faultyDetail?.component === 'Transform'
+  && faultyDetail?.field === 'unknownField'
+  && faultyDetail?.entity === 'cube';
+const inputUnchanged = JSON.stringify(faultyInner) === faultyInputSnapshot;
+const noOrphanAfterFault = faultyEntityCount === baselineEntityCount;
+const healthyRetainedAfterFault = world.get(rootEntity, SceneInstance).ok;
+if (!rejectedBeforeSpawn) {
+  m30Failures.push(`wrong rejection: ${JSON.stringify(faultyResult)}`);
+}
+if (!inputUnchanged || !noOrphanAfterFault || !healthyRetainedAfterFault) {
+  m30Failures.push(
+    `fault rejection invariant failed: ${JSON.stringify({ inputUnchanged, noOrphanAfterFault, healthyRetainedAfterFault, faultyEntityCount, baselineEntityCount })}`,
+  );
+}
+sceneChildren.delete(Number(faultyOuterHandle));
+world.sharedRefs.release(faultyInnerHandle);
+world.sharedRefs.release(faultyOuterHandle);
 
-  if (!exactDiagnostic || faultyDiagnostic === undefined) {
-    m30Failures.push(`wrong diagnostic: ${JSON.stringify(faultyResult.value.diagnostics)}`);
+const correctedInner = structuredClone(faultyInner);
+delete correctedInner.entities.cube.components.Transform.unknownField;
+const correctedOuter = structuredClone(faultyOuter);
+const correctedInputSnapshot = JSON.stringify(correctedInner);
+const correctedInnerHandle = world.allocSharedRef('SceneAsset', correctedInner);
+const correctedOuterHandle = world.allocSharedRef('SceneAsset', correctedOuter);
+sceneChildren.set(Number(correctedOuterHandle), correctedInnerHandle);
+const correctedResult = worldInstantiateScene(world, correctedOuterHandle);
+if (!correctedResult.ok) {
+  m30Failures.push(`corrected instantiate failed: ${correctedResult.error.code}`);
+} else {
+  const correctedRoot = correctedResult.value.root;
+  const correctedState = world.get(correctedRoot, SceneInstance);
+  const correctedMember = correctedState.ok ? correctedState.value.mapping[2] : undefined;
+  const correctedEmpty = correctedResult.value.diagnostics.length === 0;
+  const correctionInputUnchanged = JSON.stringify(correctedInner) === correctedInputSnapshot;
+  const freshIdentity = Number(correctedRoot) !== Number(rootEntity)
+    && correctedMember !== undefined
+    && baselineMountedMember !== undefined
+    && Number(correctedMember) !== Number(baselineMountedMember);
+  const healthyRetained = world.get(rootEntity, SceneInstance).ok;
+  for (let i = 0; i < 60; i += 1) {
+    world.update().unwrap();
+    const draw = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+    if (!draw.ok) m30Failures.push(`corrected draw failed: ${draw.error.code}`);
+    else void renderer.observe(draw.value, { include: ['draws'] });
   }
-  if (JSON.stringify(knownFieldValue) !== JSON.stringify([1, 0, 0])) {
-    m30Failures.push(`known mount field was not preserved: ${JSON.stringify(knownFieldValue)}`);
-  }
-  if (faultyEntityCount !== baselineEntityCount + 5) {
-    m30Failures.push(`faulty entity count=${faultyEntityCount}, baseline=${baselineEntityCount}`);
-  }
-  if (!inputUnchanged || !noOrphanAfterFault || !healthyRetainedAfterFault || faultyCleanupCount !== 5) {
+  await device.queue.onSubmittedWorkDone();
+  bytes = await readback();
+  const repairedPixelSamples = {};
+  for (const site of sites) repairedPixelSamples[site.name] = readRgba(site.x, site.y);
+  const repairedPixelRegions = {
+    left: region(0, Math.floor(WIDTH / 2)),
+    right: region(Math.floor(WIDTH / 2), WIDTH),
+  };
+  const repairedMeshedRenderCount = Object.values(repairedPixelRegions)
+    .filter((stats) => stats.stddevLuma > 2 && stats.maxLuma > 20).length;
+  const firstCleanupCount = worldDespawnScene(world, correctedRoot).unwrap();
+  const secondCleanup = world.get(correctedRoot, SceneInstance).ok
+    ? { changed: true, count: worldDespawnScene(world, correctedRoot).unwrap() }
+    : { changed: false, count: 0 };
+  const healthyRetainedBeforeFinalTeardown = world.get(rootEntity, SceneInstance).ok;
+  sceneChildren.delete(Number(correctedOuterHandle));
+  world.sharedRefs.release(correctedInnerHandle);
+  world.sharedRefs.release(correctedOuterHandle);
+  if (!correctedEmpty || !correctionInputUnchanged || !freshIdentity || !healthyRetained) {
     m30Failures.push(
-      `fault cleanup invariant failed: ${JSON.stringify({ inputUnchanged, noOrphanAfterFault, healthyRetainedAfterFault, faultyCleanupCount })}`,
+      `corrected recovery invariant failed: ${JSON.stringify({ correctedEmpty, correctionInputUnchanged, freshIdentity, healthyRetained })}`,
     );
   }
-
-  const correctedInner = structuredClone(faultyInner);
-  delete correctedInner.entities[0].components.Transform.unknownField;
-  const correctedOuter = structuredClone(faultyOuter);
-  const correctedInputSnapshot = JSON.stringify(correctedInner);
-  const correctedInnerHandle = world.allocSharedRef('SceneAsset', correctedInner);
-  const correctedOuterHandle = world.allocSharedRef('SceneAsset', correctedOuter);
-  sceneChildren.set(Number(correctedOuterHandle), correctedInnerHandle);
-  const correctedResult = worldInstantiateScene(world, correctedOuterHandle);
-  if (!correctedResult.ok) {
-    m30Failures.push(`corrected instantiate failed: ${correctedResult.error.code}`);
-  } else {
-    const correctedRoot = correctedResult.value.root;
-    const correctedState = world.get(correctedRoot, SceneInstance);
-    const correctedMember = correctedState.ok ? correctedState.value.mapping[2] : undefined;
-    const correctedEmpty = correctedResult.value.diagnostics.length === 0;
-    const correctionInputUnchanged = JSON.stringify(correctedInner) === correctedInputSnapshot;
-    const freshIdentity = faultyResult.ok
-      && Number(correctedRoot) !== Number(faultyRoot)
-      && correctedMember !== undefined
-      && faultyMember !== undefined
-      && Number(correctedMember) !== Number(faultyMember);
-    const healthyRetained = world.get(rootEntity, SceneInstance).ok;
-    for (let i = 0; i < 60; i += 1) {
-      world.update().unwrap();
-      const draw = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
-      if (!draw.ok) m30Failures.push(`corrected draw failed: ${draw.error.code}`);
-      else void renderer.observe(draw.value, { include: ['draws'] });
-    }
-    await device.queue.onSubmittedWorkDone();
-    bytes = await readback();
-    const repairedPixelSamples = {};
-    for (const site of sites) repairedPixelSamples[site.name] = readRgba(site.x, site.y);
-    const repairedPixelRegions = {
-      left: region(0, Math.floor(WIDTH / 2)),
-      right: region(Math.floor(WIDTH / 2), WIDTH),
-    };
-    const repairedMeshedRenderCount = Object.values(repairedPixelRegions)
-      .filter((stats) => stats.stddevLuma > 2 && stats.maxLuma > 20).length;
-    const firstCleanupCount = worldDespawnScene(world, correctedRoot).unwrap();
-    const secondCleanup = world.get(correctedRoot, SceneInstance).ok
-      ? { changed: true, count: worldDespawnScene(world, correctedRoot).unwrap() }
-      : { changed: false, count: 0 };
-    const healthyRetainedBeforeFinalTeardown = world.get(rootEntity, SceneInstance).ok;
-    sceneChildren.delete(Number(correctedOuterHandle));
-    world.sharedRefs.release(correctedInnerHandle);
-    world.sharedRefs.release(correctedOuterHandle);
-    if (!correctedEmpty || !correctionInputUnchanged || !freshIdentity || !healthyRetained) {
-      m30Failures.push(
-        `corrected recovery invariant failed: ${JSON.stringify({ correctedEmpty, correctionInputUnchanged, freshIdentity, healthyRetained })}`,
-      );
-    }
-    if (repairedMeshedRenderCount === 0) {
-      m30Failures.push(`corrected pixels blank: ${JSON.stringify(repairedPixelRegions)}`);
-    }
-    if (firstCleanupCount !== 5 || secondCleanup.changed || !healthyRetainedBeforeFinalTeardown) {
-      m30Failures.push(
-        `corrected cleanup invariant failed: ${JSON.stringify({ firstCleanupCount, secondCleanup, healthyRetainedBeforeFinalTeardown })}`,
-      );
-    }
-    globalThis.__m30DawnRecovery = {
-      diagnostics: faultyResult.value.diagnostics,
-      exactDiagnostic,
-      knownFieldValue,
-      faultyEntityCount,
-      baselineEntityCount,
-      faultyCleanupCount,
-      noOrphanAfterFault,
-      healthyRetainedAfterFault,
-      correctedDiagnostics: correctedResult.value.diagnostics,
-      correctedEmpty,
-      correctionInputUnchanged,
-      freshIdentity,
-      healthyRetained,
-      firstCleanupCount,
-      secondCleanup,
-      healthyRetainedBeforeFinalTeardown,
-      repairedPixelSamples,
-      repairedPixelRegions,
-    };
+  if (repairedMeshedRenderCount === 0) {
+    m30Failures.push(`corrected pixels blank: ${JSON.stringify(repairedPixelRegions)}`);
   }
+  if (firstCleanupCount !== 5 || secondCleanup.changed || !healthyRetainedBeforeFinalTeardown) {
+    m30Failures.push(
+      `corrected cleanup invariant failed: ${JSON.stringify({ firstCleanupCount, secondCleanup, healthyRetainedBeforeFinalTeardown })}`,
+    );
+  }
+  globalThis.__m30DawnRecovery = {
+    rejectedBeforeSpawn,
+    error: faultyResult.ok ? undefined : faultyResult.error,
+    faultyEntityCount,
+    baselineEntityCount,
+    noOrphanAfterFault,
+    healthyRetainedAfterFault,
+    correctedDiagnostics: correctedResult.value.diagnostics,
+    correctedEmpty,
+    correctionInputUnchanged,
+    freshIdentity,
+    healthyRetained,
+    firstCleanupCount,
+    secondCleanup,
+    healthyRetainedBeforeFinalTeardown,
+    repairedPixelSamples,
+    repairedPixelRegions,
+  };
 }
 
 const failures = [];

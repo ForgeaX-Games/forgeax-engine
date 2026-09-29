@@ -2,7 +2,8 @@
 //
 // Shape:
 // - RhiCallEvent: closed union (~40 kind incl. initialData + frameMark), each kind name 1:1 with RHI method name.
-//   Excludes: writeTimestamp/resolveQuerySet (per OOS-3).
+//   Query-set lifecycle and occlusion resolve calls are ordinary events;
+//   timestamp writes and render-bundle execution remain deferred.
 //   Includes: core RHI + copyExternalImageToTexture + clearBuffer (per IS-11).
 // - Tape: header with formatVersion, rhiCapsRecorded, events array, blobPool map.
 // - InspectReport: frameIdx, workIndex, bindings, drawCall, rt (path string, not inline base64).
@@ -42,7 +43,7 @@ export interface RhiCapsRecorded {
 }
 
 // ============================================================================
-// RhiCallEvent — closed union (each kind maps 1:1 to an RHI method)
+// RhiCallEvent — closed union (compound RHI operations use existing events)
 // ============================================================================
 
 /**
@@ -98,6 +99,17 @@ export interface RhiCallEventDestroyTexture {
   readonly handleId: HandleId;
 }
 
+export interface RhiCallEventCreateQuerySet {
+  readonly kind: 'createQuerySet';
+  readonly handleId: HandleId;
+  readonly desc: Pick<GPUQuerySetDescriptor, 'label' | 'type' | 'count'>;
+}
+
+export interface RhiCallEventDestroyQuerySet {
+  readonly kind: 'destroyQuerySet';
+  readonly handleId: HandleId;
+}
+
 export interface RhiCallEventCreateTextureView {
   readonly kind: 'createTextureView';
   readonly sourceHandleId: HandleId;
@@ -118,6 +130,13 @@ export interface RhiCallEventCreateSampler {
   readonly kind: 'createSampler';
   readonly handleId: HandleId;
   readonly desc?: Partial<GPUSamplerDescriptor> | undefined;
+}
+
+export interface RhiCallEventGetBindGroupLayout {
+  readonly kind: 'getBindGroupLayout';
+  readonly handleId: HandleId;
+  readonly pipelineHandleId: HandleId;
+  readonly index: number;
 }
 
 export interface RhiCallEventCreateBindGroupLayout {
@@ -287,8 +306,8 @@ export interface RhiCallEventBeginRenderPass {
           readonly [key: string]: unknown;
         }
       | undefined;
-    readonly occlusionQuerySet?: unknown | undefined;
-    readonly timestampWrites?: unknown | undefined;
+    /** The opaque query set is represented by the parallel handle id below. */
+    readonly timestampWrites?: Omit<GPURenderPassTimestampWrites, 'querySet'> | undefined;
     readonly maxDrawCount?: number | undefined;
   };
   readonly colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
@@ -299,13 +318,20 @@ export interface RhiCallEventBeginRenderPass {
    */
   readonly colorAttachmentResolveTargetHandleIds?: readonly (HandleId | undefined)[];
   readonly depthStencilViewHandleId?: HandleId | undefined;
+  readonly occlusionQuerySetHandleId?: HandleId | undefined;
+  readonly timestampQuerySetHandleId?: HandleId | undefined;
 }
 
 export interface RhiCallEventBeginComputePass {
   readonly kind: 'beginComputePass';
+  readonly timestampQuerySetHandleId?: HandleId | undefined;
   readonly cmdHandleId: HandleId;
   readonly passHandleId: HandleId;
-  readonly desc?: Partial<GPUComputePassDescriptor> | undefined;
+  readonly desc?:
+    | (Omit<Partial<GPUComputePassDescriptor>, 'timestampWrites'> & {
+        readonly timestampWrites?: Omit<GPUComputePassTimestampWrites, 'querySet'> | undefined;
+      })
+    | undefined;
 }
 
 export interface RhiCallEventCopyBufferToBuffer {
@@ -358,6 +384,16 @@ export interface RhiCallEventClearBuffer {
   readonly handleId: HandleId;
   readonly offset?: number | undefined;
   readonly size?: number | undefined;
+}
+
+export interface RhiCallEventResolveQuerySet {
+  readonly kind: 'resolveQuerySet';
+  readonly cmdHandleId: HandleId;
+  readonly querySetHandleId: HandleId;
+  readonly firstQuery: number;
+  readonly queryCount: number;
+  readonly destinationHandleId: HandleId;
+  readonly destinationOffset: number;
 }
 
 export interface RhiCallEventPushDebugGroup {
@@ -461,8 +497,25 @@ export interface RhiCallEventSetStencilReference {
   readonly reference: number;
 }
 
+/** Native executeBundles state boundary; bundle commands are expanded in-place. */
+export interface RhiCallEventResetRenderState {
+  readonly kind: 'resetRenderState';
+  readonly passHandleId: HandleId;
+}
+
 export interface RhiCallEventEndRenderPass {
   readonly kind: 'endRenderPass';
+  readonly passHandleId: HandleId;
+}
+
+export interface RhiCallEventBeginOcclusionQuery {
+  readonly kind: 'beginOcclusionQuery';
+  readonly passHandleId: HandleId;
+  readonly queryIndex: number;
+}
+
+export interface RhiCallEventEndOcclusionQuery {
+  readonly kind: 'endOcclusionQuery';
   readonly passHandleId: HandleId;
 }
 
@@ -553,8 +606,9 @@ export interface RhiCallEventInitialData {
  * Closed union of all recordable RHI call events.
  *
  * v1 covers: core RHI methods + copyExternalImageToTexture + clearBuffer (IS-11).
- * Excludes: writeTimestamp/resolveQuerySet (OOS-3),
- *           executeBundles (OOS-10), beginOcclusionQuery/endOcclusionQuery.
+ * Timestamp writes and render-bundle execution remain deferred; query-set
+ * lifecycle, resolve, and occlusion-query events are represented as ordinary
+ * events.
  *
  * Kinds are named 1:1 with RHI method names per plan-strategy §8 naming convention.
  * The frameMark kind is the only non-method event — it marks frame boundaries.
@@ -565,9 +619,12 @@ export type RhiCallEvent =
   | RhiCallEventCreateTexture
   | RhiCallEventDestroyBuffer
   | RhiCallEventDestroyTexture
+  | RhiCallEventCreateQuerySet
+  | RhiCallEventDestroyQuerySet
   | RhiCallEventCreateTextureView
   | RhiCallEventCreateSampler
   | RhiCallEventCreateBindGroupLayout
+  | RhiCallEventGetBindGroupLayout
   | RhiCallEventCreateBindGroup
   | RhiCallEventCreatePipelineLayout
   | RhiCallEventCreateRenderPipeline
@@ -585,6 +642,7 @@ export type RhiCallEvent =
   | RhiCallEventCopyTextureToBuffer
   | RhiCallEventCopyTextureToTexture
   | RhiCallEventClearBuffer
+  | RhiCallEventResolveQuerySet
   | RhiCallEventPushDebugGroup
   | RhiCallEventPopDebugGroup
   | RhiCallEventInsertDebugMarker
@@ -598,7 +656,10 @@ export type RhiCallEvent =
   | RhiCallEventSetViewport
   | RhiCallEventSetScissorRect
   | RhiCallEventSetStencilReference
+  | RhiCallEventResetRenderState
   | RhiCallEventEndRenderPass
+  | RhiCallEventBeginOcclusionQuery
+  | RhiCallEventEndOcclusionQuery
   | RhiCallEventSetBlendConstant
   | RhiCallEventDrawIndirect
   | RhiCallEventDrawIndexedIndirect
@@ -879,10 +940,4 @@ export type InspectFields = 'bindings' | 'drawCall' | 'rt';
  *
  * @internal
  */
-export const DEFERRED_COMMANDS = new Set<string>([
-  'beginOcclusionQuery',
-  'endOcclusionQuery',
-  'executeBundles',
-  'writeTimestamp',
-  'resolveQuerySet',
-]);
+export const DEFERRED_COMMANDS = new Set<string>(['writeTimestamp']);

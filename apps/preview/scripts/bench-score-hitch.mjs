@@ -381,7 +381,7 @@ try {
       rendererState: fresh[0]?.evidence.renderer?.state ?? null,
       hitPoint: HIT_POINT,
       matchedControlPoint: CONTROL_POINT,
-      scene: 'templates/game-default/assets/scene.pack.json RedBox at (3, 0.5, -2)',
+      scene: 'apps/game-capability-lab/assets/scene.pack.json RedBox at (3, 0.5, -2)',
     },
     workloadFingerprint: {
       targetHealth: fresh[0]?.evidence.render?.targetHealth ?? null,

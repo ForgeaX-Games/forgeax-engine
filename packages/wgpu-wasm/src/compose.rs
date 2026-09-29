@@ -44,7 +44,9 @@ pub fn compose_shader(
     let imports = parse_imports_json(imports_json)?;
     let shader_defs = parse_defines_json(defines_json)?;
 
-    let mut composer = Composer::default();
+    // Composition validates source capability, not the eventual GPU device.
+    // Match the final validator below; runtime device admission stays in RHI.
+    let mut composer = Composer::default().with_capabilities(naga::valid::Capabilities::all());
 
     // naga_oil 0.22's `add_composable_module` rejects a module whose `#import`
     // targets are not yet registered with the composer. The `imports` map

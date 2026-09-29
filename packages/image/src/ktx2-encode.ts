@@ -17,6 +17,7 @@
 // is M5 (w38); doing it here would make every existing texture encode to Basis
 // ahead of loader support and redden the whole fixture fleet.
 
+import { parseKtx2 } from '@forgeax/engine-codec';
 import type { BasisEncodeMode } from '@forgeax/engine-codec/encode';
 import { basisEncode } from '@forgeax/engine-codec/encode';
 
@@ -32,6 +33,11 @@ export interface EncodeSourceInfo {
   readonly colorSpace: 'srgb' | 'linear';
   /** Whether the source is an HDR image (.hdr -> rgba16float). */
   readonly isHdr: boolean;
+  /**
+   * Bake the full mip chain into the KTX2 (sidecar `mipmap`). Block-compressed
+   * formats cannot be mip-generated on the GPU, so the chain is offline-only.
+   */
+  readonly mipmap: boolean;
 }
 
 /**
@@ -49,7 +55,7 @@ export interface EncodeSourceInfo {
  */
 export function resolveEncodeMode(
   mode: CompressionMode,
-  source: EncodeSourceInfo,
+  source: Pick<EncodeSourceInfo, 'colorSpace' | 'isHdr'>,
 ): ResolvedEncodeMode {
   switch (mode) {
     case 'none':
@@ -74,7 +80,7 @@ export interface BasisEncodeParams {
   readonly perceptual: boolean;
   /** Wrap the UASTC-LDR payload in KTX2 zstd supercompression. */
   readonly uastcSupercompression: boolean;
-  /** Encoder-side mip generation. M3 keeps this false (offline mips land in M5). */
+  /** Encoder-side mip generation: the offline chain for a mipmapped source. */
   readonly mipGen: boolean;
 }
 
@@ -98,7 +104,7 @@ export function basisEncodeParamsFor(
         srgb: srgbColor,
         perceptual: srgbColor,
         uastcSupercompression: false,
-        mipGen: false,
+        mipGen: source.mipmap,
       };
     case 'uastc':
       return {
@@ -106,7 +112,7 @@ export function basisEncodeParamsFor(
         srgb: srgbColor,
         perceptual: srgbColor,
         uastcSupercompression: true,
-        mipGen: false,
+        mipGen: source.mipmap,
       };
     case 'uastc-hdr':
       return {
@@ -114,7 +120,7 @@ export function basisEncodeParamsFor(
         srgb: false,
         perceptual: false,
         uastcSupercompression: false,
-        mipGen: false,
+        mipGen: source.mipmap,
       };
   }
 }
@@ -123,6 +129,8 @@ export function basisEncodeParamsFor(
 export interface EncodedTexture {
   readonly ktx2: Uint8Array;
   readonly mode: ResolvedEncodeMode;
+  /** Mip levels the KTX2 carries, read back from its header. */
+  readonly levelCount: number;
 }
 
 /**
@@ -213,5 +221,19 @@ export async function encodeTextureToKtx2(
       },
     };
   }
-  return { ok: true, value: { ktx2: result.value, mode: resolved } };
+  const parsed = await parseKtx2(result.value);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: { code: 'ktx2-encode-failed', mode: resolved, reason: parsed.error.code },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ktx2: result.value,
+      mode: resolved,
+      levelCount: Math.max(1, parsed.value.header.levelCount),
+    },
+  };
 }

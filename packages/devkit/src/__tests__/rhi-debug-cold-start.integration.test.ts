@@ -1,4 +1,4 @@
-import { encodeTape, type V7Tape } from '@forgeax/engine-rhi-debug';
+import { encodeTape, tapeDigest, type V7Tape } from '@forgeax/engine-rhi-debug';
 import { createShaderModule, rhi } from '@forgeax/engine-rhi-null';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -42,7 +42,7 @@ async function nullReplayBackend() {
 function artifactContext(bytes: Uint8Array): RhiDebugOperationContext {
   const artifact = {
     kind: 'rhi-tape' as const,
-    digest: 'sha256:cold-start-recovery',
+    digest: tapeDigest(bytes),
     source: 'rhi.capture',
   };
   return {
@@ -58,7 +58,7 @@ describe('DevKit RHI debug cold start', () => {
     if (!encoded.ok) return;
     const artifact = {
       kind: 'rhi-tape' as const,
-      digest: 'sha256:cold-start',
+      digest: tapeDigest(encoded.value),
       source: 'rhi.capture',
     };
     const operations = discoverRhiDebugOperations();
@@ -78,7 +78,7 @@ describe('DevKit RHI debug cold start', () => {
     expect(summary.ok).toBe(true);
     if (!summary.ok) return;
     expect(summary.value.artifact.digest).toBe(capture.value.digest);
-    expect(summary.value.model.works).toEqual([]);
+    expect(summary.value.summary.works).toEqual([]);
   });
 
   it('routes capture-unavailable through the standalone CLI recovery contract', async () => {
@@ -104,7 +104,7 @@ describe('DevKit RHI debug cold start', () => {
       {
         artifact: {
           kind: 'rhi-tape',
-          digest: 'sha256:old-artifact',
+          digest: tapeDigest(oldArtifact),
           source: 'legacy-source',
         },
       },
@@ -117,7 +117,18 @@ describe('DevKit RHI debug cold start', () => {
   it('routes capability mismatch and unsupported pixel readback by error code', async () => {
     const capabilityTape: V7Tape = {
       ...emptyTape,
-      header: { ...emptyTape.header, rhiCaps: { textureCompressionBc: true } },
+      header: { ...emptyTape.header, rhiCaps: { textureCompressionBc: true }, eventCount: 1 },
+      events: [
+        {
+          kind: 'createTexture',
+          handleId: 'texture:compressed',
+          desc: {
+            size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+            format: 'bc1-rgba-unorm',
+            usage: 0x04,
+          },
+        },
+      ],
     };
     const capabilityBytes = encodeTape(capabilityTape);
     expect(capabilityBytes.ok).toBe(true);
@@ -131,7 +142,7 @@ describe('DevKit RHI debug cold start', () => {
       {
         artifact: {
           kind: 'rhi-tape',
-          digest: 'sha256:capability-mismatch',
+          digest: tapeDigest(capabilityBytes.value),
           source: 'rhi.capture',
         },
         workIndex: 0,
@@ -153,7 +164,7 @@ describe('DevKit RHI debug cold start', () => {
       {
         artifact: {
           kind: 'rhi-tape',
-          digest: 'sha256:readback-unsupported',
+          digest: tapeDigest(encoded.value),
           source: 'rhi.capture',
         },
         workIndex: 0,

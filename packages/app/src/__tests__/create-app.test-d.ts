@@ -23,6 +23,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 import { createRenderer, type EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { Result } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
+import type { AssetRuntimeAssemblyError } from '../assets-runtime-assembly';
 import { type App, type AppError, createApp } from '../index';
 
 describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
@@ -30,7 +31,7 @@ describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
     const canvas = null as unknown as HTMLCanvasElement;
     const ret = createApp(canvas);
     expectTypeOf(ret).toEqualTypeOf<
-      Promise<Result<App, AppError | RhiError | EngineEnvironmentError>>
+      Promise<Result<App, AppError | RhiError | EngineEnvironmentError | AssetRuntimeAssemblyError>>
     >();
   });
 
@@ -38,7 +39,9 @@ describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
     const renderer = null as unknown as Renderer;
     const world = null as unknown as World;
     const ret = createApp({ renderer, world });
-    expectTypeOf(ret).toEqualTypeOf<Promise<Result<App, AppError | RhiError>>>();
+    expectTypeOf(ret).toEqualTypeOf<
+      Promise<Result<App, AppError | RhiError | AssetRuntimeAssemblyError>>
+    >();
   });
 
   it('app.renderer / app.world are reference-equal types at the call site (AC-09)', async () => {

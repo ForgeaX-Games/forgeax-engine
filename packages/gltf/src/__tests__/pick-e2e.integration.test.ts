@@ -30,7 +30,7 @@
 // fixture pattern).
 
 import { World } from '@forgeax/engine-ecs';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import';
 import { decodeMeshBinHeader } from '@forgeax/engine-pack';
 import { pick } from '@forgeax/engine-picking';
 import { Camera, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
@@ -73,7 +73,7 @@ describe('gltf e2e pick probe over pack JSON roundtrip (m5-1)', () => {
 
     // --- 3. Encode via packMeshBin: converts aabb Float32Array to plain
     //       array in the JSON tail (Array.from at import/src/mesh-bin.ts:153) ---
-    const packed = packMeshBinV4(
+    const packed = packMeshBin(
       {
         vertices: meshAsset.vertices,
         indices: meshAsset.indices,

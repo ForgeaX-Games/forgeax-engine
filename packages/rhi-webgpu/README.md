@@ -51,12 +51,36 @@ Real-GPU integration is in [`src/__tests__/dawn-real-gpu.dawn.test.ts`](./src/__
 
 ## Timestamp write contract
 
-When `device.caps.timestampQuery` is true, `RhiCommandEncoder.writeTimestamp`
-must find and successfully call the raw `GPUCommandEncoder.writeTimestamp`
-with the mapped query set and index. A missing or throwing raw method throws a
-structured `RhiError` with code `webgpu-runtime-error`; the shim never treats
-that write as a no-op or synthesizes timestamp ticks. Capability-disabled
-devices retain the existing `feature-not-enabled` diagnostic path.
+Timestamp capture uses the WebGPU pass descriptor `timestampWrites` field on
+`beginRenderPass` / `beginComputePass`. The shim maps the opaque ForgeaX
+`QuerySet` to the native `GPUQuerySet` at the pass boundary. The obsolete
+command-encoder `writeTimestamp` entry is intentionally not exposed: current
+Dawn rejects that method even when `timestamp-query` is advertised. A device
+without a usable timestamp period remains capability-negative and produces no
+synthetic ticks.
+When `device.caps.timestampQuery` is true, render and compute pass descriptors
+carry the mapped query set and timestamp indices. The WebGPU adapter does not
+expose the removed command-encoder timestamp entry; callers that need an
+encoder-position marker use an empty timestamp-enabled compute pass on the same
+encoder. A marker failure is a structured `webgpu-runtime-error`; the shim
+never treats it as a no-op or synthesizes timestamp ticks. Capability-disabled
+devices retain the existing refusal path.
+
+## Query forwarding contract
+
+The shim forwards the query surface from [`@forgeax/engine-rhi`](../rhi):
+
+| Operation | Runtime contract | Evidence |
+|:--|:--|:--|
+| `createQuerySet` / `destroyQuerySet` | Occlusion sets are available without an optional capability; `count > 4096` returns `limit-exceeded`; timestamp sets require `device.caps.timestampQuery` | [`device.ts`](./src/device.ts#L1837), [Dawn create coverage](./src/__tests__/dawn-real-gpu.dawn.test.ts#L381) |
+| `occlusionQuerySet` + `beginOcclusionQuery` / `endOcclusionQuery` | The pass owns the query-set state; missing set, out-of-range index, nested begin, and unmatched end produce structured errors | [`device.ts`](./src/device.ts#L542), [Dawn state/round-trip coverage](./src/__tests__/dawn-real-gpu.dawn.test.ts#L619) |
+| `resolveQuerySet` | Validates 256-byte destination alignment, `QUERY_RESOLVE` usage, range, and destination size before raw forwarding | [`device.ts`](./src/device.ts#L966), [Dawn coverage](./src/__tests__/dawn-real-gpu.dawn.test.ts#L820) |
+| Timestamp pass writes | `timestampWrites` maps opaque `QuerySet` handles to raw `GPUQuerySet`; a capability-negative device refuses creation and does not synthesize ticks | [`device.ts`](./src/device.ts#L745), [Dawn admission/readback coverage](./src/__tests__/dawn-real-gpu.dawn.test.ts#L1233) |
+| Pass descriptor `timestampWrites` | Capability-positive devices map opaque query sets at the real render/compute pass boundary; unavailable periods remain fail-closed | [`device.ts`](./src/device.ts#L745), [unit coverage](./src/internal/__tests__/timestamp-query.unit.test.ts) |
+| `createRenderBundleEncoder` / `executeBundles` | Shared native command adapter; typed immutable bundles, repeated execution and native compatibility/lifetime validation | [Browser/Dawn validation](./src/__tests__/render-bundle-validation.fixture.ts) |
+
+> [!NOTE]
+> Dawn is the current real-GPU evidence owner for query behavior. This package does not claim a separate browser query artifact merely because the browser shim and interface compile; `RhiNull` remains structural-only.
 
 ## Capabilities tri-layer
 
@@ -97,7 +121,7 @@ the Render owner contract. Neither produces synthetic ticks.
 - **`'x' in src` guard transit**: spec `?: T` vs forgeax `?: T | undefined` differ under `exactOptionalPropertyTypes:true`; the shim guards each field per F-3 anti-pattern 2.
 - **`device.lost` single source**: this package only forwards the spec Promise; fan-out is the engine's job (`LostListenerRegistry`).
 - **Error message keyword classification**: `requestDevice` failure routes via `feature` / `limit` keyword detection; mock and real-GPU formats may differ.
-- **Real-path implementation (M4-M5)**: command recording + queue submit + queue.writeBuffer landed; the 3 placeholder methods (`executeBundles` / `beginOcclusionQuery` / `endOcclusionQuery`) still return `Result.err({ code: 'rhi-not-available', hint: 'see feat-future-rhi-resource-creation' })`.
+- **Real-path implementation (M4-M5 + query closure)**: command recording + queue submit + queue.writeBuffer landed; query-set creation/destruction, occlusion begin/end, resolve, and timestamp pass writes are forwarded or capability-gated. Render bundle creation, finish and execution are implemented with native WebGPU validation.
 - **Escape hatch tear-down**: `getRawDevice` (no prefix) removed in `feat-20260508-rhi-surface-completion` M4 (AC-RSC-05); the single sanctioned hatch is `_internal_getRawDevice` confined to the AC-08 (h) allow-list.
 - **destroyBuffer / destroyTexture (feat-20260612)**: per-handle destroyed-state bookkeeping in shim layer (`WeakMap<Handle, { destroyed: boolean }>`) on top of the spec's idempotent-void `GPUBuffer.destroy()` / `GPUTexture.destroy()`. Dual-backend behavior is symmetric: both shims track destroyed boolean per handle, fail-fast on second destroy with `'destroy-after-destroy'` error code, and never depend on wasm panic interception (plan-strategy D-6). Implementation at `packages/rhi-webgpu/src/device.ts`.
 
@@ -128,6 +152,6 @@ A: D-S1 single-point exemption — `apps/hello/triangle/src/main.ts:96` `context
 
 ## Related packages
 
-- [`@forgeax/engine-rhi`](../rhi) — pure interface contract (14 opaque handles + 9 descriptors + 7 main interfaces + `RhiError` / `Result`).
+- [`@forgeax/engine-rhi`](../rhi) — pure interface contract (14 opaque handles + descriptor projections + 7 main interfaces + `RhiError` / `Result`).
 - [`@forgeax/engine-types`](../types) — POD types / enum SSOT.
 - [`@forgeax/engine-runtime`](../engine) — async factory entry (M3 injects via `rhi.requestDevice()`).

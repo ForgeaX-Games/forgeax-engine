@@ -8,9 +8,8 @@ import * as SceneOwner from '@forgeax/engine-scene';
 // via AssetRegistry, no external handleToGuid table needed. Those scenarios
 // are covered by m2-t3 in roots-to-scene-asset.test.ts.
 //
-// NOTE: rootsToSceneAsset collects the root entity itself in the BFS closure,
-// unlike old collectSceneAsset (which only returned SceneAsset entities).
-// Entity counts here include the synthetic root from instantiateScene.
+// NOTE: rootsToSceneAsset omits the transient synthetic SceneInstance anchor.
+// Entity counts therefore describe authored keyed declarations only.
 //
 // M1T7 AUDIT (feat-20260707-engine-world-clone-transient-for-editor-ssot):
 //   Classification: (b) false-positive modification risk — all 10 tests
@@ -27,7 +26,7 @@ import { type Component, defineComponent as defineEcsComponent, World } from '@f
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { SceneInstance } from '@forgeax/engine-render';
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
-import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import type { SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -50,10 +49,6 @@ function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
 }
 
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
-
 // biome-ignore lint/suspicious/noExplicitAny: allocSharedRef('SceneAsset') returns branded Handle<"SceneAsset", ...> but instantiateScene expects Handle<string, ...>
 function registerSceneAsset(world: World, asset: SceneAsset): any {
   registerSceneComponents(world);
@@ -71,8 +66,12 @@ function def<T>(v: T | undefined | null, label = 'value'): T {
 }
 
 /** Find the entity in the scene that has the given component. */
-function findEntityWith(entities: readonly SceneEntity[], compName: string): SceneEntity {
-  const found = entities.find(
+function findEntityWith(
+  entities: Readonly<Record<string, SceneEntity>> | readonly SceneEntity[],
+  compName: string,
+): SceneEntity {
+  const list = Array.isArray(entities) ? entities : Object.values(entities);
+  const found = list.find(
     (e) => (e.components as Record<string, Record<string, unknown>>)[compName] !== undefined,
   );
   if (!found) throw new Error(`no entity with component ${compName}`);
@@ -87,11 +86,11 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Transform: { pos: [1, 2, 3] } } },
-        { localId: localId(1), components: { Test_Transform: { pos: [4, 5, 6] } } },
-        { localId: localId(2), components: { Test_Transform: { pos: [7, 8, 9] } } },
-      ],
+      entities: {
+        'entity-0': { components: { Test_Transform: { pos: [1, 2, 3] } } },
+        'entity-1': { components: { Test_Transform: { pos: [4, 5, 6] } } },
+        'entity-2': { components: { Test_Transform: { pos: [7, 8, 9] } } },
+      },
     };
 
     const world = new World();
@@ -109,8 +108,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     if (!collected.ok) return;
     const scene = collected.value;
     expect(scene.kind).toBe('scene');
-    // rootsToSceneAsset includes the root entity + all children = 4 entities.
-    expect(scene.entities).toHaveLength(4);
+    // Three authored declarations; the transient anchor is omitted.
+    expect(Object.keys(scene.entities)).toHaveLength(3);
 
     const entityWithTransform = findEntityWith(scene.entities, 'Test_Transform');
     expect(entityWithTransform).toBeDefined();
@@ -125,7 +124,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Test_Pos3: { x: 10.5, y: 20.5, z: 30.5 } } }],
+      entities: { 'entity-0': { components: { Test_Pos3: { x: 10.5, y: 20.5, z: 30.5 } } } },
     };
 
     const world = new World();
@@ -142,8 +141,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    // root + 1 child = 2 entities.
-    expect(scene.entities).toHaveLength(2);
+    // one authored entity; the transient anchor is omitted.
+    expect(Object.keys(scene.entities)).toHaveLength(1);
     const e = findEntityWith(scene.entities, 'Test_Pos3');
     const tp = def(comp(e, 'Test_Pos3'), 'Test_Pos3');
     expect(Math.abs((tp.x as number) - 10.5)).toBeLessThan(0.001);
@@ -159,7 +158,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Test_WithDefault: { required: 7 } } }],
+      entities: { 'entity-0': { components: { Test_WithDefault: { required: 7 } } } },
     };
 
     const world = new World();
@@ -176,7 +175,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
     const e = findEntityWith(scene.entities, 'Test_WithDefault');
     const tw = def(comp(e, 'Test_WithDefault'), 'Test_WithDefault');
     expect(tw.required).toBe(7);
@@ -184,7 +183,7 @@ describe('w9 — round-trip semantic equivalence', () => {
   });
 
   it('(d) empty scene (no entities) round-trips to empty entities[]', () => {
-    const asset: SceneAsset = { kind: 'scene', entities: [] };
+    const asset: SceneAsset = { kind: 'scene', entities: {} };
     const world = new World();
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
@@ -201,8 +200,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     if (!collected.ok) return;
     const scene = collected.value;
     expect(scene.kind).toBe('scene');
-    // Empty scene: root only (1 entity in closure — just the root).
-    expect(scene.entities.length).toBeGreaterThanOrEqual(1);
+    // Empty scene has no authored declarations.
+    expect(Object.keys(scene.entities)).toHaveLength(0);
   });
 
   it('(e) string field round-trips through rootsToSceneAsset', () => {
@@ -212,7 +211,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Test_Name: { label: 'hello' } } }],
+      entities: { 'entity-0': { components: { Test_Name: { label: 'hello' } } } },
     };
 
     const world = new World();
@@ -229,7 +228,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
     const e = findEntityWith(scene.entities, 'Test_Name');
     const tn = def(comp(e, 'Test_Name'), 'Test_Name');
     expect(tn.label).toBe('hello');
@@ -242,16 +241,15 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
+      entities: {
+        'entity-0': {
           components: {
             Test_A: { val: 1 },
             Test_B: { flag: true },
             Test_C: { name: 'multi' },
           },
         },
-      ],
+      },
     };
 
     const world = new World();
@@ -268,7 +266,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
     const e = findEntityWith(scene.entities, 'Test_A');
     expect(def(comp(e, 'Test_A'), 'Test_A').val).toBe(1);
     expect(def(comp(e, 'Test_B'), 'Test_B').flag).toBe(true);
@@ -280,10 +278,10 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Flag: { enabled: true } } },
-        { localId: localId(1), components: { Test_Flag: { enabled: false } } },
-      ],
+      entities: {
+        'entity-0': { components: { Test_Flag: { enabled: true } } },
+        'entity-1': { components: { Test_Flag: { enabled: false } } },
+      },
     };
 
     const world = new World();
@@ -300,11 +298,11 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    // root + 2 children = 3 entities.
-    expect(scene.entities).toHaveLength(3);
+    // two authored children; the transient anchor is omitted.
+    expect(Object.keys(scene.entities)).toHaveLength(2);
 
     // Find the two entities with Test_Flag.
-    const flagged = scene.entities.filter(
+    const flagged = Object.values(scene.entities).filter(
       (e) => (e.components as Record<string, Record<string, unknown>>).Test_Flag !== undefined,
     );
     expect(flagged).toHaveLength(2);
@@ -322,7 +320,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Test_Pack: { a: 99 } } }],
+      entities: { 'entity-0': { components: { Test_Pack: { a: 99 } } } },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -344,12 +342,16 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(assetEntry.guid).toBe('aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee');
     expect(assetEntry.kind).toBe('scene');
     const payload = assetEntry.payload as Record<string, unknown>;
-    expect(Array.isArray(payload.entities)).toBe(true);
-    expect(payload.entities as Array<unknown>).toHaveLength(1);
+    expect(
+      payload.entities !== null &&
+        typeof payload.entities === 'object' &&
+        !Array.isArray(payload.entities),
+    ).toBe(true);
+    expect(Object.keys(payload.entities as Record<string, unknown>)).toHaveLength(1);
   });
 
   it('(i) serializeSceneAssetToPack without guid uses a generated guid', () => {
-    const asset: SceneAsset = { kind: 'scene', entities: [] };
+    const asset: SceneAsset = { kind: 'scene', entities: {} };
 
     const packResult = serializeSceneAssetToPack(asset, new Map());
     expect(packResult.ok).toBe(true);
@@ -375,10 +377,10 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Full: { posX: 1.5, posY: 2.5, name: 'e0' } } },
-        { localId: localId(1), components: { Test_Full: { posX: 3.5, posY: 4.5, name: 'e1' } } },
-      ],
+      entities: {
+        'entity-0': { components: { Test_Full: { posX: 1.5, posY: 2.5, name: 'e0' } } },
+        'entity-1': { components: { Test_Full: { posX: 3.5, posY: 4.5, name: 'e1' } } },
+      },
     };
 
     const world = new World();
@@ -394,8 +396,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     const collected = rootsToSceneAsset(reg, world, [root]);
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
-    // root + 2 children = 3 entities.
-    expect(collected.value.entities).toHaveLength(3);
+    // Two authored declarations; the transient anchor is omitted.
+    expect(Object.keys(collected.value.entities)).toHaveLength(2);
 
     const packResult = serializeSceneAssetToPack(
       collected.value,
@@ -408,8 +410,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(pack.kind).toBe('internal-text-package');
     const assets = pack.assets as Array<Record<string, unknown>>;
     const payload = def(assets[0], 'assets[0]').payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
-    expect(entities).toHaveLength(3);
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
+    expect(entities).toHaveLength(2);
 
     // Find entities with Test_Full in serialized output.
     const tfEntities = entities.filter(
@@ -444,7 +446,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
   it('(AC-02) Transform entity serializes without a world key', () => {
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Transform: { pos: [1, 2, 3] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [1, 2, 3] } } } },
     };
 
     const world = new World();
@@ -462,7 +464,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
 
     // Every Transform-carrying entity (synthetic identity root + the authored
     // child) must omit the transient world field.
-    const transformEntities = collected.value.entities.filter(
+    const transformEntities = Object.values(collected.value.entities).filter(
       (e) => (e.components as Record<string, Record<string, unknown>>).Transform !== undefined,
     );
     expect(transformEntities.length).toBeGreaterThan(0);
@@ -472,11 +474,12 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
       expect('world' in t).toBe(false);
     }
 
-    // The authored (non-root) entity retains its persisted local TRS. Locate it
-    // by its ChildOf link (the synthetic root carries no ChildOf).
-    const authored = transformEntities.find(
-      (e) => (e.components as Record<string, Record<string, unknown>>).ChildOf !== undefined,
-    );
+    // The authored entity retains its persisted local TRS. Its implicit
+    // ChildOf edge to the transient anchor is omitted, so identify it by data.
+    const authored = transformEntities.find((e) => {
+      const pos = (e.components as Record<string, Record<string, unknown>>).Transform?.pos;
+      return Array.isArray(pos) && pos[0] === 1 && pos[1] === 2 && pos[2] === 3;
+    });
     const t = def(comp(def(authored, 'authored'), 'Transform'), 'Transform');
     expect(t.pos).toEqual([1, 2, 3]);
     // Reference the imported Transform token so the schema is registered.
@@ -493,12 +496,9 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
-          components: { W1_GenericTransient: { persisted: 7, cache: [9, 9, 9, 9] } },
-        },
-      ],
+      entities: {
+        'entity-0': { components: { W1_GenericTransient: { persisted: 7, cache: [9, 9, 9, 9] } } },
+      },
     };
 
     const world = new World();
@@ -530,7 +530,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { W1_NoTransient: { a: 3, b: 4 } } }],
+      entities: { 'entity-0': { components: { W1_NoTransient: { a: 3, b: 4 } } } },
     };
 
     const world = new World();
@@ -561,7 +561,7 @@ describe('marker component scene-pack round-trip', () => {
     defineComponent('Test_EmptySchemaMarker', {});
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Test_EmptySchemaMarker: {} } }],
+      entities: { 'entity-0': { components: { Test_EmptySchemaMarker: {} } } },
     };
 
     const world = new World();
@@ -589,7 +589,7 @@ describe('marker component scene-pack round-trip', () => {
     const pack = serialized.value;
     const payload = def((pack.assets as Array<Record<string, unknown>>)[0], 'assets[0]')
       .payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     const markerEntity = entities.find((entity) => {
       const components = entity.components as Record<string, unknown>;
       return components.Test_EmptySchemaMarker !== undefined;
@@ -632,22 +632,20 @@ describe('w4 -- Transform vec serialization shape (AC-05)', () => {
   });
 });
 
-describe('w4 -- old-shape scene JSON downgrade regression (research Finding 3)', () => {
-  it('unknown per-axis keys are silently skipped with diagnostics, known keys still apply', () => {
+describe('w4 -- old-shape scene JSON validation (research Finding 3)', () => {
+  it('rejects unknown per-axis keys before spawning a partial scene', () => {
     // Old 10-scalar shape scene JSON: every per-axis key is unknown after the
-    // M2 schema cut. instantiateScene must not abort and must not dirty-write;
-    // each unknown key surfaces one production-observable diagnostic and the
-    // entity lands the default identity transform (Finding 3 + 4 downgrade).
+    // keyed SceneAsset schema cut. The producer must repair the source rather
+    // than silently dropping authored data.
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
+      entities: {
+        'entity-0': {
           components: {
             Transform: { posX: 5, posY: 6, posZ: 7, quatW: 1, scaleX: 2 },
           },
         },
-      ],
+      },
     };
 
     const world = new World();
@@ -656,29 +654,17 @@ describe('w4 -- old-shape scene JSON downgrade regression (research Finding 3)',
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
     const res = SceneOwner.worldInstantiateScene(world, handle);
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
     if (!res.ok) return;
-
-    // One diagnostic per unknown key, all attributed to Transform.
-    const fields = res.value.diagnostics
-      .filter((d) => d.component === 'Transform')
-      .map((d) => d.field)
-      .sort();
-    expect(fields).toEqual(['posX', 'posY', 'posZ', 'quatW', 'scaleX']);
-
-    // The carrying entity degrades to the identity transform (defaults).
-    const tfEntity = findEntityWith(
-      (() => {
-        const collected = rootsToSceneAsset(reg, world, [res.value.root]);
-        if (!collected.ok) throw new Error('collect failed');
-        return collected.value.entities;
-      })(),
-      'Transform',
-    );
-    const tf = def(comp(tfEntity, 'Transform'), 'Transform');
-    expect(tf.pos).toEqual([0, 0, 0]);
-    expect(tf.quat).toEqual([0, 0, 0, 1]);
-    expect(tf.scale).toEqual([1, 1, 1]);
+    expect(res.error).toMatchObject({
+      code: 'asset-package-invalid',
+      detail: {
+        reason: 'unknown component field',
+        component: 'Transform',
+        field: 'posX',
+        entity: 'entity-0',
+      },
+    });
   });
 });
 
@@ -701,7 +687,7 @@ describe('m3 — runtime collector kernel parity', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { CollectorParity: { count: 42 } } }],
+      entities: { 'entity-0': { components: { CollectorParity: { count: 42 } } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -723,10 +709,12 @@ describe('m3 — runtime collector kernel parity', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { FixedEnt_CollectorParity: { refs: [0, 1] } } },
-        { localId: localId(1), components: {} },
-      ],
+      entities: {
+        'entity-0': {
+          components: { FixedEnt_CollectorParity: { refs: ['entity-0', 'entity-1'] } },
+        },
+        'entity-1': { components: {} },
+      },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -767,12 +755,9 @@ describe('m3 — runtime collector kernel parity', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
-          components: { TransientField_CollectorParity: { keep: 5, derived: 99 } },
-        },
-      ],
+      entities: {
+        'entity-0': { components: { TransientField_CollectorParity: { keep: 5, derived: 99 } } },
+      },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -829,7 +814,7 @@ describe('m3 — runtime collector kernel parity supplemental', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { RoundTripComp_Sup: { val: 99 } } }],
+      entities: { 'entity-0': { components: { RoundTripComp_Sup: { val: 99 } } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -850,9 +835,7 @@ describe('m3 — runtime collector kernel parity supplemental', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { TransientFieldCol_Sup: { keep: 5, derived: 99 } } },
-      ],
+      entities: { 'entity-0': { components: { TransientFieldCol_Sup: { keep: 5, derived: 99 } } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);

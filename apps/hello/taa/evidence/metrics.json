@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "forgeax-render-metrics/1",
+  "featureId": "feat-20260827-auto-exposure-hdr-color-grading",
+  "source": { "path": "apps/hello/taa/src/main.ts", "sha256": "8e4ea3e8bf37612984da5c9d0094d4cf40be6399eae037d5e7869496a5e5dc2c" },
+  "sourceRevision": "runtime-exact-head",
+  "build": { "command": "pnpm --filter @forgeax/hello-taa build", "status": "pass" },
+  "backend": "browser-webgpu",
+  "runner": "playwright",
+  "frames": 300,
+  "roster": { "taa": ["temporal-target", "taa-resolve"], "none": [] },
+  "counters": { "bloomOffResources": 0, "bloomOffPasses": 0, "bloomOffUploads": 0, "taaResolveCount": 1 },
+  "status": "blocked",
+  "qualifiedTiming": {
+    "status": "blocked",
+    "samples": [],
+    "p95Ms": { "1920x1080": null, "3840x2160": null },
+    "thresholdsMs": { "1920x1080": 0.35, "3840x2160": 0.8 },
+    "requirements": {
+      "pairedProfilerWindows": true,
+      "rawGpuTimestamps": true,
+      "stableFrameResourceGrowth": 0,
+      "ineligibleLanes": ["swiftshader", "lavapipe", "rhi-null", "wall-clock-only"]
+    },
+    "reason": "No current qualified physical Browser/Dawn timestamp sample was produced by this local evidence update"
+  }
+  ,"exactHeadJoin": {
+    "status": "blocked",
+    "sourceRevision": "runtime-exact-head",
+    "requiredBackends": ["browser-webgpu", "dawn-node", "rhi-null"],
+    "requiredEvidence": ["three-r184-provenance", "decoded-sRGB-roi", "asset-authority", "300-frame-stability"],
+    "reason": "This checked-in metric is a contract baseline; validation must replace runtime-exact-head with the exact checkout SHA"
+  }
+}

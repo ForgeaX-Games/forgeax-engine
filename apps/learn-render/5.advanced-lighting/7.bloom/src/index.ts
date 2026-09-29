@@ -1,6 +1,6 @@
 import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
-import { Update } from '@forgeax/engine-ecs';
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
+import { Update } from '@forgeax/engine/ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine/input';
 // apps/learn-render/5.advanced-lighting/7.bloom/src/index.ts
 // LearnOpenGL section 5.7 - Bloom.
 //
@@ -11,12 +11,12 @@ import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine
 // colours run well past 1.0 (up to 15.0). The bright light-box cubes are
 // the bloom source: each is an unlit cube painted with its light colour
 // (mirroring the tutorial's 7.light_box.fs, which writes lightColor
-// straight to FragColor), so their pixels blow past the bloom bright-pass
+// straight to FragColor), so their pixels blow past the Bloom extraction
 // threshold of 1.0 and glow.
 //
 // Bloom is opt-in via Camera fields (bloom, bloomThreshold, bloomIntensity,
-// bloomBlurRadius) + Reinhard-extended tonemap. The engine declares the
-// URP default bloom chain (bright-filter -> blur-h -> blur-v -> composite);
+// bloomSoftKnee/bloomScatter) + Reinhard-extended tonemap. The engine declares the
+// five-level multiscale chain (downsample -> upsample -> composite);
 // no custom pipeline code lives here. Contrast with 6.hdr's custom
 // RenderPipeline paradigm and apps/hello/bloom (which proves the bloom
 // infrastructure and toggles it at runtime via Space).
@@ -27,23 +27,29 @@ import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine
 //   - "// 3. bootstrap"       entry point wiring (1)+(2) + HUD
 
 // 1. engine usage
-import { type App, createApp } from '@forgeax/engine-app';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { quat } from '@forgeax/engine-math';
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
+import { type App, createApp } from '@forgeax/engine/app';
+import { AssetGuid } from '@forgeax/engine/pack/guid';
+import { quat } from '@forgeax/engine/math';
+import { HANDLE_CUBE } from '@forgeax/engine/assets-runtime';
+import { Transform } from '@forgeax/engine/scene';
 
-import { BLOOM_DISABLED, BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
-import { PointLight } from '@forgeax/engine-render';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  BLOOM_DISABLED,
+  BLOOM_ENABLED,
+  Camera,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  perspective,
+  TONEMAP_REINHARD_EXTENDED,
+} from '@forgeax/engine/render';
 
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import type { MaterialAsset, TextureAsset } from '@forgeax/engine/types';
+import { unwrapHandle } from '@forgeax/engine/types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
-import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import {
   exposeLearnRenderTestApp,
   trackLearnRenderTestBootstrap,
@@ -60,17 +66,16 @@ const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 const CONTAINER2_GUID_STR = '019e3969-1d46-7945-a75a-ef97d537531e';
 
 // Bloom configuration. threshold=1.0 only filters HDR-bright pixels (the
-// light boxes); intensity/blurRadius match hello/bloom's PASS config.
+// light boxes); intensity/scatter match hello/bloom's migrated Camera config.
 const BLOOM_THRESHOLD = 1.0;
 const BLOOM_INTENSITY = 1.0;
-const BLOOM_BLUR_RADIUS = 4.0;
 
 // Reinhard-extended exposure analogue. The bloom_final tonemap in the
 // tutorial uses exposure=1.0.
 const TONEMAP_EXPOSURE = 1.0;
 
 // HDR light colours (bloom.cpp lightColors). Channels exceed 1.0 so the
-// light boxes blow past the bloom bright-pass threshold and glow.
+// light boxes blow past the Bloom extraction threshold and glow.
 const LIGHT_COLORS: ReadonlyArray<readonly [number, number, number]> = [
   [5.0, 5.0, 5.0],
   [10.0, 0.0, 0.0],
@@ -133,6 +138,29 @@ const CAMERA_FAR = 100.0;
 
 const DEG2RAD = Math.PI / 180;
 
+type LearnRenderErrorRecord = {
+  readonly asset?: string;
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail?: unknown;
+};
+
+function toLearnRenderError(error: {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail?: unknown;
+}, asset?: string): LearnRenderErrorRecord {
+  return {
+    ...(asset === undefined ? {} : { asset }),
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    ...(error.detail === undefined ? {} : { detail: error.detail }),
+  };
+}
+
 // 3. bootstrap
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -146,7 +174,7 @@ trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
+    runtimeBinding === undefined ? {} : { assetRuntimeBinding: runtimeBinding },
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
@@ -157,14 +185,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   exposeLearnRenderTestApp(app, target);
   const world = app.world;
   app.onError((error) => {
-    console.error('[learn-render 5.7 bloom] app.onError:', error.code, error.hint);
+    const record = toLearnRenderError(error);
+    console.error('[learn-render 5.7 bloom] app.onError:', record);
     const bus = (
       globalThis as unknown as {
-        __learnRenderErrors?: Array<{ code: string; hint?: string }>;
-    __captureBloom?: () => Promise<Uint8Array>;
+        __learnRenderErrors?: LearnRenderErrorRecord[];
+        __captureBloom?: () => Promise<Uint8Array>;
       }
     ).__learnRenderErrors;
-    if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
+    if (bus !== undefined) bus.push(record);
   });
 
   const assets = app.assets;
@@ -187,7 +216,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     assets.loadByGuid<TextureAsset>(container2GuidRes.value),
   ]);
   if (!woodTexRes.ok || !container2TexRes.ok) {
-    console.error('[learn-render 5.7 bloom] loadByGuid failed');
+    const failures = [
+      woodTexRes.ok ? undefined : toLearnRenderError(woodTexRes.error, 'wood'),
+      container2TexRes.ok ? undefined : toLearnRenderError(container2TexRes.error, 'container2'),
+    ].filter((failure): failure is LearnRenderErrorRecord => failure !== undefined);
+    const bus = (globalThis as unknown as {
+      __learnRenderErrors?: LearnRenderErrorRecord[];
+    }).__learnRenderErrors;
+    if (bus !== undefined) failures.forEach((failure) => bus.push(failure));
+    console.error(`[learn-render 5.7 bloom] loadByGuid failed: ${JSON.stringify({ failures })}`);
     return;
   }
   const woodTex = woodTexRes.value;
@@ -269,7 +306,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Bright light-box cube (unlit, HDR light colour -> bloom source).
     const lightBoxMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
       'MaterialAsset',
-      Materials.unlit([color[0], color[1], color[2], 1.0], { castShadow: false }),
+      Materials.unlit([color[0], color[1], color[2], 1.0]),
     );
     world
       .spawn(
@@ -285,10 +322,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   // Camera with bloom + tonemap enabled.
-  // Camera.bloom=BLOOM_ENABLED opt-in drives the URP default bloom chain
-  // (bright-filter -> blur-h -> blur-v -> composite). No custom pipeline
-  // code needed -- this is the "Camera fields as API" paradigm, contrasted
-  // with 6.hdr's custom RenderPipeline paradigm.
+  // Camera.bloom=BLOOM_ENABLED opt-in drives the URP default five-level
+  // multiscale chain (D0..D4 -> U3..U0 -> composite). No custom pipeline code
+  // needed -- this is the "Camera fields as API" paradigm, contrasted with
+  // 6.hdr's custom RenderPipeline paradigm.
   const cameraEntity = world
     .spawn(
       {
@@ -309,7 +346,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           bloom: BLOOM_ENABLED,
           bloomThreshold: BLOOM_THRESHOLD,
           bloomIntensity: BLOOM_INTENSITY,
-          bloomBlurRadius: BLOOM_BLUR_RADIUS,
+          bloomSoftKnee: 0.5,
+          bloomScatter: 0.7,
         },
       },
     )
@@ -371,23 +409,47 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   console.warn('[learn-render 5.7 bloom] Standard pipeline active. Press Space to toggle bloom.');
 
-  installCaptureHook(target, world);
+  installCaptureHook(app, world);
 }
 
 // Canvas capture hook for the capture smoke harness (pixel mode). Advances the
-// World before reading the Host-owned presentation surface.
-function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
+// World and issues one explicit observed draw before reading the Render-owned
+// final-srgb observation. Reading that receipt-bound domain avoids comparing a
+// captured Bloom graph with an earlier browser compositor frame.
+function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureBloom?: CaptureHook };
+  const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureBloom = async (): Promise<Uint8Array> => {
+    // Requesting all three domains keeps the Standard output split in the
+    // same graph shape used by the existing receipt-observation contract;
+    // final-srgb capture is only declared on the explicit encode stage.
+    const armed = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-srgb']);
+    if (armed === undefined) throw new Error('[learn-render 5.7 bloom] final-srgb observation unavailable');
+    if (!armed.ok) throw armed.error;
     world.update(1 / 60).unwrap();
-    const r = await captureCanvasPixels(target);
-    if (!r.ok) {
-      throw new Error(
-        `[learn-render 5.7 bloom] canvas capture failed: ${r.error.code} -- ${r.error.hint}`,
+    const frame = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+    if (!frame.ok) throw frame.error;
+    const observed = await renderer.observe(frame.value, {
+      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+    });
+    if (!observed.ok) throw observed.error;
+    const domain = observed.value.observations?.find((item) => item.domain === 'final-srgb');
+    if (domain === undefined) throw new Error('[learn-render 5.7 bloom] final-srgb observation missing');
+    const { width, height, bytesPerRow } = domain.metadata;
+    const tightRowBytes = width * 4;
+    if (bytesPerRow === tightRowBytes) return domain.bytes;
+    const tight = new Uint8Array(tightRowBytes * height);
+    for (let y = 0; y < height; y += 1) {
+      tight.set(
+        domain.bytes.subarray(y * bytesPerRow, y * bytesPerRow + tightRowBytes),
+        y * tightRowBytes,
       );
     }
-    return r.value;
+    return tight;
   };
 }
 
@@ -402,6 +464,6 @@ function updateHud(bloom: number): void {
 
 declare global {
   interface Window {
-    __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    __learnRenderErrors?: LearnRenderErrorRecord[];
   }
 }

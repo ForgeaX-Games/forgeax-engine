@@ -8,25 +8,21 @@ function shaderSource(name: (typeof shaderNames)[number]): string {
   return readFileSync(fileURLToPath(new URL(`../shaders/${name}.wgsl`, import.meta.url)), 'utf8');
 }
 
-function count(source: string, pattern: RegExp): number {
-  return source.match(pattern)?.length ?? 0;
-}
-
-describe('VFX Fog producer contract', () => {
-  it('requires one shared Fog call with a world-space ray for every topology', () => {
-    for (const name of shaderNames) {
+describe('VFX fog composition contract', () => {
+  it('fogs every clip-space particle topology at its own depth through the shared View fog', () => {
+    for (const name of ['billboard', 'ribbon', 'trail', 'beam'] as const) {
       const source = shaderSource(name);
-      expect(source, name).toMatch(
-        /#import\s+forgeax_view::common::\{[^}]*\bFogViewParams\b[^}]*\bFogRay\b[^}]*\}/,
-      );
-      expect(source, name).toMatch(/#import\s+forgeax_view::fog::\{[^}]*\bapply_fog\b[^}]*\}/);
-      expect(count(source, /\bapply_fog\s*\(/g), name).toBe(1);
-      expect(count(source, /\bFogRay\s*\(/g), name).toBe(1);
-      expect(source, name).toMatch(/world[_A-Za-z]*position|worldPosition/);
-      expect(source, name).toMatch(/ray[_A-Za-z]*distance|distance/);
-      expect(source, name).toMatch(/\.a\b|alpha/);
-      expect(source, name).not.toMatch(/texture_3d|raymarch/i);
+      expect(source, name).toContain('#import forgeax_view::fog::{translucent_fog, ndc_world}');
+      expect(source, name).toContain('translucent_fog(view, ndc_world(view, input.clip_position),');
+      expect(source, name).not.toMatch(/\bFogViewParams\b|\bview_fog\s*\(|texture_3d|raymarch/i);
     }
+    // Mesh particles fog through the shared Standard surface at their world position.
+    const surface = readFileSync(
+      fileURLToPath(new URL('../../../shader/src/standard-surface.wgsl', import.meta.url)),
+      'utf8',
+    );
+    expect(shaderSource('mesh')).toContain('evaluateStandardSurface(');
+    expect(surface).toContain('translucent_fog(view, in.worldPos, color, alpha)');
   });
 
   it('keeps VFX coverage on the current graphics feature lane', () => {
@@ -46,15 +42,18 @@ describe('VFX Fog producer contract', () => {
     expect(camera).toContain('viewProjection');
   });
 
-  it('keeps billboard scene-depth soft-particle alpha before Fog mixing', () => {
+  it('keeps billboard scene-depth soft-particle alpha in the final color', () => {
     const billboard = shaderSource('billboard');
     const depthLoad = billboard.indexOf('textureLoad(scene_depth');
     const softParticleCall = billboard.indexOf('softParticle(input.position');
-    const fogCall = billboard.indexOf('apply_fog(');
+    const finalColor = billboard.indexOf(
+      'translucent_fog(view, ndc_world(view, input.clip_position), rgb * alpha, alpha)',
+    );
 
     expect(depthLoad).toBeGreaterThanOrEqual(0);
     expect(softParticleCall).toBeGreaterThan(depthLoad);
-    expect(fogCall).toBeGreaterThan(softParticleCall);
+    expect(finalColor).toBeGreaterThan(softParticleCall);
     expect(billboard).toContain('input.color.a * edge, input.fade_distance');
+    expect(billboard).toContain('@group(0) @binding(1) var scene_depth: texture_depth_2d;');
   });
 });

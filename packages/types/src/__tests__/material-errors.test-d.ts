@@ -7,11 +7,14 @@ import type {
 } from '../material/errors.js';
 
 const expectedCodes = [
+  'material-output-contract-invalid',
   'material-parent-not-found',
   'material-circular-inheritance',
+  'material-child-contract-invalid',
   'material-no-effective-pass',
   'material-value-unknown',
   'material-value-type-mismatch',
+  'material-parameter-type-unsupported',
   'material-contract-program-mismatch',
   'shader-module-id-missing',
   'shader-module-id-duplicate',
@@ -24,22 +27,34 @@ const expectedCodes = [
   'material-derived-interface-mismatch',
   'material-texture-coordinate-invalid',
   'material-payload-bounds',
+  'material-transmission-contract-invalid',
+  'material-physical-contract-invalid',
+  'material-tangent-required',
+  'material-surface-slot-missing',
+  'material-surface-abi-mismatch',
+  'material-surface-forbidden-interface',
 ] as const;
 
 declare const error: MaterialError;
 
 function renderDiagnostic(error: MaterialError): string {
   switch (error.code) {
+    case 'material-output-contract-invalid':
+      return error.detail.reason;
     case 'material-parent-not-found':
       return error.detail.missingParent;
     case 'material-circular-inheritance':
       return error.detail.chain.join(' -> ');
+    case 'material-child-contract-invalid':
+      return `${error.detail.material}:${error.detail.parent}`;
     case 'material-no-effective-pass':
       return error.detail.material;
     case 'material-value-unknown':
       return error.detail.parameter;
     case 'material-value-type-mismatch':
       return `${error.detail.parameter}:${error.detail.expectedType}`;
+    case 'material-parameter-type-unsupported':
+      return `${error.detail.material}:${error.detail.parameter}:${error.detail.type}`;
     case 'material-contract-program-mismatch':
       return `${error.detail.pass}:${error.detail.program}`;
     case 'shader-module-id-missing':
@@ -64,6 +79,18 @@ function renderDiagnostic(error: MaterialError): string {
       return `${error.detail.parameter}:${error.detail.slot}:${error.detail.reason}`;
     case 'material-payload-bounds':
       return `${error.detail.slot}:${error.detail.byteOffset}:${error.detail.byteLength}`;
+    case 'material-transmission-contract-invalid':
+      return `${error.detail.material}:${error.detail.parameter}:${error.detail.reason}`;
+    case 'material-physical-contract-invalid':
+      return `${error.detail.material}:${error.detail.layer}:${error.detail.reason}`;
+    case 'material-tangent-required':
+      return `${error.detail.material}:${error.detail.mesh}:${error.detail.layer}:${error.detail.uv}`;
+    case 'material-surface-slot-missing':
+      return `${error.detail.material}:${error.detail.pass}:${error.detail.slot}`;
+    case 'material-surface-abi-mismatch':
+      return `${error.detail.material}:${error.detail.pass}:${error.detail.action}`;
+    case 'material-surface-forbidden-interface':
+      return `${error.detail.material}:${error.detail.pass}:${error.detail.interface}`;
   }
 }
 

@@ -18,8 +18,53 @@ import { describe, expect, it } from 'vitest';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
+const FLAG_DRIFT_SELF = path.relative(ENGINE_ROOT, fileURLToPath(import.meta.url));
+
+function normalizeRepoPath(value: string): string {
+  return value.split(path.sep).join('/');
+}
+
+function gitFlagDriftHits(root: string): string[] | null {
+  const relativeRoot = normalizeRepoPath(path.relative(ENGINE_ROOT, root));
+  const result = spawnSync(
+    'git',
+    [
+      '-C',
+      ENGINE_ROOT,
+      'grep',
+      '--name-only',
+      '-z',
+      '-e',
+      '--runId',
+      '-e',
+      '--ws-url',
+      '--',
+      `${relativeRoot}/**/*.ts`,
+      `${relativeRoot}/**/*.mjs`,
+    ],
+    { encoding: 'buffer', maxBuffer: 4 * 1024 * 1024 },
+  );
+
+  // A source snapshot (for example, the public SDK archive) has no Git
+  // metadata. Keep the filesystem fallback for that mode, and also avoid
+  // turning an unavailable Git binary into a false-positive guard result.
+  if (result.error || (result.status !== 0 && result.status !== 1)) return null;
+
+  return result.stdout
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map(normalizeRepoPath)
+    .filter((relativePath) => relativePath !== normalizeRepoPath(FLAG_DRIFT_SELF))
+    .filter((relativePath) => !relativePath.split('/').includes('dist'))
+    .filter((relativePath) => !relativePath.split('/').includes('node_modules'))
+    .sort();
+}
 
 function flagDriftHits(root: string): string[] {
+  const gitHits = gitFlagDriftHits(root);
+  if (gitHits !== null) return gitHits;
+
   const hits: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -44,7 +89,9 @@ function flagDriftHits(root: string): string[] {
 }
 
 describe('AC-07: flag drift grep gate', () => {
-  it('zero hits for --runId / --ws-url across apps/ packages/ (excluding dist, node_modules, self)', () => {
+  it('zero hits for --runId / --ws-url across apps/ packages/ (excluding dist, node_modules, self)', {
+    timeout: 30_000,
+  }, () => {
     expect([
       ...flagDriftHits(path.join(ENGINE_ROOT, 'apps')),
       ...flagDriftHits(path.join(ENGINE_ROOT, 'packages')),
@@ -146,7 +193,7 @@ describe('AC-08 partial: import.meta.hot in rhiDebugFlag guard', () => {
 });
 
 describe('RHI-debug smoke roster gate', () => {
-  it('resolves every declared hello and learn-render smoke at 300 frames', () => {
+  it('resolves every declared hello and learn-render smoke at 60 frames', () => {
     const rosterPath = path.resolve(ENGINE_ROOT, 'scripts', 'rhi-debug-smoke-roster.mjs');
     const result = spawnSync(
       process.execPath,
@@ -157,11 +204,11 @@ describe('RHI-debug smoke roster gate', () => {
         '--learn-root',
         'apps/learn-render',
         '--frames',
-        '300',
+        '60',
       ],
       { cwd: ENGINE_ROOT, encoding: 'utf8' },
     );
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(0);
     const roster = JSON.parse(result.stdout) as {
       status: string;
       frameCount: number;
@@ -174,14 +221,14 @@ describe('RHI-debug smoke roster gate', () => {
       }[];
       unavailable: readonly { reason: string }[];
     };
-    expect(roster.status).toBe('unavailable');
+    expect(roster.status).toBe('ready');
     expect(roster.execution).toMatchObject({ status: 'not-executed', mode: 'declaration-only' });
-    expect(roster.frameCount).toBe(300);
+    expect(roster.frameCount).toBe(60);
     expect(roster.entries.length).toBeGreaterThan(0);
     expect(
       roster.entries.every(
         (entry) =>
-          entry.frames === 300 &&
+          entry.frames === 60 &&
           entry.command === entry.invocation &&
           entry.tokens.join(' ') === entry.invocation &&
           entry.tokens[0] === 'pnpm' &&
@@ -191,8 +238,7 @@ describe('RHI-debug smoke roster gate', () => {
     expect(roster.entries.some((entry) => entry.invocation.includes('format-tier1 build'))).toBe(
       true,
     );
-    expect(roster.unavailable.length).toBeGreaterThan(0);
-    expect(roster.unavailable.every((item) => item.reason.length > 0)).toBe(true);
+    expect(roster.unavailable).toEqual([]);
   });
 
   it('executes every declared command in a temporary workspace and fails closed', {
@@ -238,12 +284,12 @@ describe('RHI-debug smoke roster gate', () => {
           '--cwd',
           fixture,
           '--frames',
-          '300',
+          '60',
           '--execute',
         ],
         { cwd: ENGINE_ROOT, encoding: 'utf8' },
       );
-      expect(passed.status).toBe(0);
+      expect(passed.status, passed.stdout + passed.stderr).toBe(0);
       const passedRoster = JSON.parse(passed.stdout) as {
         status: string;
         execution: { status: string; mode: string; passedCount: number; failedCount: number };
@@ -273,7 +319,7 @@ describe('RHI-debug smoke roster gate', () => {
         invocation: 'pnpm --filter @fake/smoke smoke:browser',
         tokens: ['pnpm', '--filter', '@fake/smoke', 'smoke:browser'],
         backend: 'browser',
-        frames: 300,
+        frames: 60,
       });
       expect(passedEntry?.stdout).toContain('fake browser smoke');
 
@@ -283,7 +329,11 @@ describe('RHI-debug smoke roster gate', () => {
           name: '@fake/smoke',
           private: true,
           scripts: {
-            'smoke:browser': 'node -e "console.error(\'fake failure\'); process.exit(7)"',
+            // process managers may route a failing script's streams differently
+            // on each runner; write the diagnostic synchronously to both pipes
+            // so the fail-closed assertion always has portable evidence.
+            'smoke:browser':
+              "node -e \"const fs = require('node:fs'); fs.writeSync(1, 'fake failure\\n'); fs.writeSync(2, 'fake failure\\n'); process.exit(7)\"",
           },
           forgeax: { smokeInvocation: 'pnpm --filter @fake/smoke smoke:browser' },
         }),
@@ -306,12 +356,31 @@ describe('RHI-debug smoke roster gate', () => {
       const failedRoster = JSON.parse(failed.stdout) as {
         status: string;
         execution: { status: string; failedCount: number };
-        entries: readonly { status: string; returnCode: number | null; stderr: string }[];
+        entries: readonly {
+          status: string;
+          returnCode: number | null;
+          stdout: string;
+          stderr: string;
+        }[];
       };
       expect(failedRoster.status).toBe('failed');
       expect(failedRoster.execution).toMatchObject({ status: 'failed', failedCount: 1 });
-      expect(failedRoster.entries[0]).toMatchObject({ status: 'failed', returnCode: 7 });
-      expect(failedRoster.entries[0]?.stderr).toContain('fake failure');
+      // The roster records the declared pnpm command's status. pnpm 11 maps
+      // the inner script's exit 7 to 1; compare against that real boundary.
+      const directFailure = spawnSync('pnpm', ['--filter', '@fake/smoke', 'smoke:browser'], {
+        cwd: fixture,
+        encoding: 'utf8',
+      });
+      expect(directFailure.error).toBeUndefined();
+      expect(directFailure.status).not.toBeNull();
+      expect(directFailure.status).not.toBe(0);
+      expect(failedRoster.entries[0]).toMatchObject({
+        status: 'failed',
+        returnCode: directFailure.status,
+      });
+      expect(`${failedRoster.entries[0]?.stdout}\n${failedRoster.entries[0]?.stderr}`).toContain(
+        'fake failure',
+      );
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

@@ -40,6 +40,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
@@ -50,7 +51,7 @@ const HEIGHT = 512;
 // This is the naga_oil-composed result of outline-solid.wgsl with
 // `#import forgeax_view::common::{View, Mesh, view, meshes}` resolved.
 // The struct layouts byte-for-byte match packages/shader/src/common.wgsl
-// (View 176 B / Mesh mat4+mat3 via 256 B per-entity stride).
+// (View 176 B / Mesh world mat4 via 256 B per-entity stride).
 // When the engine provides a `composeCustomShader` API, this constant
 // can be replaced with a runtime `composeShader()` call.
 const COMPOSED_OUTLINE_WGSL = `
@@ -64,7 +65,6 @@ struct View {
 
 struct Mesh {
   worldFromLocal : mat4x4<f32>,
-  normalMatrix   : mat3x3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view : View;
@@ -314,21 +314,25 @@ const lease = worldAttachment1.value;
 
 const metalTexAsset = {
   kind: 'texture',
-  width: metalDecoded.width,
-  height: metalDecoded.height,
+  shape: {
+    viewDimension: '2d',
+    extent: { width: metalDecoded.width, height: metalDecoded.height },
+  },
   format: metalDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: metalDecoded.bytes,
   colorSpace: metalDecoded.colorSpace,
-  mipmap: metalDecoded.mipmap,
+  mips: metalDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 const marbleTexAsset = {
   kind: 'texture',
-  width: marbleDecoded.width,
-  height: marbleDecoded.height,
+  shape: {
+    viewDimension: '2d',
+    extent: { width: marbleDecoded.width, height: marbleDecoded.height },
+  },
   format: marbleDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: marbleDecoded.bytes,
   colorSpace: marbleDecoded.colorSpace,
-  mipmap: marbleDecoded.mipmap,
+  mips: marbleDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 const metalHandle = unwrapHandle(world.allocSharedRef('TextureAsset', metalTexAsset));
 const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', marbleTexAsset));
@@ -514,8 +518,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -680,6 +684,8 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+emitSmokeReceipt('app-learn-render-4-advanced-opengl-2-stencil-testing/smoke', framesObserved);
 
 console.log(
   `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, RhiError count=0 (outlinePixels=${outlinePixels} info-only), wallTotalMs=${wallTotalMs}`,

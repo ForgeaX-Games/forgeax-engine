@@ -67,14 +67,14 @@ const materialOcclusionTextureUvTransform =
   process.env.VITE_FALSIFY_MATERIAL_OCCLUSION_TEXTURE_UV_TRANSFORM ?? '';
 const materialOcclusionTextureUvSet =
   process.env.VITE_FALSIFY_MATERIAL_OCCLUSION_TEXTURE_UV_SET ?? '';
-const materialSpecularTint = process.env.VITE_FALSIFY_MATERIAL_SPECULAR_TINT ?? '';
-const materialSpecularTintTexture = process.env.VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE ?? '';
-const materialSpecularTintTextureSampler =
-  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_SAMPLER ?? '';
-const materialSpecularTintTextureUvTransform =
-  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_TRANSFORM ?? '';
-const materialSpecularTintTextureUvSet =
-  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET ?? '';
+const materialSpecularColor = process.env.VITE_FALSIFY_MATERIAL_SPECULAR_COLOR ?? '';
+const materialSpecularColorTexture = process.env.VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE ?? '';
+const materialSpecularColorTextureSampler =
+  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_SAMPLER ?? '';
+const materialSpecularColorTextureUvTransform =
+  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_TRANSFORM ?? '';
+const materialSpecularColorTextureUvSet =
+  process.env.VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_SET ?? '';
 const alphaCutoff = process.env.VITE_FALSIFY_MATERIAL_ALPHA_CUTOFF ?? '';
 if (alphaCutoff !== '' && alphaCutoff !== '1') {
   console.error(
@@ -139,11 +139,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -206,11 +206,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -262,11 +262,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -554,48 +554,48 @@ if (materialOcclusionTextureUvSet !== '' && materialOcclusionTextureUvSet !== '1
   );
   process.exit(1);
 }
-if (materialSpecularTint !== '' && materialSpecularTint !== 'cool') {
+if (materialSpecularColor !== '' && materialSpecularColor !== 'cool') {
   console.error(
-    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_TINT=${materialSpecularTint}; expected cool`,
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_COLOR=${materialSpecularColor}; expected cool`,
   );
   process.exit(1);
 }
-if (materialSpecularTintTexture !== '' && materialSpecularTintTexture !== 'blue') {
+if (materialSpecularColorTexture !== '' && materialSpecularColorTexture !== 'blue') {
   console.error(
-    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE=${materialSpecularTintTexture}; expected blue`,
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE=${materialSpecularColorTexture}; expected blue`,
   );
   process.exit(1);
 }
-if (materialSpecularTintTextureSampler !== '' && materialSpecularTintTextureSampler !== 'nearest') {
+if (materialSpecularColorTextureSampler !== '' && materialSpecularColorTextureSampler !== 'nearest') {
   console.error(
-    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_SAMPLER=${materialSpecularTintTextureSampler}; expected nearest`,
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_SAMPLER=${materialSpecularColorTextureSampler}; expected nearest`,
   );
   process.exit(1);
 }
-if (materialSpecularTintTextureUvTransform !== '' && materialSpecularTintTextureUvTransform !== '1') {
+if (materialSpecularColorTextureUvTransform !== '' && materialSpecularColorTextureUvTransform !== '1') {
   console.error(
-    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_TRANSFORM=${materialSpecularTintTextureUvTransform}; expected 1`,
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_TRANSFORM=${materialSpecularColorTextureUvTransform}; expected 1`,
   );
   process.exit(1);
 }
-if (materialSpecularTintTextureUvSet !== '' && materialSpecularTintTextureUvSet !== '1') {
+if (materialSpecularColorTextureUvSet !== '' && materialSpecularColorTextureUvSet !== '1') {
   console.error(
-    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET=${materialSpecularTintTextureUvSet}; expected 1`,
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_SET=${materialSpecularColorTextureUvSet}; expected 1`,
   );
   process.exit(1);
 }
-if (materialSpecularTintTextureUvTransform !== '' && materialSpecularTintTextureUvSet !== '') {
+if (materialSpecularColorTextureUvTransform !== '' && materialSpecularColorTextureUvSet !== '') {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_TRANSFORM cannot be combined with VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_TRANSFORM cannot be combined with VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_SET',
   );
   process.exit(1);
 }
 if (
-  materialSpecularTintTextureUvSet !== '' &&
-  (materialSpecularTintTexture !== '' || materialSpecularTintTextureSampler !== '')
+  materialSpecularColorTextureUvSet !== '' &&
+  (materialSpecularColorTexture !== '' || materialSpecularColorTextureSampler !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET cannot be combined with another specularTintTexture falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_SET cannot be combined with another specularColorTexture falsifier',
   );
   process.exit(1);
 }
@@ -651,10 +651,10 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -684,8 +684,8 @@ if (
     materialNormalTextureUvTransform,
     materialMetallicRoughnessTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -730,8 +730,8 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -786,8 +786,8 @@ if (
     materialMetallicRoughnessTextureUvTransform,
     materialMetallicRoughnessTextureUvSet,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -820,8 +820,8 @@ if (
     materialMetallicRoughnessTextureUvTransform,
     materialMetallicRoughnessTextureUvSet,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -851,8 +851,8 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -884,8 +884,8 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -917,8 +917,8 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -951,8 +951,8 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -961,7 +961,7 @@ if (
   process.exit(1);
 }
 if (
-  materialSpecularTint !== '' &&
+  materialSpecularColor !== '' &&
   [
     pointLightIntensity,
     pointLightRange,
@@ -978,12 +978,12 @@ if (
   ].some((value) => value !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT cannot be combined with another material or PointLight falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
 if (
-  materialSpecularTintTexture !== '' &&
+  materialSpecularColorTexture !== '' &&
   [
     pointLightIntensity,
     pointLightRange,
@@ -997,22 +997,22 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
+    materialSpecularColor,
   ].some((value) => value !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE cannot be combined with another material or PointLight falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
-if (materialSpecularTintTexture !== '' && materialSpecularTintTextureSampler !== '') {
+if (materialSpecularColorTexture !== '' && materialSpecularColorTextureSampler !== '') {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE cannot be combined with VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_SAMPLER',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE cannot be combined with VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_SAMPLER',
   );
   process.exit(1);
 }
 if (
-  materialSpecularTintTextureUvTransform !== '' &&
+  materialSpecularColorTextureUvTransform !== '' &&
   [
     pointLightIntensity,
     pointLightRange,
@@ -1043,18 +1043,18 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
   ].some((value) => value !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_TRANSFORM cannot be combined with another material or PointLight falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_TRANSFORM cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
 if (
-  materialSpecularTintTextureUvSet !== '' &&
+  materialSpecularColorTextureUvSet !== '' &&
   [
     pointLightIntensity,
     pointLightRange,
@@ -1085,17 +1085,17 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTextureUvTransform,
+    materialSpecularColor,
+    materialSpecularColorTextureUvTransform,
   ].some((value) => value !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET cannot be combined with another material or PointLight falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_UV_SET cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
 if (
-  materialSpecularTintTextureSampler !== '' &&
+  materialSpecularColorTextureSampler !== '' &&
   [
     pointLightIntensity,
     pointLightRange,
@@ -1123,11 +1123,11 @@ if (
     materialNormalTextureSampler,
     materialNormalTextureUvTransform,
     materialOcclusionStrength,
-    materialSpecularTint,
+    materialSpecularColor,
   ].some((value) => value !== '')
 ) {
   console.error(
-    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_SAMPLER cannot be combined with another material or PointLight falsifier',
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE_SAMPLER cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
@@ -1274,8 +1274,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1297,8 +1297,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1320,8 +1320,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1343,8 +1343,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1372,8 +1372,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1401,8 +1401,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1430,8 +1430,8 @@ if (
     materialClearcoat,
     materialNormalScale,
     materialOcclusionStrength,
-    materialSpecularTint,
-    materialSpecularTintTexture,
+    materialSpecularColor,
+    materialSpecularColorTexture,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1471,11 +1471,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1516,11 +1516,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1562,11 +1562,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1609,11 +1609,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1667,11 +1667,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1718,11 +1718,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1770,11 +1770,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1823,11 +1823,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1886,11 +1886,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
   ].some((value) => value !== '')
 ) {
   console.error(
@@ -1943,11 +1943,11 @@ if (
     materialOcclusionTextureSampler,
     materialOcclusionTextureUvTransform,
     materialOcclusionTextureUvSet,
-    materialSpecularTint,
-    materialSpecularTintTexture,
-    materialSpecularTintTextureSampler,
-    materialSpecularTintTextureUvTransform,
-    materialSpecularTintTextureUvSet,
+    materialSpecularColor,
+    materialSpecularColorTexture,
+    materialSpecularColorTextureSampler,
+    materialSpecularColorTextureUvTransform,
+    materialSpecularColorTextureUvSet,
     alphaCutoff,
   ].some((value) => value !== '')
 ) {
@@ -1964,28 +1964,28 @@ await verifyDemoCapture({
   liveHook: '__captureBasicLighting',
   rtIdx: 0,
   appDir: dirname(here),
-  assertTape: pointLightIntensity === '' && pointLightRange === '' && pointLightColor === '' && pointLightPosition === '' && materialMetallic === '' && materialRoughness === '' && materialBaseColor === '' && materialBaseColorTexture === '' && materialBaseColorTextureSampler === '' && materialBaseColorTextureUvTransform === '' && materialBaseColorTextureUvSet === '' && materialMetallicRoughnessTexture === '' && materialMetallicRoughnessTextureSampler === '' && materialMetallicRoughnessTextureUvTransform === '' && materialMetallicRoughnessTextureUvSet === '' && materialMetallicChannel === '' && materialRoughnessChannel === '' && materialEmissive === '' && materialEmissiveIntensity === '' && materialEmissiveTexture === '' && materialEmissiveTextureSampler === '' && materialEmissiveTextureUvTransform === '' && materialEmissiveTextureUvSet === '' && materialClearcoat === '' && materialNormalScale === '' && materialNormalTexture === '' && materialNormalTextureUvSet === '' && materialNormalTextureSampler === '' && materialNormalTextureUvTransform === '' && materialNormalTextureMagFilter === '' && materialNormalTextureMinFilter === '' && materialNormalTextureMipmapFilter === '' && materialNormalTextureAddressModeU === '' && materialNormalTextureAddressModeV === '' && materialNormalTextureAddressModeW === '' && materialNormalTextureSamplerLodMinClamp === '' && materialNormalTextureSamplerLodMaxClamp === '' && materialNormalTextureSamplerMaxAnisotropy === '' && materialOcclusionStrength === '' && materialOcclusionTextureSampler === '' && materialOcclusionTextureUvTransform === '' && materialOcclusionTextureUvSet === '' && materialSpecularTint === '' && materialSpecularTintTexture === '' && materialSpecularTintTextureSampler === '' && materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === '' && alphaCutoff === '' && alphaBlend === ''
+  assertTape: pointLightIntensity === '' && pointLightRange === '' && pointLightColor === '' && pointLightPosition === '' && materialMetallic === '' && materialRoughness === '' && materialBaseColor === '' && materialBaseColorTexture === '' && materialBaseColorTextureSampler === '' && materialBaseColorTextureUvTransform === '' && materialBaseColorTextureUvSet === '' && materialMetallicRoughnessTexture === '' && materialMetallicRoughnessTextureSampler === '' && materialMetallicRoughnessTextureUvTransform === '' && materialMetallicRoughnessTextureUvSet === '' && materialMetallicChannel === '' && materialRoughnessChannel === '' && materialEmissive === '' && materialEmissiveIntensity === '' && materialEmissiveTexture === '' && materialEmissiveTextureSampler === '' && materialEmissiveTextureUvTransform === '' && materialEmissiveTextureUvSet === '' && materialClearcoat === '' && materialNormalScale === '' && materialNormalTexture === '' && materialNormalTextureUvSet === '' && materialNormalTextureSampler === '' && materialNormalTextureUvTransform === '' && materialNormalTextureMagFilter === '' && materialNormalTextureMinFilter === '' && materialNormalTextureMipmapFilter === '' && materialNormalTextureAddressModeU === '' && materialNormalTextureAddressModeV === '' && materialNormalTextureAddressModeW === '' && materialNormalTextureSamplerLodMinClamp === '' && materialNormalTextureSamplerLodMaxClamp === '' && materialNormalTextureSamplerMaxAnisotropy === '' && materialOcclusionStrength === '' && materialOcclusionTextureSampler === '' && materialOcclusionTextureUvTransform === '' && materialOcclusionTextureUvSet === '' && materialSpecularColor === '' && materialSpecularColorTexture === '' && materialSpecularColorTextureSampler === '' && materialSpecularColorTextureUvTransform === '' && materialSpecularColorTextureUvSet === '' && alphaCutoff === '' && alphaBlend === ''
     ? undefined
     : ({ tape }) => {
-        const pointLightsBuffer = tape.events.find(
+        const lightDataBuffer = tape.events.find(
           (event) =>
             event.kind === 'createBuffer' &&
-            event.desc?.size === 144 &&
-            event.desc?.usage === 140,
+            event.desc?.size === 20480 &&
+            event.desc?.usage === 136,
         );
-        const upload = pointLightsBuffer === undefined
+        const upload = lightDataBuffer === undefined
           ? undefined
           : tape.events.find(
               (event) =>
                 event.kind === 'writeBuffer' &&
-                event.handleId === pointLightsBuffer.handleId &&
-                event.bufferOffset === 16 &&
-                event.size === 32,
+                event.handleId === lightDataBuffer.handleId &&
+                event.bufferOffset === 0 &&
+                event.size >= 80,
             );
         const data = upload === undefined ? undefined : tape.blobPool.get(upload.dataHash);
-        if (data === undefined || data.byteLength < 28) {
+        if (data === undefined || data.byteLength < 80) {
           throw new Error(
-            'capture tape is missing the 32-byte PointLight std430 upload at buffer offset 16',
+            'capture tape is missing the unified Cluster light_data upload at buffer offset 0',
           );
         }
         const floats = new Float32Array(data);
@@ -2090,7 +2090,7 @@ await verifyDemoCapture({
             `[learn-render 2.2 basic-lighting] tape materialAlphaBlend=${alphaBlend} baseColorAlpha=${baseColorAlpha} blend=src-alpha/one-minus-src-alpha depthWriteEnabled=false queue=3000`,
           );
         }
-        if (materialMetallic !== '' || materialRoughness !== '' || materialBaseColor !== '' || materialBaseColorTexture !== '' || materialBaseColorTextureSampler !== '' || materialBaseColorTextureUvTransform !== '' || materialBaseColorTextureUvSet !== '' || materialMetallicRoughnessTexture !== '' || materialMetallicRoughnessTextureSampler !== '' || materialMetallicRoughnessTextureUvTransform !== '' || materialMetallicRoughnessTextureUvSet !== '' || materialEmissive !== '' || materialEmissiveIntensity !== '' || materialEmissiveTexture !== '' || materialEmissiveTextureSampler !== '' || materialEmissiveTextureUvTransform !== '' || materialEmissiveTextureUvSet !== '' || materialClearcoat !== '' || materialNormalScale !== '' || materialNormalTexture !== '' || materialNormalTextureUvSet !== '' || materialNormalTextureSampler !== '' || materialNormalTextureUvTransform !== '' || materialNormalTextureMagFilter !== '' || materialNormalTextureMinFilter !== '' || materialNormalTextureMipmapFilter !== '' || materialNormalTextureAddressModeU !== '' || materialNormalTextureAddressModeV !== '' || materialNormalTextureAddressModeW !== '' || materialNormalTextureSamplerLodMinClamp !== '' || materialNormalTextureSamplerLodMaxClamp !== '' || materialNormalTextureSamplerMaxAnisotropy !== '' || materialOcclusionStrength !== '' || materialOcclusionTextureSampler !== '' || materialOcclusionTextureUvTransform !== '' || materialOcclusionTextureUvSet !== '' || materialSpecularTint !== '' || materialSpecularTintTexture !== '' || materialSpecularTintTextureSampler !== '' || materialSpecularTintTextureUvTransform !== '' || materialSpecularTintTextureUvSet !== '') {
+        if (materialMetallic !== '' || materialRoughness !== '' || materialBaseColor !== '' || materialBaseColorTexture !== '' || materialBaseColorTextureSampler !== '' || materialBaseColorTextureUvTransform !== '' || materialBaseColorTextureUvSet !== '' || materialMetallicRoughnessTexture !== '' || materialMetallicRoughnessTextureSampler !== '' || materialMetallicRoughnessTextureUvTransform !== '' || materialMetallicRoughnessTextureUvSet !== '' || materialEmissive !== '' || materialEmissiveIntensity !== '' || materialEmissiveTexture !== '' || materialEmissiveTextureSampler !== '' || materialEmissiveTextureUvTransform !== '' || materialEmissiveTextureUvSet !== '' || materialClearcoat !== '' || materialNormalScale !== '' || materialNormalTexture !== '' || materialNormalTextureUvSet !== '' || materialNormalTextureSampler !== '' || materialNormalTextureUvTransform !== '' || materialNormalTextureMagFilter !== '' || materialNormalTextureMinFilter !== '' || materialNormalTextureMipmapFilter !== '' || materialNormalTextureAddressModeU !== '' || materialNormalTextureAddressModeV !== '' || materialNormalTextureAddressModeW !== '' || materialNormalTextureSamplerLodMinClamp !== '' || materialNormalTextureSamplerLodMaxClamp !== '' || materialNormalTextureSamplerMaxAnisotropy !== '' || materialOcclusionStrength !== '' || materialOcclusionTextureSampler !== '' || materialOcclusionTextureUvTransform !== '' || materialOcclusionTextureUvSet !== '' || materialSpecularColor !== '' || materialSpecularColorTexture !== '' || materialSpecularColorTextureSampler !== '' || materialSpecularColorTextureUvTransform !== '' || materialSpecularColorTextureUvSet !== '') {
           const materialBuffer = tape.events.find(
             (event) =>
               event.kind === 'createBuffer' &&
@@ -2906,15 +2906,15 @@ await verifyDemoCapture({
             );
           }
           if (materialNormalScale !== '') {
-            const actual = materialFloats[72];
-            const expected = 0.0;
-            if (Math.abs(actual - expected) > 1e-6) {
+            const actual = Array.from(materialFloats.slice(24, 26));
+            const expected = [0.0, 0.0];
+            if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-6)) {
               throw new Error(
-                `capture tape material normalScale=${actual}; expected ${expected} at global byte offset 288`,
+                `capture tape material normalScale=${actual}; expected ${expected} at global byte offsets 96,100`,
               );
             }
             console.log(
-              `[learn-render 2.2 basic-lighting] tape materialNormalScale=${materialNormalScale} normalScale=${actual} materialUBO byteOffset=288 texture=rg-normal`,
+              `[learn-render 2.2 basic-lighting] tape materialNormalScale=${materialNormalScale} normalScale=${actual} materialUBO byteOffsets=96,100 texture=rg-normal`,
             );
           }
           if (materialNormalTexture !== '' || materialNormalTextureUvSet !== '' || materialNormalTextureSampler !== '' || materialNormalTextureUvTransform !== '' || materialNormalTextureMagFilter !== '' || materialNormalTextureMinFilter !== '' || materialNormalTextureMipmapFilter !== '' || materialNormalTextureAddressModeU !== '' || materialNormalTextureAddressModeV !== '' || materialNormalTextureAddressModeW !== '' || materialNormalTextureSamplerLodMinClamp !== '' || materialNormalTextureSamplerLodMaxClamp !== '' || materialNormalTextureSamplerMaxAnisotropy !== '') {
@@ -3166,25 +3166,25 @@ await verifyDemoCapture({
               );
             }
           }
-          if (materialSpecularTint !== '') {
+          if (materialSpecularColor !== '') {
             const actual = [materialFloats[20], materialFloats[21], materialFloats[22]];
             const expected = [0.0, srgbToLinear(0.8), 1.0];
             if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-6)) {
               throw new Error(
-                `capture tape material specularTint=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 80,84,88`,
+                `capture tape material specularColor=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 80,84,88`,
               );
             }
             console.log(
-              `[learn-render 2.2 basic-lighting] tape materialSpecularTint=cool specularTint=${JSON.stringify(actual)} materialUBO byteOffsets=80,84,88`,
+              `[learn-render 2.2 basic-lighting] tape materialSpecularColor=cool specularColor=${JSON.stringify(actual)} materialUBO byteOffsets=80,84,88`,
             );
           }
           if (
-            materialSpecularTintTexture !== '' ||
-            materialSpecularTintTextureSampler !== '' ||
-            materialSpecularTintTextureUvTransform !== '' ||
-            materialSpecularTintTextureUvSet !== ''
+            materialSpecularColorTexture !== '' ||
+            materialSpecularColorTextureSampler !== '' ||
+            materialSpecularColorTextureUvTransform !== '' ||
+            materialSpecularColorTextureUvSet !== ''
           ) {
-            const expectedBytes = materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === ''
+            const expectedBytes = materialSpecularColorTextureUvTransform === '' && materialSpecularColorTextureUvSet === ''
               ? [0, 64, 255, 255]
               : [
                   0, 64, 255, 255,
@@ -3196,8 +3196,8 @@ await verifyDemoCapture({
               if (
                 event.kind !== 'createTexture' ||
                 event.desc?.format !== 'rgba8unorm' ||
-                event.desc?.size?.width !== (materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === '' ? 1 : 2) ||
-                event.desc?.size?.height !== (materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === '' ? 1 : 2)
+                event.desc?.size?.width !== (materialSpecularColorTextureUvTransform === '' && materialSpecularColorTextureUvSet === '' ? 1 : 2) ||
+                event.desc?.size?.height !== (materialSpecularColorTextureUvTransform === '' && materialSpecularColorTextureUvSet === '' ? 1 : 2)
               ) {
                 return false;
               }
@@ -3214,7 +3214,7 @@ await verifyDemoCapture({
             });
             if (texture === undefined) {
               throw new Error(
-                'capture tape is missing the expected specularTintTexture initialData payload',
+                'capture tape is missing the expected specularColorTexture initialData payload',
               );
             }
             const sampler = tape.events.find(
@@ -3229,7 +3229,7 @@ await verifyDemoCapture({
             );
             if (sampler === undefined) {
               throw new Error(
-                'capture tape is missing the specularTintTexture sampler nearest/clamp-to-edge descriptor',
+                'capture tape is missing the specularColorTexture sampler nearest/clamp-to-edge descriptor',
               );
             }
             const view = tape.events.find(
@@ -3250,26 +3250,26 @@ await verifyDemoCapture({
             );
             if (binding === undefined) {
               throw new Error(
-                'capture tape is missing the specularTintTexture user-region bindings at 7/8',
+                'capture tape is missing the specularColorTexture user-region bindings at 7/8',
               );
             }
-            if (materialSpecularTintTextureUvTransform !== '') {
+            if (materialSpecularColorTextureUvTransform !== '') {
               const actual = Array.from(materialFloats.slice(48, 56));
               const expected = [0.25, 0.25, 0, 0, 0, 0, 1, 1];
               if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-6)) {
                 throw new Error(
-                  `capture tape specularTintTexture coordinates=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 192..220`,
+                  `capture tape specularColorTexture coordinates=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 192..220`,
                 );
               }
               console.log(
-                `[learn-render 2.2 basic-lighting] tape materialSpecularTintTextureUvTransform=1 coordinates=${JSON.stringify(actual)} materialUBO byteOffsets=192,196,200,204,208,212,216,220`,
+                `[learn-render 2.2 basic-lighting] tape materialSpecularColorTextureUvTransform=1 coordinates=${JSON.stringify(actual)} materialUBO byteOffsets=192,196,200,204,208,212,216,220`,
               );
-            } else if (materialSpecularTintTextureUvSet !== '') {
+            } else if (materialSpecularColorTextureUvSet !== '') {
               const actual = Array.from(materialFloats.slice(48, 56));
               const expected = [0, 0, 1, 1, 1, 0, 1, 1];
               if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-6)) {
                 throw new Error(
-                  `capture tape specularTintTexture coordinates=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 192..220`,
+                  `capture tape specularColorTexture coordinates=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at global byte offsets 192..220`,
                 );
               }
               const uv1Pipeline = tape.events.find(
@@ -3311,11 +3311,11 @@ await verifyDemoCapture({
                 );
               }
               console.log(
-                `[learn-render 2.2 basic-lighting] tape materialSpecularTintTextureUvSet=1 coordinates=${JSON.stringify(actual)} materialUBO byteOffsets=192,196,200,204,208,212,216,220 texture=rgba8unorm 2x2 sampler=nearest/clamp-to-edge userRegion=specularTintTexture bindings=7/8 vertexStride=56 uv1Location=6 uv1Offset=48 uv1=[0.75,0.75]`,
+                `[learn-render 2.2 basic-lighting] tape materialSpecularColorTextureUvSet=1 coordinates=${JSON.stringify(actual)} materialUBO byteOffsets=192,196,200,204,208,212,216,220 texture=rgba8unorm 2x2 sampler=nearest/clamp-to-edge userRegion=specularColorTexture bindings=7/8 vertexStride=56 uv1Location=6 uv1Offset=48 uv1=[0.75,0.75]`,
               );
             }
             console.log(
-              `[learn-render 2.2 basic-lighting] tape materialSpecularTintTexture=${materialSpecularTintTexture === '' ? 'default' : 'blue'} sampler=nearest payload=${JSON.stringify(expectedBytes)} colorSpace=linear sampler=nearest/clamp-to-edge userRegion=specularTintTexture bindings=7/8`,
+              `[learn-render 2.2 basic-lighting] tape materialSpecularColorTexture=${materialSpecularColorTexture === '' ? 'default' : 'blue'} sampler=nearest payload=${JSON.stringify(expectedBytes)} colorSpace=linear sampler=nearest/clamp-to-edge userRegion=specularColorTexture bindings=7/8`,
             );
           }
           if (materialEmissiveTexture !== '') {
@@ -3396,11 +3396,11 @@ await verifyDemoCapture({
           const actual = [floats[0], floats[1], floats[2]];
           if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-5)) {
             throw new Error(
-              `capture tape PointLight position=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at byte offsets 16,20,24`,
+              `capture tape Cluster light_data position=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at byte offsets 0,4,8`,
             );
           }
           console.log(
-            `[learn-render 2.2 basic-lighting] tape pointLightPosition=${pointLightPosition} position=${JSON.stringify(actual)} UBO byteOffsets=16,20,24`,
+            `[learn-render 2.2 basic-lighting] tape clusterLightData position=${pointLightPosition} position=${JSON.stringify(actual)} byteOffsets=0,4,8`,
           );
         }
         if (pointLightIntensity !== '') {
@@ -3412,11 +3412,11 @@ await verifyDemoCapture({
             Math.abs(floats[6] - expected) > 1e-6
           ) {
             throw new Error(
-              `capture tape PointLight color*intensity=[${floats[4]},${floats[5]},${floats[6]}]; expected ${expected} at byte offset 32`,
+              `capture tape Cluster light_data color*intensity=[${floats[4]},${floats[5]},${floats[6]}]; expected ${expected} at byte offset 16`,
             );
           }
           console.log(
-            `[learn-render 2.2 basic-lighting] tape pointLightIntensity=${actual} UBO byteOffset=32`,
+            `[learn-render 2.2 basic-lighting] tape clusterLightData intensity=${actual} byteOffset=16`,
           );
         }
         if (pointLightRange !== '') {
@@ -3425,11 +3425,11 @@ await verifyDemoCapture({
           const expected = 1 / (range * range);
           if (Math.abs(actual - expected) > 1e-6) {
             throw new Error(
-              `capture tape PointLight invRangeSquared=${actual}; expected ${expected} for range ${range} at byte offset 28`,
+              `capture tape Cluster light_data invRangeSquared=${actual}; expected ${expected} for range ${range} at byte offset 12`,
             );
           }
           console.log(
-            `[learn-render 2.2 basic-lighting] tape pointLightRange=${range} invRangeSquared=${actual} UBO byteOffset=28`,
+            `[learn-render 2.2 basic-lighting] tape clusterLightData range=${range} invRangeSquared=${actual} byteOffset=12`,
           );
         }
         if (pointLightColor !== '') {
@@ -3439,11 +3439,11 @@ await verifyDemoCapture({
           const expected = expectedColor.map((value) => value * expectedIntensity);
           if (actual.some((value, index) => Math.abs(value - expected[index]) > 1e-5)) {
             throw new Error(
-              `capture tape PointLight colorTimesIntensity=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at byte offsets 32,36,40`,
+              `capture tape Cluster light_data colorTimesIntensity=${JSON.stringify(actual)}; expected ${JSON.stringify(expected)} at byte offsets 16,20,24`,
             );
           }
           console.log(
-            `[learn-render 2.2 basic-lighting] tape pointLightColor=${pointLightColor} colorTimesIntensity=${JSON.stringify(actual)} UBO byteOffsets=32,36,40`,
+            `[learn-render 2.2 basic-lighting] tape clusterLightData color=${pointLightColor} colorTimesIntensity=${JSON.stringify(actual)} byteOffsets=16,20,24`,
           );
         }
       },

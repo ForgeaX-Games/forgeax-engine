@@ -11,7 +11,7 @@ describe('realm capability contract', () => {
   it('publishes one explicit capability entry for each supported realm', () => {
     const matrix = createRealmCapabilityMatrix({
       catalogDigest: 'sha256:catalog',
-      supported: { build: true, host: true, engine: true },
+      supported: { build: true, host: true, engine: true, frontend: true },
     });
 
     expect(matrix).toEqual({
@@ -20,6 +20,7 @@ describe('realm capability contract', () => {
         build: { realm: 'build', supported: true },
         host: { realm: 'host', supported: true },
         engine: { realm: 'engine', supported: true },
+        frontend: { realm: 'frontend', supported: true },
       },
     });
   });

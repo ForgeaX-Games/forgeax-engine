@@ -65,8 +65,14 @@ import {
   Tilemap,
 } from '@forgeax/engine-render/authoring';
 import * as SceneOwner from '@forgeax/engine-scene';
-import { ChildOf, Children, propagateTransforms, Transform } from '@forgeax/engine-scene';
-import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import {
+  ChildOf,
+  Children,
+  GlobalTransform,
+  propagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
+import type { Handle, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { tonemapFromF32 } from '../../../render/src/components/camera';
@@ -77,7 +83,8 @@ import {
   type SpritePlaybackMode,
   spritePlaybackModeFromU32,
 } from '../../../render/src/components/sprite-playback-mode';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 {
   // --- from children.test.ts ---
@@ -150,17 +157,17 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   // abstraction: components are flat-scalar SoA columns, not nested objects).
 
   describe('w7 - 5 component schemas register through defineComponent', () => {
-    it('Transform has pos/quat/scale inline array fields + world array<f32,16>', () => {
+    it('Transform has the three authored local array fields', () => {
       expect(Transform.name).toBe('Transform');
-      expect(Object.keys(componentSchema(Transform)).length).toBe(4);
+      expect(Object.keys(componentSchema(Transform)).length).toBe(3);
       // pos: inline [x, y, z]
       expect(componentSchema(Transform).pos).toBe('array<f32, 3>');
       // quat: inline [x, y, z, w] quaternion
       expect(componentSchema(Transform).quat).toBe('array<f32, 4>');
       // scale: inline [x, y, z]
       expect(componentSchema(Transform).scale).toBe('array<f32, 3>');
-      // world: resolved mat4 (column-major 16 floats)
-      expect(componentSchema(Transform).world).toBe('array<f32, 16>');
+      expect(GlobalTransform.name).toBe('GlobalTransform');
+      expect(componentSchema(GlobalTransform).world).toBe('array<f32, 16>');
     });
 
     it('MeshFilter has 1 shared<MeshAsset> field (assetHandle; M5 / w14)', () => {
@@ -176,9 +183,9 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
     });
 
-    it('Camera has 20 fields (17 f32 + historyVersion u32 + clearColor array<f32,4> + autoAspect bool)', () => {
+    it('Camera has 31 fields including target, exposure, and color grading columns', () => {
       expect(Camera.name).toBe('Camera');
-      expect(Object.keys(componentSchema(Camera)).length).toBe(20);
+      expect(Object.keys(componentSchema(Camera)).length).toBe(31);
       expect(componentSchema(Camera).fov).toBe('f32');
       expect(componentSchema(Camera).aspect).toBe('f32');
       expect(componentSchema(Camera).near).toBe('f32');
@@ -198,7 +205,8 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(componentSchema(Camera).bloom).toBe('f32');
       expect(componentSchema(Camera).bloomThreshold).toBe('f32');
       expect(componentSchema(Camera).bloomIntensity).toBe('f32');
-      expect(componentSchema(Camera).bloomBlurRadius).toBe('f32');
+      expect(componentSchema(Camera).bloomSoftKnee).toBe('f32');
+      expect(componentSchema(Camera).bloomScatter).toBe('f32');
       // feat-20260709 M3: clear-color quartet collapsed into one inline
       // array<f32,4> column (clearColor); per-axis scalars are gone.
       expect(componentSchema(Camera).clearColor).toBe('array<f32, 4>');
@@ -209,15 +217,24 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
       // opt-out flag (bool column tier, not f32).
       expect(componentSchema(Camera).autoAspect).toBe('bool');
+      expect(componentSchema(Camera).exposureMode).toBe('f32');
+      expect(componentSchema(Camera).compensationEv).toBe('f32');
+      expect(componentSchema(Camera).rangeEv).toBe('array<f32, 2>');
+      expect(componentSchema(Camera).rates).toBe('array<f32, 2>');
+      expect(componentSchema(Camera).temperature).toBe('f32');
+      expect(componentSchema(Camera).tint).toBe('f32');
+      expect(componentSchema(Camera).colorLut).toBe('shared<TextureAsset>');
+      expect(componentSchema(Camera).colorLutStrength).toBe('f32');
     });
 
-    it('DirectionalLight has 12 fields: 3 light + castShadow bool + 8 merged shadow f32', () => {
+    it('DirectionalLight has 15 fields: 3 light + castShadow bool + closed shadow quality fields + contactShadowLength', () => {
       // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
       // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
       // feat-20260709 M2: direction/color collapsed from 6 per-axis scalars to
       // two array<f32,3> columns (3 light fields: direction + color + intensity).
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(12);
+      expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(15);
+      expect(componentSchema(DirectionalLight).contactShadowLength).toBe('f32');
       // 3 light fields
       expect(componentSchema(DirectionalLight).direction).toBe('array<f32, 3>');
       expect(componentSchema(DirectionalLight).color).toBe('array<f32, 3>');
@@ -231,7 +248,10 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(componentSchema(DirectionalLight).depthBias).toBe('f32');
       expect(componentSchema(DirectionalLight).normalBias).toBe('f32');
       expect(componentSchema(DirectionalLight).shadowDistance).toBe('f32');
-      expect(componentSchema(DirectionalLight).pcfKernelSize).toBe('f32');
+      expect(componentSchema(DirectionalLight).shadowFilter).toBe('enum');
+      expect(componentSchema(DirectionalLight).shadowAngularRadius).toBe('f32');
+      expect(componentSchema(DirectionalLight).maxPenumbraTexels).toBe('f32');
+      expect('pcfKernelSize' in componentSchema(DirectionalLight)).toBe(false);
     });
 
     it('all 5 components are frozen tokens with owner-assigned identities', () => {
@@ -411,9 +431,10 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   //                    file keeps an integration-shape spawn smoke for the
   //                    archetype-with-Children path.
   //
-  // feat-20260601 M4: GlobalTransform is retired. The resolved world transform
-  // is the `Transform.world` mat4 column; propagate + hierarchy compose coverage
-  // lives in render-system-extract.test.ts (Transform.world parent x child).
+  // The resolved world transform is the `GlobalTransform.world` mat4 column;
+  // Transform's generic ECS requirement materializes that carrier on normal
+  // spawn/add paths. Propagation + hierarchy compose coverage lives in
+  // render-system-extract.test.ts (GlobalTransform.world parent x child).
   //
   // charter mapping: proposition 2 (Bevy ChildOf/Children industry analog) +
   // proposition 3 (machine-readable schema > prose: grep componentSchema(ChildOf) /
@@ -432,14 +453,10 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect((componentSchema(Children) as Record<string, unknown>).entities).toBe('array<entity>');
     });
 
-    it('Transform carries the resolved world mat4 column (array<f32, 16>)', () => {
-      // feat-20260601 M4: the world transform lives on Transform.world, not a
-      // separate GlobalTransform component. The 3 local-TRS inline array
-      // columns (pos/quat/scale) plus the `world: array<f32, 16>` resolved
-      // mat4 are the full shape.
-      const tKeys = Object.keys(componentSchema(Transform));
+    it('GlobalTransform carries the resolved world mat4 column', () => {
+      const tKeys = Object.keys(componentSchema(GlobalTransform));
       expect(tKeys).toContain('world');
-      expect(componentSchema(Transform).world).toBe('array<f32, 16>');
+      expect(componentSchema(GlobalTransform).world).toBe('array<f32, 16>');
       expect(componentSchema(Transform).pos).toBe('array<f32, 3>');
       expect(componentSchema(Transform).quat).toBe('array<f32, 4>');
       expect(componentSchema(Transform).scale).toBe('array<f32, 3>');
@@ -602,7 +619,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   //
   // Two orthogonal guarantees after ChildOf gained its `relationship` block:
   //   AC-25 reader path unchanged -- propagateTransforms still walks ChildOf.parent
-  //     upward and composes child.Transform.world = parent.world x
+  //     upward and composes child.GlobalTransform.world = parent.world x
   //     compose(child local). The migration must NOT alter this output.
   //   AC-25 mirror auto-maintained -- spawning / removing / reparenting ChildOf
   //     now auto-updates the parent's Children.entities list (the OOS-10 manual-
@@ -634,9 +651,9 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       const r = propagateTransforms(world);
       expect(r.ok).toBe(true);
 
-      // feat-20260601: the resolved world transform lives on Transform.world
+      // feat-20260601: the resolved world transform lives on GlobalTransform.world
       // (a 16-float column-major mat4); the translation column is m[12,13,14].
-      const t = world.get(child, Transform);
+      const t = world.get(child, GlobalTransform);
       expect(t.ok).toBe(true);
       if (!t.ok) return;
       const w = t.value.world;
@@ -800,12 +817,16 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
     state: { type: 'unique<SceneInstanceState>' },
   });
 
-  function localId(n: number): LocalEntityId {
-    return n as LocalEntityId;
-  }
-
-  function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
-    return { kind: 'scene', entities: nodes };
+  function buildScene(nodes: readonly (SceneEntity & { readonly key: string })[]): SceneAsset {
+    return {
+      kind: 'scene',
+      entities: Object.fromEntries(
+        nodes.map(({ key, components, instance }) => [
+          key,
+          { components, ...(instance === undefined ? {} : { instance }) },
+        ]),
+      ),
+    };
   }
 
   function registerSceneAsset(
@@ -841,7 +862,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
 
       const nodes: SceneEntity[] = [
         {
-          localId: localId(0),
+          key: 'entity-0',
           components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
@@ -872,7 +893,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       // asserted in the next test).
       const nodes: SceneEntity[] = [
         {
-          localId: localId(0),
+          key: 'entity-0',
           components: { Transform: {} },
         },
       ];
@@ -899,7 +920,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       // defaults. AC-12 mandates this path is SILENT (no error code).
       const nodes: SceneEntity[] = [
         {
-          localId: localId(0),
+          key: 'entity-0',
           components: { Transform: {} },
         },
       ];
@@ -929,7 +950,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       //   - read layer:    null is what the AI user observes after world.get
       const nodes: SceneEntity[] = [
         {
-          localId: localId(0),
+          key: 'entity-0',
           components: { TargetSlot: {} },
         },
       ];
@@ -964,7 +985,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
 
       const nodes: SceneEntity[] = [
         {
-          localId: localId(0),
+          key: 'entity-0',
           components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
@@ -990,7 +1011,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       const world = new World();
       world.components.register(Transform).unwrap();
 
-      const nodes: SceneEntity[] = [{ localId: localId(0), components: { Transform: {} } }];
+      const nodes: SceneEntity[] = [{ key: 'entity-0', components: { Transform: {} } }];
       const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
       const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
@@ -1292,7 +1313,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   //        refactoring — every field value must stay byte-identical)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('camera factory 20-field snapshot (w14 AC-07 invariant)', () => {
+  describe('camera factory 31-field schema snapshot (w14 AC-07 invariant)', () => {
     it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 20 fields match reference', () => {
       const pod = perspective({ fov: Math.PI / 3, aspect: 16 / 9 });
       // Perspective quartet — caller-supplied
@@ -1317,7 +1338,8 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(pod.bloom).toBe(BLOOM_DISABLED);
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
-      expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
+      expect(pod.bloomSoftKnee).toBeCloseTo(0.5, 6);
+      expect(pod.bloomScatter).toBeCloseTo(0.7, 6);
       // Clear-color default: transparent black array [0,0,0,0] (feat-20260709 M3;
       // E9 factory-pathway carries the new array default via
       // cameraPodFromDefaults()).
@@ -1344,7 +1366,8 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(pod.bloom).toBe(BLOOM_DISABLED);
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
-      expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
+      expect(pod.bloomSoftKnee).toBeCloseTo(0.5, 6);
+      expect(pod.bloomScatter).toBeCloseTo(0.7, 6);
     });
 
     it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 20 fields match reference', () => {
@@ -1370,7 +1393,8 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(pod.bloom).toBe(BLOOM_DISABLED);
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
-      expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
+      expect(pod.bloomSoftKnee).toBeCloseTo(0.5, 6);
+      expect(pod.bloomScatter).toBeCloseTo(0.7, 6);
       // Clear-color default: transparent black array [0,0,0,0] (feat-20260709 M3).
       expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 0]);
       // aspect-sync opt-out default (feat-20260617 / M3): the sidecar only
@@ -1392,44 +1416,57 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(pod.tonemap).toBe(TONEMAP_NONE);
     });
 
-    it('perspective + orthographic 20-field counts (20 Camera columns)', () => {
+    it('perspective + orthographic 30-field payload counts (30 factory Camera values)', () => {
       const p = perspective({ fov: 60, aspect: 4 / 3 });
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
-      // Both return exactly 20 fields (17 f32 + historyVersion u32 + one clearColor array +
+      // Both return exactly 30 values: Camera.fields also includes the optional
+      // target reference, which factories intentionally leave unset.
+      // The returned values include exposure and color grading columns +
       // autoAspect bool column; feat-20260709 M3 collapsed the 4-scalar
       // clear-color quartet into one inline array<f32,4>).
-      expect(Object.keys(p).length).toBe(20);
-      expect(Object.keys(o).length).toBe(20);
+      expect(Object.keys(p).length).toBe(30);
+      expect(Object.keys(o).length).toBe(30);
     });
   });
 
   // ────────────────────────────────────────────────────────────────────────────
-  // w14-b: Camera.fields reflection guard (AC-07 SSOT — 17 f32 fields)
+  // Camera.fields reflection guard (AC-07 SSOT — 18 f32 fields)
   // ────────────────────────────────────────────────────────────────────────────
 
   describe('Camera.fields reflection (w14 AC-07 SSOT)', () => {
-    it('Camera.fields has exactly 20 keys matching the Camera column set', () => {
+    it('Camera.fields has exactly 31 keys matching the Camera column set', () => {
       const keys = Object.keys(Camera.fields).sort();
       expect(keys).toEqual([
         'antialias',
         'aspect',
         'autoAspect',
         'bloom',
-        'bloomBlurRadius',
         'bloomIntensity',
+        'bloomScatter',
+        'bloomSoftKnee',
         'bloomThreshold',
         'bottom',
         'clearColor',
+        'colorLut',
+        'colorLutStrength',
+        'compensationEv',
         'exposure',
+        'exposureMode',
         'far',
         'fov',
         'historyVersion',
         'left',
         'near',
         'projection',
+        'rangeEv',
+        'rates',
         'right',
+        'target',
+        'temperature',
+        'tint',
         'tonemap',
         'top',
+        'transparency',
         'whitePoint',
       ]);
     });
@@ -1441,9 +1478,15 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
             ? 'bool'
             : key === 'clearColor'
               ? 'array<f32, 4>'
-              : key === 'historyVersion'
-                ? 'u32'
-                : 'f32';
+              : key === 'rangeEv' || key === 'rates'
+                ? 'array<f32, 2>'
+                : key === 'colorLut'
+                  ? 'shared<TextureAsset>'
+                  : key === 'historyVersion'
+                    ? 'u32'
+                    : key === 'target'
+                      ? 'shared<RenderTarget>'
+                      : 'f32';
         expect(Camera.fields[key].type).toBe(expected);
       }
     });
@@ -1471,13 +1514,23 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(d.bloom.default).toBe(0);
       expect(d.bloomThreshold.default).toBeCloseTo(1.0, 6);
       expect(d.bloomIntensity.default).toBeCloseTo(1.0, 6);
-      expect(d.bloomBlurRadius.default).toBeCloseTo(4.0, 6);
+      expect(d.bloomSoftKnee.default).toBeCloseTo(0.5, 6);
+      expect(d.bloomScatter.default).toBeCloseTo(0.7, 6);
       // Clear-color default: explicit layer-2 transparent black array (feat-20260709
       // M3; array layer-3 fallback is all-zero so the default MUST be explicit,
       // D-5).
       expect(Array.from(d.clearColor.default as Float32Array)).toEqual([0, 0, 0, 0]);
       // aspect-sync opt-out default (feat-20260617 / M3).
       expect(d.autoAspect.default).toBe(true);
+      expect(d.exposureMode.default).toBe(0);
+      expect(d.compensationEv.default).toBe(0);
+      expect(Array.from(d.rangeEv.default as Float32Array)).toEqual([-8, 8]);
+      expect(Array.from(d.rates.default as Float32Array)).toEqual([3, 1]);
+      expect(d.temperature.default).toBe(6504);
+      expect(d.tint.default).toBe(0);
+      expect(d.colorLut.default).toBe(0);
+      expect(d.colorLutStrength.default).toBe(0);
+      expect(d.transparency.default).toBe(0);
       // Perspective quartet defaults intentionally absent (OOS-5).
       expect(d.fov.default).toBeUndefined();
       expect(d.aspect.default).toBeUndefined();
@@ -1487,7 +1540,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   });
 
   describe('componentDefinition(Camera).defaults — frozen token defaults map (AC-07 + feat-20260528-fxaa-post-processing + feat-20260531-bloom + feat-20260608-clear-color)', () => {
-    it('componentDefinition(Camera).defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,0], autoAspect: true }', () => {
+    it('componentDefinition(Camera).defaults includes exposure and color grading defaults', () => {
       expect(componentDefinition(Camera).defaults).toEqual({
         projection: 0,
         left: -1,
@@ -1502,9 +1555,19 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
         bloom: 0,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
-        bloomBlurRadius: 4.0,
+        bloomSoftKnee: 0.5,
+        bloomScatter: 0.7,
         clearColor: new Float32Array([0, 0, 0, 0]),
         autoAspect: true,
+        exposureMode: 0,
+        compensationEv: 0,
+        rangeEv: new Float32Array([-8, 8]),
+        rates: new Float32Array([3, 1]),
+        temperature: 6504,
+        tint: 0,
+        colorLut: 0,
+        colorLutStrength: 0,
+        transparency: 0,
       });
     });
 
@@ -1713,7 +1776,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(pod.exposure).toBeCloseTo(1.0, 6);
     });
 
-    it('perspective return value has all 20 Camera fields', () => {
+    it('perspective return value has all 30 factory Camera fields', () => {
       const pod = perspective({ fov: 60, aspect: 4 / 3 });
       const keys = Object.keys(pod).sort();
       expect(keys).toEqual([
@@ -1721,21 +1784,31 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
         'aspect',
         'autoAspect',
         'bloom',
-        'bloomBlurRadius',
         'bloomIntensity',
+        'bloomScatter',
+        'bloomSoftKnee',
         'bloomThreshold',
         'bottom',
         'clearColor',
+        'colorLut',
+        'colorLutStrength',
+        'compensationEv',
         'exposure',
+        'exposureMode',
         'far',
         'fov',
         'historyVersion',
         'left',
         'near',
         'projection',
+        'rangeEv',
+        'rates',
         'right',
+        'temperature',
+        'tint',
         'tonemap',
         'top',
+        'transparency',
         'whitePoint',
       ]);
     });
@@ -2409,6 +2482,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       const world = new World();
       const e = world.spawn({ component: Transform, data: {} }).unwrap();
       const row = world.get(e, Transform).unwrap();
+      const global = world.get(e, GlobalTransform).unwrap();
 
       // local pos/quat/scale inline array columns at identity.
       expect(Array.from(row.pos)).toEqual([0, 0, 0]);
@@ -2417,7 +2491,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
 
       // world array<f32,16> resolves to a Float32Array view of 16 contiguous
       // floats. Default fill is the identity mat4 (column-major).
-      const w = row.world as Float32Array;
+      const w = global.world as Float32Array;
       expect(w).toBeInstanceOf(Float32Array);
       expect(w.length).toBe(16);
       const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];

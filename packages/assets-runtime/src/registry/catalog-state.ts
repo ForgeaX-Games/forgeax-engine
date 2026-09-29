@@ -232,7 +232,7 @@ export class CatalogReplica {
   private version = 0;
   private stale = false;
   private diagnostics: readonly CatalogDiagnostic[] = [];
-  private currentSnapshot: CatalogReplicaSnapshot;
+  private currentSnapshot: CatalogReplicaSnapshot | undefined;
   private readonly expectedScope: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'> | undefined;
 
   constructor(source: CatalogSource) {
@@ -252,7 +252,37 @@ export class CatalogReplica {
   }
 
   snapshot(): CatalogReplicaSnapshot {
-    return this.currentSnapshot;
+    return this.currentSnapshot ?? this.makeSnapshot();
+  }
+
+  /** Read an accepted row without materializing or sorting the full observation. */
+  get(guid: string): CatalogEntry | undefined {
+    return this.entries.get(guidKey(guid));
+  }
+
+  /**
+   * Adopt an already accepted baseline without reading the source again.
+   *
+   * AssetRegistry uses this when a URL-backed pack index was loaded before a
+   * CatalogSource was attached. The replica still subscribes before exposing
+   * the baseline, so later deltas retain the same ordering and validation
+   * semantics as a normal `start()`.
+   */
+  seed(entries: readonly CatalogEntry[]): void {
+    if (this.startPromise !== undefined || this.baselineReady) return;
+    if (this.unsubscribe === undefined) {
+      this.unsubscribe = this.source.subscribe((delta) => this.receive(delta));
+    }
+    this.entries.clear();
+    for (const entry of entries) this.entries.set(guidKey(entry.guid), freezeEntry(entry));
+    this.stale = false;
+    this.diagnostics = [];
+    this.baselineReady = true;
+    const pending = this.pendingBeforeBaseline;
+    this.pendingBeforeBaseline = [];
+    this.pendingDuringReconcile = undefined;
+    for (const delta of pending) this.fold(delta, false);
+    this.currentSnapshot = this.makeSnapshot();
   }
 
   dispose(): void {
@@ -266,6 +296,15 @@ export class CatalogReplica {
 
   async start(): Promise<SnapshotResult> {
     if (this.startPromise !== undefined) return this.startPromise;
+    // `reconcile()` accepts a fresh baseline without populating startPromise.
+    // Once that baseline is ready, a later consumer start is only another
+    // view of the same authoritative snapshot; fetching again would duplicate
+    // the catalog read for constrained sources that must reconcile first.
+    // Disposal removes the subscription, so a deliberately restarted replica
+    // still takes the normal subscribe-and-load path.
+    if (this.baselineReady && this.unsubscribe !== undefined) {
+      return Promise.resolve(ok(this.snapshot()));
+    }
     if (this.unsubscribe === undefined) {
       this.unsubscribe = this.source.subscribe((delta) => this.receive(delta));
     }
@@ -334,6 +373,38 @@ export class CatalogReplica {
         : safeDelta.diagnostics,
     );
 
+    if (degraded) {
+      // A failed producer observation cannot replace asset identity or payload.
+      // Retain recovery evidence from our accepted baseline, never from the
+      // rejected delta's rows or locators.
+      const affected = new Set(
+        (safeDelta.diagnostics ?? [])
+          .filter((diagnostic) => diagnostic.code.startsWith('source-package-'))
+          .flatMap((diagnostic) =>
+            (diagnostic.evidence ?? [])
+              .filter((evidence) => evidence.type === 'asset')
+              .map((evidence) => guidKey(evidence.id)),
+          ),
+      );
+      for (const key of affected) {
+        const entry = this.entries.get(key);
+        if (
+          entry?.lifecycle !== 'current' ||
+          entry.revision === undefined ||
+          entry.projection === undefined ||
+          entry.projection.lastKnownGood !== undefined
+        )
+          continue;
+        this.entries.set(
+          key,
+          freezeEntry({
+            ...entry,
+            projection: { ...entry.projection, lastKnownGood: { packageUrl: entry.packageUrl } },
+          }),
+        );
+      }
+    }
+
     if (!degraded) {
       let changed = false;
       for (const entry of [...safeDelta.added, ...safeDelta.changed]) {
@@ -350,7 +421,7 @@ export class CatalogReplica {
       if (changed) this.version += 1;
     }
 
-    this.currentSnapshot = this.makeSnapshot();
+    this.currentSnapshot = undefined;
     if (publish) {
       this.publish(safeDelta);
     }

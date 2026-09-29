@@ -194,7 +194,7 @@ world.addSystem(Update, {
 app.start();
 ```
 
-`forgeax-engine-assets/learn-opengl/meshes/cube-mesh.stub.meta.json` 是一个空文件 `cube-mesh.stub` 的同名 sidecar（同 §1.4 / §1.5 / §1.6 同型 procedural 形态）；`subAssets[0].guid` 由 `forgeax-engine-console asset import` 一次性铸造（reimport byte-identical）。runtime 阶段 `loadByGuid` 不感知物理路径——它只认 GUID，pack-index 把 GUID 翻译成 URL 或回落到 `registerWithGuid` 的内存表。
+`forgeax-engine-assets/learn-opengl/meshes/cube-mesh.stub.meta.json` 是一个空文件 `cube-mesh.stub` 的同名 sidecar（同 §1.4 / §1.5 / §1.6 同型 procedural 形态）；`subAssets[0].guid` 由 `forgeax asset import` 一次性铸造（reimport byte-identical）。runtime 阶段 `loadByGuid` 不感知物理路径——它只认 GUID，pack-index 把 GUID 翻译成 URL 或回落到 `registerWithGuid` 的内存表。
 
 
 ## 与 LO 原版的差异

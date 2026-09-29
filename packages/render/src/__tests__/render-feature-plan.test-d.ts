@@ -1,98 +1,31 @@
 import type { TextureFormat } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
-import type { RenderFeaturePlan, RenderFeaturePlanContext } from '../features/plan';
+import { expectTypeOf } from 'vitest';
+import type { RenderFeatureWorkPlan } from '../features/plan';
 import type { RenderFeature } from '../features/types';
 import type { RenderFeatureRecovery } from '../features/vocabulary';
+import type { RenderFeaturePlanContext, SceneDataTarget } from '../index';
+
+declare const context: RenderFeaturePlanContext;
+const resolved = context.views[0]?.sceneData.require('forgeax::scene-data::temporal-v1');
+if (resolved === undefined) throw new Error('view catalog missing');
+expectTypeOf(resolved).toEqualTypeOf<
+  import('../temporal/scene-data').SceneDataTarget<'forgeax::scene-data::temporal-v1'>
+>();
+
+expectTypeOf(resolved).toMatchTypeOf<SceneDataTarget>();
+expectTypeOf(resolved.access).toEqualTypeOf<'sampled-read'>();
 
 const format: TextureFormat = 'rgba8unorm';
 
-const plan: RenderFeaturePlan = {
-  resources: [
-    {
-      kind: 'compute-program',
-      name: 'simulate-program',
-      program: {
-        wgsl: '@compute @workgroup_size(1) fn simulate() {}',
-        entryPoints: ['simulate'],
-        bindings: [
-          {
-            entries: [
-              { binding: 0, visibility: 4, buffer: { type: 'storage' } },
-              { binding: 1, visibility: 4, buffer: { type: 'uniform' } },
-            ],
-          },
-        ],
-      },
-    },
-    {
-      kind: 'graphics-program',
-      name: 'draw-program',
-      program: {
-        shader: 'forgeax::feature-draw',
-        vertexLayout: 'position',
-        colorFormats: [format],
-      },
-    },
-    {
-      kind: 'buffer',
-      name: 'particles',
-      size: 256,
-      usage: ['storage', 'vertex'],
-    },
-    {
-      kind: 'buffer',
-      name: 'params',
-      size: 16,
-      usage: ['uniform'],
-    },
-    {
-      kind: 'buffer',
-      name: 'indirect-draw',
-      size: 16,
-      usage: ['storage', 'indirect'],
-    },
-    {
-      kind: 'compute-bindings',
-      name: 'simulate-bindings',
-      program: 'simulate-program',
-      entries: [
-        { binding: 0, resource: 'particles' },
-        { binding: 1, resource: 'params' },
-      ],
-    },
-    {
-      kind: 'graphics-bindings',
-      name: 'draw-bindings',
-      program: 'draw-program',
-      values: { opacity: 1 },
-    },
-    {
-      kind: 'vertex-data',
-      name: 'particle-vertices',
-      layout: 'position',
-      buffer: 'particles',
-    },
-  ],
+const plan: RenderFeatureWorkPlan = {
+  resources: [],
   passes: [
-    {
-      kind: 'compute',
-      name: 'simulate',
-      program: 'simulate-program',
-      bindings: 'simulate-bindings',
-      dispatches: [{ kind: 'direct', entryPoint: 'simulate', workgroups: [1, 1, 1] }],
-    },
     {
       kind: 'raster',
       name: 'draw',
       colorAttachments: [{ target: 'color', loadOp: 'load', storeOp: 'store' }],
-      draws: [
-        {
-          program: 'draw-program',
-          bindings: ['draw-bindings'],
-          vertexData: [{ slot: 0, resource: 'particle-vertices' }],
-          draw: { kind: 'draw-indirect', resource: 'indirect-draw' },
-        },
-      ],
+      draws: [],
     },
   ],
 };
@@ -100,19 +33,20 @@ const plan: RenderFeaturePlan = {
 const feature = {
   identity: 'synthetic.plan',
   extract: () => ok({ frame: 1 }),
-  plan(data: { readonly frame: number }, context: RenderFeaturePlanContext) {
+  plan(data: { readonly frame: number }, planContext: RenderFeaturePlanContext) {
     void data;
-    void context.frame;
-    void context.caps;
+    void planContext.frame;
+    void planContext.caps;
+    void planContext.views.map((view) => view.sceneData);
     // @ts-expect-error plan callbacks cannot access a raw device.
-    void context.device;
+    void planContext.device;
     // @ts-expect-error plan callbacks cannot access a queue.
-    void context.queue;
+    void planContext.queue;
     // @ts-expect-error plan callbacks cannot access an encoder.
-    void context.encoder;
+    void planContext.encoder;
     // @ts-expect-error plan callbacks cannot submit work.
-    void context.submit;
-    return ok(plan);
+    void planContext.submit;
+    return ok({ work: [{ scope: { view: 'main' }, ...plan }] });
   },
 } satisfies RenderFeature<{ readonly frame: number }>;
 
@@ -123,7 +57,7 @@ const missingPlan = {
 // @ts-expect-error RenderFeature plan is mandatory.
 const invalidFeature: RenderFeature<undefined> = missingPlan;
 
-const invalidDispatch: RenderFeaturePlan = {
+const invalidDispatch: RenderFeatureWorkPlan = {
   resources: [],
   passes: [
     {
@@ -155,6 +89,7 @@ function recoveryLabel(recovery: RenderFeatureRecovery): string {
   return exhaustive;
 }
 
+void format;
 void feature;
 void invalidFeature;
 void invalidDispatch;

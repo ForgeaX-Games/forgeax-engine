@@ -6,7 +6,7 @@ Pure-function SoA-friendly Vec / Mat / Quat / Color / Euler math library for for
 ## 30-second self-introduction
 
 - **ABI**: `Float32Array & { readonly __<dim>: void }` 七件套（`Vec2 / Vec3 / Vec4 / Quat / Mat3 / Mat4 / Color`）+ `Euler` plain-object；branded 维度互斥（编译期）+ TypedArray 即时上传 GPU（运行期）。
-- **Surface**: 18 namespace × 202 函数（vec2:20 / vec3:21 / vec4:18 / mat3:10 / mat4:33 / quat:23 / euler:6 / color:6 / easing:4 / noise:1 / frustum:4 / ray:9 / ray2:11 / box2:13 / box3:7 / circle2:10 / sphere:5 / f32-to-f16-bytes:1）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
+- **Surface**: 18 namespace × 203 函数（vec2:20 / vec3:21 / vec4:18 / mat3:10 / mat4:33 / quat:23 / euler:6 / color:7 / easing:4 / noise:1 / frustum:4 / ray:9 / ray2:11 / box2:13 / box3:7 / circle2:10 / sphere:5 / f32-to-f16-bytes:1）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
 - **Style**: gl-matrix / wgpu-matrix 风纯函数 namespace + out-param-first（`func(out, ...args)`）；零分配；aliasing-safe（`add(v, v, v)` 合法）。
 - **Errors**: 全库静默回退（不抛错、不返回 `null`、不返回 `Result`、不 `console.warn`）；退化语义靠 JSDoc `@degrade` + 本 README §退化策略表 + `*.test-d.ts` 三层共担。
 
@@ -33,7 +33,7 @@ vec3.normalize(v, vec3.create(0, 0, 0));          // v = (0, 0, 0)
 
 > 上述代码覆盖 v0.1 PBR 渲染管线 90% 的典型 transform / projection / shader-uniform 准备路径——LLM 一次扫读即可拿到 "概念→签名→典型流程" 完整闭包（charter 命题 1）。
 
-## quick-ref：18 namespace × 202 函数
+## quick-ref：18 namespace × 203 函数
 
 每 namespace 内函数顺序粗略按 "构造 → 比较 → 算术 → 几何 → 高级" 分组。完整签名以 `.d.ts` JSDoc 为 SSOT。
 
@@ -46,7 +46,7 @@ vec3.normalize(v, vec3.create(0, 0, 0));          // v = (0, 0, 0)
 | **`mat4`** (33) | `create / clone / identity / equals / multiply / transpose / invert / scale / translate / rotate / lookAt / compose / decompose / fromQuat / fromTranslation / fromScaling / fromRotation / perspective / perspectiveNO / perspectiveReverseZ / orthographic / orthographicNO / orthographicReverseZ / transformVec3 / transformPoint / transformDirection / getTranslation / getForward / getUp / getRight / unproject / projectPoint / computeViewProj` |
 | **`quat`** (23) | `create / clone / identity / fromAxisAngle / fromEuler / fromRotationMatrix / fromLookAt / fromUnitVectors / multiply / rotateAxis / slerp / nlerp / invert / conjugate / dot / length / lengthSq / normalize / transformVec3 / eulerY / right / up / forward` |
 | **`euler`** (6) | `create / clone / set / toQuat / fromQuat / fromRotationMatrix` |
-| **`color`** (6) | `create / clone / srgbToLinear / linearToSrgb / fromHex / toHex` |
+| **`color`** (7) | `create / clone / srgbToLinear / linearToSrgb / fromHex / fromCss / toHex` |
 | **`easing`** (4) | `cubicInOut / smoothstep / smootherstep / elasticInOut` — scalar time-remaps (clamp t to [0,1]; Bevy `EaseFunction`; slow-in/slow-out with elastic overshoot). Growable home for further ease variants |
 | **`noise`** (1) | `perlin1d` — 1D Perlin noise returning [-1,1]. Deterministic, smooth (nearby inputs → nearby outputs); canonical permutation table matching Bevy's `2d_screen_shake`. Growable home for 2D/3D/Simplex variants |
 | **`frustum`** (4) | `create / fromViewProjection / intersectsBox / intersectsSphere` |
@@ -97,7 +97,7 @@ Pure-function ray primitives for screen-ray unprojection, ray-AABB slab intersec
 | Function | Signature | Purpose | Notes |
 |:--|:--|:--|:--|
 | `ray.create(out?, origin?, direction?)` | `(out?, origin?, direction?) => Ray` | Allocate a Ray (6 floats: rx,ry,rz,dx,dy,dz) | Direction auto-normalized; zero-length dir falls back to `(0,0,0)` |
-| `ray.screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `(Ray, number, number, number, number, Mat4Like, Mat4Like, 'perspective' \| 'orthographic') => Ray` | Unproject a screen coordinate into a world-space ray | Two-point unproject (ndc near=0, far=1); y-flip: DOM y-down to NDC y-up; NaN/Inf input falls back to centre ray |
+| `ray.screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `(Ray, number, number, number, number, Mat4Like, Mat4Like, 'perspective' \| 'orthographic') => Ray` | Unproject a screen coordinate into a world-space ray | Projection-aware two-point unproject (forward or Reverse-Z, including infinite far); y-flip: DOM y-down to NDC y-up; NaN/Inf input falls back to centre ray |
 | `ray.worldToScreen(out, worldPos, viewProj, canvasW, canvasH)` | `(Vec2, Vec3Like, Mat4Like, number, number) => WorldToScreenResult` | Project a world-space point to screen-space pixel coordinates | Returns `{ onScreen, behind }` flags; `behind=true` means the point is behind the camera and `out` is meaningless; degenerate viewport returns `{ onScreen: false, behind: false }` |
 | `ray.rayAabbIntersects(r, aabb)` | `(RayLike, Box3Like) => RayAabbResult` | Slab-method ray-AABB intersection | Returns `{ hit, tmin }`; six degenerate cases handled per research Finding 2; NaN-safe edge/corner via `Number.isNaN` guard |
 | `ray.rayTriangleIntersects(r, a, b, c)` | `(RayLike, Vec3Like, Vec3Like, Vec3Like) => RayTriResult` | Moller-Trumbore ray-triangle intersection | Returns `{ hit, t, u, v }` (t=ray parameter, u/v=barycentric); double-sided (`abs(det) < epsilon`); degenerate/collinear triangles return `hit=false` to prevent NaN propagation; `t <= 0` rejected (behind ray origin); NaN guard on all inputs |
@@ -238,7 +238,8 @@ const projWebGL = mat4.perspectiveNO(mat4.create(), Math.PI / 4, 16 / 9, 0.1, 10
 const projReverseZ = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 16 / 9, 0.1, 100);
 ```
 
-`orthographic / orthographicNO / orthographicReverseZ` 三档同形（`orthographicReverseZ` 为本库自创扩展，详见末尾对照表脚注）。
+`orthographic / orthographicNO / orthographicReverseZ` 三档同形，位置参数统一为
+`(out, left, right, top, bottom, near, far)`（`orthographicReverseZ` 为本库自创扩展，详见末尾对照表脚注）。
 
 ## 非目标（Non-goals）
 
@@ -255,7 +256,7 @@ const projReverseZ = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 16 / 9
 
 | 版本 | 范围 |
 |:--|:--|
-| **v0.0 (本闭环)** | 18 namespace × 202 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数、2D bounds/raycast/cast，以及 easing 标量缓动 + noise 1D Perlin）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
+| **v0.0 (本闭环)** | 18 namespace × 203 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数、2D bounds/raycast/cast，以及 easing 标量缓动 + noise 1D Perlin）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
 | v0.1 (PBR 闭环) | `mat3.fromMat4Scale` 法线矩阵优化路径；`Color.linearToSRGB` GPU 上传专用变体；高级 PBR 工具 |
 | v0.2 (动画闭环) | `quat.squad` Catmull-Rom 球面插值；`euler.lookAt` 自然映射；动画系统消费方向定 |
 | v1.0 (稳定 ABI) | 不再 breaking ABI；coverage 阈值不退步；`@forgeax/engine-math` 正式 `npm publish` |
@@ -288,6 +289,17 @@ const projReverseZ = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 16 / 9
 - `.forgeax-harness/knowledge-base/wiki/typescript-branded-types.md` — brand 模式 SSOT
 - `.forgeax-harness/knowledge-base/wiki/reversed-z-projection.md` — reversed-Z 深度精度推导
 - `.forgeax-harness/knowledge-base/wiki/v8-elements-kinds.md` — V8 PACKED_DOUBLE_ELEMENTS / TypedArray 五铁律
+
+### Reverse-Z camera consumers
+
+`frustum.fromViewProjection` extracts the WebGPU `0 <= z <= w` volume for
+forward and Reverse-Z matrices. Plane slots 4/5 are the lower/upper Z clip
+boundaries, respectively; their near/far roles reverse with the projection.
+`screenToRay` derives depth direction from the perspective/orthographic
+projection and uses an interior unprojection point, so infinite far planes
+still produce a finite forward ray. Engine rendering selects the existing
+`perspectiveReverseZ` / `orthographicReverseZ` functions; the Math functions
+with short names retain their forward-Z mathematical meaning.
 
 ## License
 

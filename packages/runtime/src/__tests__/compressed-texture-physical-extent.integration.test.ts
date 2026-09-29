@@ -79,13 +79,11 @@ function compressedPod(): TextureAsset {
     bytes.fill(level.level + 1, level.byteOffset, level.byteOffset + level.byteLength);
   return {
     kind: 'texture',
-    width: 2085,
-    height: 1573,
+    shape: { viewDimension: '2d', extent: { width: 2085, height: 1573 } },
     format: 'bc7-rgba-unorm',
     data: bytes,
     colorSpace: 'linear',
-    mipmap: true,
-    mipLevelCount: layout.length,
+    mips: { kind: 'packed', levelCount: layout.length },
   };
 }
 
@@ -93,13 +91,18 @@ describe('compressed texture physical extent recorded-RHI witness [w36]', () => 
   it('allocates and uploads BC7 physical extents while preserving logical asset metadata', () => {
     const calls = { create: [] as TextureCall[], writes: [] as WriteCall[] };
     const pod = compressedPod();
-    const expected = deriveMipUploadLayout(pod.format, pod.width, pod.height, numMipLevels(pod));
+    const expected = deriveMipUploadLayout(
+      pod.format,
+      pod.shape.extent.width,
+      pod.shape.extent.height,
+      pod.mips.kind === 'packed' ? pod.mips.levelCount : 1,
+    );
 
     const result = makeStore(calls).ensureResident(toShared<'TextureAsset'>(36), pod);
     if (!result.ok) throw result.error;
 
-    expect(pod.width).toBe(2085);
-    expect(pod.height).toBe(1573);
+    expect(pod.shape.extent.width).toBe(2085);
+    expect(pod.shape.extent.height).toBe(1573);
     expect(calls.create).toHaveLength(1);
     expect(calls.create[0]?.size).toMatchObject({ width: 2088, height: 1576 });
     expect(calls.writes).toHaveLength(expected.length);
@@ -122,12 +125,11 @@ describe('compressed texture physical extent recorded-RHI witness [w36]', () => 
     const calls = { create: [] as TextureCall[], writes: [] as WriteCall[] };
     const pod: TextureAsset = {
       kind: 'texture',
-      width: 17,
-      height: 9,
+      shape: { viewDimension: '2d', extent: { width: 17, height: 9 } },
       format: 'rgba8unorm',
       data: new Uint8Array(17 * 9 * 4),
       colorSpace: 'linear',
-      mipmap: false,
+      mips: { kind: 'none' },
     };
 
     expect(makeStore(calls).ensureResident(toShared<'TextureAsset'>(37), pod).ok).toBe(true);

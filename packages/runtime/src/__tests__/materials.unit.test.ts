@@ -80,16 +80,19 @@ describe('Materials.standard multi-pass (w14)', () => {
       expect(shadowPass).toBeDefined();
     });
 
-    it('shadow-caster pass uses forgeax_material::standard shader', () => {
+    it('shadow-caster pass uses the canonical depth-only shader', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
       const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
-      expect(shadowPass?.program.module).toBe('forgeax_material::standard');
+      expect(shadowPass?.program.module).toBe('forgeax::default-shadow-caster');
     });
 
-    it('castShadow=false suppresses the shadow-caster pass', () => {
+    it('always publishes the shadow-caster pass; ShadowParticipation owns per-entity casting', () => {
+      // @ts-expect-error castShadow is not a material option; use ShadowParticipation { cast }.
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1], castShadow: false });
       const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
-      expect(shadowPass).toBeUndefined();
+      expect(shadowPass).toBeDefined();
+      const unlit = Materials.unlit([0.5, 0.5, 0.5, 1]);
+      expect(unlit.passes?.map((p) => p.name)).toEqual(['forward', 'shadow-caster']);
     });
   });
 
@@ -98,35 +101,53 @@ describe('Materials.standard multi-pass (w14)', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
       expect(mat.passes).toHaveLength(3);
     });
-
-    it('standard material with castShadow=false has 2 passes', () => {
-      const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1], castShadow: false });
-      expect(mat.passes).toHaveLength(2);
-    });
   });
 
   describe('PBR properties preserved', () => {
-    it('keeps authored sRGB numbers unchanged and makes sRGB the schema default', () => {
+    it('stores numeric tuples as linear values and marks generated metadata linear', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.25, 0.75, 0.4] });
       expect(mat.values?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
-      expect(mat.colorSpace).toBeUndefined();
+      expect(mat.colorSpace).toBe('linear');
       expect(mat.parameters?.find((parameter) => parameter.name === 'baseColor')).toEqual({
         name: 'baseColor',
         type: 'color',
+        colorSpace: 'linear',
+        default: [1, 1, 1, 1],
       });
       expect(mat.parameters?.find((parameter) => parameter.name === 'emissive')).toMatchObject({
         name: 'emissive',
-        colorSpace: 'srgb',
+        colorSpace: 'linear',
       });
     });
 
-    it('persists an explicit linear override without changing numeric values', () => {
+    it('decodes explicit sRGB helper and Hex input once at the authoring boundary', () => {
+      const helper = Materials.standard({
+        baseColor: Materials.srgb([0.5, 0.25, 0.75, 0.4]),
+      });
+      const hex = Materials.standard({ baseColor: '#808080' });
+      expect(helper.values?.baseColor).toEqual(Materials.srgb([0.5, 0.25, 0.75, 0.4]));
+      expect((hex.values?.baseColor as readonly number[] | undefined)?.[0]).toBeCloseTo(
+        0.2158605,
+        6,
+      );
+      expect(helper.colorSpace).toBe('linear');
+      expect(hex.colorSpace).toBe('linear');
+    });
+
+    it('treats a numeric 0xRRGGBB input like the equivalent sRGB Hex', () => {
+      const numeric = Materials.standard({ baseColor: 0x808080 });
+      const hex = Materials.standard({ baseColor: '#808080' });
+      expect(numeric.values?.baseColor).toEqual(hex.values?.baseColor);
+    });
+
+    it('rejects color tuples with the wrong channel count', () => {
       const mat = Materials.standard({
         baseColor: [0.5, 0.25, 0.75, 0.4],
-        colorSpace: 'linear',
       });
+      expect(() => Materials.standard({ baseColor: [0.5, 0.25, 0.75] as never })).toThrow(
+        'must contain 4 channels',
+      );
       expect(mat.values?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
-      expect(mat.colorSpace).toBe('linear');
     });
 
     it('values includes metallic and roughness defaults', () => {
@@ -188,13 +209,19 @@ describe('Materials.standard multi-pass (w14)', () => {
       expect(mat.values?.occlusionStrength).toBe(0.75);
     });
 
-    it('declares built-in PBR textures in bind-group slot order', () => {
-      const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
+    it('declares supplied PBR textures in bind-group slot order', () => {
+      const mat = Materials.standard({
+        baseColor: [0.5, 0.5, 0.5, 1],
+        baseColorTexture: 42,
+        metallicRoughnessTexture: 43,
+        normalTexture: 44,
+        emissiveTexture: 45,
+        occlusionTexture: 46,
+      });
       expect(mat.parameters?.filter((parameter) => parameter.type === 'texture')).toEqual([
         { name: 'baseColorTexture', type: 'texture', optional: true },
         { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
         { name: 'normalTexture', type: 'texture', optional: true },
-        { name: 'specularTintTexture', type: 'texture', optional: true },
         { name: 'emissiveTexture', type: 'texture', optional: true },
         { name: 'occlusionTexture', type: 'texture', optional: true },
       ]);
@@ -246,8 +273,9 @@ describe('Materials.unlit forward-only (w14)', () => {
   it('keeps unlit numeric fields before texture coordinates in shader ABI order', () => {
     const mat = Materials.unlit([1, 1, 1, 1]);
     expect(mat.parameters).toEqual([
-      { name: 'baseColor', type: 'color' },
+      { name: 'baseColor', type: 'color', colorSpace: 'linear' },
       { name: 'alphaCutoff', type: 'f32', optional: true },
+      { name: 'alphaHash', type: 'f32', optional: true },
       { name: 'baseColorTexture', type: 'texture', optional: true },
     ]);
   });

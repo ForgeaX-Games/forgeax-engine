@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ObservationUnavailableError } from '../errors/render';
-import type { RenderFeatureErrorCode, RenderFeatureErrorDescriptor } from '../features/types';
+import type {
+  RenderError,
+  RenderFeatureErrorCode,
+  RenderFeatureErrorDescriptor,
+  SceneDataUnavailableDetail,
+} from '../errors/render';
+import { ObservationUnavailableError, SceneDataUnavailableError } from '../errors/render';
 
 const renderFeatureErrorCodes: readonly RenderFeatureErrorCode[] = [
   'render-feature-registration-conflict',
@@ -31,8 +36,33 @@ function describeError(error: RenderFeatureErrorDescriptor): string {
   }
 }
 
+describe('scene-data render error contract', () => {
+  it('allows exhaustive handling of scene-data-unavailable', () => {
+    const detail: SceneDataUnavailableDetail = {
+      featureIdentity: 'taa',
+      schema: 'forgeax::scene-data::temporal-v1',
+      lane: 'direct',
+      reason: 'capability-missing',
+      missingContributorIds: [],
+      omittedMissingContributorCount: 0,
+      recovery: 'next-frame',
+    };
+    const error = new SceneDataUnavailableError(detail) satisfies RenderError;
+
+    expect(error.code).toBe('scene-data-unavailable');
+    switch (error.detail.reason) {
+      case 'capability-missing':
+      case 'producer-missing':
+      case 'coverage-incomplete':
+      case 'renderer-recovering':
+        expect(error.detail.recovery).toBeTruthy();
+        break;
+    }
+  });
+});
+
 describe('render feature error vocabulary', () => {
-  it('keeps the four feature codes closed and machine-readable', () => {
+  it('keeps the feature codes closed and machine-readable', () => {
     expect(renderFeatureErrorCodes).toHaveLength(7);
     expect(describeError).toBeTypeOf('function');
   });

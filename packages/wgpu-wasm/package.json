@@ -35,6 +35,7 @@
     "build:wasm": "bash build.sh",
     "fetch-wasm": "node scripts/fetch-wasm.mjs",
     "postinstall": "node scripts/ensure-wasm.mjs",
+    "prebuild": "node scripts/verify-current.mjs",
     "build": "tsup",
     "test": "vitest run",
     "test:wasm": "wasm-pack test --node"

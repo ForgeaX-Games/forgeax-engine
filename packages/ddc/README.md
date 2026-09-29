@@ -4,7 +4,7 @@
 
 DDC is a Node-only, read-only, disposable projection of producer evidence. The author authority remains the source, Pack, and Meta inputs. A cache hit is never author truth, and a Catalog row is only a projection of validated producer facts.
 
-The machine-readable category and producer index is [`asset-authority.schema.json`](../../asset-authority.schema.json). DDC does not provide Save, Undo, Move, Rename, Promote, or Editor write operations.
+The machine-readable category and producer index is [`schemas/asset-authority.schema.json`](../../schemas/asset-authority.schema.json). DDC does not provide Save, Undo, Move, Rename, Promote, or Editor write operations.
 
 > [!IMPORTANT]
 > DDC can be deleted and rebuilt from author inputs. It must not become Save, Undo, Move, Rename, collaboration state, or the only copy of a runtime asset.
@@ -96,6 +96,9 @@ Each `begin` persists a strictly increasing generation and an expected head revi
 
 `DdcGenerationSession` heartbeats active candidate leases while a multi-asset generation is still producing, so atomic publication may outlive one lease interval without weakening the final commit fence. Closing, discarding, or committing a candidate stops its heartbeat.
 
+> [!NOTE]
+> `DdcLifecycle.readCurrentEntry()` is a recovery read for a Pack producer to rehydrate its process-local transport cache after a restart. It accepts only a `current` head with a complete, integrity-checked entry; it never promotes LKG/stale content, mutates the head, or turns DDC into an authoring/runtime transport authority. Catalog and producer state remain the consumer-facing authority.
+
 | Rollback surface | Contract | Result |
 |---|---|---|
 | `DdcLifecycle.beginWithSnapshot` | Captures the accepted head and allocates the lease while holding the same per-asset lock | No begin/snapshot TOCTOU window |
@@ -115,6 +118,11 @@ An immutable entry is accepted only when all of these facts agree:
 3. `DdcReceipt.outputDigest` matches the canonical payload, refs, and artifact bytes.
 4. The stored integrity record matches every payload, receipt, artifact, and entry digest.
 5. The mutable head still owns the attempt, generation, and expected revision.
+
+For a runtime Pack publication, the immutable payload excludes the live
+`scopeId`/`generation` tuple; when a producer supplies that generation, it is
+recorded as receipt metadata and rebound to the accepted Catalog tuple when
+the payload is restored for transport.
 
 `DdcEntryStore.publish` is idempotent for the same key and integrity. A different payload under the same key remains a conflict; it is never silently overwritten. Staging and destination stay under the injected root so publication does not claim cross-device atomicity.
 

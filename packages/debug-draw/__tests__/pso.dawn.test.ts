@@ -133,7 +133,7 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
       depthStencil: {
         format: 'depth32float' as GPUTextureFormat,
         depthWriteEnabled: false,
-        depthCompare: 'less-equal',
+        depthCompare: 'greater-equal',
       },
       fragment: {
         module: fsModule,
@@ -169,7 +169,7 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
   });
 
   // (b) DepthStencil: none for always mode, present for less-equal
-  it('(b) depthStencil: absent for always-mode PSO, present with depthCompare=less-equal for less-equal mode', () => {
+  it('(b) depthStencil: absent for always-mode PSO, present with depthCompare=greater-equal for less-equal mode', () => {
     if (!capturedPipelineDesc) {
       console.warn('[pso.dawn] skipping (b) -- no captured PSO descriptor');
       return;
@@ -186,7 +186,7 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
     expect(ds).toBeDefined();
     expect(ds?.format).toBe('depth32float');
     expect(ds?.depthWriteEnabled).toBe(false);
-    expect(ds?.depthCompare).toBe('less-equal');
+    expect(ds?.depthCompare).toBe('greater-equal');
   });
 
   // (c) Fragment color target format

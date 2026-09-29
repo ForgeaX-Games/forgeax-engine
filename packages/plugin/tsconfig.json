@@ -8,6 +8,18 @@
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
-  "include": ["src/**/*"],
-  "references": [{ "path": "../tool-runtime" }]
+  "include": [
+    "src/**/*"
+  ],
+  "references": [
+    {
+      "path": "../tool-runtime"
+    },
+    {
+      "path": "../types"
+    },
+    {
+      "path": "../pack"
+    }
+  ]
 }

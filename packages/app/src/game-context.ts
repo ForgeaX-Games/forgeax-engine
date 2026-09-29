@@ -5,12 +5,10 @@
 // owns all non-ECS teardown through Fiber effects.
 
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
-import type { SceneAsset } from '@forgeax/engine-types';
 
-import type { App } from './types';
+import type { App, ExecutionApp } from './types';
 
 /** JSON-shaped data a game may intentionally project through a host bridge. */
 export type GameProjectionValue =
@@ -66,21 +64,21 @@ export interface GameProjectionRegistrar {
 
 /** Realm-local Host capability injected into an asset-resident game plugin. */
 export interface GameHost {
-  /** Presentation canvas owned by this Host realm. */
-  readonly canvas: HTMLCanvasElement;
+  /** Present only when this realm owns the presentation canvas. */
+  readonly canvas?: HTMLCanvasElement | OffscreenCanvas;
   /** The WebGPU Renderer (optional — some hosts may not expose it). */
   readonly renderer?: Renderer;
-  /** The AssetRegistry owned by the Renderer. */
+  /**
+   * Optional per-App message endpoint. Generated frontend and Engine hosts
+   * borrow opposite ends of one channel. DevKit closes the frontend end; App
+   * closes the Engine end. Games own their protocol and listeners, but must not
+   * close the borrowed port.
+   */
+  readonly port?: MessagePort;
+  /** The realm-local AssetRegistry. */
   readonly assets: AssetRegistry;
-  /** The App handle for lifecycle introspection. */
-  readonly app: App;
-  /** Synthetic root entity of the host-instantiated defaultScene. Carries the
-   * SceneInstance component. Absent when the game has no defaultScene. */
-  readonly defaultSceneRoot?: EntityHandle;
-  /** The loaded SceneAsset payload for the defaultScene. Contains the
-   * author-side entity list with Name components. Absent when the game has
-   * no defaultScene. */
-  readonly defaultScene?: SceneAsset;
+  /** Source realms expose World/assets; presentation Hosts expose local App controls. */
+  readonly app: Pick<App, 'world' | 'assets'> | App | ExecutionApp;
   /**
    * Controlled UI container for this run. Games must mount their DOM UI here
    * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending

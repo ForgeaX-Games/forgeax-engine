@@ -22,8 +22,9 @@ const hereDir = fileURLToPath(import.meta.url).replace(/\/[^/]+$/, '');
 const APP_ROOT = resolve(hereDir, '..');
 const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
 const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
-const BRICKWALL_SRC_PATH = resolve(TEXTURES_DIR, 'brickwall.jpg');
-const BRICKWALL_NORMAL_SRC_PATH = resolve(TEXTURES_DIR, 'brickwall_normal.jpg');
+const BRICKWALL_SRC_PATH = resolve(TEXTURES_DIR, 'bricks2.jpg');
+const BRICKWALL_NORMAL_SRC_PATH = resolve(TEXTURES_DIR, 'bricks2_normal.jpg');
+const BRICKWALL_HEIGHT_SRC_PATH = resolve(TEXTURES_DIR, 'bricks2_disp.jpg');
 
 // --- 1. dawn.node binding setup ---
 
@@ -121,9 +122,9 @@ const mockCanvas = {
 
 // --- 3. Asset fixtures check ---
 
-if (!existsSync(BRICKWALL_SRC_PATH) || !existsSync(BRICKWALL_NORMAL_SRC_PATH)) {
+if (!existsSync(BRICKWALL_SRC_PATH) || !existsSync(BRICKWALL_NORMAL_SRC_PATH) || !existsSync(BRICKWALL_HEIGHT_SRC_PATH)) {
   console.error(
-    `[smoke] FAIL - asset fixtures missing: ${BRICKWALL_SRC_PATH} or ${BRICKWALL_NORMAL_SRC_PATH}`,
+    `[smoke] FAIL - asset fixtures missing: ${BRICKWALL_SRC_PATH}, ${BRICKWALL_NORMAL_SRC_PATH}, or ${BRICKWALL_HEIGHT_SRC_PATH}`,
   );
   console.error(
     '  rerun: git submodule update --init --recursive (forgeax-engine-assets submodule must be checked out)',
@@ -137,7 +138,7 @@ const { World } = await import('@forgeax/engine-ecs');
 const { ok: okResult } = await import('@forgeax/engine-types');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
-const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
+const { Camera, Materials, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
@@ -147,21 +148,27 @@ const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const brickwallDecodeRes = await decodeImageFromFile(BRICKWALL_SRC_PATH);
 const brickwallNormalDecodeRes = await decodeImageFromFile(BRICKWALL_NORMAL_SRC_PATH);
-if (!brickwallDecodeRes.ok || !brickwallNormalDecodeRes.ok) {
+const brickwallHeightDecodeRes = await decodeImageFromFile(BRICKWALL_HEIGHT_SRC_PATH);
+if (!brickwallDecodeRes.ok || !brickwallNormalDecodeRes.ok || !brickwallHeightDecodeRes.ok) {
   console.error(
     '[smoke] FAIL - decodeImageFromFile failed:',
     brickwallDecodeRes.ok ? null : brickwallDecodeRes.error.code,
     brickwallNormalDecodeRes.ok ? null : brickwallNormalDecodeRes.error.code,
+    brickwallHeightDecodeRes.ok ? null : brickwallHeightDecodeRes.error.code,
   );
   process.exit(1);
 }
 const { decoded: brickwallDecoded } = brickwallDecodeRes.value;
 const { decoded: brickwallNormalDecoded } = brickwallNormalDecodeRes.value;
+const { decoded: brickwallHeightDecoded } = brickwallHeightDecodeRes.value;
 console.log(
   `[learn-render-4-normal-mapping] decoded brickwall=${brickwallDecoded.width}x${brickwallDecoded.height} ${brickwallDecoded.mime}`,
 );
 console.log(
   `[learn-render-4-normal-mapping] decoded brickwall_normal=${brickwallNormalDecoded.width}x${brickwallNormalDecoded.height} ${brickwallNormalDecoded.mime}`,
+);
+console.log(
+  `[learn-render-4-normal-mapping] decoded brickwall_height=${brickwallHeightDecoded.width}x${brickwallHeightDecoded.height} ${brickwallHeightDecoded.mime}`,
 );
 
 const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
@@ -204,30 +211,37 @@ renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: 
 
 
 // Register textures under their GUIDs.
-const brickwallGuidRes = AssetGuid.parse('019e3969-1d45-78a4-9f59-a41c910656f4');
-const brickwallNormalGuidRes = AssetGuid.parse('019e3969-1d46-78ef-b4d9-0163f7f93193');
-if (!brickwallGuidRes.ok || !brickwallNormalGuidRes.ok) {
+const brickwallGuidRes = AssetGuid.parse('019e3969-1d45-744f-8269-e1b1c6e6a8cf');
+const brickwallNormalGuidRes = AssetGuid.parse('019e3969-1d45-7020-8756-675a0f885532');
+const brickwallHeightGuidRes = AssetGuid.parse('019e3969-1d45-7d3e-9bc8-55fcdc87beab');
+if (!brickwallGuidRes.ok || !brickwallNormalGuidRes.ok || !brickwallHeightGuidRes.ok) {
   console.error('[smoke] FAIL - GUID parse failed');
   process.exit(1);
 }
 
 const baseColorTexAsset = {
   kind: 'texture',
-  width: brickwallDecoded.width,
-  height: brickwallDecoded.height,
+  shape: { viewDimension: '2d', extent: { width: brickwallDecoded.width, height: brickwallDecoded.height } },
   format: brickwallDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: brickwallDecoded.bytes,
   colorSpace: brickwallDecoded.colorSpace,
-  mipmap: brickwallDecoded.mipmap,
+  mips: brickwallDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 const normalTexAsset = {
   kind: 'texture',
-  width: brickwallNormalDecoded.width,
-  height: brickwallNormalDecoded.height,
+  shape: { viewDimension: '2d', extent: { width: brickwallNormalDecoded.width, height: brickwallNormalDecoded.height } },
   format: brickwallNormalDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: brickwallNormalDecoded.bytes,
   colorSpace: brickwallNormalDecoded.colorSpace,
-  mipmap: brickwallNormalDecoded.mipmap,
+  mips: brickwallNormalDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
+};
+const heightTexAsset = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: brickwallHeightDecoded.width, height: brickwallHeightDecoded.height } },
+  format: brickwallHeightDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+  data: brickwallHeightDecoded.bytes,
+  colorSpace: brickwallHeightDecoded.colorSpace,
+  mips: brickwallHeightDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
@@ -237,58 +251,69 @@ const lease = worldAttachment1.value;
 // Catalogue the textures under their GUIDs, then mint shared-ref column handles.
 assets.catalog(brickwallGuidRes.value, baseColorTexAsset);
 assets.catalog(brickwallNormalGuidRes.value, normalTexAsset);
+assets.catalog(brickwallHeightGuidRes.value, heightTexAsset);
 const baseColorHandle = world.allocSharedRef('TextureAsset', baseColorTexAsset);
 const normalHandle = world.allocSharedRef('TextureAsset', normalTexAsset);
+const heightHandle = world.allocSharedRef('TextureAsset', heightTexAsset);
 console.log(`[learn-render-4-normal-mapping] registered brickwall handle id=${baseColorHandle}`);
 
-// Register material with pass-based MaterialAsset shape.
-const wallMatHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      program: { module: 'forgeax::default-standard-pbr' },
-      renderState: { tags: { LightMode: 'Forward' } },
-    },
-  ],
-  values: {
+const normalMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.8,
     baseColorTexture: unwrapHandle(baseColorHandle),
     normalTexture: unwrapHandle(normalHandle),
-  },
-});
+    normalScale: [2, 0.35],
+}));
+const bumpMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
+    baseColor: [1.0, 1.0, 1.0, 1.0],
+    metallic: 0.0,
+    roughness: 0.8,
+    baseColorTexture: unwrapHandle(baseColorHandle),
+    bumpTexture: unwrapHandle(heightHandle),
+    bumpScale: -6,
+}));
 
-// Spawn quad: HANDLE_QUAD is 1x1 in XY, faces +Z.
+// Two panels exercise the same material inputs as the browser example.
 world
   .spawn(
     {
       component: Transform,
       data: {
-        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+        pos: [-0.68, 0, 0], quat: [0, 0, 0, 1], scale: [1.2, 1.2, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [wallMatHandle] } },
+    { component: MeshRenderer, data: { materials: [normalMatHandle] } },
+  )
+  .unwrap();
+world
+  .spawn(
+    {
+      component: Transform,
+      data: {
+        pos: [0.68, 0, 0], quat: [0, 0, 0, 1], scale: [1.2, 1.2, 1],},
+    },
+    { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+    { component: MeshRenderer, data: { materials: [bumpMatHandle] } },
   )
   .unwrap();
 
-// Point light at (0.5, 1, 0.3) — LO 5.4 verbatim.
+// Off-axis light matches the browser scene.
 world.spawn(
   {
     component: Transform,
     data: {
-      pos: [0.5, 1, 0.3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+      pos: [0.5, 1, 1.2], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
-  { component: PointLight, data: {} },
+  { component: PointLight, data: { intensity: 8, range: 10 } },
 );
 
-// Camera at (0, 0, 3), Zoom=45 deg.
+// Camera at (0, 0, 3.4), Zoom=45 deg.
 world.spawn(
   {
     component: Transform,
     data: {
-      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+      pos: [0, 0, 3.4], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

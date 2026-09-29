@@ -1,10 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { RenderFeaturePlan } from '@forgeax/engine-render';
+import { World } from '@forgeax/engine-ecs';
+import { createSceneDataCatalog, type RenderFeaturePlan } from '@forgeax/engine-render';
 import type { VfxGpuTickIntent } from '@forgeax/engine-vfx';
 import { describe, expect, it } from 'vitest';
-import { freezeRenderFeaturePlan } from '../../../render/src/features/plan';
-import { gpuParticleRenderFeature } from '../feature/gpu-particle-feature.js';
+import {
+  freezeVfxPlan as freezeRenderFeaturePlan,
+  gpuParticleRenderFeature,
+  planPasses,
+  planResources,
+  singleViewContext,
+} from './vfx-frame-fixture';
 
 const stagePlanPath = resolve(import.meta.dirname, '../feature/stage-plan.ts');
 
@@ -23,10 +29,10 @@ describe('VFX managed stage execution seam', () => {
       resolve(import.meta.dirname, '../feature/gpu-particle-feature.ts'),
       'utf8',
     );
-    const plan: RenderFeaturePlan = { resources: [], passes: [] };
+    const plan: RenderFeaturePlan = { work: [{ scope: 'frame', resources: [], passes: [] }] };
     expect(source).toContain('RenderFeaturePlan');
     expect(source).not.toMatch(/GPUCommandEncoder|queue\.submit|encoder\.finish/);
-    expect(plan.passes).toEqual([]);
+    expect(planPasses(plan)).toEqual([]);
   });
 
   it('declares storage-produced indirect work and dependent raster descriptors', () => {
@@ -87,7 +93,7 @@ describe('VFX managed stage execution seam', () => {
       {
         worlds: [
           {
-            world: {},
+            world: new World(),
             runtime,
             camera: {
               position: new Float32Array(3),
@@ -100,7 +106,7 @@ describe('VFX managed stage execution seam', () => {
         ],
         frameNumber: 1,
       } as never,
-      {
+      singleViewContext({
         caps: {} as never,
         frame: { frameNumber: 1 },
         generation: 1,
@@ -108,7 +114,13 @@ describe('VFX managed stage execution seam', () => {
           { name: 'scene-color', kind: 'color', format: 'rgba16float', sampleCount: 1 },
           { name: 'scene-depth', kind: 'depth', format: 'depth24plus', sampleCount: 1 },
         ],
-      },
+        sceneData: createSceneDataCatalog({
+          featureIdentity: feature.identity,
+          generation: 1,
+          planIdentity: `${feature.identity}:1`,
+          rgba16floatRenderable: true,
+        }),
+      }),
     );
 
     expect(planned.ok).toBe(true);
@@ -119,7 +131,7 @@ describe('VFX managed stage execution seam', () => {
         { name: 'scene-depth', kind: 'depth', format: 'depth24plus', sampleCount: 1 },
       ]).ok,
     ).toBe(true);
-    expect(planned.value.resources).toEqual(
+    expect(planResources(planned.value)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: 'buffer',
@@ -131,7 +143,7 @@ describe('VFX managed stage execution seam', () => {
         expect.objectContaining({ kind: 'vertex-data' }),
       ]),
     );
-    expect(planned.value.passes).toEqual(
+    expect(planPasses(planned.value)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'compute' }),
         expect.objectContaining({
@@ -144,5 +156,21 @@ describe('VFX managed stage execution seam', () => {
         }),
       ]),
     );
+    const graphicsProgram = planResources(planned.value).find(
+      (resource) => resource.kind === 'graphics-program',
+    );
+    expect(graphicsProgram).toMatchObject({
+      program: {
+        renderState: {
+          cullMode: 'none',
+          depthCompare: 'less-equal',
+          depthWriteEnabled: false,
+          blend: {
+            color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        },
+      },
+    });
   });
 });

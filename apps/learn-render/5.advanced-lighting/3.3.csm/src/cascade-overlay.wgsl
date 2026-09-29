@@ -41,15 +41,8 @@ struct PostProcessParams {
   tintMode: f32,
   fakeDepth: f32,
   _pad: vec2<f32>,
+  splits: vec4<f32>,
 }
-
-// PSSM cascade far distances (view-space). Computed with splitLambda=0.75,
-// near=0.1, far=50, cascadeCount=4 -- matches the engine PSSM formula used
-// by DirectionalLight with shadowDistance=50.
-const SPLIT_A : f32 = 3.498403;
-const SPLIT_B : f32 = 7.939551;
-const SPLIT_C : f32 = 17.311534;
-const SPLIT_D : f32 = 50.000000;
 
 const TINT_STRENGTH : f32 = 0.45;
 
@@ -88,22 +81,20 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
     viewDepth = CAMERA_FAR;
   } else {
     let ndcDepth = textureSample(depthTex, depthSampler, in.uv);
-    // Convert NDC [0,1] depth to linear view-space depth.
-    // Derivation from the WebGPU perspective projection matrix
-    //   z_ndc = far/(far-near) - near*far/((far-near) * viewDepth)
-    //   => viewDepth = near * far / (far - z_ndc * (far - near))
-    let NEAR_TIMES_FAR = CAMERA_NEAR * CAMERA_FAR;
-    let FAR_MINUS_NEAR = CAMERA_FAR - CAMERA_NEAR;
-    viewDepth = NEAR_TIMES_FAR / (CAMERA_FAR - ndcDepth * FAR_MINUS_NEAR);
+    // Reverse-Z [0,1]: near is 1 and far/clear is 0.
+    viewDepth = CAMERA_NEAR / (ndcDepth + (1.0 - ndcDepth) * (CAMERA_NEAR / CAMERA_FAR));
   }
 
   // Bucket the view depth into one of four PSSM cascade bands.
+  let splitA = p.splits.x;
+  let splitB = p.splits.y;
+  let splitC = p.splits.z;
   var band : i32 = 3;
-  if (viewDepth <= SPLIT_A) {
+  if (viewDepth <= splitA) {
     band = 0;
-  } else if (viewDepth <= SPLIT_B) {
+  } else if (viewDepth <= splitB) {
     band = 1;
-  } else if (viewDepth <= SPLIT_C) {
+  } else if (viewDepth <= splitC) {
     band = 2;
   } else {
     band = 3;

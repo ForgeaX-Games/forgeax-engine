@@ -11,6 +11,7 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
+  "exclude": ["src/**/__tests__/**/*.ts"],
   "references": [
     { "path": "../assets-runtime" },
     { "path": "../audio-webaudio" },
@@ -30,6 +31,7 @@
     { "path": "../rhi-wgpu" },
     { "path": "../scene" },
     { "path": "../shader" },
+    { "path": "../vite-plugin-shader" },
     { "path": "../skinning" },
     { "path": "../types" }
   ]

@@ -1,10 +1,10 @@
 import { World } from '@forgeax/engine-ecs';
-import { PostProcessParams } from '@forgeax/engine-render';
+import { Fog } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 import { buildFogWorld } from '../fog.js';
 
 function fogCount(world: World): number {
-  return Array.from(world.query({ read: [PostProcessParams] }).unwrap()).length;
+  return Array.from(world.query({ read: [Fog] }).unwrap()).length;
 }
 
 describe('Fog demo controller transitions', () => {

@@ -21,24 +21,23 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { SceneInstance } from '@forgeax/engine-render';
 import { ChildOf } from '@forgeax/engine-scene';
-import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import type { Handle, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 import { registerRuntimeComponents } from './helpers/register-runtime-components';
 
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
-
 function buildScene(): SceneAsset {
   const Transform = defineComponent('Transform', { pos: 'array<f32, 3>' });
   void Transform;
   const nodes: SceneEntity[] = [
-    { localId: localId(0), components: { Transform: { pos: [1, 0, 0] } } },
-    { localId: localId(1), components: { Transform: { pos: [2, 0, 0] } } },
+    { key: 'entity-0', components: { Transform: { pos: [1, 0, 0] } } },
+    { key: 'entity-1', components: { Transform: { pos: [2, 0, 0] } } },
   ];
-  return { kind: 'scene', entities: nodes };
+  return {
+    kind: 'scene',
+    entities: Object.fromEntries(nodes.map(({ key, components }) => [key, { components }])),
+  };
 }
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
@@ -142,11 +141,17 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
 //       array is a snapshot at call time, not a live view (SceneInstance contract).
 
 function buildPostScene(): SceneAsset {
-  const nodes: SceneEntity[] = [
-    { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
-    { localId: localId(1), components: { Transform: { pos: [1, 0, 0] }, ChildOf: { parent: 0 } } },
+  const nodes: Array<SceneEntity & { readonly key: string }> = [
+    { key: 'entity-0', components: { Transform: { pos: [0, 0, 0] } } },
+    {
+      key: 'entity-1',
+      components: { Transform: { pos: [1, 0, 0] }, ChildOf: { parent: 'entity-0' } },
+    },
   ];
-  return { kind: 'scene', entities: nodes };
+  return {
+    kind: 'scene',
+    entities: Object.fromEntries(nodes.map(({ key, components }) => [key, { components }])),
+  };
 }
 
 // A lightweight component for post-instantiate injection testing.
@@ -227,8 +232,8 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     // Two root nodes, each gets a different component via query-after.
     defineComponent('Transform', { pos: 'array<f32, 3>' });
     const multiRoot: SceneEntity[] = [
-      { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
-      { localId: localId(1), components: { Transform: { pos: [10, 0, 0] } } },
+      { key: 'entity-0', components: { Transform: { pos: [0, 0, 0] } } },
+      { key: 'entity-1', components: { Transform: { pos: [10, 0, 0] } } },
     ];
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
@@ -267,7 +272,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     const world = new World();
     registerRuntimeComponents(world, [Enemy, Waypoint]);
     const singleRoot: SceneEntity[] = [
-      { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
+      { key: 'entity-0', components: { Transform: { pos: [0, 0, 0] } } },
     ];
     const asset: SceneAsset = { kind: 'scene', entities: singleRoot };
     const handle = registerSceneAsset(world, asset);

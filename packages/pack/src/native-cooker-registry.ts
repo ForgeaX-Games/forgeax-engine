@@ -20,6 +20,7 @@ export interface NativeCookDraft<P = unknown> {
   readonly refs: readonly string[];
   readonly artifacts: Readonly<Record<string, NativeCookArtifact>>;
   readonly inputFingerprint: string;
+  readonly sourceDependencies?: readonly string[];
 }
 
 export interface NativeCooker<P = unknown, I = unknown> {
@@ -92,6 +93,19 @@ function transactionFailure(key: string, reason: string): Result<never, AssetSta
   return failure(key, { guid: 'unknown', producer: reason });
 }
 
+function thrownProducer(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error !== null && typeof error === 'object') {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
+  return String(error);
+}
+
 function recovered<P>(
   key: string,
   previous: NativeCookTransactionSnapshot<P>,
@@ -110,14 +124,18 @@ function recovered<P>(
 export class NativeCookerRegistry {
   private readonly cookers = new Map<string, NativeCooker>();
 
-  register(cooker: NativeCooker): void {
+  register(cooker: NativeCooker): () => void {
     if (typeof cooker.key !== 'string' || cooker.key.length === 0) {
       throw new TypeError('NativeCookerRegistry.register: key must be a non-empty string');
     }
     if (typeof cooker.cook !== 'function') {
       throw new TypeError(`NativeCookerRegistry.register: cooker ${cooker.key} must expose cook`);
     }
+    if (this.cookers.has(cooker.key)) throw new TypeError(`duplicate native cooker ${cooker.key}`);
     this.cookers.set(cooker.key, cooker);
+    return () => {
+      if (this.cookers.get(cooker.key) === cooker) this.cookers.delete(cooker.key);
+    };
   }
 
   get(key: string): NativeCooker | undefined {
@@ -141,7 +159,7 @@ export class NativeCookerRegistry {
       const typedInput = cooker.discover === undefined ? input : await cooker.discover(input);
       draft = await cooker.cook(typedInput);
     } catch (error) {
-      return failure(key, { guid: 'unknown', producer: String(error) });
+      return failure(key, { guid: 'unknown', producer: thrownProducer(error) });
     }
     if (
       draft.guid.length === 0 ||

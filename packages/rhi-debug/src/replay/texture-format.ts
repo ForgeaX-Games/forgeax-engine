@@ -31,8 +31,11 @@ const BYTES_PER_TEXEL: Readonly<Record<string, number>> = {
   rg16float: 4,
   rgba16float: 8,
   r32float: 4,
+  r32uint: 4,
+  rg32uint: 8,
   rg32float: 8,
   rgba32float: 16,
+  rgba32uint: 16,
   rgb10a2unorm: 4,
   rg11b10ufloat: 4,
 };

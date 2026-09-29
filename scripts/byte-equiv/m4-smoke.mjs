@@ -47,7 +47,7 @@ const DEMOS = [
   { name: 'hello-triangle', filter: '@forgeax/hello-triangle' }, // forward (minimal)
   { name: 'hello-tonemap', filter: '@forgeax/hello-tonemap' }, // tonemap + skybox
   { name: 'hello-fxaa', filter: '@forgeax/hello-fxaa' }, // fxaa
-  { name: 'hello-bloom', filter: '@forgeax/hello-bloom' }, // bloom-bright + bloom-blur(h/v) + bloom-composite
+  { name: 'hello-bloom', filter: '@forgeax/hello-bloom' }, // five downsample + four upsample + composite
   { name: 'hello-skin', filter: '@forgeax/hello-skin' }, // forward + skinned forward
   { name: 'hello-hdrp-lighting', filter: '@forgeax/hello-hdrp-lighting' }, // HDRP cluster forward + point-shadow-caster
   { name: 'hello-sprite', filter: '@forgeax/hello-sprite' }, // forward sprite-split sub-pass

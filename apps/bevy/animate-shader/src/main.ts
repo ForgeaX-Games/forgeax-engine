@@ -1,3 +1,4 @@
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
@@ -32,6 +33,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const mesh = app.world.allocSharedRef('MeshAsset', geometry.value);
   const material = app.world.allocSharedRef('MaterialAsset', makeMaterial());
+  const timeValue = app.world.spawn({ component: RuntimeMaterialValue, data: { asset: material, parameter: 'time', value: [0] } }).unwrap();
   app.world.spawn(
     { component: Transform, data: { pos: [0, 0.5, 0] } },
     { component: MeshFilter, data: { assetHandle: mesh } },
@@ -55,10 +57,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const time = world.hasResource('Time')
         ? world.getResource<{ elapsed: number }>('Time').elapsed
         : 0;
-      const resolved = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(material);
-      if (!resolved.ok || resolved.value.values === undefined) return;
-      (resolved.value.values as Record<string, unknown>).time = time;
-      world.sharedRefs.markChanged(material).unwrap();
+      world.set(timeValue, RuntimeMaterialValue, { value: [time] }).unwrap();
     },
   });
   app.onError((error) => console.error('[bevy-animate-shader] app error:', error.code, error.hint));

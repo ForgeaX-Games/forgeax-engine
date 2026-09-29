@@ -5,10 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Build-time MSDF font atlas baking and runtime font asset loading for the forgeax engine. CLI surface is provided by @forgeax/engine-remote (forgeax-engine-remote-font).",
-  "bin": {
-    "forgeax-engine-remote-font": "./dist/cli-font.mjs"
-  },
+  "description": "Build-time MSDF font atlas baking and runtime font asset loading for the ForgeaX engine. The unified ForgeaX asset command owns the public producer entry.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

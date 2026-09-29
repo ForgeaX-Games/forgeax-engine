@@ -102,6 +102,8 @@ describe('DDC multiprocess lifecycle', () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-multiprocess-head-'));
     roots.push(root);
     const script = `
+      const { mkdir, readdir, writeFile } = await import('node:fs/promises');
+      const { join } = await import('node:path');
       const { DdcEntryStore, ddcOutputDigest } = await load(process.argv[5]);
       const { DdcLifecycle } = await load(process.argv[1]);
       const root = process.argv[2];
@@ -112,7 +114,16 @@ describe('DDC multiprocess lifecycle', () => {
       const store = new DdcEntryStore(root);
       const lifecycle = new DdcLifecycle(root);
       const lease = await lifecycle.begin(guid, key);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      const barrier = join(root, 'stale-writer-barrier');
+      await mkdir(barrier, { recursive: true });
+      await writeFile(join(barrier, lease.attempt), 'ready');
+      const deadline = Date.now() + 4000;
+      while ((await readdir(barrier)).length < 2) {
+        if (Date.now() >= deadline) {
+          throw new Error('timed out waiting for both stale-writer leases');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       await store.write({ ...entry, receipt: { ...entry.receipt, outputDigest: ddcOutputDigest(entry) } });
       const committed = await lifecycle.commit(lease, key);
       console.log(JSON.stringify({ result: committed.result, revision: committed.revision, generation: lease.generation }));

@@ -1,3 +1,4 @@
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 // apps/shadertoy/fractal-pyramid/src/index.ts
 //
 // Shadertoy reproduction: "fractal pyramid" (https://www.shadertoy.com/view/tsXBzS).
@@ -9,7 +10,7 @@
 //     camera transform, so the quad always covers the whole viewport.
 //   - The Shadertoy iResolution / iTime globals ride in the @group(1)@binding(0)
 //     material UBO via paramSchema [iResolution: vec2, iTime: f32]. The raf loop
-//     mutates values.iTime every frame (same per-frame param mutation path
+//     publishes managed iTime every frame (same per-frame param mutation path
 //     the hello/custom-shader pulse demo uses).
 //
 // A Camera entity is spawned only so the engine runs the forward pass (with no
@@ -93,7 +94,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', program: { module: FRACTAL_SHADER_PATH }, renderState: { ...{ cullMode: 'none' }, tags: { LightMode: 'Forward' }, queue: 2000 } },
+      { name: 'Forward', program: { module: FRACTAL_SHADER_PATH }, renderState: { cullMode: 'none', depthCompare: 'always', depthWriteEnabled: false, tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
     parameters: [
       { name: 'iResolution', type: 'vec2' },
@@ -101,6 +102,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ],
     values,
   });
+
+  const timeValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iTime', value: [0] } }).unwrap();
+  const resolutionValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iResolution', kind: 2, value: [target.width, target.height] } }).unwrap();
 
   const planeRes = createPlaneGeometry(1, 1);
   if (!planeRes.ok) {
@@ -133,14 +137,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const h = target.clientHeight || cssH;
       target.width = Math.max(1, Math.floor(w * renderScale));
       target.height = Math.max(1, Math.floor(h * renderScale));
-      values.iResolution = [target.width, target.height];
+      world.set(resolutionValue, RuntimeMaterialValue, { value: [target.width, target.height] }).unwrap();
     });
   }
 
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    values.iTime = (now - startTime) / 1000;
+    world.set(timeValue, RuntimeMaterialValue, { value: [(now - startTime) / 1000] }).unwrap();
     world.update().unwrap();
     const r = renderer.draw(frameRequest);
     if (!r.ok) console.error('[fractal-pyramid] draw error:', r.error);

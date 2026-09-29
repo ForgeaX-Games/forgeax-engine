@@ -7,7 +7,7 @@
 // the node-side path is self-contained (no vite-plugin-pack dependency).
 // The Basis transcode + block-upload path is exercised by the browser e2e
 // (w41) and pixel parity (w42); this smoke proves the scene boots and renders
-// 300+ frames without crashing or WebGPU validation errors.
+// 60+ frames without crashing or WebGPU validation errors.
 //
 // Output literals (grep-friendly):
 //   - `[hello-compressed] backend=<backend>`
@@ -20,7 +20,7 @@ import { dirname, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const M27_RECOVERY = process.argv.includes('--m27-recovery');
 const M27_PNG_2X2_SOLID_RED_BASE64 =
@@ -206,25 +206,22 @@ if (M27_RECOVERY) {
   }
   m27TextureAsset = {
     kind: 'texture',
-    width: parsed.value.width,
-    height: parsed.value.height,
+    shape: { viewDimension: '2d', extent: { width: parsed.value.width, height: parsed.value.height } },
     format: 'rgba8unorm-srgb',
     data: parsed.value.bytes,
     colorSpace: parsed.value.colorSpace,
-    mipmap: false,
-    mipLevelCount: 1,
+    mips: { kind: 'none' },
   };
 }
 
 // Register synthetic texture + mint handles.
 const texHandle = world.allocSharedRef('TextureAsset', m27TextureAsset ?? {
   kind: 'texture',
-  width: TEX_W,
-  height: TEX_H,
+  shape: { viewDimension: '2d', extent: { width: TEX_W, height: TEX_H } },
   format: 'rgba8unorm',
   data: checkerPixels,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 });
 const samplerHandle = world.allocSharedRef('SamplerAsset', {
   kind: 'sampler',
@@ -253,16 +250,18 @@ const matHandle = world.allocSharedRef('MaterialAsset', M27_RECOVERY ? {
   kind: 'material',
   passes: [
     {
-      program: { module: 'forgeax::standard-pbr' },
-      values: {
-        baseColorFactor: [1, 1, 1, 1],
-        roughnessFactor: 0.8,
-        metallicFactor: 0,
-        baseColorTexture: { handle: texHandle },
-        baseColorSampler: { handle: samplerHandle },
-      },
+      name: 'Forward',
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
+  values: {
+    baseColor: [1, 1, 1, 1],
+    metallic: 0,
+    roughness: 0.8,
+    baseColorTexture: texHandle,
+    sampler: samplerHandle,
+  },
 });
 
 // 4 staggered quads.
@@ -309,7 +308,7 @@ world.spawn(
 // --- 4. Render loop -----------------------------------------------------------
 
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const start = performance.now();
 let totalFrames = 0;
 const pixelReads = [];

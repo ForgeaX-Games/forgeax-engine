@@ -111,12 +111,21 @@ describe('w6 (b) -- pbr / unlit / sprite-adjacent shaders DO NOT pick up PER_INS
     });
   }
 
-  it('default-standard-pbr.wgsl keeps its storage, cluster, and vertex-color axes (none touch PER_INSTANCE_REGION)', () => {
+  it('default-standard-pbr.wgsl keeps its material axes (none touch PER_INSTANCE_REGION)', () => {
     const axes = variantAxes(readWgsl('default-standard-pbr.wgsl'));
     expect(axes).toEqual([
       '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
       '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE',
       '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+      '#pragma variant_axis PROBE_BLEND_AVAILABLE',
+      '#pragma variant_axis EXTENDED_LIGHTING_AVAILABLE',
+      '#pragma variant_axis TRANSMISSION_AVAILABLE',
+      '#pragma variant_axis DIRECTIONAL_PCSS_AVAILABLE',
+      '#pragma variant_axis PROJECTOR_AVAILABLE',
+      '#pragma variant_axis GPU_DRIVEN_SCENE_INDEX_AVAILABLE',
+      '#pragma variant_axis REFLECTION_FALLBACK_AVAILABLE',
+      '#pragma variant_axis COVERAGE_ONLY',
+      '#pragma variant_axis VISIBLE_SURFACE_AVAILABLE',
     ]);
   });
 
@@ -125,6 +134,7 @@ describe('w6 (b) -- pbr / unlit / sprite-adjacent shaders DO NOT pick up PER_INS
     expect(axes).toEqual([
       '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
       '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+      '#pragma variant_axis COVERAGE_ONLY',
     ]);
   });
 });
@@ -206,4 +216,22 @@ describe('w6 (d) -- MAX_UNIFORM_INSTANCES=128 stays unchanged under the new axis
     const src = readWgsl('common.wgsl');
     expect(src).toMatch(/MAX_UNIFORM_INSTANCES\s*=\s*128/);
   });
+});
+
+describe('HDR/display fragment contract', () => {
+  for (const file of ['sprite.wgsl', 'sprite-lit.wgsl'] as const) {
+    it(`${file} keeps LDR OETF in fs_main and HDR output linear`, () => {
+      const src = stripComments(readWgsl(file));
+      const ldrStart = src.indexOf('fn fs_main(');
+      const hdrStart = src.indexOf('fn fs_main_hdr(');
+      expect(ldrStart).toBeGreaterThanOrEqual(0);
+      expect(hdrStart).toBeGreaterThan(ldrStart);
+
+      const ldrBody = src.slice(ldrStart, hdrStart);
+      const hdrBody = src.slice(hdrStart);
+      expect(ldrBody).toContain('linear_to_srgb(');
+      expect(hdrBody).not.toContain('linear_to_srgb(');
+      expect(hdrBody).toContain('return vec4<f32>');
+    });
+  }
 });

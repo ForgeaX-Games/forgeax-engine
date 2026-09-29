@@ -7,7 +7,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  // Bevy point lights cast shadows; the cube-array lane is a build-time opt-in.
+  plugins: [forgeaxShader({ engineEntries: { pointShadows: true } }) as never],
   server: { fs: { allow: [monorepoRoot] } },
   build: { target: 'esnext', rollupOptions: { input: { main: resolve(here, 'index.html') } } },
 });

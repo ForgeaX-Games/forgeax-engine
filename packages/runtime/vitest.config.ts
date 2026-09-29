@@ -1,5 +1,5 @@
 import { defineProject } from 'vitest/config';
-import { fileURLToPath } from 'node:url';
+import { createRenderSourceAliases } from '../../config/vitest-render-source-alias';
 
 // Pin NODE_ENV so this run is hermetic. `import.meta.env.DEV` is constant-folded
 // from NODE_ENV when vitest resolves the Vite config (DEV === NODE_ENV !==
@@ -13,28 +13,7 @@ process.env.NODE_ENV = 'test';
 
 export default defineProject({
   resolve: {
-    alias: [
-      // Runtime integration tests import the authored render implementation
-      // directly. Resolve the public render barrel to that same source graph
-      // so component tokens are registered once; mixing the source graph with
-      // a separately bundled dist graph gives each Camera/MeshRenderer a
-      // different ECS id and makes every query miss.
-      {
-        find: /^@forgeax\/engine-render$/,
-        replacement: fileURLToPath(new URL('../render/src/index.ts', import.meta.url)),
-      },
-      // The public runtime facade delegates to this internal render entry.
-      // Cover the authored implementation, rather than its built output, when
-      // runtime integration tests exercise that boundary.
-      {
-        find: '@forgeax/engine-render/internal/construct-renderer',
-        replacement: fileURLToPath(new URL('../render/src/construct-renderer.ts', import.meta.url)),
-      },
-      {
-        find: '@forgeax/engine-render/authoring',
-        replacement: fileURLToPath(new URL('../render/src/authoring.ts', import.meta.url)),
-      },
-    ],
+    alias: createRenderSourceAliases(),
   },
   test: {
     environment: 'node',

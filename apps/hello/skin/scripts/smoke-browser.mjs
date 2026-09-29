@@ -43,6 +43,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // apps/hello/skin/scripts -> apps/hello/skin -> apps/hello -> apps -> repo root.
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
 const BROWSER_WAIT_MS = Number.parseInt(process.env.SMOKE_BROWSER_WAIT_MS ?? '8000', 10);
+const BROWSER_HEADLESS = process.env.FORGEAX_BROWSER_HEADLESS !== '0';
 const M22_RECOVERY = process.argv.includes('--m22-recovery') || process.env.M22_RECOVERY === '1';
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-skin', 'dev'], {
@@ -70,7 +71,7 @@ console.log(`[smoke-browser] using ${portUrl}`);
 // macOS / Linux system Chrome ships WebGPU; bundled chromium does not without
 // the right flags + a Vulkan/Metal swiftshader fallback.
 const browser = await chromium.launch({
-  headless: true,
+  headless: BROWSER_HEADLESS,
   channel: 'chrome',
   args: [
     '--enable-unsafe-webgpu',
@@ -89,41 +90,93 @@ page.on('console', (msg) => {
   if (msg.type() === 'error') errors.push(`CONSOLE-ERR: ${txt}`);
 });
 
-// AC-03 (bug-20260612): record every dev `POST /__import/<guid>` response so the
-// smoke can prove the dev lazy-import chain actually fired AND returned a
-// well-formed `PackIndexEntry[]` body (not a 4xx/5xx). The runtime's
-// `createDevImportTransport` issues exactly one POST per missing-DDC GUID; a
-// successful Fox.glb load should hit /__import for the scene root + all
-// sub-asset GUIDs the runtime walks (mesh, material, texture, skeleton, skin,
-// 3 anim-clips). A 4xx/5xx, an empty entries array, or a missing `kind=scene`
-// row indicates the very failure mode the requirements describe even when the
-// browser console transcript happens to be clean.
+// AC-03 (bug-20260612): record the active dev asset transport so the smoke can
+// prove the lazy-import chain actually fired and returned a valid scene path.
+// Older sessions use POST /__import/<guid>; the current scoped runtime uses a
+// catalog snapshot plus a Pack v2 JSON package and binary artifact. Keep both
+// protocols observable because this smoke is also used against older fixtures.
 const importProbeHits = [];
-page.on('response', async (resp) => {
+const scopedPackProbeHits = [];
+const probeReads = [];
+page.on('response', (resp) => {
   const url = resp.url();
-  const idx = url.indexOf('/__import/');
-  if (idx < 0) return;
-  // Strip query/hash if any, then take the suffix as guid.
-  const guid = url.slice(idx + '/__import/'.length).replace(/[?#].*$/, '');
-  let entriesLen;
-  let entryKinds = [];
-  try {
-    const body = await resp.json();
-    if (Array.isArray(body)) {
-      entriesLen = body.length;
-      entryKinds = body
-        .map((e) => (e && typeof e === 'object' ? e.kind : undefined))
-        .filter((k) => typeof k === 'string');
-    }
-  } catch (_e) {
-    // Non-JSON body (e.g. plain-text 4xx/5xx) -- leave entriesLen undefined.
+  const importIndex = url.indexOf('/__import/');
+  if (importIndex >= 0) {
+    // Strip query/hash if any, then take the suffix as guid.
+    const guid = url.slice(importIndex + '/__import/'.length).replace(/[?#].*$/, '');
+    const probeRead = (async () => {
+      let entriesLen;
+      let entryKinds = [];
+      try {
+        const body = await resp.json();
+        if (Array.isArray(body)) {
+          entriesLen = body.length;
+          entryKinds = body
+            .map((e) => (e && typeof e === 'object' ? e.kind : undefined))
+            .filter((k) => typeof k === 'string');
+        }
+      } catch (_e) {
+        // Non-JSON body (e.g. plain-text 4xx/5xx) -- leave entriesLen undefined.
+      }
+      importProbeHits.push({
+        guid,
+        status: resp.status(),
+        entriesLen,
+        entryKinds,
+      });
+    })();
+    probeReads.push(probeRead);
+    return;
   }
-  importProbeHits.push({
-    guid,
-    status: resp.status(),
-    entriesLen,
-    entryKinds,
-  });
+
+  let pathname;
+  try {
+    pathname = new URL(url).pathname;
+  } catch (_e) {
+    return;
+  }
+  const scopedKind = pathname.endsWith('/catalog.json')
+    ? 'catalog'
+    : pathname.includes('/asset/') && pathname.endsWith('.pack.json')
+      ? 'package'
+      : pathname.includes('/asset/') && pathname.endsWith('/body.bin')
+        ? 'artifact'
+        : undefined;
+  if (scopedKind === undefined || !pathname.includes('/__pack/scopes/')) return;
+
+  const probeRead = (async () => {
+    let entriesLen;
+    let entryKinds = [];
+    let assetCount;
+    let assetKinds = [];
+    try {
+      const body = await resp.json();
+      if (scopedKind === 'catalog' && body && Array.isArray(body.entries)) {
+        entriesLen = body.entries.length;
+        entryKinds = body.entries
+          .map((e) => (e && typeof e === 'object' ? e.kind : undefined))
+          .filter((k) => typeof k === 'string');
+      }
+      if (scopedKind === 'package' && body && Array.isArray(body.assets)) {
+        assetCount = body.assets.length;
+        assetKinds = body.assets
+          .map((e) => (e && typeof e === 'object' ? e.kind : undefined))
+          .filter((k) => typeof k === 'string');
+      }
+    } catch (_e) {
+      // Binary artifacts and non-JSON error bodies do not carry kind facts.
+    }
+    scopedPackProbeHits.push({
+      kind: scopedKind,
+      url: pathname,
+      status: resp.status(),
+      entriesLen,
+      entryKinds,
+      assetCount,
+      assetKinds,
+    });
+  })();
+  probeReads.push(probeRead);
 });
 
 // Capture GPU pipeline descriptors + device errors + vertex-buffer uploads.
@@ -146,12 +199,12 @@ await page.addInitScript(() => {
   // SkinPaletteAllocator from M1 m1-2 owns). For each write we record an
   // FNV-1a-32 hash of the full payload bytes (AC-01 full-mat4-region
   // distinctness) plus one hash per complete joint mat4 for AC-02 pose-
-  // Transform.world distinctness. The root joint is intentionally static in
+  // GlobalTransform.world distinctness. The root joint is intentionally static in
   // the Khronos clips, so hashing only M_0 would be a false negative. Cursor rewinds
   // per frame so byteOffset=0 entries should appear once per frame per
   // skinned entity; across ~8s of rendering (= hundreds of frames) we
   // expect >>10 entries with ≥2 distinct hash values once advanceAnimation
-  // -> Transform.world -> writeJointPalette is alive.
+  // -> GlobalTransform.world -> writeJointPalette is alive.
   globalThis.__forgeaxSkinPaletteBuffers = [];
   globalThis.__forgeaxSkinPaletteWrites = [];
   // M4 / m4-3: capture every setBindGroup(2, bg, dynamicOffsets) call so
@@ -340,9 +393,20 @@ await page.addInitScript(() => {
 });
 
 const pageUrl = new URL(portUrl);
+pageUrl.searchParams.set('gpu-evidence', '1');
+pageUrl.searchParams.set('gpu-ssao', '1');
 if (M22_RECOVERY) pageUrl.searchParams.set('m22-recovery', '1');
-await page.goto(pageUrl.toString(), { waitUntil: 'networkidle', timeout: 30000 });
+// The running Engine intentionally keeps the dev transport and frame loop
+// active, so Playwright's `networkidle` can never become a stable lifecycle
+// boundary. DOM readiness plus the explicit settle window below still waits
+// for the same runtime/GPU assertions without turning an active app into a
+// false timeout.
+await page.goto(pageUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });
 await page.waitForTimeout(BROWSER_WAIT_MS);
+await page.waitForFunction(() => globalThis.__forgeaxGpuEvidence?.().frames >= 60, null, { timeout: 60000 });
+const gpuEvidence = await page.evaluate(() => globalThis.__forgeaxGpuEvidence());
+console.log('[smoke-browser] GPU-driven skin', JSON.stringify(gpuEvidence));
+if (gpuEvidence.failures.length > 0) throw new Error(JSON.stringify(gpuEvidence));
 
 let m22Recovery = null;
 if (M22_RECOVERY) {
@@ -365,6 +429,56 @@ const captured = await page.evaluate(() => ({
   skinSetBindGroup2: globalThis.__forgeaxSkinSetBindGroup2 ?? [],
   hudText: document.getElementById('skin-hud')?.innerText ?? '',
 }));
+const timingRunnerUrl = `/@fs${resolve(REPO_ROOT, 'packages/render/src/__tests__/gpu-pass-timing-browser-runner.ts')}`;
+const timingEvidence = await page.evaluate(async (url) => {
+  const module = await import(url);
+  return module.runBrowserGpuPassTiming();
+}, timingRunnerUrl);
+console.log(`=== GPU pass timing receipt evidence: ${JSON.stringify(timingEvidence)} ===`);
+if (timingEvidence.frames !== 3) {
+  console.error(`\n[smoke-browser] GPU timing RED -- expected 3 receipt observations, got ${timingEvidence.frames}`);
+  process.exit(1);
+}
+if (timingEvidence.supported && (timingEvidence.unavailable || timingEvidence.measuredPasses < 1)) {
+  console.error('\n[smoke-browser] GPU timing RED -- supported runner did not publish measured receipt facts');
+  process.exit(1);
+}
+if (!timingEvidence.supported && (!timingEvidence.unavailable || timingEvidence.measuredPasses !== 0)) {
+  console.error('\n[smoke-browser] GPU timing RED -- unsupported runner did not publish structured unavailable facts');
+  process.exit(1);
+}
+
+const visualTimingModes = ['off', 'on', 'unsupported'];
+for (const mode of visualTimingModes) {
+  const visualUrl = new URL(portUrl);
+  visualUrl.searchParams.set('gpu-pass-timing', mode);
+  visualUrl.searchParams.set('gpu-pass-timing-capture', '1');
+  await page.goto(visualUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(BROWSER_WAIT_MS);
+  const visualProbe = await page.evaluate(() => ({
+    mode: document.documentElement.dataset.gpuPassTiming,
+    capability: document.documentElement.dataset.gpuPassTimingCapability,
+    canvas: document.querySelector('canvas')?.getBoundingClientRect().toJSON(),
+    hud: document.getElementById('skin-hud')?.innerText ?? '',
+    deviceErrors: globalThis.__forgeaxDeviceErrors ?? [],
+  }));
+  console.log(`[smoke-browser] visual timing ${mode}: ${JSON.stringify(visualProbe)}`);
+  const canvasVisible =
+    visualProbe.canvas !== undefined && visualProbe.canvas.width > 0 && visualProbe.canvas.height > 0;
+  if (
+    visualProbe.mode !== mode ||
+    !canvasVisible ||
+    !visualProbe.hud.includes(`GPU timing: ${mode}`) ||
+    !visualProbe.hud.includes('State: Paused')
+  ) {
+    console.error(
+      `[smoke-browser] GPU timing visual RED -- ${mode} did not render the same paused target with a bound mode label`,
+    );
+    await browser.close();
+    viteProc.kill('SIGTERM');
+    process.exit(1);
+  }
+}
 console.log('\n=== captured GPU pipelines ===');
 captured.pipelines.forEach((p, i) => console.log(`[#${i}]`, JSON.stringify(p)));
 console.log('=== captured GPU device errors ===');
@@ -518,63 +632,72 @@ if (captured.deviceErrors.length > 0) {
   process.exit(1);
 }
 
-// AC-03 (bug-20260612): dev `/__import/<guid>` positive probe. Walks the
-// recorded responses captured via `page.on('response')` above. Three gates,
-// any one red exits 1:
-//   (a) hit count >= 3 -- Fox.glb declares 9 sub-assets (scene + mesh +
-//       material + texture + skeleton + skin + 3 anim-clip). The runtime
-//       walks the scene graph lazily, so an exact count is brittle, but
-//       fewer than 3 imports means the lazy-import transport never engaged
-//       (the bug's exact symptom: `asset-not-imported` returned without a
-//       transport fetch). Lower bound is intentionally loose to tolerate
-//       runtime-side walk-order changes; a FALSIFY (empty pluginPack roots)
-//       collapses this to 0 hits and trips the gate.
-//   (b) zero non-2xx responses -- a 404 / 422 / 500 from /__import means
-//       the dev plugin rejected the GUID; the runtime would surface this
-//       as the exact `asset-not-imported` error the requirements describe.
-//   (c) at least one response carries `kind=scene` -- proves the Fox.glb
-//       SCENE root specifically routed through the per-meta import path.
-//       If only sub-assets (mesh / texture) round-trip but the scene row
-//       is missing, `loadByGuid<SceneAsset>(FOX_SCENE_GUID)` would still
-//       fail even though the rest of the chain looks healthy.
+// AC-03 (bug-20260612): positive probe for either dev asset transport. A
+// legacy session needs >=3 successful imports and a scene row. A scoped
+// session needs a catalog containing the scene, a Pack v2 JSON body containing
+// the scene, and one successful binary artifact. A 4xx/5xx or missing scene
+// evidence remains red even when the browser console transcript is clean.
+await Promise.all(probeReads);
 const importProbeHitCount = importProbeHits.length;
 const importProbeNon2xx = importProbeHits.filter((h) => h.status < 200 || h.status >= 300);
 const importProbeKindUnion = new Set(importProbeHits.flatMap((h) => h.entryKinds));
+const scopedPackNon2xx = scopedPackProbeHits.filter((h) => h.status < 200 || h.status >= 300);
+const scopedCatalogHits = scopedPackProbeHits.filter((h) => h.kind === 'catalog');
+const scopedPackageHits = scopedPackProbeHits.filter((h) => h.kind === 'package');
+const scopedArtifactHits = scopedPackProbeHits.filter((h) => h.kind === 'artifact');
+const scopedPackKindUnion = new Set(
+  scopedPackProbeHits.flatMap((h) => [...h.entryKinds, ...h.assetKinds]),
+);
+const legacyImportEvidence =
+  importProbeHitCount >= 3 && importProbeNon2xx.length === 0 && importProbeKindUnion.has('scene');
+const scopedPackEvidence =
+  scopedCatalogHits.some(
+    (h) =>
+      h.status >= 200 &&
+      h.status < 300 &&
+      (h.entriesLen ?? 0) >= 3 &&
+      h.entryKinds.includes('scene'),
+  ) &&
+  scopedPackageHits.some(
+    (h) => h.status >= 200 && h.status < 300 && h.assetKinds.includes('scene'),
+  ) &&
+  scopedArtifactHits.some((h) => h.status >= 200 && h.status < 300);
+const ac03Evidence = legacyImportEvidence || scopedPackEvidence;
+const ac03Non2xx = [...importProbeNon2xx, ...scopedPackNon2xx];
+const ac03KindUnion = new Set([...importProbeKindUnion, ...scopedPackKindUnion]);
 console.log('\n=== AC-03 import probe hits ===');
 importProbeHits.forEach((h, i) =>
   console.log(
     `[#${i}] guid=${h.guid.slice(0, 8)} status=${h.status} entriesLen=${h.entriesLen ?? 'n/a'} kinds=[${h.entryKinds.join(',')}]`,
   ),
 );
+scopedPackProbeHits.forEach((h, i) =>
+  console.log(
+    `[#scoped-${i}] kind=${h.kind} status=${h.status} entriesLen=${h.entriesLen ?? 'n/a'} ` +
+      `assetCount=${h.assetCount ?? 'n/a'} kinds=[${[...new Set([...h.entryKinds, ...h.assetKinds])].join(',')}] url=${h.url}`,
+  ),
+);
 console.log(
-  `=== AC-03 summary: hits=${importProbeHitCount} non2xx=${importProbeNon2xx.length} kindUnion=[${[...importProbeKindUnion].join(',')}] ===`,
+  `=== AC-03 summary: legacyHits=${importProbeHitCount} scopedHits=${scopedPackProbeHits.length} ` +
+    `non2xx=${ac03Non2xx.length} kindUnion=[${[...ac03KindUnion].join(',')}] ===`,
 );
 if (M22_RECOVERY) {
   console.log('=== AC-03 skipped: M22 recovery mode exercises the already-loaded same-page App/World path ===');
 }
-if (!M22_RECOVERY && importProbeHitCount < 3) {
+if (!M22_RECOVERY && ac03Non2xx.length > 0) {
   console.error(
-    `\n[smoke-browser] AC-03 RED -- only ${importProbeHitCount} POST /__import hit(s) observed; ` +
-      'expected >= 3 for Fox.glb sub-asset walk (scene + mesh + material + texture + skeleton + skin + 3 anim-clip). ' +
-      'Suspect: createDevImportTransport never engaged, vite pluginPack missing Fox roots, or runtime asset-registry walk regressed.',
+    `\n[smoke-browser] AC-03 RED -- ${ac03Non2xx.length} non-2xx asset transport response(s). ` +
+      'The dev plugin rejected a catalog, package, artifact, or lazy-import request. First failure:',
   );
+  const first = ac03Non2xx[0];
+  console.error(`  kind=${first.kind ?? 'legacy-import'} status=${first.status} url=${first.url ?? first.guid}`);
   process.exit(1);
 }
-if (!M22_RECOVERY && importProbeNon2xx.length > 0) {
+if (!M22_RECOVERY && !ac03Evidence) {
   console.error(
-    `\n[smoke-browser] AC-03 RED -- ${importProbeNon2xx.length} non-2xx /__import response(s); ` +
-      'dev plugin rejected GUID(s). First failure:',
-  );
-  const first = importProbeNon2xx[0];
-  console.error(`  guid=${first.guid} status=${first.status} kinds=[${first.entryKinds.join(',')}]`);
-  process.exit(1);
-}
-if (!M22_RECOVERY && !importProbeKindUnion.has('scene')) {
-  console.error(
-    '\n[smoke-browser] AC-03 RED -- no /__import response carried kind=scene; ' +
-      'Fox.glb SCENE root never imported through dev transport. ' +
-      `Observed kinds: [${[...importProbeKindUnion].join(',')}]. ` +
-      'Suspect: per-meta import filtered out the scene row, or runtime never resolved the scene GUID.',
+    '\n[smoke-browser] AC-03 RED -- no complete dev asset transport evidence; ' +
+      'expected either >=3 legacy /__import responses or scoped catalog + Pack v2 scene + binary artifact. ' +
+      `Observed kinds: [${[...ac03KindUnion].join(',')}].`,
   );
   process.exit(1);
 }
@@ -583,7 +706,7 @@ if (!M22_RECOVERY && !importProbeKindUnion.has('scene')) {
 // buffer hash distinctness probe. The new SkinPaletteAllocator (M1 m1-2)
 // owns one GPUBuffer labeled `skin-palette` and rewrites it every frame
 // via queue.writeBuffer (record stage M3). The advanceAnimationPlayer +
-// Transform.world propagation drives joint world matrices each frame, so
+// GlobalTransform.world propagation drives joint world matrices each frame, so
 // the pre-multiplied M_i = joint_world * IBM payload bytes must change
 // across frames whenever any clip is playing. Three Fox.glb instances are
 // playing Survey/Walk/Run clips so within any few frames the recorded
@@ -626,7 +749,7 @@ if (skinPaletteFullHashSet.size < 2) {
   console.error(
     `\n[smoke-browser] AC-01 RED -- ${skinPaletteHits} palette writes recorded but only ` +
       `${skinPaletteFullHashSet.size} distinct fullHash value(s); palette payload is frozen across frames. ` +
-      'Suspect: writeJointPalette short-circuited to identity, advanceAnimationPlayer not driving Transform.world, ' +
+      'Suspect: writeJointPalette short-circuited to identity, advanceAnimationPlayer not driving GlobalTransform.world, ' +
       'or the per-frame allocator cursor reset is eating into the same identical payload every frame.',
   );
   process.exit(1);
@@ -637,14 +760,14 @@ console.log(
 );
 
 // feat-20260612-skin-palette-per-frame-upload M4 / m4-2: AC-02 animated-pose
-// Transform.world distinctness probe. Reuses skinPaletteWrites from the
+// GlobalTransform.world distinctness probe. Reuses skinPaletteWrites from the
 // same queue.writeBuffer hook and looks for any complete joint mat4 after the
 // root that changes across the sample window. Imported assets may order their
 // animated joints differently, so hard-coding one child index would make this
 // positive gate a false negative.
 // Distinctness across ≥10 sample writes proves advanceAnimationPlayer is
 // mutating the joint hierarchy each frame and propagateTransforms is rewriting
-// Transform.world before the record stage's writeJointPalette pulls the view.
+// GlobalTransform.world before the record stage's writeJointPalette pulls the view.
 // FALSIFY anchor: short-circuit advanceAnimationPlayer to skip its world.set
 // emissions -> the animated child-joint mat4 stays at the bind pose ->
 // poseMat4Hash collapses to a single value -> probe red. The 10-sample
@@ -681,7 +804,7 @@ if (animatedJointIndex < 0) {
   console.error(
     `\n[smoke-browser] AC-02 RED -- ${skinPaletteHits} palette writes recorded but no non-root joint ` +
       `mat4 changed across the sample window. Suspect: advanceAnimationPlayer ` +
-      'short-circuited (no world.set), propagateTransforms not rewriting Transform.world, or the ' +
+      'short-circuited (no world.set), propagateTransforms not rewriting GlobalTransform.world, or the ' +
       'joint hierarchy is sourced from a stale view that never refreshes.',
   );
   process.exit(1);
@@ -841,7 +964,7 @@ console.log(
     `${captured.pipelines.length} pipelines created, ` +
     `${captured.pipelines.filter((p) => /pbr-skin/.test(p.label ?? '')).length} skin variants, ` +
     `${captured.deviceErrors.length} device errors, ` +
-    `${importProbeHitCount} /__import hits (kinds=[${[...importProbeKindUnion].join(',')}]), ` +
+    `${importProbeHitCount} legacy imports + ${scopedPackProbeHits.length} scoped pack responses (kinds=[${[...ac03KindUnion].join(',')}]), ` +
     `${skinPaletteHits} palette writes (${skinPaletteFullHashSet.size} distinct full, ${skinPalettePoseMat4Set.size} distinct animated-pose mat4), ` +
     `${skinDynSecondValues.length} dyn-offset captures (${skinDynSecondSet.size} distinct second-offset values). ${finalGateSummary}`,
 );

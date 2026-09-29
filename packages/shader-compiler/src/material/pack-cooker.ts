@@ -1,24 +1,19 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import {
-  type CookedMaterialRecord,
-  collectMaterialCookRefs,
-  createMaterialArtifactDigest,
-  createMaterialCookIdentity,
-  type MaterialCookReceipt,
-  type MaterialCookWasmProvenance,
-  serializeCookedMaterialRecord,
-} from '@forgeax/engine-pack/material-cook';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { isStandardRootModule } from '@forgeax/engine-pack';
+import type { MaterialCookWasmProvenance } from '@forgeax/engine-pack/material-cook';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
-import type { MaterialAsset } from '@forgeax/engine-types';
+import { admitRayMaterial } from '@forgeax/engine-shader';
+import type { MaterialAsset, MaterialPass, MaterialTable } from '@forgeax/engine-types';
 import { cookMaterialAsset } from './cook.js';
+import { createMaterialProgramCompiler } from './program-compiler.js';
+import { cookedRecord, materialPrograms, rayMaterialProgram } from './publication.js';
+import { cookRayMaterial } from './ray-material.js';
+import { resolveMaterialAsset } from './resolve.js';
 import { buildMaterialSourceCatalog } from './source-catalog.js';
-import { createMaterialSpecializationKey } from './specialization-key.js';
-
-const MATERIAL_COOK_PROFILE = 'webgpu/v1';
-const MATERIAL_COOK_COMPILER_VERSION = 'forgeax-material-cooker/1';
+import { DEFAULT_MATERIAL_VARIANT_CONTEXT } from './variant-context.js';
 
 interface MaterialPackCookInput {
   readonly guid: string;
@@ -28,6 +23,9 @@ interface MaterialPackCookInput {
   readonly refs?: readonly string[];
   readonly compilerFingerprint?: string;
   readonly wasm?: MaterialCookWasmProvenance;
+  /** Authored Pack publication generation; retained by material receipt identity. */
+  readonly cookGeneration?: number;
+  readonly table?: MaterialTable;
 }
 
 interface MaterialSourceFile {
@@ -37,7 +35,11 @@ interface MaterialSourceFile {
 }
 
 const require = createRequire(import.meta.url);
-const MODULE_ID_RE = /^\s*#define_import_path\s+([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)\s*$/m;
+// Engine and package-owned shader identifiers may use dotted segments (the
+// VFX family is intentionally namespaced as `vfx-render.particles.*`). Keep
+// the Pack collector's header grammar aligned with `shaderModuleId()` and the
+// Vite manifest loader so a cold cooker cannot silently drop those modules.
+const MODULE_ID_RE = /^\s*#define_import_path\s+([A-Za-z0-9_.-]+(?:::[A-Za-z0-9_.-]+)*)\s*$/m;
 const ENGINE_MODULE_ALIASES: Readonly<Record<string, string>> = {
   'forgeax_material::standard': 'forgeax::default-standard-pbr',
   'forgeax_material::unlit': 'forgeax::default-unlit',
@@ -45,6 +47,12 @@ const ENGINE_MODULE_ALIASES: Readonly<Record<string, string>> = {
   'forgeax_material::sprite': 'forgeax::sprite',
   'forgeax_material::sprite-lit': 'forgeax::sprite-lit',
 };
+const SPRITE_ROOT_MODULES = new Set([
+  'forgeax_material::sprite',
+  'forgeax::sprite',
+  'forgeax_material::sprite-lit',
+  'forgeax::sprite-lit',
+]);
 
 function moduleIdOf(source: string): string | undefined {
   return MODULE_ID_RE.exec(source)?.[1];
@@ -87,16 +95,35 @@ function packagedShaderRoots(): readonly string[] {
   return [...new Set(roots)];
 }
 
-async function collectMaterialSources(roots: readonly string[]): Promise<{
+export async function collectMaterialSources(
+  roots: readonly string[],
+  engineRoots: readonly string[] = [],
+): Promise<{
   readonly engine: readonly MaterialSourceFile[];
   readonly project: readonly MaterialSourceFile[];
 }> {
   const files = [...new Set((await Promise.all(roots.map(collectWgslFiles))).flat())].sort();
+  const shadowCasterPaths = new Set(engineRoots.map((root) => resolve(root, 'shadow_caster.wgsl')));
   const records: MaterialSourceFile[] = [];
   for (const path of files) {
     const source = await readFile(path, 'utf8');
-    const moduleId = moduleIdOf(source);
-    if (moduleId !== undefined) records.push({ path, source, moduleId });
+    // shadow_caster is a reserved Engine entry. Older source snapshots omit
+    // the import-path directive, while current snapshots already carry it;
+    // keep the producer-owned identity without ever emitting two directives.
+    const shadowCaster = shadowCasterPaths.has(path);
+    const moduleId =
+      moduleIdOf(source) ?? (shadowCaster ? 'forgeax::default-shadow-caster' : undefined);
+    if (moduleId !== undefined) {
+      const sourceWithModuleId =
+        shadowCaster && moduleIdOf(source) === undefined
+          ? `#define_import_path ${moduleId}\n${source}`
+          : source;
+      records.push({
+        path,
+        source: sourceWithModuleId,
+        moduleId,
+      });
+    }
   }
   for (const record of [...records]) {
     const alias = ENGINE_MODULE_ALIASES[record.moduleId];
@@ -132,6 +159,49 @@ function materialInput(value: unknown): MaterialPackCookInput {
   return input as MaterialPackCookInput;
 }
 
+/**
+ * Pack JSON keeps the authored pass intentionally small, but the renderer's
+ * selector consumes the same LightMode tag that built-in Standard materials
+ * publish.  Derive that policy at the Pack boundary so a cooked asset and an
+ * in-memory Standard material enter the render graph with one pass identity.
+ */
+function normalizeMaterialPass(pass: MaterialPass): MaterialPass {
+  const tags = pass.renderState?.tags;
+  if (tags !== undefined && typeof tags === 'object' && tags !== null && 'LightMode' in tags) {
+    return pass;
+  }
+  const lightMode =
+    pass.name.toLowerCase() === 'shadow-caster'
+      ? 'ShadowCaster'
+      : pass.name.toLowerCase() === 'deferred'
+        ? 'Deferred'
+        : pass.name.toLowerCase() === 'forward'
+          ? 'Forward'
+          : undefined;
+  if (lightMode === undefined) return pass;
+  return {
+    ...pass,
+    renderState: {
+      ...(pass.renderState ?? {}),
+      tags: {
+        LightMode: lightMode,
+        ...(tags as Record<string, unknown> | undefined),
+      },
+    },
+  };
+}
+
+function normalizeMaterialAsset(source: MaterialAsset): MaterialAsset {
+  const sourcePasses = source.passes;
+  if (sourcePasses === undefined) return source;
+  const passes = sourcePasses.map(normalizeMaterialPass);
+  if (passes.every((pass, index) => pass === sourcePasses[index])) return source;
+  return {
+    ...source,
+    passes: passes as unknown as NonNullable<MaterialAsset['passes']>,
+  };
+}
+
 function unique(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
@@ -156,141 +226,125 @@ function inputDigest(
     .digest('hex')}`;
 }
 
-function specializationKey(resolved: MaterialAsset, sourceClosureDigest: string): string {
-  return createMaterialSpecializationKey({
-    contractHash: JSON.stringify(resolved.parameters ?? []),
-    passes: (resolved.passes ?? []).map((pass) => ({
-      name: pass.name,
-      module: pass.program.module,
-      entries: {
-        vertex: pass.program.vertexEntry ?? '',
-        fragment: pass.program.fragmentEntry ?? '',
-      },
-      sourceClosure: { digest: sourceClosureDigest },
-      ...(pass.program.moduleSlots ? { moduleSlots: pass.program.moduleSlots } : {}),
-    })),
-    vertexInputs: [],
-    versions: {
-      profile: MATERIAL_COOK_PROFILE,
-      adapter: 'generic',
-      compiler: MATERIAL_COOK_COMPILER_VERSION,
-    },
-  }).digest;
-}
-
-function cookedRecord(
+/**
+ * Material Packs may give an engine-owned Standard source a project-owned
+ * module identity (for example a physical-material case alias).  The Vite
+ * shader producer performs the same header projection before compiling the
+ * manifest; keep Pack cooking on that one source route instead of requiring a
+ * copied WGSL file just to make the alias discoverable.
+ */
+function materialModuleAliases(
+  sources: {
+    readonly engine: readonly MaterialSourceFile[];
+    readonly project: readonly MaterialSourceFile[];
+  },
   input: MaterialPackCookInput,
-  resolved: MaterialAsset,
-  sourceClosure: readonly string[],
-  layoutIdentity: string,
-  artifactPath: string,
-  artifactBytes: Uint8Array,
-  inputFingerprint: string,
-): CookedMaterialRecord {
-  const artifactDigest = createMaterialArtifactDigest(artifactBytes);
-  const materialSpecializationKey = specializationKey(resolved, inputFingerprint);
-  const materialContractDigest = createMaterialArtifactDigest(
-    new TextEncoder().encode(JSON.stringify(resolved.parameters ?? [])),
+): readonly MaterialSourceFile[] {
+  if (input.sourcePath === undefined || input.sourceKey === undefined) return [];
+  const sourcePath = resolve(dirname(resolve(input.sourcePath)), input.sourceKey);
+  const source = [...sources.engine, ...sources.project].find(
+    (candidate) => resolve(candidate.path) === sourcePath,
   );
-  const programIdentity = createMaterialArtifactDigest(
-    new TextEncoder().encode(
-      JSON.stringify({ specializationKey: materialSpecializationKey, layoutIdentity }),
-    ),
+  if (source === undefined) return [];
+  const existing = new Set(
+    [...sources.engine, ...sources.project].map((candidate) => candidate.moduleId),
   );
-  const pipelineIdentity = createMaterialArtifactDigest(
-    new TextEncoder().encode(
-      JSON.stringify({
-        programIdentity,
-        renderState: (resolved.passes ?? []).map((pass) => pass.renderState ?? null),
-      }),
-    ),
-  );
-  const identity = createMaterialCookIdentity({
-    materialContractDigest,
-    sourceRevision: inputFingerprint,
-    sourceClosureDigest: inputFingerprint,
-    layoutIdentity,
-    programIdentity,
-    pipelineIdentity,
-    materialPublicationIdentity: createMaterialArtifactDigest(
-      new TextEncoder().encode(JSON.stringify({ guid: input.guid, values: resolved.values ?? {} })),
-    ),
-    compilerFingerprint: input.compilerFingerprint ?? 'unavailable',
-    wasm: input.wasm ?? {
-      sourceContentKey: 'unavailable',
-      artifactSha256: 'unavailable',
-      glueSha256: 'unavailable',
-    },
-    artifactDigest,
-    valueGeneration: 1,
-    dependencyGeneration: 1,
-    cookGeneration: 1,
-  });
-  const receipt: MaterialCookReceipt = {
-    schemaVersion: 'material-cook/3',
-    sourceClosure,
-    profile: MATERIAL_COOK_PROFILE,
-    compilerVersion: MATERIAL_COOK_COMPILER_VERSION,
-    identity,
-    derivedInterface: { layoutIdentity },
-  };
-  const refs = collectMaterialCookRefs(resolved);
-  return {
-    schemaVersion: 'material-cook/3',
-    guid: input.guid,
-    materialGuid: input.guid,
-    publicationGeneration: 1,
-    specializationKey: materialSpecializationKey,
-    artifactDigest,
-    sourceClosure,
-    parameterContract: {
-      parameters: resolved.parameters ?? [],
-      values: resolved.values ?? {},
-    },
-    authored: input.source,
-    resolved: {
-      passes: resolved.passes ?? [],
-      parameters: resolved.parameters ?? [],
-      values: resolved.values ?? {},
-    },
-    refs,
-    artifact: {
-      mediaType: 'text/wgsl',
-      path: artifactPath,
-      digest: artifactDigest,
-      bytes: artifactBytes,
-    },
-    receipt,
-  };
+  const aliases = new Map<string, MaterialSourceFile>();
+  for (const pass of input.source.passes ?? []) {
+    const moduleId = pass.program.module;
+    if (moduleId === source.moduleId || existing.has(moduleId) || aliases.has(moduleId)) continue;
+    aliases.set(moduleId, {
+      ...source,
+      moduleId,
+      source: source.source.replace(/^(\s*#define_import_path\s+)[^\n]+/m, `$1${moduleId}`),
+    });
+  }
+  return [...aliases.values()];
 }
 
 /** Build a Pack NativeCooker for authored WGSL material rows. */
 export function createMaterialPackCooker(roots: readonly string[] = []): NativeCooker {
+  const compile = createMaterialProgramCompiler();
   return {
     key: 'material',
     async cook(rawInput: unknown) {
       const input = materialInput(rawInput);
+      let normalizedInput: MaterialPackCookInput = {
+        ...input,
+        source: normalizeMaterialAsset(input.source),
+      };
+      const packagedRoots = packagedShaderRoots();
       const sourceRoots = [
         ...roots,
         ...(input.sourcePath === undefined ? [] : [dirname(resolve(input.sourcePath))]),
-        ...packagedShaderRoots(),
+        ...packagedRoots,
       ];
-      const sources = await collectMaterialSources(sourceRoots);
+      const sources = await collectMaterialSources(sourceRoots, packagedRoots);
+      const aliases = materialModuleAliases(sources, normalizedInput);
+      // An alias of an Engine-owned template retains that template's identity.
+      // Project names and arbitrary Surface slots do not select Standard policy.
+      const templateAliases = new Map(
+        aliases.flatMap((alias) => {
+          const owner = sources.engine.find(
+            (source) =>
+              source.path === alias.path &&
+              (isStandardRootModule(source.moduleId) || SPRITE_ROOT_MODULES.has(source.moduleId)),
+          );
+          return owner === undefined ? [] : [[alias.moduleId, owner.moduleId] as const];
+        }),
+      );
+      if (templateAliases.size > 0 && normalizedInput.source.passes !== undefined) {
+        normalizedInput = {
+          ...normalizedInput,
+          source: {
+            ...normalizedInput.source,
+            passes: normalizedInput.source.passes.map((pass) => ({
+              ...pass,
+              program: {
+                ...pass.program,
+                module: templateAliases.get(pass.program.module) ?? pass.program.module,
+              },
+            })) as unknown as NonNullable<MaterialAsset['passes']>,
+          },
+        };
+      }
       const catalog = buildMaterialSourceCatalog({
         roots: sourceRoots,
         engine: sources.engine,
-        project: sources.project,
+        project: [
+          ...sources.project,
+          ...aliases.filter((alias) => !templateAliases.has(alias.moduleId)),
+        ],
       });
       if (!catalog.ok) {
-        throw new Error(`material source catalog failed: ${JSON.stringify(catalog.error)}`);
+        throw catalog.error;
       }
-      const cooked = await cookMaterialAsset({
-        material: input.guid,
-        table: { [input.guid]: input.source },
-        sources: catalog.value,
-      });
+      const table = { ...(input.table ?? {}), [normalizedInput.guid]: normalizedInput.source };
+      const resolved = resolveMaterialAsset(normalizedInput.guid, table);
+      if (!resolved.ok) throw resolved.error;
+      // The root selects skinning for every raster pass, including its shadow
+      // wrapper. A Ready publication must match the geometry the Renderer asks for.
+      const context = {
+        ...DEFAULT_MATERIAL_VARIANT_CONTEXT,
+        geometry: resolved.value.asset.passes?.some(
+          (pass) =>
+            pass.program.module === 'forgeax::pbr-skin' ||
+            pass.program.module === 'forgeax_material::pbr-skin',
+        )
+          ? ('skinned' as const)
+          : ('mesh' as const),
+      };
+      const cooked = await cookMaterialAsset(
+        {
+          material: normalizedInput.guid,
+          table,
+          sources: catalog.value,
+          context,
+        },
+        compile,
+      );
       if (!cooked.ok) {
-        throw new Error(`material shader compile failed: ${JSON.stringify(cooked.error)}`);
+        throw cooked.error;
       }
       const layoutIdentity = cooked.value.passes[0]?.layoutIdentity;
       if (layoutIdentity === undefined) {
@@ -299,39 +353,124 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
       if (cooked.value.passes.some((pass) => pass.layoutIdentity !== layoutIdentity)) {
         throw new Error('material shader passes produced different layout identities');
       }
-      const artifactBytes = new TextEncoder().encode(
-        cooked.value.passes.map((pass) => pass.compile.wgsl).join('\n'),
+      // A material may be shared by ordinary sprites and SpriteInstances.
+      // Publish both buffer layouts; the component selects the exact program.
+      const passes = [...cooked.value.passes];
+      // Visible-surface capture is another Standard deferred output contract.
+      // Publish it with the same authored Surface and parameter schema so a
+      // renderer never rewrites WGSL or substitutes a diagnostic material.
+      const resolvedAsset = cooked.value.resolved.asset;
+      if (resolvedAsset.parent !== undefined)
+        throw new Error('material resolution retained a parent');
+      const visiblePasses = resolvedAsset.passes?.filter((pass) =>
+        isStandardRootModule(pass.program.module),
       );
+      if (visiblePasses !== undefined && visiblePasses.length > 0) {
+        const visible = await cookMaterialAsset(
+          {
+            material: normalizedInput.guid,
+            table: {
+              [normalizedInput.guid]: {
+                ...resolvedAsset,
+                passes: visiblePasses as unknown as NonNullable<MaterialAsset['passes']>,
+              },
+            },
+            sources: catalog.value,
+            context: { ...context, visibleSurface: true },
+          },
+          compile,
+        );
+        if (!visible.ok) throw visible.error;
+        passes.push(...visible.value.passes.filter((pass) => pass.context.visibleSurface === true));
+      }
+      if (
+        cooked.value.resolved.asset.passes?.some((pass) =>
+          SPRITE_ROOT_MODULES.has(pass.program.module),
+        )
+      ) {
+        const instanced = await cookMaterialAsset(
+          {
+            material: normalizedInput.guid,
+            table: { ...(input.table ?? {}), [normalizedInput.guid]: normalizedInput.source },
+            sources: catalog.value,
+            context: { ...DEFAULT_MATERIAL_VARIANT_CONTEXT, geometry: 'sprite-instances' },
+          },
+          compile,
+        );
+        if (!instanced.ok) throw instanced.error;
+        passes.push(...instanced.value.passes);
+      }
+      const programs = [...materialPrograms(passes, normalizedInput)];
+      const ray = admitRayMaterial(resolvedAsset, normalizedInput.guid).ok
+        ? await cookRayMaterial({
+            material: normalizedInput.guid,
+            table: { [normalizedInput.guid]: resolvedAsset },
+            sources: catalog.value,
+          })
+        : undefined;
+      if (ray !== undefined && !ray.ok) throw ray.error;
+      const rayCooked = ray?.value;
+      if (rayCooked !== undefined) {
+        const pass = resolvedAsset.passes?.find((pass) => pass.name.toLowerCase() === 'forward');
+        if (pass === undefined)
+          throw new Error('admitted ray material lost its authored forward pass');
+        programs.push(rayMaterialProgram(rayCooked.program, pass.name, normalizedInput));
+      }
       const sourceClosure = unique([
-        ...(input.sourcePath === undefined ? [] : [resolve(input.sourcePath)]),
-        ...(input.sourceKey === undefined || input.sourcePath === undefined
+        ...(normalizedInput.sourcePath === undefined ? [] : [resolve(normalizedInput.sourcePath)]),
+        ...(normalizedInput.sourceKey === undefined || normalizedInput.sourcePath === undefined
           ? []
-          : [resolve(dirname(resolve(input.sourcePath)), input.sourceKey)]),
-        ...cooked.value.passes.flatMap((pass) => pass.sourceClosure),
+          : [resolve(dirname(resolve(normalizedInput.sourcePath)), normalizedInput.sourceKey)]),
+        ...passes.flatMap((pass) => pass.sourceClosure),
+        ...(rayCooked?.sourceClosure ?? []),
       ]);
-      const fingerprint = inputDigest(sourceClosure, [...sources.engine, ...sources.project]);
-      const artifactPath = `materials/${input.guid.toLowerCase()}/shader.wgsl`;
+      const passClosureDigests = [
+        ...new Set([
+          ...passes.map((pass) => pass.sourceClosureDigest),
+          ...(rayCooked === undefined ? [] : [rayCooked.program.sourceClosureDigest]),
+        ]),
+      ].sort();
+      const fingerprint =
+        passClosureDigests.length === 1 && passClosureDigests[0] !== undefined
+          ? passClosureDigests[0]
+          : inputDigest(sourceClosure, [...sources.engine, ...sources.project]);
       const record = cookedRecord(
-        input,
+        normalizedInput,
         cooked.value.resolved.asset,
         sourceClosure,
         layoutIdentity,
-        artifactPath,
-        artifactBytes,
+        programs,
         fingerprint,
+        cooked.value.layerPlan.identity,
       );
-      const refs = collectMaterialCookRefs(cooked.value.resolved.asset);
       return {
-        guid: input.guid,
+        guid: normalizedInput.guid,
         payload: {
-          ...input.source,
-          cooked: JSON.parse(serializeCookedMaterialRecord(record)) as Record<string, unknown>,
+          ...normalizedInput.source,
+          // Keep binary compiler output native through producer fingerprinting.
+          // The Pack output boundary owns the one JSON-compatible projection.
+          cooked: record,
         },
-        refs: unique([...(input.refs ?? []), ...refs.parent, ...refs.textures, ...refs.samplers]),
-        artifacts: {
-          [artifactPath]: { mediaType: 'text/wgsl', bytes: artifactBytes },
-        },
+        refs: unique([
+          ...(normalizedInput.refs ?? []),
+          ...record.refs.parent,
+          ...record.refs.textures,
+          ...record.refs.samplers,
+        ]),
+        artifacts: Object.fromEntries(
+          programs.map(({ artifact }) => [
+            artifact.path,
+            { mediaType: artifact.mediaType, bytes: artifact.bytes },
+          ]),
+        ),
         inputFingerprint: fingerprint,
+        sourceDependencies: unique(
+          sourceClosure.flatMap((source) => {
+            if (isAbsolute(source)) return [source];
+            const record = catalog.value.get(source);
+            return record.ok && record.value.virtual !== true ? [resolve(record.value.path)] : [];
+          }),
+        ),
       };
     },
   };

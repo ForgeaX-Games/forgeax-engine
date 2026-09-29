@@ -7,7 +7,11 @@ import {
   type PeerId,
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { BoundedEventQueue, DEFAULT_MAX_QUEUED_EVENTS } from './event-queue';
+import {
+  BoundedEventQueue,
+  DEFAULT_MAX_QUEUED_BYTES,
+  DEFAULT_MAX_QUEUED_EVENTS,
+} from './event-queue';
 
 export interface WebSocketLike {
   readonly CONNECTING: number;
@@ -15,6 +19,7 @@ export interface WebSocketLike {
   readonly CLOSING: number;
   readonly CLOSED: number;
   readonly readyState: number;
+  readonly bufferedAmount?: number;
   binaryType?: string;
   onopen: ((event: unknown) => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
@@ -73,6 +78,8 @@ export function createWebSocketClientEndpoint(
     let closed = false;
     let locallyClosed = false;
     let messageTail = Promise.resolve();
+    let pendingMessages = 0;
+    let pendingBytes = 0;
 
     const removeAbortListener = (): void => {
       signal.removeEventListener('abort', abortPendingConnection);
@@ -126,6 +133,8 @@ export function createWebSocketClientEndpoint(
             }),
           );
         try {
+          if ((socket.bufferedAmount ?? 0) + data.byteLength > DEFAULT_MAX_QUEUED_BYTES)
+            throw new Error('send buffer limit exceeded; retry after the socket drains');
           socket.send(data);
           return ok(undefined);
         } catch (cause) {
@@ -165,17 +174,39 @@ export function createWebSocketClientEndpoint(
       resolve(ok(endpoint));
     };
     socket.onmessage = ({ data }) => {
+      if (closed || queue.closed) return;
+      const byteLength =
+        data instanceof ArrayBuffer || ArrayBuffer.isView(data)
+          ? data.byteLength
+          : typeof Blob !== 'undefined' && data instanceof Blob
+            ? data.size
+            : 0;
+      if (
+        pendingMessages >= queue.maxQueuedEvents ||
+        pendingBytes + byteLength > queue.maxQueuedBytes
+      ) {
+        disconnect('Message conversion queue overflow.');
+        socket.close();
+        return;
+      }
+      pendingMessages += 1;
+      pendingBytes += byteLength;
       // Blob.arrayBuffer() is asynchronous. Serialize conversion so that
       // ordered WebSocket messages retain their wire order after decoding.
       messageTail = messageTail
         .then(async () => {
+          if (closed || queue.closed) return;
           const bytes = await options.toBytes(data);
           if (!bytes || closed) return;
           if (!queue.enqueue({ kind: 'message', peerId: clientPeerId, data: bytes })) {
             socket.close();
           }
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          pendingMessages -= 1;
+          pendingBytes -= byteLength;
+        });
     };
     socket.onerror = (cause) => {
       if (opened) disconnect(`WebSocket error: ${normalizeCause(cause)}`);

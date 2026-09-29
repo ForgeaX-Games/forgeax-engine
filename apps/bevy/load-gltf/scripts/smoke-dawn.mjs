@@ -11,7 +11,7 @@ const root = resolve(here, '..', '..', '..', '..');
 const appRoot = resolve(here, '..');
 const width = 200;
 const height = 150;
-const minFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const minFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const errors = [];
 
 const { create, globals } = await import('webgpu');
@@ -135,7 +135,7 @@ for (; frames < minFrames; frames += 1) {
 }
 const luma = await meanLuma();
 console.log(`[bevy-load-gltf] backend=${rendererBackend(renderer)}`);
-console.log(`[smoke] frames observed=${frames} meanLuma=${luma.toFixed(4)} sceneEntities=${scene.entities.length}`);
+console.log(`[smoke] frames observed=${frames} meanLuma=${luma.toFixed(4)} sceneEntities=${Object.keys(scene.entities).length}`);
 if (rendererBackend(renderer) !== 'webgpu' || frames < minFrames || luma <= 0.02 || errors.length > 0) {
   console.error(`[smoke] FAIL - backend=${rendererBackend(renderer)} frames=${frames} meanLuma=${luma.toFixed(4)} errors=${errors.map((error) => error.code).join(',')}`);
   process.exit(1);

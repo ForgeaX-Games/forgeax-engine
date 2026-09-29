@@ -14,6 +14,8 @@ import type {
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import type {
+  ParticleEffectInstance,
+  VfxChannelInput,
   VfxDataInterfaceError,
   VfxDataInterfaceProvider,
   VfxDataInterfaceRequirement,
@@ -76,13 +78,15 @@ export interface VfxRuntimeHostControlError {
     | 'vfx-host-control-world-detached'
     | 'vfx-host-control-stale-generation'
     | 'vfx-host-control-runtime-unavailable'
-    | 'vfx-host-control-player-unavailable';
+    | 'vfx-host-control-player-unavailable'
+    | 'vfx-host-control-instance-rejected';
   readonly expected: string;
   readonly hint: string;
   readonly detail: {
     readonly requestedGeneration?: number;
     readonly currentGeneration?: number;
     readonly player?: EntityHandle;
+    readonly causeCode?: string;
   };
 }
 
@@ -109,6 +113,30 @@ export interface VfxRuntimeHostControl {
   }): Result<
     {
       readonly state: 'enabled' | 'paused';
+      readonly generation: number;
+    },
+    VfxRuntimeHostControlError
+  >;
+  patchPlayerParameters(input: {
+    readonly player: EntityHandle;
+    readonly values: Partial<VfxValueMap>;
+  }): Result<
+    {
+      readonly state: 'queued';
+      readonly generation: number;
+      readonly parameterGeneration: number;
+      readonly pendingPatchCount: number;
+    },
+    VfxRuntimeHostControlError
+  >;
+  submitChannel(input: {
+    readonly player: EntityHandle;
+    readonly channel: string;
+    readonly payload: VfxChannelInput['payload'];
+    readonly sequence: number;
+  }): Result<
+    {
+      readonly state: 'queued';
       readonly generation: number;
     },
     VfxRuntimeHostControlError
@@ -240,7 +268,15 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
   const feature = gpuParticleRenderFeature({
     camera: options.camera,
     dataInterfaces,
-    material: { read: (world, guid) => readRenderAsset(world, guid, 'material') },
+    material: {
+      read: (world, guid) => readRenderAsset(world, guid, 'material'),
+      projection: (world, material) => {
+        const assets = worlds.get(world)?.assets;
+        return assets !== undefined && 'getMaterialProjectionForPayload' in assets
+          ? assets.getMaterialProjectionForPayload(material)
+          : undefined;
+      },
+    },
     mesh: { read: (world, guid) => readRenderAsset(world, guid, 'mesh') },
     playerConsumption: {
       isEnabled: (world, player) => !pausedPlayers.get(world)?.has(player),
@@ -320,6 +356,41 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
         }
         return ok(action(world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY)));
       };
+      type InstanceAction<T> =
+        | { readonly kind: 'value'; readonly value: T }
+        | { readonly kind: 'error'; readonly causeCode: string };
+      const withInstance = <T>(
+        player: EntityHandle,
+        action: (instance: ParticleEffectInstance) => Result<T, { readonly code: string }>,
+      ): Result<T, VfxRuntimeHostControlError> => {
+        const result = withRuntime(player, (runtime): InstanceAction<T> => {
+          const instance = runtime.getInstance(player);
+          if (instance === undefined) {
+            return { kind: 'error', causeCode: 'vfx-instance-unavailable' };
+          }
+          const outcome = action(instance);
+          return outcome.ok
+            ? { kind: 'value', value: outcome.value }
+            : { kind: 'error', causeCode: outcome.error.code };
+        });
+        if (!result.ok) return result;
+        if (result.value.kind === 'error') {
+          return err(
+            controlFailure(
+              'vfx-host-control-instance-rejected',
+              'the live typed VFX instance to accept this control input',
+              'run one fixed tick or repair the reflected instance contract before retrying',
+              {
+                requestedGeneration,
+                currentGeneration: requestedGeneration,
+                player,
+                causeCode: result.value.causeCode,
+              },
+            ),
+          );
+        }
+        return ok(result.value.value);
+      };
       const control: VfxRuntimeHostControl = {
         generation: requestedGeneration,
         replay: ({ player, replayInput }) =>
@@ -351,6 +422,23 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
               generation: requestedGeneration,
             });
           }),
+        patchPlayerParameters: ({ player, values }) =>
+          withInstance(player, (instance) => {
+            const patched = instance.patch(values);
+            if (!patched.ok) return patched;
+            return ok({
+              state: 'queued' as const,
+              generation: requestedGeneration,
+              parameterGeneration: instance.generation,
+              pendingPatchCount: instance.pendingPatchCount,
+            });
+          }),
+        submitChannel: ({ player, channel, payload, sequence }) =>
+          withInstance(player, (instance) => {
+            const submitted = instance.submit({ channel, payload, sequence });
+            if (!submitted.ok) return submitted;
+            return ok({ state: 'queued' as const, generation: requestedGeneration });
+          }),
       };
       return ok(Object.freeze(control));
     },
@@ -377,7 +465,7 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
           return err(
             failure(
               'vfx-host-loader-install-failed',
-              'the v2 VFX loader to be registered once',
+              'the Program v3 VFX loader to be registered once',
               'remove a conflicting particle-effect loader and retry attachWorld',
               cause,
             ),

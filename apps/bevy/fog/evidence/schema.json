@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/bevy-fog-evidence/1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "featureId", "source", "build", "backend", "runner", "frames", "frameIdentity", "visualEvidence", "falsify", "status"],
+  "properties": {
+    "schemaVersion": { "const": "bevy-fog-evidence/1" },
+    "featureId": { "type": "string", "minLength": 1 },
+    "source": { "type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } } },
+    "build": { "type": "object", "additionalProperties": false, "required": ["command", "sha256"], "properties": { "command": { "type": "string", "minLength": 1 }, "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } } },
+    "backend": { "enum": ["browser-webgpu", "dawn-node"] },
+    "runner": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "minLength": 1 }, "id": { "type": "string", "minLength": 1 } } },
+    "frames": { "type": "integer", "minimum": 60 },
+    "frameIdentity": { "type": "object", "additionalProperties": false, "required": ["first", "last", "sequenceSha256"], "properties": { "first": { "type": "integer", "minimum": 0 }, "last": { "type": "integer", "minimum": 0 }, "sequenceSha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } } },
+    "visualEvidence": { "type": "array", "minItems": 0, "items": { "type": "object", "additionalProperties": false, "required": ["id", "png", "observed", "verdict", "confidence"], "properties": { "id": { "type": "string", "minLength": 1 }, "png": { "type": "string", "minLength": 1 }, "observed": { "type": "string", "minLength": 1 }, "verdict": { "enum": ["pass", "fail", "unavailable"] }, "confidence": { "enum": ["high", "medium", "low"] } } } },
+    "falsify": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "result"], "properties": { "id": { "type": "string", "minLength": 1 }, "result": { "enum": ["pass", "fail", "unavailable"] } }, "additionalProperties": false } },
+    "status": { "enum": ["pass", "fail", "unavailable"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "unavailable" } } }, "then": { "properties": { "visualEvidence": { "items": { "properties": { "verdict": { "const": "unavailable" } } } } } } },
+    { "if": { "properties": { "status": { "const": "pass" } } }, "then": { "properties": { "visualEvidence": { "items": { "required": ["png", "observed", "verdict", "confidence"] } } } } }
+  ]
+}

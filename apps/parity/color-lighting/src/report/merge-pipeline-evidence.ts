@@ -51,7 +51,7 @@ export interface MergePipelineEvidenceValue {
   readonly artifacts: readonly PipelineEvidenceArtifact[];
 }
 
-const REQUIRED_PIPELINES = ['forgeax::urp', 'forgeax::hdrp'] as const;
+const REQUIRED_RUNTIME_IDS = ['browser', 'dawn'] as const;
 const validateSchema = new Ajv2020({ allErrors: true, strict: false }).compile(pipelineEvidenceSchema);
 
 function error(
@@ -108,16 +108,6 @@ function validateArtifactIdentity(artifact: PipelineEvidenceArtifact, index: num
     return error('artifact-hash-mismatch', 'semanticHash excluding only caseId and pipeline', 'discard the artifact and rerun the producer', {
       artifactIndex: index,
       field: 'semanticHash',
-    });
-  }
-  if (
-    (artifact.pipelineId === 'forgeax::urp' && artifact.runtimeId !== 'browser')
-    || (artifact.pipelineId === 'forgeax::hdrp' && artifact.runtimeId !== 'dawn')
-  ) {
-    return error('artifact-identity-mismatch', 'URP from browser and HDRP from Dawn', 'rerun the missing pipeline producer in its declared runtime', {
-      artifactIndex: index,
-      field: 'runtimeId',
-      pipelineId: artifact.pipelineId,
     });
   }
   if (artifact.source !== 'live-producer' || artifact.semantic !== 'linear-hdr' || !artifact.copySrc || artifact.lifetime !== 'active') {
@@ -224,13 +214,13 @@ function mergeValidatedArtifacts(
   artifacts: readonly PipelineEvidenceArtifact[],
 ): PipelineMergeResult<MergePipelineEvidenceValue> {
   const first = artifacts[0];
-  if (first === undefined) return error('artifact-missing', 'one URP and one HDRP artifact', 'run both producer environments before merging', { field: 'artifacts' });
-  const pipelineIds = artifacts.map((artifact) => artifact.pipelineId);
-  if (new Set(pipelineIds).size !== pipelineIds.length) {
-    return error('artifact-pipeline-duplicate', 'one artifact for each required pipeline', 'remove duplicate or URP-as-HDRP artifacts and rerun both producers', { field: 'pipelineId' });
+  if (first === undefined) return error('artifact-missing', 'one browser and one Dawn artifact', 'run both producer environments before merging', { field: 'artifacts' });
+  const runtimeIds = artifacts.map((artifact) => artifact.runtimeId);
+  if (new Set(runtimeIds).size !== runtimeIds.length) {
+    return error('artifact-pipeline-duplicate', 'one artifact for each required runtime', 'remove duplicate runtime artifacts and rerun both producers', { field: 'runtimeId' });
   }
-  if (artifacts.length !== REQUIRED_PIPELINES.length || !REQUIRED_PIPELINES.every((pipelineId) => pipelineIds.includes(pipelineId))) {
-    return error('artifact-missing', 'both forgeax::urp and forgeax::hdrp artifacts', 'run the missing producer and pass its explicit artifact path', { field: 'pipelineId' });
+  if (artifacts.length !== REQUIRED_RUNTIME_IDS.length || !REQUIRED_RUNTIME_IDS.every((runtimeId) => runtimeIds.includes(runtimeId))) {
+    return error('artifact-missing', 'one forgeax::standard artifact from each runtime', 'run the missing browser or Dawn producer and pass its explicit artifact path', { field: 'runtimeId' });
   }
   if (artifacts.slice(1).some((artifact) => artifact === first)) {
     return error('artifact-substitution', 'independent producer artifact objects', 'do not compare one artifact object with itself', { field: 'artifacts' });
@@ -238,11 +228,11 @@ function mergeValidatedArtifacts(
   if (artifacts.some((artifact) => artifact.caseId !== first.caseId || artifact.sourceHash !== first.sourceHash || artifact.semanticHash !== first.semanticHash)) {
     return error('artifact-identity-mismatch', 'matching case, source, and semantic identity', 'rerun both producers from one invocation and one SceneCase source', { field: 'identity' });
   }
-  const urp = artifacts.find((artifact) => artifact.pipelineId === 'forgeax::urp');
-  const hdrp = artifacts.find((artifact) => artifact.pipelineId === 'forgeax::hdrp');
-  if (urp === undefined || hdrp === undefined) return error('artifact-missing', 'validated URP and HDRP entries', 'rerun both producer environments', { field: 'pipelineId' });
-  const capturedPipelineIds = ['urp', 'hdrp'] as const;
-  const orderedArtifacts = [urp, hdrp] as const;
+  const browser = artifacts.find((artifact) => artifact.runtimeId === 'browser');
+  const dawn = artifacts.find((artifact) => artifact.runtimeId === 'dawn');
+  if (browser === undefined || dawn === undefined) return error('artifact-missing', 'validated browser and Dawn entries', 'rerun both producer environments', { field: 'runtimeId' });
+  const capturedPipelineIds = ['standard'] as const;
+  const orderedArtifacts = [browser, dawn] as const;
   const report: CrossRuntimeCaseReport = {
     schemaVersion: 2,
     caseId: first.caseId,

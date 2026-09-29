@@ -209,68 +209,8 @@ hud = await page.evaluate(() => document.getElementById('level-switch-hud')?.inn
 console.log(`[smoke-browser] after key '3': ${hud}`);
 if (!hud.includes('main-menu')) fail(`HUD expected 'main-menu', got: ${hud}`);
 
-// --- M29: same App/World/page partial-commit recovery ---
-
 const MIN_STDDEV = 6.0;
 const MIN_LUMA = 8.0;
-
-await page.waitForFunction(() => globalThis.__forgeax_level_switch__?.m29 !== undefined, null, { timeout: 10000 });
-const m29Failed = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.runFault());
-const failed = m29Failed.snapshot;
-if (
-  m29Failed.ok !== true ||
-  m29Failed.frameCode !== 'app-system-update-failed' ||
-  failed.level !== 'tutorial' ||
-  failed.previousLevel !== 'main-menu' ||
-  failed.session !== 'boot' ||
-  failed.mainMenuExitAlive !== false ||
-  failed.tutorialEnterAlive !== false ||
-  failed.meshEntityCount !== 2 ||
-  failed.appErrorCount !== 1 ||
-  failed.lastAppErrorCode !== 'app-system-update-failed' ||
-  failed.lastCauseMatches !== true
-) {
-  fail(`M29 failure snapshot did not preserve partial commit and original App cause: ${JSON.stringify(m29Failed)}`);
-}
-console.log(`[smoke-browser] M29 fault: ${JSON.stringify(failed)}`);
-
-const m29Recovered = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.repairAndRetry());
-const recovered = m29Recovered.snapshot;
-if (
-  m29Recovered.ok !== true ||
-  m29Recovered.staleFrameCode !== null ||
-  m29Recovered.retryFrameCode !== null ||
-  m29Recovered.resumeCode !== null ||
-  recovered.worldIdentity !== failed.worldIdentity ||
-  recovered.level !== 'tutorial' ||
-  recovered.session !== 'ready' ||
-  recovered.repairedCallbackRuns !== 1 ||
-  recovered.repairedScopeAlive !== true ||
-  recovered.meshEntityCount !== 2 ||
-  recovered.appErrorCount !== 1
-) {
-  fail(`M29 forced retry did not recover in the same App/World: ${JSON.stringify(m29Recovered)}`);
-}
-await page.waitForTimeout(700);
-const recoveredStats = await shootAndDecode('m29-recovered');
-if (recoveredStats.stddevLuma < MIN_STDDEV && recoveredStats.meanLuma < MIN_LUMA) {
-  fail(`M29 recovered frame is near-uniform dark: ${JSON.stringify(recoveredStats)}`);
-}
-
-await page.keyboard.press('3');
-await page.waitForTimeout(1800);
-hud = await page.evaluate(() => document.getElementById('level-switch-hud')?.innerText ?? '');
-if (!hud.includes('main-menu')) fail(`M29 cleanup expected 'main-menu', got: ${hud}`);
-const m29Cleaned = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.snapshot());
-if (
-  m29Cleaned.worldIdentity !== failed.worldIdentity ||
-  m29Cleaned.meshEntityCount !== 1 ||
-  m29Cleaned.repairedScopeAlive !== false ||
-  m29Cleaned.appErrorCount !== 1
-) {
-  fail(`M29 cleanup was not single-pass and idempotent: ${JSON.stringify(m29Cleaned)}`);
-}
-console.log(`[smoke-browser] M29 PASS: ${JSON.stringify({ failed, recovered, cleaned: m29Cleaned })}`);
 
 // --- M41: invalid variants must be refused atomically in the same App/World/page ---
 
@@ -379,6 +319,43 @@ if (
   fail(`M41 second cleanup changed the same World: ${JSON.stringify(m41CleanedAgain)}`);
 }
 console.log(`[smoke-browser] M41 PASS: ${JSON.stringify({ invalid: m41Invalid, repaired: m41Repaired, cleaned: m41Cleaned })}`);
+
+// --- M29: poisoned World requires a fresh execution rebuild ---
+
+await page.waitForFunction(() => globalThis.__forgeax_level_switch__?.m29 !== undefined, null, { timeout: 10000 });
+const m29Failed = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.runFault());
+const failed = m29Failed.snapshot;
+if (
+  m29Failed.ok !== true ||
+  m29Failed.frameCode !== 'app-system-update-failed' ||
+  failed.level !== 'tutorial' ||
+  failed.previousLevel !== 'main-menu' ||
+  failed.session !== 'boot' ||
+  failed.mainMenuExitAlive !== false ||
+  failed.tutorialEnterAlive !== false ||
+  failed.meshEntityCount !== 2 ||
+  failed.worldHealth !== 'poisoned' ||
+  failed.appErrorCount !== 1 ||
+  failed.lastAppErrorCode !== 'app-system-update-failed' ||
+  failed.lastCauseMatches !== true
+) {
+  fail(`M29 failure snapshot did not preserve the partial commit and poison boundary: ${JSON.stringify(m29Failed)}`);
+}
+console.log(`[smoke-browser] M29 fault: ${JSON.stringify(failed)}`);
+
+const m29Recovery = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.recoveryRequired());
+const recovery = m29Recovery.snapshot;
+if (
+  m29Recovery.ok !== true ||
+  m29Recovery.recovery !== 'fresh-world-required' ||
+  recovery.worldIdentity !== failed.worldIdentity ||
+  recovery.worldHealth !== 'poisoned' ||
+  recovery.appErrorCount !== 1 ||
+  recovery.lastCauseMatches !== true
+) {
+  fail(`M29 poison recovery boundary was not explicit: ${JSON.stringify(m29Recovery)}`);
+}
+console.log(`[smoke-browser] M29 PASS: ${JSON.stringify({ failed, recovery })}`);
 
 // Fatal page errors only.
 if (pageErrors.length > 0) {

@@ -26,7 +26,7 @@ The `transitionStatesSystem` runs every frame (registered by `registerStatesPlug
 | `getState(world, token)` | `=> Result<string, StateError>` | Read the current state variant string |
 | `getPreviousState(world, token)` | `=> Result<string, StateError>` | Read the previous-frame state variant string |
 | `inState(token, variant)` | `=> (world: World) => boolean` | Factory returning a run-condition predicate; true when the state machine is in the given variant |
-| `registerStatesPlugin(world)` | `=> void` | Idempotent: inserts per-token Resources + registers `transitionStates` system; called automatically by `createApp` |
+| `registerStatesPlugin(world)` | `=> () => void` | Idempotent: inserts per-token Resources + registers `transitionStates` system; called automatically by `createApp` |
 | `despawnOnExit(world, entity, token, variant)` | `=> void` (throws on duplicate) | Mark entity to be despawned when `token` leaves `variant` |
 | `despawnOnEnter(world, entity, token, variant)` | `=> void` (throws on duplicate) | Mark entity to be despawned when `token` enters `variant` |
 | `OnEnter(token, variant)` | `=> string` | Returns a dispatch label string for registering enter callbacks |
@@ -34,7 +34,7 @@ The `transitionStatesSystem` runs every frame (registered by `registerStatesPlug
 | `addOnEnter(token, variant, fn)` | `=> UnsubscribeHandle` | Register a callback to fire when entering `variant` |
 | `addOnExit(token, variant, fn)` | `=> UnsubscribeHandle` | Register a callback to fire when leaving `variant` |
 | `StateError` | structured error | `.code` (4-member closed union) / `.expected` / `.hint` / `.detail` |
-| `forgeax-engine-remote-state` | CLI plugin bin | `list` (all registered tokens + current state) / `get <name>` (variant string) |
+| `forgeax dev eval` | Unified live command | query state tokens in the current World |
 
 > [!IMPORTANT]
 > `StateErrorCode` is a 4-member closed union: `'state-already-defined'` | `'state-not-registered'` | `'invalid-variant'` | `'state-default-required'`. SSOT at `packages/state/src/errors.ts` -- do not copy.
@@ -146,6 +146,8 @@ const Gameplay = defineSystem({
 
 ## Pitfalls
 
+- **Plugin disposal with scoped entities** -- the disposer removes scheduling and resources, then releases component leases. A live entity or system can reject release with `component-in-use`. Remove the reported users and retry the same disposer before reinstalling; the rejected lease remains owned.
+
 - **`setNextState` before `registerStatesPlugin`** -- returns `StateError { code: 'state-not-registered' }`. `createApp` auto-registers; manual `createRenderer` users must call `registerStatesPlugin(world)` before any state operation.
 - **Duplicate `despawnOnExit` on same entity + token** -- throws `ComponentAlreadyPresentError` (ECS default exclusive=false fail-fast). One entity can only carry one `__scopedTo__<tokenName>` component.
 - **`force` flag** -- `setNextStateForce` skips the "same-state no-op" guard. Use for restart semantics (re-fire `OnExit` + `OnEnter` + scoped despawn for the same variant).
@@ -161,6 +163,6 @@ const Gameplay = defineSystem({
 - `transitionStatesSystem` 8-step pipeline: source `packages/state/src/transition-system.ts`
 - `inState` condition factory (predicate closure, resource key derivation): source `packages/state/src/conditions.ts`
 - `registerStatesPlugin` auto-wire in `createApp`: source `packages/app/src/create-app.ts`
-- CLI plugin bin `forgeax-engine-remote-state`: source `packages/state/src/cli-state.ts`
+- Live state inspection: `forgeax dev eval`; the command executes in the current World realm.
 - Zero-intrusion design (consumes ECS primitives only): see [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md)
 - App bootstrap + `createApp` auto-register: see [`forgeax-engine-app`](../forgeax-engine-app/SKILL.md)

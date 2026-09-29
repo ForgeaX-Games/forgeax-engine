@@ -19,12 +19,9 @@ function registerSceneWorld(world: World): void {
 function scene(): SceneAsset {
   return {
     kind: 'scene',
-    entities: [
-      {
-        localId: 0 as never,
-        components: { ScenePayloadMarker: { value: 7 } },
-      },
-    ],
+    entities: {
+      marker: { components: { ScenePayloadMarker: { value: 7 } } },
+    },
   };
 }
 
@@ -48,7 +45,7 @@ describe('scene payload ownership', () => {
 
     const result = worldInstantiateScenePayload(world, {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { MissingComponent: { value: 1 } } }],
+      entities: { missing: { components: { MissingComponent: { value: 1 } } } },
     } as SceneAsset);
 
     expect(result.ok).toBe(false);

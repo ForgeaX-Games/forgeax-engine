@@ -8,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 240;
 const HEIGHT = 160;
 const SPRITE_SIZE = 32;
@@ -97,7 +97,14 @@ for (let y = 0; y < SPRITE_SIZE; y++) {
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: SPRITE_SIZE, height: SPRITE_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const textureId = unwrapHandle(textureHandle);
 

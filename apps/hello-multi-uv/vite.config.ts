@@ -9,5 +9,8 @@ export default withRhiDebug({
   here,
   rootDepth: 2,
   port: 5198,
-  materialPackages: [resolve(here, 'src/multi-uv-demo.pack.json')],
+  materialPackages: [
+    resolve(here, 'src/multi-uv-demo.pack.json'),
+    resolve(here, 'src/multi-uv-demo-false.pack.json'),
+  ],
 });

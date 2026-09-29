@@ -1,3 +1,4 @@
+import { installGpuDrivenEvidence } from '@forgeax/apps-shared/gpu-driven-evidence';
 import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 // hello-fbx-skin -- feat-20260615-fbx-importer-via-sdk M5 t51 R2 fixup #2.
@@ -30,7 +31,7 @@ import {
   AnimationTargetId,
   bindAnimationTargets,
 } from '@forgeax/engine-animation';
-import { Skin } from '@forgeax/engine-skinning';
+import { Skin, skinningPlugin } from '@forgeax/engine-skinning';
 
 import { Transform } from '@forgeax/engine-scene';
 
@@ -70,7 +71,7 @@ bootstrap(canvas).catch((err: unknown) => {
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
+    { plugins: [skinningPlugin()], ...(import.meta.env.DEV && runtimeBinding !== undefined ? { assetRuntimeBinding: runtimeBinding } : {}) },
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
@@ -79,6 +80,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appRes.value;
   const world: World = app.world;
+  installGpuDrivenEvidence(world, app.renderer);
   console.warn('[fbx-skin] Standard pipeline active');
 
   const assets = app.assets;

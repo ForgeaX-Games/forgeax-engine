@@ -52,9 +52,11 @@ const CAMERA_FAR = 50.0;
 const SHADOW_CONFIG = {
   cascadeCount: 1,
   mapSize: 2048,
-  depthBias: 0.005,
+  depthBias: 0.00001,
   shadowDistance: 50,
-  pcfKernelSize: 3,
+  shadowFilter: 2,
+  shadowAngularRadius: 0.00465,
+  maxPenumbraTexels: 32,
 };
 
 // Cube scene objects: position, scale, color.
@@ -197,9 +199,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     overrideBackend: undefined,
   });
 
-  // Shadow / PCF toggles.
+  // Shadow toggle.
   let shadowEnabled = true;
-  let currentPcfSize = 3;
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Space') {
@@ -213,21 +214,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           castShadow: true,
           cascadeCount: 1,
           mapSize: 2048,
-          depthBias: 0.005,
+          depthBias: 0.00001,
           shadowDistance: 50,
-          pcfKernelSize: currentPcfSize,
+          shadowFilter: 2,
+          shadowAngularRadius: 0.00465,
+          maxPenumbraTexels: 32,
         });
         shadowEnabled = true;
         console.warn('[learn-render 5.3.1 directional shadow] shadow enabled via Space toggle');
       }
-    }
-    if (e.key === 'p' || e.key === 'P') {
-      e.preventDefault();
-      currentPcfSize = currentPcfSize === 1 ? 3 : 1;
-      world.set(lightEntity, DirectionalLight, { pcfKernelSize: currentPcfSize });
-      console.warn(
-        `[learn-render 5.3.1 directional shadow] pcfKernelSize toggled to ${currentPcfSize} via P toggle`,
-      );
     }
   });
 

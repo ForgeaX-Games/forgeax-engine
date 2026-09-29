@@ -11,9 +11,8 @@
       ],
       "artifacts": {},
       "payload": {
-        "entities": [
-          {
-            "localId": 1,
+        "entities": {
+          "sibling": {
             "components": {
               "Transform": {
                 "pos": [
@@ -39,24 +38,33 @@
                 ]
               }
             }
+          },
+          "inner": {
+            "components": {},
+            "instance": {
+              "source": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+              "overrides": [
+                {
+                  "target": [
+                    "cube"
+                  ],
+                  "components": {
+                    "Transform": {
+                      "pos": [
+                        1.0,
+                        0,
+                        0
+                      ]
+                    },
+                    "Name": {
+                      "value": "m30-mounted-member"
+                    }
+                  }
+                }
+              ]
+            }
           }
-        ],
-        "mounts": [
-          {
-            "localId": 0,
-            "source": 0,
-            "memberFirst": 2,
-            "memberCount": 1,
-            "overrides": [
-              {
-                "localId": 2,
-                "comp": "Transform",
-                "field": "pos",
-                "value": [1.0, 0, 0]
-              }
-            ]
-          }
-        ]
+        }
       }
     }
   ]

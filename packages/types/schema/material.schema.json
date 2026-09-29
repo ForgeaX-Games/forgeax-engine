@@ -52,7 +52,18 @@
           "$ref": "#/$defs/program"
         },
         "renderState": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "colorWriteMask": { "type": "integer", "minimum": 0, "maximum": 15 },
+            "depthBias": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+            "depthBiasSlopeScale": { "type": "number" },
+            "depthBiasClamp": { "type": "number" }
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/colorOutput" }
         }
       }
     },
@@ -154,9 +165,6 @@
         "coordinates": {
           "$ref": "#/$defs/coordinates"
         },
-        "normalScale": {
-          "type": "number"
-        },
         "occlusionStrength": {
           "type": "number"
         }
@@ -201,6 +209,32 @@
       "items": false,
       "minItems": 2,
       "maxItems": 2
+    },
+    "colorOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "format"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blend": {
+          "type": "object"
+        },
+        "writeMask": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        }
+      }
     }
   }
 }

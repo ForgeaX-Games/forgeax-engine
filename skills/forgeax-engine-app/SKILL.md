@@ -1,7 +1,7 @@
 ---
 name: forgeax-engine-app
 description: >-
-  ForgeaX App assembly, execution tiers, and browser frame ownership. Use when
+  ForgeaX App assembly, worker policies, and browser frame ownership. Use when
   bootstrapping a game, selecting time or worker policy, wiring plugins/input/profiling,
   or diagnosing execution and rebuild reports.
 ---
@@ -14,13 +14,43 @@ The app host follows `RenderScene -> Standard Pipeline -> DeviceScope -> FrameRe
 Use `createApp`, then let the host perform `attach -> draw`; use `inspect`, `observe`, and `recover`
 with the returned receipt. Domain producers keep their own assets, input, audio, and plugin owners.
 
+## Recovery route
+
+Index renderer recovery as `renderer.state() -> renderer.inspect() ->
+renderer.recover() -> FrameReceipt`. Renderer is the unique recovery owner;
+App only admits a frame when the renderer is `alive`. `device-lost` and
+`recovering` keep the Host/rAF heartbeat but freeze World update and submit
+when logic and rendering are co-located. With a Render Worker, inspect `report.render`: App replaces
+the GPU owner with a fresh epoch/baseline while the source World keeps updating.
+Read `app.canvas` after replacement and rebind any caller-owned DOM listeners.
+`recover()` is single-flight, so concurrent calls share one Promise. A
+`faulted` renderer must be disposed and recreated; `disposed` is terminal.
+
+Branch on the closed `RenderError` code and read `expected`, `hint`, and typed
+`detail`. Use its guidance to wait for the active flight, explicitly retry,
+repair the named producer or capability, or rebuild the Renderer. After a
+successful recovery, retry the same request and require its `FrameReceipt` and
+device generation as submit evidence. Target/history identities survive, but
+new-generation contents are uninitialized until that receipt; fallback output
+is not real Browser/Dawn proof. Do not scan the factory for a hidden retry
+loop, add a RecoveryManager, switch backend, destroy the old device, or create
+a second submit path.
+
+Browser display consumers can subscribe with
+`subscribeBrowserFrameSubmitted(canvas, listener)`. The callback carries the
+accepted frame/device/graph identity and the deeply frozen output mapping,
+including identity distortion. Use it for display picking and world labels;
+discard it on loss, retirement, or zero-size output and reacquire context only
+after the existing Renderer recovery route succeeds. Worker execution carries
+the same serializable facts through its frame-complete message.
+
 > **`createApp` is a host adapter, not a second scheduler.** It measures one browser delta, calls `world.update(deltaSeconds)`, then draws. Game behavior belongs in ECS `Update` or `FixedUpdate` systems.
 
 ## One-screen takeoff
 
 ```ts
-import { createApp } from '@forgeax/engine-app';
-import { Time, Update } from '@forgeax/engine-ecs';
+import { createApp } from '@forgeax/engine/app';
+import { Time, Update } from '@forgeax/engine/ecs';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const result = await createApp(canvas, {}, forgeaxBundlerAdapter());
@@ -48,25 +78,34 @@ The canvas form creates its World, renderer, default plugins, browser input back
 ```ts
 const result = await createApp(canvas, {
   execution: {
-    tier: 'auto',
     bootstrap: new URL('./game-bootstrap.mjs', import.meta.url),
+    // Omitted policies are auto: enable every supported worker.
+    workers: { engine: 'auto', render: 'auto', kernels: 'auto' },
   },
 }, forgeaxBundlerAdapter());
 if (!result.ok) throw result.error;
-
-const app = result.value;
-app.start().unwrap();
-const report = app.execution.report();
+result.value.start().unwrap();
+const report = result.value.execution.report();
 ```
 
 | Need | Action |
 |:--|:--|
-| Maximum compatibility | Request `auto`; inspect `actualTier` and `selectionReason` |
-| Guaranteed Engine Worker | Request `engine-worker`; handle an unavailable-capability `AppError` |
-| Shared numeric Kernels | Request `shared`; serve COOP/COEP and verify SAB/Atomics facts in the report |
-| Partial Kernel write | Stop using the old World; call `app.execution.rebuild()` and use the new identity |
+| Default parallel execution | Omit `workers`; inspect each `report.workers` decision |
+| Require a worker | Set its policy to `true`; handle `app-execution-worker-unavailable` |
+| Disable independent rendering | Set `render: false`; configure the co-located Renderer |
+| Shared numeric kernels | Leave `kernels: 'auto'`, serve COOP/COEP and inspect actual `kernelDispatch` |
+| Host-only bootstrap | Set `engine: false`; leave dependent policies auto or false |
+| Partial Kernel write | Call `app.execution.rebuild()` and use the new World identity |
 
-World, Renderer, and WebGPU stay together in the Engine Worker. The Host owns DOM input, one-credit rAF pacing, Web Audio, and diagnostic projection. Shared Kernel Workers receive only bound numeric spans. Use [`packages/app/schema/execution-report.schema.json`](../../packages/app/schema/execution-report.schema.json) as the report authority and [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md) for Kernel eligibility.
+World and Assets stay in the Engine Worker. With `render` enabled, a child owns
+Renderer/WebGPU; source plugins inject World/Assets and use bootstrap
+`configureRenderer` for GPU setup. Declare Feature implementations through the
+bootstrap. Logic N+1 overlaps render N; admission of N+2 waits for N's GPU receipt.
+Kernel workers receive eligible shared numeric spans, independently of render
+placement. Missing isolation disables auto kernels only. Canvas/assemble calls
+without a bootstrap explicitly construct local objects and remain local. DevKit generates that bootstrap for ordinary projects automatically; both templates therefore default to auto with browser UI (`roots.frontend`) and Engine gameplay (`roots.engine`) assets. `roots.host` remains the resident Node backend.
+Use the [App contract](../../packages/app/README.md#worker-execution) for placement,
+recovery and the report schema, and [ECS](../forgeax-engine-ecs/SKILL.md) for kernel eligibility.
 
 When a host temporarily hands the presentation surface to another carrier
 (for example, a disposable Play iframe or Tauri WebView), use
@@ -82,8 +121,8 @@ Attach `@forgeax/engine-profiler` to the App or Renderer assembly when a bounded
 needed. The default is off: no profiler means no capture records or profiler-owned event objects.
 
 ```ts
-import { createProfiler } from '@forgeax/engine-profiler';
-import { createApp } from '@forgeax/engine-app';
+import { createProfiler } from '@forgeax/engine/profiler';
+import { createApp } from '@forgeax/engine/app';
 
 const profiler = createProfiler();
 const result = await createApp({ renderer, world, profiler });
@@ -105,17 +144,27 @@ renderer `inspect` and `observe` projections and forwards the opt-in profiler;
 it does not define a timing controller, timestamp vocabulary, or
 membership-specific option.
 
+`gpuPassTiming` is a transparent option projection to Runtime and Render. The
+App does not admit the capability, own the `frameId`, create a timing session,
+or own a `FrameReceipt`; it only keeps the existing realm and worker gate. The
+Render route is `gpuPassTiming` opt-in -> `draw()` receipt ->
+`observe(receipt, { include: ['timings'] })` -> status/code/hint. Membership
+timing remains producer-specific and is not generic accepted evidence. Link to
+the Render contract and validator before adding any new diagnostic surface.
+
 ## Renderer feature assembly
 
 When a producer owns an optional render contribution, pass it through the
-single renderer assembly seam. `RenderFeature` and its `FrameData` type come
-from `@forgeax/engine-render`; `createRenderer` comes from
-`@forgeax/engine-runtime`.
+single renderer assembly seam. Game-author code uses the public umbrella
+facades (`@forgeax/engine/<package-directory>`); the physical
+`@forgeax/engine-*` names are repository ownership units for package source and
+tests. `RenderFeature` and its `FrameData` type come from
+`@forgeax/engine/render`; `createRenderer` comes from `@forgeax/engine/runtime`.
 
 ```ts
-import { ok } from '@forgeax/engine-types';
-import type { RenderFeature } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { ok } from '@forgeax/engine/types';
+import type { RenderFeature } from '@forgeax/engine/render';
+import { createRenderer } from '@forgeax/engine/runtime';
 
 type FrameData = { readonly visibleCount: number };
 const feature = {
@@ -137,13 +186,13 @@ const renderer = created.value;
 
 For a producer that needs graphics or compute, declare the work in its plan.
 The public imports stay split by owner: `RenderFeature` and plan declarations
-come from `@forgeax/engine-render`; `createRenderer` comes from
-`@forgeax/engine-runtime`.
+come from `@forgeax/engine/render`; `createRenderer` comes from
+`@forgeax/engine/runtime`.
 
 ```ts
-import { ok } from '@forgeax/engine-types';
-import type { RenderFeature } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { ok } from '@forgeax/engine/types';
+import type { RenderFeature } from '@forgeax/engine/render';
+import { createRenderer } from '@forgeax/engine/runtime';
 interface PreparedFrame {
   readonly visibleCount: number;
 }
@@ -186,7 +235,7 @@ seam. Call `renderer.recover()` after device loss and treat `disposed` as
 terminal. `renderer.dispose()` is idempotent.
 
 For terminology and the public context boundary, use
-[`@forgeax/engine-render`](../../packages/render/README.md) and its
+[`@forgeax/engine/render`](../../packages/render/README.md) and its
 [`declarative feature plan`](../../packages/render/src/features/plan.ts).
 For the runtime host contract, use
 [`packages/runtime/README.md`](../../packages/runtime/README.md). For code-first
@@ -234,8 +283,8 @@ const result = await createApp(canvas, {
 For the assemble form, the host creates the World first. Its existing policy is authoritative.
 
 ```ts
-import { World } from '@forgeax/engine-ecs';
-import { createApp } from '@forgeax/engine-app';
+import { World } from '@forgeax/engine/ecs';
+import { createApp } from '@forgeax/engine/app';
 
 const world = new World({ time: { fixedDeltaSeconds: 1 / 120, maxStepsPerUpdate: 8 } });
 const result = await createApp({ renderer, world, plugins: [myPlugin] });
@@ -248,7 +297,7 @@ result.value.start().unwrap();
 The former `registerUpdate` callback surface is deleted. Convert each callback into a named `Update` system. The system reads time from the World and participates in schedule ordering.
 
 ```ts
-import { Time, Update, defineSystem } from '@forgeax/engine-ecs';
+import { Time, Update, defineSystem } from '@forgeax/engine/ecs';
 
 const AnimateHud = defineSystem({
   name: 'animate-hud',
@@ -265,7 +314,7 @@ app.world.addSystem(Update, AnimateHud).unwrap();
 For deterministic simulation, register the behavior on `FixedUpdate` instead. Use schedule edges or sets for ordering; never recreate an app callback queue.
 
 ```ts
-import { FixedUpdate } from '@forgeax/engine-ecs';
+import { FixedUpdate } from '@forgeax/engine/ecs';
 
 app.world.addSystem(FixedUpdate, {
   name: 'step-combat',
@@ -279,8 +328,8 @@ app.world.addSystem(FixedUpdate, {
 The canvas form inserts the input backend and activates the input scan on `Update` before user systems. User systems read the frozen `InputSnapshot`; they do not install gameplay DOM listeners.
 
 ```ts
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
-import { Update, defineSystem } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine/input';
+import { Update, defineSystem } from '@forgeax/engine/ecs';
 
 const ReadInput = defineSystem({
   name: 'read-input',
@@ -296,7 +345,7 @@ app.world.addSystem(Update, ReadInput).unwrap();
 Use `plugins` to compose optional capability packages such as physics and audio. These are native DeepSeek Cordis plugins: declare `inject`/`provide`, register every reversible side effect through `ctx.effect`, and let the App-owned `pluginContext` own their Fibers.
 
 ```ts
-import type { Plugin } from '@forgeax/engine-plugin';
+import type { Plugin } from '@forgeax/engine/plugin';
 
 const gameplay: Plugin = {
   name: 'gameplay',
@@ -333,3 +382,14 @@ report, tolerance, and structured error diagnostics. The schema is
 App does not define record/schema/component state or restore policy. Preview and
 Remote only consume the summary through existing read/eval paths. Do not add
 restore/replay actions or transport raw World, Rapier, or Web Audio objects.
+
+## Plugin asset authoring
+
+Create functional Packs: export small native behaviors from the same file, and split
+complex implementations into ordinary TypeScript modules. Follow the
+[Plugin contract](../../packages/plugin/README.md): persistent definitions live in
+Pack, and schema-v3 project `roots` select their GUIDs. Use `asset plugin inspect`
+to check sourceKey and definitions, then inspect native Fiber state to confirm
+activation. Verify a new session after code or configuration changes; engine and
+frontend effects own scene and DOM cleanup respectively. For source reuse, read
+`help asset source import` or `help asset clone` and transfer the author closure.

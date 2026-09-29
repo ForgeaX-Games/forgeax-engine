@@ -51,6 +51,7 @@ test('joins both producers only when identity and required paths match', () => {
   writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
+  writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
 
   const browser = join(root, 'browser-evidence');
   const runtime = join(root, 'runtime-evidence');
@@ -85,6 +86,7 @@ test('rejects an identity mismatch before copying evidence', () => {
   writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
+  writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
 
   const browser = join(root, 'browser-evidence');
   const runtime = join(root, 'runtime-evidence');
@@ -112,6 +114,7 @@ test('accepts earlier producer attempts during a failed-job retry', () => {
   writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
+  writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
 
   const browser = join(root, 'browser-evidence');
   const runtime = join(root, 'runtime-evidence');
@@ -157,6 +160,7 @@ test('rejects a future producer attempt even when earlier attempts are allowed',
   writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
+  writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
 
   const browser = join(root, 'browser-evidence');
   const runtime = join(root, 'runtime-evidence');

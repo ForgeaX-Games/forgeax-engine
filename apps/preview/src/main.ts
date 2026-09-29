@@ -1,12 +1,12 @@
 // apps/preview -- Vite host for asset-resident Cordis game plugins.
 //
-// Three-statement composition:
+// Project roots compile into literal program tables; runtime mounting stays native Cordis.
+// Composition:
 //   1. createApp(canvas) -- one-shot engine wiring
-//   2. loadGame(slug, resolver) -- resolve + validate the template module
+//   2. load the selected project program table
 //   3. provide GameHost, mount gameplay, then start the App
 //
-// The resolver is a dynamic import proxy injected by the host so loadGame
-// remains independent of Vite / bundler specifics. The slug defaults to
+// The slug defaults to
 // `game-default` and may be overridden via `?game=<slug>`.
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -15,26 +15,43 @@ import {
   createRuntimeAssetImportTransport,
   runtimeBinding,
 } from '@forgeax/apps-shared/asset-runtime-config';
+import type { PackProgramHost } from '@forgeax/engine/pack/runtime';
+import {
+  createBrowserPackProgramHost,
+  prepareBrowserPackProgramScope,
+} from '@forgeax/engine/pack/runtime-browser';
 import {
   type App,
+  activateExecutionRoot,
   type CanvasAppError,
   createApp,
   type GameHost,
   gameHostPlugin,
   isAppError,
-  isLoadGameError,
-  loadGame,
 } from '@forgeax/engine-app';
+import { createAssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { audioPlugin } from '@forgeax/engine-audio';
 import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
-import { physicsPlugin } from '@forgeax/engine-physics';
+import type { PluginPrograms } from '@forgeax/engine-plugin';
 import { buildProfileModel, createProfiler } from '@forgeax/engine-profiler';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { type CatalogEntry, ImportError, type SceneAsset } from '@forgeax/engine-types';
+import { skinningPlugin } from '@forgeax/engine-skinning';
+import { type CatalogEntry, ImportError } from '@forgeax/engine-types';
 import { createUiLoader, type UiAsset, type UiError } from '@forgeax/engine-ui';
 import { createPreviewInspection } from './preview-inspection';
+import { captureSurfaceStandardEvidence } from './surface-standard-evidence';
 import { PREVIEW_UI_SOURCE_GUID, type UiAuthoringAssetGateway } from './ui-authoring';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
+
+interface TemplatePrograms {
+  readonly root: string | null;
+  createPrograms(
+    sessionId: string,
+    contextId: string,
+    sessionGeneration: number,
+    fallback?: PackProgramHost,
+  ): PluginPrograms;
+}
 
 const previewQuery = new URLSearchParams(window.location.search);
 if (previewQuery.get('fixture') === 'gltf-transform') {
@@ -53,11 +70,61 @@ const previewCanvas = canvas;
 const runtimeDevBinding = import.meta.env.DEV ? runtimeBinding : undefined;
 const previewRun = createPreviewUiRun(previewCanvas.parentElement ?? document.body);
 const previewProfiler = previewQuery.get('profile') === '1' ? createProfiler() : undefined;
-const previewPlugins = [
-  webAudioPlugin(),
-  audioPlugin(),
-  ...(previewQuery.get('profileNoPhysics') === '1' ? [] : [physicsPlugin('rapier-3d')]),
-];
+const previewPlugins = [webAudioPlugin(), audioPlugin(), skinningPlugin()];
+
+const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
+// The Surface evidence lane owns its four-cell World and deliberately
+// publishes only the Surface asset roots.  Keep the ordinary gameplay
+// bootstrap out of that lane so its unrelated default-scene dependencies
+// cannot turn a shader readback into an asset-import failure.
+const surfaceEvidenceMode = previewQuery.get('surfaceEvidence') === '1';
+
+const templates: Record<
+  string,
+  { engine: () => Promise<TemplatePrograms>; host: () => Promise<TemplatePrograms> }
+> = {
+  'game-capability-lab': {
+    engine: () => import('virtual:forgeax/plugin-programs/game-capability-lab/engine'),
+    host: () => import('virtual:forgeax/plugin-programs/game-capability-lab/frontend'),
+  },
+  'depth-of-field': {
+    engine: () => import('virtual:forgeax/plugin-programs/depth-of-field/engine'),
+    host: () => import('virtual:forgeax/plugin-programs/depth-of-field/frontend'),
+  },
+  'brotato-3d': {
+    engine: () => import('virtual:forgeax/plugin-programs/brotato-3d/engine'),
+    host: () => import('virtual:forgeax/plugin-programs/brotato-3d/frontend'),
+  },
+  empty: {
+    engine: () => import('virtual:forgeax/plugin-programs/empty/engine'),
+    host: () => import('virtual:forgeax/plugin-programs/empty/frontend'),
+  },
+  'game-3d': {
+    engine: () => import('virtual:forgeax/plugin-programs/game-3d/engine'),
+    host: () => import('virtual:forgeax/plugin-programs/game-3d/frontend'),
+  },
+};
+const selected = templates[slug === 'game-default' ? 'game-capability-lab' : slug];
+if (!selected) throw new Error(`preview: unknown project ${slug}`);
+const engine = surfaceEvidenceMode ? undefined : await selected.engine();
+const host = surfaceEvidenceMode ? undefined : await selected.host();
+if (slug === 'game-3d' && runtimeBinding === undefined) {
+  throw new Error('preview: runtime vase requires the Pack runtime binding');
+}
+const runtimeProgramHost =
+  engine !== undefined && slug === 'game-3d'
+    ? createBrowserPackProgramHost(
+        await prepareBrowserPackProgramScope(
+          new URL('forgeax-pack-program-worker.js', document.baseURI).href,
+        ),
+      )
+    : undefined;
+const enginePrograms = engine?.createPrograms(
+  crypto.randomUUID(),
+  `preview:${slug}:engine`,
+  1,
+  runtimeProgramHost,
+);
 
 // Wire dev-mode ImportTransport so loadByGuid for raw-source assets in
 // templates/<slug>/scene.pack.json (and the engine-assets submodule's
@@ -69,8 +136,14 @@ const app = await createApp(
   previewCanvas,
   {
     uiRoot: previewRun.uiRoot,
+    ...(slug === 'game-3d' && runtimeBinding !== undefined
+      ? { runtimePacks: { scopeId: runtimeBinding.scopeId } }
+      : {}),
     plugins: previewPlugins,
+    ...(enginePrograms === undefined ? {} : { pluginPrograms: enginePrograms }),
+    ...(runtimeDevBinding === undefined ? {} : { assetRuntimeBinding: runtimeDevBinding }),
     ...(previewProfiler === undefined ? {} : { profiler: previewProfiler }),
+    ...(runtimeBinding === undefined ? {} : { assetRuntimeBinding: runtimeBinding }),
   },
   {
     ...forgeaxBundlerAdapter(),
@@ -101,57 +174,22 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
     previewRun.cleanup();
     throw new Error('preview: canvas App did not provide its AssetRegistry');
   }
-  configureRuntimeAssetCatalog(assets, runtimeBinding);
+  if (!app.pluginContext.runtimePacks) configureRuntimeAssetCatalog(assets, runtimeBinding);
   await assets.refreshCatalog();
   previewRun.authoring.bind(createPreviewUiAssetGateway(assets, runtimeBinding, import.meta.hot));
   const previewInspection = createPreviewInspection(app, previewRun.registerCleanup);
 
-  const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
-
-  const templateManifests = import.meta.glob<{ entry: string; defaultScene?: string }>(
-    '../../../templates/*/forge.json',
-    { eager: true, import: 'default' },
-  );
-  const templateModules = import.meta.glob<{ default: unknown }>([
-    '../../../templates/*/main.ts',
-    '../../../templates/*/src/main.ts',
-  ]);
-
-  const loaded = await loadGame(slug, (s) => {
-    const manifest = templateManifests[`../../../templates/${s}/forge.json`];
-    if (!manifest) return Promise.reject(new Error(`Unknown template: ${s}`));
-    const key = `../../../templates/${s}/${manifest.entry.replace(/^\.\//, '')}`;
-    const loader = templateModules[key];
-    if (!loader) return Promise.reject(new Error(`Unknown template entry: ${s}/${manifest.entry}`));
-    return loader();
+  const gameChannel = new MessageChannel();
+  previewRun.registerCleanup(() => {
+    gameChannel.port1.close();
+    gameChannel.port2.close();
   });
-  if (!loaded.ok) {
-    previewRun.cleanup();
-    reportLoadError(loaded.error);
-    throw new Error('preview: loadGame failed');
-  }
-
-  const manifest = templateManifests[`../../../templates/${slug}/forge.json`];
-  if (manifest === undefined) throw new Error(`preview: missing loaded template manifest ${slug}`);
-  let defaultScene: SceneAsset | undefined;
-  let defaultSceneRoot: GameHost['defaultSceneRoot'];
-  if (manifest.defaultScene !== undefined) {
-    const scene = await assets.loadByGuid<SceneAsset>(assets.parseGuid(manifest.defaultScene));
-    if (!scene.ok) throw scene.error;
-    defaultScene = scene.value;
-    const handle = app.world.allocSharedRef('SceneAsset', scene.value);
-    const instantiated = assets.instantiate<SceneAsset>(handle, app.world);
-    if (!instantiated.ok) throw instantiated.error;
-    defaultSceneRoot = instantiated.value;
-  }
-
-  const ctx: GameHost = {
+  const gameHost: GameHost = {
+    port: gameChannel.port1,
     canvas: previewCanvas,
     assets,
     app,
     renderer: app.renderer,
-    ...(defaultScene === undefined ? {} : { defaultScene }),
-    ...(defaultSceneRoot === undefined ? {} : { defaultSceneRoot }),
     // M2 D-9: wire the pointer-lock gate setter. The game template calls
     // setPointerLockAllowed(mode === 'fps') when switching modes; the
     // preview host delegates to the input backend's setPointerLockAllowed.
@@ -162,14 +200,65 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   };
 
   try {
-    await app.pluginContext.plugin(gameHostPlugin(ctx));
-    await app.pluginContext.plugin(loaded.value);
+    await app.pluginContext.plugin(gameHostPlugin(gameHost));
+    if (engine?.root) {
+      const started = await activateExecutionRoot(app.pluginContext, {
+        guid: engine.root,
+      });
+      previewRun.registerCleanup(() => {
+        void started.fiber.dispose();
+      });
+    }
+    if (host?.root) {
+      const scope = app.pluginContext
+        .isolate('assets')
+        .isolate('pluginPrograms')
+        .isolate('gameHost');
+      if (!runtimeBinding) throw new Error('preview requires the Pack runtime binding');
+      const catalog = createCatalogSource({
+        url: import.meta.env.DEV
+          ? runtimeBinding.catalogUrl
+          : new URL('pack-index.json', document.baseURI).href,
+        ...(import.meta.env.DEV ? { expectedScope: runtimeBinding } : {}),
+      });
+      const reader = createAssetRegistry({ catalog, scopeId: runtimeBinding.scopeId });
+      const hostPrograms = host.createPrograms(
+        crypto.randomUUID(),
+        `preview:${slug}:host`,
+        1,
+        runtimeProgramHost,
+      );
+      const provider = scope.plugin({
+        provide: ['assets', 'pluginPrograms', 'gameHost'],
+        apply(ctx) {
+          ctx.provide('gameHost', { ...gameHost, port: gameChannel.port2 });
+          ctx.provide('assets', reader);
+          ctx.provide('pluginPrograms', hostPrograms);
+          ctx.effect(() => () => reader.dispose());
+        },
+      });
+      try {
+        await provider.await();
+        const started = await activateExecutionRoot(scope, { guid: host.root });
+        previewRun.registerCleanup(() => {
+          void started.fiber.dispose().finally(() => provider.dispose());
+        });
+      } catch (cause) {
+        await provider.dispose();
+        throw cause;
+      }
+    }
   } catch (e: unknown) {
     previewRun.cleanup();
     console.error('[preview] gameplay activation rejected:', e);
     throw e;
   }
-  app.start();
+  if (!surfaceEvidenceMode) app.start();
+
+  Object.assign(window, {
+    __forgeaxSurfaceStandardEvidence: () =>
+      captureSurfaceStandardEvidence(app, { resumeApp: !surfaceEvidenceMode }),
+  });
 
   if (previewProfiler !== undefined) {
     const started = previewProfiler.startCapture({
@@ -342,12 +431,26 @@ async function createPreviewUiCatalogGateway(
   const refresh = async (): Promise<void> => {
     entries = await fetchCatalogEntries(binding.catalogUrl);
   };
-  const importSource = async (guid: string): Promise<ImportError | undefined> => {
+  const importSource = async (guid: string): Promise<readonly CatalogEntry[] | ImportError> => {
     const response = await fetch(`${binding.importUrlBase}/${encodeURIComponent(guid)}`, {
       method: 'POST',
     });
-    if (response.ok) return undefined;
+    if (response.ok) {
+      const imported = parseCatalogEntries(await response.json());
+      if (imported.length > 0) return imported;
+      return new ImportError({
+        code: 'import-internal-error',
+        expected: 'the import response to contain the published UI catalog row',
+        hint: 'Inspect the producer publication and retry the preview import.',
+        detail: { reason: `Import response contained no catalog entries for ${guid}` },
+      });
+    }
     return importErrorFromResponse(await readJsonResponse(response));
+  };
+  const mergeImportedEntries = (imported: readonly CatalogEntry[]): void => {
+    const byGuid = new Map(entries.map((entry) => [entry.guid.toLowerCase(), entry] as const));
+    for (const entry of imported) byGuid.set(entry.guid.toLowerCase(), entry);
+    entries = [...byGuid.values()];
   };
   const findEntry = (guid: string): CatalogEntry | undefined =>
     entries.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
@@ -378,8 +481,12 @@ async function createPreviewUiCatalogGateway(
       let response = await fetch(entry.packageUrl);
       if (!response.ok) {
         const imported = await importSource(guid);
-        if (imported !== undefined) return { ok: false, error: imported };
+        if (imported instanceof ImportError) return { ok: false, error: imported };
         await refresh();
+        // The import response is the producer's accepted publication. Merge
+        // it after refresh so a transient/stale catalog read cannot erase the
+        // row that was just made loadable.
+        mergeImportedEntries(imported);
         entry = findEntry(guid);
         if (entry === undefined) {
           return {
@@ -453,9 +560,12 @@ async function createPreviewUiCatalogGateway(
 }
 
 async function fetchCatalogEntries(url: string): Promise<CatalogEntry[]> {
-  const response = await fetch(url);
+  const response = await fetch(url, { cache: 'no-store' });
   if (!response.ok) throw new Error(`catalog request failed: HTTP ${response.status}`);
-  const body = (await response.json()) as { entries?: unknown } | unknown;
+  return parseCatalogEntries(await response.json());
+}
+
+function parseCatalogEntries(body: unknown): CatalogEntry[] {
   const entries =
     typeof body === 'object' &&
     body !== null &&
@@ -561,6 +671,10 @@ function reportCreateError(err: CanvasAppError): {
     console.error(`[preview] EngineEnvironmentError: webgpu inner=${code}`);
     return { code: 'engine-environment', detail: `webgpu inner=${code}` };
   }
+  if (err.code === 'asset-assembly-failed') {
+    console.error(`[preview] AssetRuntimeAssemblyError ${err.code}: ${err.hint}`);
+    return { code: err.code, detail: err.detail.kind };
+  }
   if (isAppError(err)) {
     switch (err.code) {
       case 'app-not-started':
@@ -597,24 +711,4 @@ function reportCreateError(err: CanvasAppError): {
     }
   }
   return { code: 'unknown', detail: String(err) };
-}
-
-function reportLoadError(err: unknown): void {
-  if (!isLoadGameError(err)) {
-    console.error('[preview] unknown load error:', err);
-    return;
-  }
-  switch (err.code) {
-    case 'module-not-found':
-      console.error(`[preview] load failed, module not found: ${err.detail.slug}`);
-      return;
-    case 'invalid-format':
-      console.error(
-        `[preview] load failed, invalid format. Exports: ${err.detail.exportKeys.join(', ')}`,
-      );
-      return;
-    case 'import-failed':
-      console.error('[preview] load failed, import error:', err.detail.cause);
-      return;
-  }
 }

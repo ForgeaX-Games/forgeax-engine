@@ -47,6 +47,25 @@ describe('keyboard snapshot edges', () => {
     expect(snap.keyboard.downCode('KeyA')).toBe(true);
     expect(snap.keyboard.justPressedCode('KeyA')).toBe(true);
   });
+
+  it('uses producer-latched press edges even when held state is already released', () => {
+    const snap = snapshotFromSample({
+      ...sample([], ['a'], [], ['KeyA']),
+      pressedKeys: new Set(['a']),
+      pressedCodes: new Set(['KeyA']),
+    });
+
+    expect(snap.keyboard.down('a')).toBe(false);
+    expect(snap.keyboard.up('a')).toBe(true);
+    expect(snap.keyboard.justPressed('a')).toBe(true);
+    expect(snap.keyboard.downCode('KeyA')).toBe(false);
+    expect(snap.keyboard.upCode('KeyA')).toBe(true);
+    expect(snap.keyboard.justPressedCode('KeyA')).toBe(true);
+
+    const next = snapshotFromSample(sample([]), undefined, undefined, snap);
+    expect(next.keyboard.justPressed('a')).toBe(false);
+    expect(next.keyboard.up('a')).toBe(false);
+  });
 });
 
 describe('empty backend sample ownership', () => {
@@ -92,5 +111,21 @@ describe('mouse snapshot edges', () => {
     expect(held.mouse.justReleased(0)).toBe(false);
     expect(released.mouse.button(0)).toBe(false);
     expect(released.mouse.justReleased(0)).toBe(true);
+  });
+
+  it('preserves a producer-latched button tap between frame-start scans', () => {
+    const tap = snapshotFromSample({
+      ...sample([]),
+      pressedButtons: [true, false, false],
+      releasedButtons: [true, false, false],
+    });
+
+    expect(tap.mouse.button(0)).toBe(false);
+    expect(tap.mouse.justPressed(0)).toBe(true);
+    expect(tap.mouse.justReleased(0)).toBe(true);
+
+    const next = snapshotFromSample(sample([]), undefined, undefined, tap);
+    expect(next.mouse.justPressed(0)).toBe(false);
+    expect(next.mouse.justReleased(0)).toBe(false);
   });
 });

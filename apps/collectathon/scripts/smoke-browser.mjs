@@ -65,6 +65,13 @@ const viteBin = resolve(appDir, 'node_modules', 'vite', 'bin', 'vite.js');
 const ENTITY_FLOOR = 100;
 const ENTITY_CEIL = 130;
 const POLL_BUDGET_MS = 20000;
+const MAX_VITE_READINESS_TIMEOUT_MS = 180_000;
+const VITE_READINESS_TIMEOUT_MS = Math.min(
+  Math.max(Number.parseInt(process.env.FORGEAX_COLLECTATHON_VITE_READINESS_TIMEOUT_MS ?? '180000', 10) || 180_000, 1),
+  MAX_VITE_READINESS_TIMEOUT_MS,
+);
+const PACK_CATALOG_PATH = '/__pack/scopes/collectathon/1/catalog.json';
+const PACK_READINESS_POLL_MS = 100;
 
 // The three startup crash signatures (D-10). Any occurrence ANYWHERE in the boot
 // window is a hard FAIL -- these are exactly the symptoms the judgment human hit
@@ -82,13 +89,66 @@ const AUDIO_GUIDS = new Set([
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Vite prints its Local URL before plugin-pack has finished the source scan
+// and publication transaction. Starting Chromium at that point races the
+// first asset request against the deliberately fail-closed 503 Pack route.
+// Admit the page only after the producer has published an authoritative
+// snapshot; a persistent producer failure remains red, and 503 is only a
+// bounded startup state (never a fallback success).
+const waitForScopedPackCatalog = async (baseUrl) => {
+  const startedAt = Date.now();
+  let lastDiagnostics = { status: 'unobserved' };
+  while (Date.now() - startedAt < VITE_READINESS_TIMEOUT_MS) {
+    try {
+      const response = await fetch(new URL(PACK_CATALOG_PATH, baseUrl), { cache: 'no-store' });
+      const body = await response.text();
+      lastDiagnostics = { status: response.status, body: body.slice(0, 1024) };
+      if (response.status === 404 || response.status === 410) {
+        throw new Error(`Pack catalog route is not bound for collectathon: ${JSON.stringify(lastDiagnostics)}`);
+      }
+      if (response.ok) {
+        let snapshot;
+        try {
+          snapshot = JSON.parse(body);
+        } catch {
+          throw new Error(`Pack catalog readiness returned invalid JSON: ${JSON.stringify(lastDiagnostics)}`);
+        }
+        if (
+          snapshot?.schemaVersion !== 'runtime-catalog-snapshot-v1' ||
+          snapshot?.scopeId !== 'collectathon' ||
+          snapshot?.generation !== 1 ||
+          snapshot?.authority !== 'authoritative'
+        ) {
+          throw new Error(`Pack catalog readiness was not authoritative: ${JSON.stringify(snapshot)}`);
+        }
+        return snapshot;
+      }
+    } catch (error) {
+      if (error instanceof Error && /Pack catalog (?:route|readiness)/.test(error.message)) throw error;
+      lastDiagnostics = { error: error instanceof Error ? error.message : String(error) };
+    }
+    await sleep(PACK_READINESS_POLL_MS);
+  }
+  throw new Error(
+    `Pack catalog did not become authoritative within ${VITE_READINESS_TIMEOUT_MS}ms: ${JSON.stringify(lastDiagnostics)}`,
+  );
+};
+
 // --- 1. spawn the Vite dev server ---------------------------------------------
 
 if (!existsSync(viteBin)) throw new Error(`collectathon browser smoke cannot find Vite: ${viteBin}`);
 
 const viteProc = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--clearScreen', 'false'], {
   cwd: appDir,
-  env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+  env: {
+    ...process.env,
+    FORCE_COLOR: '0',
+    NO_COLOR: '1',
+    // Native FSEvents can block Vite startup on macOS Node 26 in a disposable
+    // worktree. Polling keeps this boot gate deterministic without changing
+    // the normal app development watcher.
+    FORGEAX_COLLECTATHON_HMR_POLLING: '1',
+  },
 });
 
 // Strip ANSI escape sequences before matching: Vite colorizes its banner even
@@ -97,22 +157,63 @@ const viteProc = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--cle
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 const stripAnsi = (s) => s.replace(ANSI_RE, '');
 let portUrl = null;
-viteProc.stdout.on('data', (chunk) => {
-  const s = stripAnsi(chunk.toString());
-  process.stdout.write(`[vite] ${s}`);
-  const m = s.match(/Local:\s+(http:\/\/\S+)/);
+let viteOutput = '';
+let viteSpawnError;
+let viteExit;
+const observeViteOutput = (stream, chunk) => {
+  const text = chunk.toString();
+  viteOutput = `${viteOutput}${text}`.slice(-8192);
+  process[stream === 'stderr' ? 'stderr' : 'stdout'].write(`[vite${stream === 'stderr' ? '-err' : ''}] ${text}`);
+  const plain = stripAnsi(viteOutput);
+  const m = plain.match(/Local:\s+(http:\/\/\S+)/);
   if (m) portUrl = m[1].replace(/\/?$/, '/');
+};
+viteProc.stdout.on('data', (chunk) => observeViteOutput('stdout', chunk));
+viteProc.stderr.on('data', (chunk) => observeViteOutput('stderr', chunk));
+viteProc.once('error', (error) => {
+  viteSpawnError = error;
 });
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
+viteProc.once('exit', (code, signal) => {
+  viteExit = { code, signal };
+});
 
-const viteDeadline = Date.now() + 30000;
-while (!portUrl && Date.now() < viteDeadline) await sleep(200);
+const viteDiagnostics = (elapsedMs) => ({
+  elapsedMs,
+  pid: viteProc.pid ?? null,
+  spawnError: viteSpawnError === undefined ? null : String(viteSpawnError),
+  exit: viteExit ?? null,
+  output: viteOutput.trim() || 'none',
+});
+
+const readinessStartedAt = Date.now();
+while (
+  !portUrl
+  && viteSpawnError === undefined
+  && viteExit === undefined
+  && Date.now() - readinessStartedAt < VITE_READINESS_TIMEOUT_MS
+) await sleep(200);
 if (!portUrl) {
-  console.error('[collectathon browser] FAIL - vite did not become ready in 30s');
+  const elapsedMs = Date.now() - readinessStartedAt;
+  const reason = viteSpawnError !== undefined
+    ? 'vite failed to spawn'
+    : viteExit !== undefined
+      ? 'vite exited before becoming ready'
+      : `vite did not become ready within ${VITE_READINESS_TIMEOUT_MS}ms`;
+  console.error(`[collectathon browser] FAIL - ${reason}: ${JSON.stringify(viteDiagnostics(elapsedMs))}`);
   viteProc.kill();
   process.exit(2);
 }
 console.log(`[collectathon browser] using ${portUrl}`);
+
+try {
+  await waitForScopedPackCatalog(portUrl);
+} catch (error) {
+  console.error(
+    `[collectathon browser] FAIL - ${error instanceof Error ? error.message : String(error)}`,
+  );
+  viteProc.kill();
+  process.exit(2);
+}
 
 // --- 2. launch headed Chrome with WebGPU --------------------------------------
 
@@ -132,7 +233,7 @@ try {
   if (chromeChannel === 'chrome-beta') {
     chromeArgs.push(
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--disable-gpu-driver-bug-workarounds',
       '--autoplay-policy=no-user-gesture-required',
     );
@@ -173,7 +274,6 @@ page.on('request', (request) => {
     audioImportRequests.push(request.url());
   }
 });
-
 // The self-hosted Linux image currently crashes Chromium's WebGPU
 // WebGPUSwapBufferProvider when a headless canvas swapchain texture is submitted
 // (the same app is stable when the render target is an ordinary GPUTexture).

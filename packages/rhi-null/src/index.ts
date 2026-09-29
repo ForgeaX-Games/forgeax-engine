@@ -25,7 +25,7 @@ import type {
 import { ok } from '@forgeax/engine-types';
 import { RhiNullAdapter } from './adapter';
 import { acquireCanvasContext } from './canvas-context';
-import { createShaderModule } from './shader';
+import { createShaderModule, createShaderModuleImmediate } from './shader';
 
 /**
  * Request a headless adapter. The two-positional-arg signature mirrors the spec
@@ -48,10 +48,12 @@ function requestAdapter(
 export const rhi: RhiInstance & {
   acquireCanvasContext: typeof acquireCanvasContext;
   createShaderModule: typeof createShaderModule;
+  createShaderModuleImmediate: typeof createShaderModuleImmediate;
 } = {
   requestAdapter,
   acquireCanvasContext,
   createShaderModule,
+  createShaderModuleImmediate,
 };
 
 export { RhiNullAdapter } from './adapter';
@@ -60,4 +62,4 @@ export { RhiNullCommandEncoder } from './command-encoder';
 export { RhiNullDevice } from './device';
 export { RhiNullComputePassEncoder, RhiNullRenderPassEncoder } from './pass-encoders';
 export { RhiNullQueue } from './queue';
-export { createShaderModule } from './shader';
+export { createShaderModule, createShaderModuleImmediate } from './shader';

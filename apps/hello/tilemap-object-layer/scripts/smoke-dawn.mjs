@@ -38,6 +38,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const WIDTH = 384;
 const HEIGHT = 384;
@@ -214,12 +215,11 @@ renderer.subscribe((event) => {
 
 const atlasAPayload = {
   kind: 'texture',
-  width: 64,
-  height: 64,
+  shape: { viewDimension: '2d', extent: { width: 64, height: 64 } },
   format: 'rgba8unorm-srgb',
   data: new Uint8Array(64 * 64 * 4).fill(255),
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 const atlasBPayload = { ...atlasAPayload, data: new Uint8Array(64 * 64 * 4).fill(128) };
 for (const [guid, payload] of [
@@ -293,6 +293,7 @@ world
       },
     },
     { component: ChildOf, data: { parent: tilemap } },
+    { component: Transform, data: {} },
   )
   .unwrap();
 
@@ -499,6 +500,7 @@ for (const r of subSceneReport) {
     `  sub-scene ${r.name}: screen=(${r.screen.x},${r.screen.y}) rgba=[${r.rgba.join(',')}] family=${r.family}`,
   );
 }
+emitSmokeReceipt('hello-tilemap-object-layer/smoke', framesDrawn);
 device.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);

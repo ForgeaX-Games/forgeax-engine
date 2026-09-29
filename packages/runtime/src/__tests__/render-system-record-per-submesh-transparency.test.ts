@@ -25,7 +25,15 @@
 import type { World as WorldType } from '@forgeax/engine-ecs';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
+import { mockRenderBundles } from './mock-render-bundles';
+
+// Load the renderer graph in setup so a cold transform cannot outlive a
+// timed-out test and leak its asynchronous work into the next telemetry assertion.
+beforeAll(async () => {
+  await importEngine();
+}, 30_000);
 
 function canonicalTestMeshAttributes(vertexCount: number) {
   return {
@@ -95,6 +103,7 @@ function makeMockGPUDevice(spies: DeviceSpies): { device: unknown } {
     limits: {},
     queue: {
       submit: () => undefined,
+      onSubmittedWorkDone: async () => undefined,
       writeBuffer: () => undefined,
       writeTexture: () => undefined,
     },
@@ -141,7 +150,7 @@ function makeMockGPUDevice(spies: DeviceSpies): { device: unknown } {
     createSampler: () => ({}),
     destroy: () => undefined,
   };
-  return { device };
+  return { device: mockRenderBundles(device) };
 }
 
 function makeMockGPU(deviceObj: unknown): unknown {
@@ -161,7 +170,8 @@ function buildManifestDataUrl(): string {
     sourcePath: `${identifier}.wgsl`,
     composedWgsl: '/* stub */',
     paramSchema,
-    variants: [],
+    variants:
+      identifier === 'forgeax::default-standard-pbr' ? standardMaterialShaderVariants() : [],
   });
   const pbrParamSchema = JSON.stringify([
     { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
@@ -229,6 +239,7 @@ async function importEcs(): Promise<{
 }
 async function importComponents(): Promise<{
   Transform: unknown;
+  GlobalTransform: unknown;
   MeshFilter: unknown;
   MeshRenderer: unknown;
   Camera: unknown;
@@ -254,12 +265,11 @@ function cameraTransform() {
 function makeTex(): TextureAsset {
   return {
     kind: 'texture',
-    width: 2,
-    height: 2,
+    shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
     format: 'rgba8unorm',
     data: new Uint8Array(2 * 2 * 4),
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   } as unknown as TextureAsset;
 }
 
@@ -412,7 +422,9 @@ describe('record: per-submesh transparency (feat-city-glb Bug 5)', () => {
     const { renderer } = await setupRenderer(spies);
     const errors: string[] = [];
     renderer.subscribe((event) => {
-      if (event.kind === 'error') errors.push(event.error.code);
+      if (event.kind === 'error') {
+        errors.push(event.error.code);
+      }
     });
 
     const { world } = await spawnMixedTransparentScene();

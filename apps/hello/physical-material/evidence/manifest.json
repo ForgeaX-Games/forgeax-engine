@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "caseManifest": "evidence/case-manifest.json",
+  "caseCount": 16,
+  "targets": [
+    { "id": "physical-material-layer-grid", "description": "clearcoat 标量、R/G/RG 贴图与顶层 Fresnel" },
+    { "id": "physical-material-rigid-skinned", "description": "rigid/skinned tangent ABI 与 coat normal" }
+  ],
+  "requiredEvidence": ["browser-webgpu-readback", "dawn-webgpu-readback", "300-submitted-frames", "exact-head-provenance", "case-records", "fetch-roundtrip-receipt", "additive-coat-falsifier"]
+}

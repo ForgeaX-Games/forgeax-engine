@@ -20,7 +20,6 @@ const reflectionJson = JSON.stringify({
     },
     { group: 1, binding: 1, addressSpace: 'handle', resourceKind: 'sampler', visibility: 2 },
     { group: 1, binding: 2, addressSpace: 'handle', resourceKind: 'texture', visibility: 2 },
-    { group: 1, binding: 8, addressSpace: 'handle', resourceKind: 'sampler', visibility: 2 },
   ],
   uvSetCount: 1,
   bindings: [
@@ -34,13 +33,50 @@ const reflectionJson = JSON.stringify({
           visibility: 2,
           texture: { sampleType: 'float', viewDimension: '2d', multisampled: false },
         },
-        { binding: 8, visibility: 2, sampler: { type: 'filtering' } },
       ],
     },
   ],
 });
 
 describe('derived material reflection equality', () => {
+  it('accepts a Pass without any material bindings', () => {
+    expect(
+      compareDerivedMaterialInterface(derive(DERIVED_REFLECTION_SCHEMA), { boundGlobals: [] }).ok,
+    ).toBe(true);
+  });
+
+  it('accepts a texture subset without renumbering the root resources', () => {
+    const parsed = parseReflection(reflectionJson);
+    const boundGlobals = parsed.boundGlobals.filter(
+      (global) => global.binding !== 1 && global.binding !== 2,
+    );
+    expect(
+      compareDerivedMaterialInterface(derive(DERIVED_REFLECTION_SCHEMA), { boundGlobals }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects undeclared material bindings instead of treating a wrong coordinate as unused', () => {
+    const parsed = parseReflection(reflectionJson);
+    const boundGlobals = parsed.boundGlobals.map((global) =>
+      global.binding === 0 ? { ...global, binding: 8 } : global,
+    );
+    const result = compareDerivedMaterialInterface(derive(DERIVED_REFLECTION_SCHEMA), {
+      boundGlobals,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: { actual: { group: 1, binding: 8 } } },
+    });
+  });
+
+  it('keeps scene row declarations outside direct material artifacts', () => {
+    const schema = [{ name: 'value', type: 'f32' }] as const;
+    expect(generateParameterModule(schema)).not.toContain('MATERIAL_SCENE_ROW_VEC4_COUNT');
+    expect(generateParameterModule(schema, { sceneIndex: true, sceneRowStride: 560 })).toContain(
+      'const MATERIAL_SCENE_ROW_VEC4_COUNT: u32 = 35u;',
+    );
+  });
+
   it('generates coordinate members from the derived material interface', () => {
     const module = generateParameterModule(DERIVED_REFLECTION_SCHEMA);
 
@@ -65,10 +101,10 @@ describe('derived material reflection equality', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('rejects non-zero visibility that omits a derived shader stage', () => {
+  it('accepts a material UBO consumed only by the vertex stage', () => {
     const parsed = parseReflection(reflectionJson.replace('"visibility":2', '"visibility":1'));
     const result = compareDerivedMaterialInterface(derive(DERIVED_REFLECTION_SCHEMA), parsed);
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it.each([
@@ -205,6 +241,11 @@ describe('derived material reflection equality', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('material-derived-interface-mismatch');
       expect(result.error.detail.parameter).toBe('exposure');
+      expect(result.error.detail.expected).toMatchObject({ offset: 0, type: 'f32' });
+      expect(result.error.detail.actual).toMatchObject({
+        offset: member.offset,
+        type: member.type,
+      });
     }
   });
 

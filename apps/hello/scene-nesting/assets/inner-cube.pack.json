@@ -11,9 +11,8 @@
       ],
       "artifacts": {},
       "payload": {
-        "entities": [
-          {
-            "localId": 0,
+        "entities": {
+          "cube": {
             "components": {
               "Transform": {
                 "pos": [
@@ -43,7 +42,7 @@
               }
             }
           }
-        ]
+        }
       }
     }
   ]

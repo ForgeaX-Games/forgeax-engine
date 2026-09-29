@@ -1,5 +1,5 @@
 /// <reference types="@webgpu/types" />
-// @forgeax/engine-rhi-debug/texel-layout -- SSOT for how a color texture's GPU
+// @forgeax/engine-rhi-debug/texel-layout -- SSOT for how a texture's GPU
 // bytes are laid out, shared by the snapshot readback (recorder) and the seed
 // write-back (replayer) so both agree on byte layout without duplicating it in
 // the tape (architecture-principles #1 SSOT / #2 Derive: format + size +
@@ -17,7 +17,7 @@
 // block footprint, including block-compressed formats.
 
 /**
- * Bytes per texel for uncompressed color formats. Block-compressed formats use
+ * Bytes per texel for uncompressed color formats and depth32float. Block-compressed formats use
  * {@link textureBlockLayout} because their bytes are addressed by blocks.
  */
 export function bytesPerTexel(format: GPUTextureFormat | undefined): number | undefined {
@@ -25,8 +25,8 @@ export function bytesPerTexel(format: GPUTextureFormat | undefined): number | un
   return TEXEL_BYTES[format];
 }
 
-// Uncompressed color formats only. Keyed to the W3C WebGPU GPUTextureFormat
-// names. Depth/stencil and block-compressed formats are deliberately absent.
+// Uncompressed color formats and the copyable depth32float plane. Keyed to the W3C WebGPU GPUTextureFormat
+// names. Other depth/stencil and block-compressed formats are absent.
 const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   // 8-bit channels
   r8unorm: 1,
@@ -58,6 +58,7 @@ const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   r32uint: 4,
   r32sint: 4,
   r32float: 4,
+  depth32float: 4,
   rg32uint: 8,
   rg32sint: 8,
   rg32float: 8,

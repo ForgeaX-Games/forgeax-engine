@@ -74,7 +74,6 @@ function stubRhiInstance(): { inst: any; requestAdapterSpy: any; createCmdEncRes
       insertDebugMarker: vi.fn(),
       finish: vi.fn(() => rOk(h())),
       resolveQuerySet: vi.fn(() => rOk(undefined)),
-      writeTimestamp: vi.fn(),
     }),
   );
 

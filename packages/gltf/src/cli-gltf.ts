@@ -1,18 +1,16 @@
 #!/usr/bin/env node
-// @forgeax/engine-gltf/src/cli-gltf — `forgeax-engine-remote-gltf` plugin
-// bin (feat-20260516-console-dependency-inversion plan-strategy section
-// 2.9). Discovered by the base bin via the kubectl 4th-path
-// `forgeax-engine-remote-` prefix scanner.
+// @forgeax/engine-gltf/src/cli-gltf — internal producer used by DevKit's
+// unified `forgeax asset import` command. It is deliberately not a package bin.
 //
 // Single subcommand `import` for v1 (UX break vs the prior
-// `forgeax-engine-remote-asset import`):
+// `forgeax asset import`):
 //
-//   write mode  `forgeax-engine-remote-gltf import <gltf-or-glb>`
+//   write mode  `forgeax asset import <gltf-or-glb> --root <project>`
 //                Parses the source via parseGlb / parseGltf and writes the
 //                sibling `<source>.meta.json` sidecar (sorted-keys, LF line
 //                ending — byte-stable so a clean reimport produces no diff).
 //
-//   --check     `forgeax-engine-remote-gltf import --check <dir>`
+//   --check     `forgeax asset import <dir> --dry-run --root <project>`
 //                Dry-run: traverse <dir> reusing SCANNER_BLACKLIST from
 //                @forgeax/engine-pack/scanner and surface the first orphan
 //                .gltf / .glb whose `<source>.meta.json` is absent as
@@ -55,14 +53,14 @@ function emitError(ctx: AssetCtx, err: ErrShape): number {
 
 function helpBody(): string {
   return [
-    'forgeax-engine-remote-gltf — glTF / GLB sidecar importer (produces texture/mesh/material/scene sub-assets)',
+    'forgeax asset import — glTF / GLB sidecar importer (internal producer)',
     '',
     'Usage:',
-    '  forgeax-engine-remote-gltf import <path.gltf|path.glb>',
-    '  forgeax-engine-remote-gltf import --check <dir>',
+    '  forgeax asset import <path.gltf|path.glb> --root <project>',
+    '  forgeax asset import <dir> --dry-run --root <project>',
     '',
-    'Produces a sibling <source>.meta.json sidecar with sub-asset entries',
-    'for every glTF asset category: texture, mesh, material, scene.',
+    'produces texture, mesh, material, and scene sub-asset entries in a sibling',
+    '<source>.meta.json sidecar.',
     '',
   ].join('\n');
 }
@@ -77,7 +75,7 @@ export async function runCliGltf(rest: string[], ctx: AssetCtx): Promise<number>
     return emitError(ctx, {
       code: 'unknown-subcommand',
       expected: "subcommand 'import'",
-      hint: "run 'forgeax-engine-remote-gltf --help' for usage",
+      hint: "run 'forgeax help asset import' for usage",
       detail: { subcommand: sub },
     });
   }
@@ -100,8 +98,8 @@ async function runImport(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-gltf import [--check] <path>',
-      hint: "run 'forgeax-engine-remote-gltf --help' for usage",
+      expected: 'forgeax asset import [--dry-run] <path> --root <project>',
+      hint: "run 'forgeax help asset import' for usage",
       detail: { message },
     });
   }
@@ -110,8 +108,8 @@ async function runImport(rest: string[], ctx: AssetCtx): Promise<number> {
     return emitError(ctx, {
       code: 'cli-parse-error',
       expected: check
-        ? 'forgeax-engine-remote-gltf import --check <dir>'
-        : 'forgeax-engine-remote-gltf import <path.gltf|path.glb>',
+        ? 'forgeax asset import <dir> --dry-run --root <project>'
+        : 'forgeax asset import <path.gltf|path.glb> --root <project>',
       hint: 'pass a positional <gltf-or-glb> argument; with --check pass a directory',
     });
   }
@@ -192,7 +190,7 @@ async function runCheck(target: string, ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-gltf import --check <dir>',
+      expected: 'forgeax asset import <dir> --dry-run --root <project>',
       hint: 'pass a directory that exists and is readable',
       detail: { path: target, message },
     });

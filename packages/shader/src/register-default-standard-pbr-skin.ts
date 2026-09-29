@@ -13,7 +13,7 @@
 //   - R-10: paramSchema reuses default-standard-pbr schema (same params)
 
 import type { ShaderRegistry } from './index.js';
-import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from './material-schemas.js';
+import { STANDARD_PIPELINE_PARAM_SCHEMA } from './material-schemas.js';
 
 /**
  * paramSchema for forgeax::pbr-skin — mirrors default-standard-pbr 8 fields.
@@ -69,6 +69,6 @@ export function registerDefaultStandardPbrSkin(
   void caps;
   registry.installMaterialArtifact(RESERVED_ID, {
     source: composedWgsl,
-    paramSchema: DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+    paramSchema: STANDARD_PIPELINE_PARAM_SCHEMA,
   });
 }

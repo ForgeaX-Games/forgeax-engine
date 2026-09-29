@@ -10,6 +10,58 @@ const RECORDED_CAPABILITY_FEATURES = [
   ['rg11b10ufloatRenderable', 'rg11b10ufloat-renderable'],
 ] as const satisfies readonly (readonly [string, GPUFeatureName])[];
 
+const WGSL_FEATURES = new Map<string, GPUFeatureName>([
+  ['f16', 'shader-f16'],
+  ['subgroups', 'subgroups'],
+  ['primitive_index', 'primitive-index'],
+]);
+
+/** WGSL block comments nest. Commented directives must not impose device features. */
+function withoutComments(source: string): string {
+  let output = '';
+  let depth = 0;
+  for (let i = 0; i < source.length; i++) {
+    const pair = source.slice(i, i + 2);
+    if (pair === '/*') {
+      depth++;
+      i++;
+      output += ' ';
+    } else if (depth > 0 && pair === '*/') {
+      depth--;
+      i++;
+    } else if (depth === 0 && pair === '//') {
+      while (i < source.length && source[i] !== '\n' && source[i] !== '\r') i++;
+      output += ' ';
+    } else if (depth === 0) output += source[i];
+  }
+  return output;
+}
+
+/** Derive descriptor requirements from the captured resources, including bootstrap shaders. */
+export function requiredReplayDescriptorFeatures(tape: Tape): ReadonlySet<GPUFeatureName> {
+  const features = new Set<GPUFeatureName>();
+  for (const event of [...tape.bootstrap.map((resource) => resource.create), ...tape.events]) {
+    if (
+      event.kind === 'createTexture' &&
+      typeof event.desc === 'object' &&
+      event.desc !== null &&
+      'format' in event.desc &&
+      event.desc.format === 'depth32float-stencil8'
+    ) {
+      features.add('depth32float-stencil8');
+    }
+    if (event.kind === 'createShaderModule' && typeof event.wgslCode === 'string') {
+      for (const directive of withoutComments(event.wgslCode).matchAll(/\benable\s+([^;]+);/g)) {
+        for (const extension of (directive[1] ?? '').split(',')) {
+          const feature = WGSL_FEATURES.get(extension.trim());
+          if (feature !== undefined) features.add(feature);
+        }
+      }
+    }
+  }
+  return features;
+}
+
 /**
  * Build the strongest fresh WebGPU device the current adapter can provide for
  * a recorded tape. Optional features must be enabled, not merely advertised,
@@ -20,10 +72,13 @@ export function replayDeviceRequest(
   adapterFeatures: ReadonlySet<GPUFeatureName>,
   adapterLimits: Readonly<Record<string, number>>,
 ): GPUDeviceDescriptor {
-  const requiredFeatures = RECORDED_CAPABILITY_FEATURES.filter(
+  const requiredFeatures: GPUFeatureName[] = RECORDED_CAPABILITY_FEATURES.filter(
     ([capability, feature]) =>
       tape.header.rhiCaps[capability] === true && adapterFeatures.has(feature),
   ).map(([, feature]) => feature);
+  // Do not filter descriptor requirements against adapter support: an
+  // unsupported replay must fail admission instead of compiling weaker work.
+  requiredFeatures.push(...requiredReplayDescriptorFeatures(tape));
   const limitEntries = Object.entries(adapterLimits).filter(
     ([, value]) => Number.isFinite(value) && value >= 0,
   );

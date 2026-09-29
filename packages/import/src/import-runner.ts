@@ -21,6 +21,7 @@
 // import. `runImport` returns `{ ok: true, value: { skipped: 'shader' } }`
 // for them so the caller can account for the sidecar without writing a DDC.
 
+import type { NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import type {
   AssetRelation,
   CatalogDiagnostic,
@@ -45,7 +46,9 @@ import {
   finalizeImportProducts,
   type TerminalImportProduct,
 } from './import-product.js';
+import { cookImportedMaterials } from './imported-material-cook.js';
 import type { ImporterRegistry } from './importer-registry.js';
+import { validateMeshLodContract } from './mesh-lod.js';
 
 /** Reserved `meta.importer` key consumed by vite-plugin-shader, not the import runner. */
 export const SHADER_RESERVED_IMPORTER_KEY = 'shader';
@@ -77,6 +80,13 @@ function isModuleLoadFailure(e: unknown): boolean {
   return (
     msg.includes('Cannot find module') || msg.includes('native addon') || msg.includes('.node')
   );
+}
+
+function declarationsSourceKey(
+  declarations: readonly { readonly guid: string; readonly sourceKey?: string }[],
+  guid: string,
+): string | undefined {
+  return declarations.find((declaration) => declaration.guid === guid)?.sourceKey;
 }
 
 /**
@@ -218,6 +228,15 @@ function declarationFields(
  * `ImportRunnerFs`.
  */
 export interface ImportRunnerFs {
+  /**
+   * Map a physical read path to the host's stable logical source identity.
+   *
+   * Hosts may expose the same source through different filesystem coordinates
+   * (for example a symlink farm in a browser Vite root).  The identity is used
+   * only for dependency/revision facts; `readSource` and `readSibling` still
+   * receive the physical path supplied by the importer.
+   */
+  sourceIdentityFor?(sourcePath: string): string;
   readSource(
     sourcePath: string,
   ): Promise<
@@ -257,6 +276,10 @@ function normalizeDependencyPath(path: string): string {
     }
   }
   return parts.join('/');
+}
+
+function dependencyIdentity(fs: ImportRunnerFs, sourcePath: string): string {
+  return normalizeDependencyPath(fs.sourceIdentityFor?.(sourcePath) ?? sourcePath);
 }
 
 function errResult(error: ImportErrorType): {
@@ -394,16 +417,19 @@ export function runImport(
   meta: RunImportMeta & { readonly buildPack: false },
   registry: ImporterRegistry,
   fs: ImportRunnerFs,
+  cookers?: Pick<NativeCookerRegistry, 'get' | 'runDraft'>,
 ): Promise<RunImportProductResult>;
 export function runImport(
   meta: RunImportMeta,
   registry: ImporterRegistry,
   fs: ImportRunnerFs,
+  cookers?: Pick<NativeCookerRegistry, 'get' | 'runDraft'>,
 ): Promise<RunImportResult>;
 export async function runImport(
   meta: RunImportMeta,
   registry: ImporterRegistry,
   fs: ImportRunnerFs,
+  cookers?: Pick<NativeCookerRegistry, 'get' | 'runDraft'>,
 ): Promise<RunImportResult | RunImportProductResult> {
   // Reserved shader key: orthogonal vite-plugin-shader pipeline owns these.
   if (meta.importer === SHADER_RESERVED_IMPORTER_KEY) {
@@ -451,7 +477,7 @@ export async function runImport(
 
   const dependencies = new Set<string>();
   const readSource = async (sourcePath: string) => {
-    dependencies.add(normalizeDependencyPath(sourcePath));
+    dependencies.add(dependencyIdentity(fs, sourcePath));
     try {
       return await fs.readSource(sourcePath);
     } catch (error) {
@@ -471,7 +497,7 @@ export async function runImport(
       | { readonly ok: false; readonly error: ImportErrorType };
     try {
       if (fs.readSibling) {
-        dependencies.add(normalizeDependencyPath(joinSiblingPath(meta.source, uri)));
+        dependencies.add(dependencyIdentity(fs, joinSiblingPath(meta.source, uri)));
         inner = await fs.readSibling(meta.source, uri);
       } else {
         inner = await readSource(joinSiblingPath(meta.source, uri));
@@ -621,6 +647,56 @@ export async function runImport(
 
   const produced = product.assets;
 
+  // LOD is a producer-authored MeshAsset fact. Validate it once at the
+  // import boundary so malformed coverage never reaches DDC or runtime.
+  for (const asset of produced) {
+    if (asset.kind !== 'mesh' || asset.payload === null || typeof asset.payload !== 'object')
+      continue;
+    const payload = asset.payload as {
+      readonly lods?: readonly {
+        readonly mesh?: unknown;
+        readonly meshGuid?: unknown;
+        readonly screenCoverage?: unknown;
+      }[];
+      readonly lodHysteresis?: unknown;
+    };
+    if (payload.lods === undefined) continue;
+    const lods = payload.lods.map((level) => ({
+      meshGuid:
+        typeof level.meshGuid === 'string'
+          ? level.meshGuid
+          : typeof level.mesh === 'string'
+            ? level.mesh
+            : JSON.stringify(level.mesh),
+      screenCoverage: level.screenCoverage,
+    }));
+    const validated = validateMeshLodContract({
+      lods: lods as readonly { meshGuid: string; screenCoverage: number }[],
+      ...(payload.lodHysteresis === undefined
+        ? {}
+        : { lodHysteresis: payload.lodHysteresis as number }),
+    });
+    if (!validated.ok) {
+      return errResult(
+        new ImportError({
+          code: validated.error.code,
+          expected: 'MeshAsset LOD facts to satisfy the shared contract',
+          hint: IMPORT_ERROR_HINTS[validated.error.code],
+          detail: {
+            meshLodSourceKey: declarationsSourceKey(meta.subAssets, asset.guid),
+            reason: validated.error.reason,
+            ...(validated.error.code === 'mesh-lod-topology-change'
+              ? {
+                  previousIndices: validated.error.previousIndices,
+                  nextIndices: validated.error.nextIndices,
+                }
+              : {}),
+          },
+        }),
+      );
+    }
+  }
+
   // GUID import-stable iron law: the produced GUID set must be a superset of
   // the declared set, and must not contain any GUID the meta never declared.
   const declared = new Set(meta.subAssets.map((s) => s.guid));
@@ -653,6 +729,25 @@ export async function runImport(
     );
   }
 
+  let materialCookFingerprints: readonly string[];
+  try {
+    const cooked = await cookImportedMaterials(product, meta, cookers);
+    product = cooked.product;
+    materialCookFingerprints = cooked.fingerprints;
+    if (materialCookFingerprints.length > 0)
+      for (const path of product.sourceDependencies) dependencies.add(dependencyIdentity(fs, path));
+  } catch (error) {
+    if (error instanceof ImportError) return errResult(error);
+    return errResult(
+      new ImportError({
+        code: 'import-internal-error',
+        expected: 'the registered material cooker to finish before source publication',
+        hint: 'repair the imported material or its cooker and rebuild the source package',
+        detail: { reason: error instanceof Error ? error.message : String(error) },
+      }),
+    );
+  }
+
   const declarations = new Map(
     meta.subAssets.map((declaration) => [declaration.guid, declaration]),
   );
@@ -660,7 +755,7 @@ export async function runImport(
     ...product,
     sourceDependencies: [...dependencies],
   };
-  const inputFingerprint = `source:${[...dependencies].sort().join('|')}`;
+  const inputFingerprint = `source:${[...dependencies].sort().join('|')}${materialCookFingerprints.length === 0 ? '' : `|native:${materialCookFingerprints.join('|')}`}`;
   let cookProducts: readonly CookProduct[];
   try {
     cookProducts = await finalizeImportProducts(productWithDependencies, inputFingerprint);
@@ -707,7 +802,7 @@ export async function runImport(
     };
   }
 
-  const assets = produced.map((a) => {
+  const assets = productWithDependencies.assets.map((a) => {
     const outputFields = declarationFields(declarations.get(a.guid));
     return {
       guid: a.guid,

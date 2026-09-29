@@ -99,6 +99,33 @@ describe('canonical replication packet codec', () => {
     expect(decoded.error.code).toBe('decode-invalid-payload');
   });
 
+  it.each(['constructor', 'toString', 'unknown'])(
+    'rejects non-own or unknown typed-array label %s',
+    (label) => {
+      const malformed = {
+        ...packet,
+        entities: [
+          {
+            ...packet.entities[0]!,
+            components: [
+              {
+                name: 'PositionCodec',
+                data: { nested: { $typedArray: label, values: [1, 2, 3] } },
+              },
+            ],
+          },
+        ],
+      };
+      const decoded = decodeReplicationPacket(
+        new TextEncoder().encode(`FXRP2\n${JSON.stringify(malformed)}`),
+        DEFAULT_REPLICATION_LIMITS,
+      );
+      expect(decoded.ok).toBe(false);
+      if (decoded.ok) return;
+      expect(decoded.error.code).toBe('decode-invalid-payload');
+    },
+  );
+
   it('rejects a component removal that carries replacement data', () => {
     const malformed = {
       ...packet,

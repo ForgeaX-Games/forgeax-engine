@@ -10,18 +10,18 @@
 // must be replaced by buildBindGroupLayoutDescriptor calls without changing
 // what the device sees.
 
+import { STANDARD_PIPELINE_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import { describe, expect, it } from 'vitest';
 import {
   appendInjection,
   buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
+  materialBindGroupLayoutIdentity,
 } from '../../../render/src/pbr-pipeline';
 import type { PipelineSpec } from '../../../render/src/pipeline-spec';
 import { buildBindGroupLayoutDescriptor } from '../../../render/src/pipeline-spec';
 
-// Stable spec stub — the dispatcher uses spec.shader for reflection only when
-// a registry is supplied; without registry the BGL shape comes purely from
-// the kind + caps inputs.
+// Standard identity selects its shared backdrop sampler policy.
 function makeSpec(): PipelineSpec {
   return {
     shader: {
@@ -44,30 +44,32 @@ function makeSpec(): PipelineSpec {
 
 describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', () => {
   describe('pbr-view', () => {
-    it('storageBuffer=true: 10 entries with read-only-storage on bindings 1+2', () => {
+    it('storageBuffer=true: 12 entries with projector and cloud bindings', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-view',
-        caps: { storageBuffer: true },
+        caps: { storageBuffer: true, extendedLighting: false },
       });
       const expected = {
         label: 'pbr-view-bgl',
-        entries: buildPbrViewBglEntries({ storageBuffer: true }),
+        entries: buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }),
       };
       expect(out).toEqual(expected);
-      // feat-20260625-spot-light-shadow-mapping: binding 8 (spot shadow atlas,
-      // w14) raised the view BGL to 9 entries (always-on, D-5). The
-      // Points/Lines viewport UBO occupies binding 10, while w25 (scope-amend
-      // webkit-fallback) folded the former binding 9 spotLightViewProj matrices
-      // UBO into the View UBO (`view.spotLightViewProj`), so the BGL stays at 9
-      // entries (bindings 0..8 plus binding 10) — keeping the WebGL2 fallback fragment uniform-
-      // buffer count <= 11 (GLES 3.0).
-      expect(out.entries.length).toBe(10);
+      // Binding 8 is the always-on spot shadow atlas, binding 10 is the
+      // Points/Lines viewport UBO, bindings 11/12 are the optional projector
+      // resources, and bindings 16/17 carry the renderer-owned cloud shadow
+      // map. Local lights are exclusively carried by the Standard Cluster
+      // group(2), so the view group has no point/spot slots.
+      expect(out.entries.length).toBe(12);
       expect(out.entries.find((entry) => entry.binding === 9)).toBeUndefined();
       expect(out.entries.find((entry) => entry.binding === 10)?.buffer?.type).toBe('uniform');
+      expect(out.entries.find((entry) => entry.binding === 11)?.texture?.viewDimension).toBe('2d');
+      expect(out.entries.find((entry) => entry.binding === 12)?.sampler?.type).toBe('filtering');
+      expect(out.entries.find((entry) => entry.binding === 16)?.texture?.viewDimension).toBe('2d');
+      expect(out.entries.find((entry) => entry.binding === 17)?.sampler?.type).toBe('filtering');
     });
 
-    it('storageBuffer=false: bindings 1+2 fall back to uniform', () => {
+    it('storageBuffer=false: view group still has no local-light bindings', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-view',
@@ -78,26 +80,108 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: buildPbrViewBglEntries({ storageBuffer: false }),
       };
       expect(out).toEqual(expected);
+      expect(out.entries.some((entry) => entry.binding === 1 || entry.binding === 2)).toBe(false);
+    });
+
+    it('projectorAvailable=false: omits optional projector bindings for the 16-texture limit', () => {
+      const spec = makeSpec();
+      const out = buildBindGroupLayoutDescriptor(spec, {
+        kind: 'pbr-view',
+        caps: { storageBuffer: true, projectorAvailable: false, extendedLighting: false },
+      });
+      expect(out).toEqual({
+        label: 'pbr-view-bgl',
+        entries: buildPbrViewBglEntries({
+          storageBuffer: true,
+          projectorAvailable: false,
+          extendedLighting: false,
+        }),
+      });
+      expect(out.entries.find((entry) => entry.binding === 11)).toBeUndefined();
+      expect(out.entries.find((entry) => entry.binding === 12)).toBeUndefined();
+      expect(out.entries.find((entry) => entry.binding === 10)?.buffer?.type).toBe('uniform');
     });
   });
 
   describe('pbr-material-merged', () => {
-    it('24 entries: user-region 13 (derived) + ibl 7 + lightmap 4', () => {
+    it('preserves authored float-data texture types in canonical and physical slots', () => {
+      const schema = [
+        {
+          name: 'baseColorTexture',
+          type: 'texture2d' as const,
+          sampleType: 'unfilterable-float' as const,
+        },
+        {
+          name: 'clearcoatTexture',
+          type: 'texture2d' as const,
+          sampleType: 'unfilterable-float' as const,
+        },
+      ];
+      const out = buildBindGroupLayoutDescriptor(makeSpec(), {
+        kind: 'pbr-material-merged',
+        materialParamSchema: schema,
+      });
+      expect(out.entries.find((entry) => entry.binding === 2)?.texture?.sampleType).toBe(
+        'unfilterable-float',
+      );
+      expect(out.entries.find((entry) => entry.binding === 49)?.texture?.sampleType).toBe(
+        'unfilterable-float',
+      );
+      expect(out.entries.find((entry) => entry.binding === 4)?.texture?.sampleType).toBe('float');
+      expect(materialBindGroupLayoutIdentity(makeSpec().shader.id, schema)).not.toBe(
+        materialBindGroupLayoutIdentity(
+          makeSpec().shader.id,
+          schema.map(({ sampleType, ...entry }) => entry),
+        ),
+      );
+    });
+    it('32 entries: user-region 25 - shared pairs 2 + IBL 6 + backdrop 1 + scene material 1 + global specular 1', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-material-merged',
       });
-      // Post-M2 (D-1): user-region comes from derive(paramSchema).bglEntries
-      // (built-in standard-PBR 4-texture fallback), then IBL + lightmap are
-      // appended at start = userRegion.length.
-      const userRegion = buildPbrMaterialUserRegionEntries();
+      // Twelve map pairs follow the UBO; displacement is visible only to the vertex stage.
+      const userRegion = buildPbrMaterialUserRegionEntries(
+        STANDARD_PIPELINE_PARAM_SCHEMA,
+        [],
+        ['displacementTexture'],
+      );
       const afterIbl = [...userRegion, ...appendInjection(userRegion, 'ibl')];
       const expected = {
         label: 'pbr-material-skylight-bgl',
-        entries: [...afterIbl, ...appendInjection(afterIbl, 'lightmap')],
+        entries: [
+          ...afterIbl.filter((entry) => ![15, 16].includes(entry.binding)),
+          ...appendInjection(afterIbl, 'transmission').filter(
+            (entry) => ![15, 16, 31].includes(entry.binding),
+          ),
+          {
+            binding: 46,
+            visibility: 0x1 | 0x2,
+            buffer: { type: 'read-only-storage', hasDynamicOffset: false },
+          },
+          {
+            binding: 47,
+            visibility: 0x2,
+            texture: { sampleType: 'float', viewDimension: 'cube' },
+          },
+        ],
       };
       expect(out).toEqual(expected);
-      expect(out.entries.length).toBe(24);
+      expect(out.entries.length).toBe(32);
+    });
+
+    it('adds only authored physical map pairs after the canonical injection chain', () => {
+      const schema = [
+        ...STANDARD_PIPELINE_PARAM_SCHEMA,
+        { name: 'clearcoat', type: 'f32' as const },
+        { name: 'clearcoatTexture', type: 'texture2d' as const },
+        { name: 'clearcoatNormalTexture', type: 'texture2d' as const },
+      ];
+      const out = buildBindGroupLayoutDescriptor(makeSpec(), {
+        kind: 'pbr-material-merged',
+        materialParamSchema: schema,
+      });
+      expect(out.entries.slice(30).map((entry) => entry.binding)).toEqual([48, 49, 52, 53, 46, 47]);
     });
   });
 
@@ -131,7 +215,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('pbr-instances', () => {
-    it('storageBuffer=true: 1 entry with read-only-storage, no dynamic offset', () => {
+    it('storageBuffer=true: one vertex-visible read-only-storage entry', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-instances',
@@ -142,25 +226,34 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: 0x3,
             buffer: { type: 'read-only-storage', hasDynamicOffset: false },
           },
         ],
       });
     });
 
-    it('storageBuffer=false: falls back to uniform', () => {
+    it('storageBuffer=false: one entry falls back to uniform', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-instances',
         caps: { storageBuffer: false },
       });
-      expect(out.entries[0]?.buffer?.type).toBe('uniform');
+      expect(out).toEqual({
+        label: 'pbr-instances-bgl',
+        entries: [
+          {
+            binding: 0,
+            visibility: 0x3,
+            buffer: { type: 'uniform', hasDynamicOffset: false },
+          },
+        ],
+      });
     });
   });
 
   describe('pbr-skin-mesh-array', () => {
-    it('storageBuffer=true: 2 entries, both dynamic offset', () => {
+    it('storageBuffer=true: 3 entries, all dynamic offset', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-skin-mesh-array',
@@ -171,11 +264,16 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: 0x3,
             buffer: { type: 'read-only-storage', hasDynamicOffset: true },
           },
           {
             binding: 1,
+            visibility: 0x1,
+            buffer: { type: 'read-only-storage', hasDynamicOffset: true },
+          },
+          {
+            binding: 2,
             visibility: 0x1,
             buffer: { type: 'read-only-storage', hasDynamicOffset: true },
           },
@@ -185,7 +283,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('unlit-material', () => {
-    it('13 entries: base PBR material only (no skylight injection)', () => {
+    it('25 entries: base PBR material only (no skylight injection)', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'unlit-material',
@@ -194,7 +292,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         label: 'unlit-material-bgl',
         entries: buildPbrMaterialUserRegionEntries(),
       });
-      expect(out.entries.length).toBe(13);
+      expect(out.entries.length).toBe(25);
     });
   });
 });

@@ -1,0 +1,516 @@
+{
+  "schema": "forgeax.three-object-comparison.v1",
+  "status": "ok",
+  "generatedAt": "2026-09-04T17:41:04.875Z",
+  "engineCommit": "07efafb3075b087729db3baf4d182da43119e3e6",
+  "threeVersion": "0.184.0",
+  "backend": "webgpu",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+  "viewport": {
+    "width": 320,
+    "height": 180,
+    "deviceScaleFactor": 1
+  },
+  "config": {
+    "cubes": 100000,
+    "pointLights": 16,
+    "spotLights": 16,
+    "warmupFrames": 10,
+    "measureFrames": 30,
+    "runs": 1,
+    "port": 5207,
+    "timeoutMs": 300000,
+    "cpuProfile": false
+  },
+  "workload": {
+    "identity": "perf-10k-cubes-lights/v1",
+    "fingerprint": "perf-10k-cubes-lights/v1|seed=17566517|bounds=-24,-16,-24..24,16,24|mesh=HANDLE_CUBE|material=shared-standard-pbr|camera=center-yaw|cubes=100000|pointLights=16|spotLights=16|hash=3ef421ee",
+    "seed": 17566517,
+    "volume": {
+      "min": [
+        -24,
+        -16,
+        -24
+      ],
+      "max": [
+        24,
+        16,
+        24
+      ]
+    },
+    "material": "standard-pbr / MeshStandardMaterial",
+    "objectPath": "10,000 independent render objects; no instancing",
+    "query": "?cubes=100000&pointLights=16&spotLights=16&profile=0"
+  },
+  "summary": {
+    "forgeax": {
+      "validRuns": 1,
+      "totalRuns": 1,
+      "frameTimeMs": {
+        "count": 29,
+        "min": 50,
+        "median": 66.60000000000036,
+        "p95": 76.69999999999987,
+        "max": 83.29999999999973,
+        "mean": 64.36206896551724
+      },
+      "fps": {
+        "count": 29,
+        "min": 12.004801920768347,
+        "median": 15.015015015014933,
+        "p95": 20,
+        "max": 20,
+        "mean": 15.82870138228608,
+        "p05": 12.004801920768347
+      },
+      "perRunMedianFrameTimeMs": [
+        66.60000000000036
+      ],
+      "perRunMedianFps": [
+        15.015015015014933
+      ],
+      "perRunP05Fps": [
+        12.004801920768347
+      ],
+      "cubeUpdateMs": {
+        "count": 1,
+        "min": 1.1000001430511475,
+        "median": 1.1000001430511475,
+        "p95": 1.1000001430511475,
+        "max": 1.1000001430511475,
+        "mean": 1.1000001430511475
+      },
+      "renderMs": null,
+      "bootstrapMs": {
+        "count": 1,
+        "min": 1192.7000000476837,
+        "median": 1192.7000000476837,
+        "p95": 1192.7000000476837,
+        "max": 1192.7000000476837,
+        "mean": 1192.7000000476837
+      }
+    },
+    "three": {
+      "validRuns": 1,
+      "totalRuns": 1,
+      "frameTimeMs": {
+        "count": 29,
+        "min": 116.70000000000027,
+        "median": 133.30000000000018,
+        "p95": 133.40000000000055,
+        "max": 150.10000000000036,
+        "mean": 133.32758620689654
+      },
+      "fps": {
+        "count": 29,
+        "min": 6.662225183211176,
+        "median": 7.5018754688672065,
+        "p95": 7.501875468867258,
+        "max": 8.56898029134531,
+        "mean": 7.508555226384343,
+        "p05": 7.496251874062938
+      },
+      "perRunMedianFrameTimeMs": [
+        133.30000000000018
+      ],
+      "perRunMedianFps": [
+        7.5018754688672065
+      ],
+      "perRunP05Fps": [
+        7.496251874062938
+      ],
+      "cubeUpdateMs": {
+        "count": 1,
+        "min": 9.049999952316284,
+        "median": 9.049999952316284,
+        "p95": 9.049999952316284,
+        "max": 9.049999952316284,
+        "mean": 9.049999952316284
+      },
+      "renderMs": {
+        "count": 1,
+        "min": 124.14999997615814,
+        "median": 124.14999997615814,
+        "p95": 124.14999997615814,
+        "max": 124.14999997615814,
+        "mean": 124.14999997615814
+      },
+      "bootstrapMs": {
+        "count": 1,
+        "min": 332.09999990463257,
+        "median": 332.09999990463257,
+        "p95": 332.09999990463257,
+        "max": 332.09999990463257,
+        "mean": 332.09999990463257
+      }
+    },
+    "ratios": {
+      "threeOverForgeaxFrameTimeMedian": 2.0015015015014934,
+      "forgeaxOverThreeFpsMedian": 2.0015015015014934,
+      "threeOverForgeaxUpdateMedian": 8.227271613996036
+    }
+  },
+  "runs": [
+    {
+      "implementation": "forgeax",
+      "run": 1,
+      "valid": true,
+      "errors": [],
+      "pageErrors": [],
+      "consoleErrors": [],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+      "devicePixelRatio": 1,
+      "cpuProfilePath": null,
+      "screenshotPath": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/overflow/feat-20260901-ecs-transform-render-dataflow-rearchitecture/apps/perf/10k-cubes-lights/artifacts/forgeax-100000-run-1.png",
+      "evidence": {
+        "backend": "webgpu",
+        "workloadFingerprint": "perf-10k-cubes-lights/v1|seed=17566517|bounds=-24,-16,-24..24,16,24|mesh=HANDLE_CUBE|material=shared-standard-pbr|camera=center-yaw|cubes=100000|pointLights=16|spotLights=16|hash=3ef421ee",
+        "seed": 17566517,
+        "requestedCounts": {
+          "cubeCount": 100000,
+          "pointLightCount": 16,
+          "spotLightCount": 16
+        },
+        "postSpawn": {
+          "cubeCount": 100000,
+          "pointLightCount": 16,
+          "spotLightCount": 16,
+          "meshHandleMatches": 100000,
+          "materialHandleMatches": 100000,
+          "positionChecksum": "60079430"
+        },
+        "frameProgress": 41,
+        "processedCubeCount": 100000,
+        "cameraRotationRadians": 0.4813379999828339,
+        "bootstrapMs": 1192.7000000476837,
+        "frameErrors": [],
+        "appRendererErrors": [],
+        "profileCapture": null,
+        "profileSummary": null,
+        "rendererInfo": null,
+        "rendererInspection": null
+      },
+      "samples": {
+        "intervalsMs": [
+          66.59999999999991,
+          50,
+          83.29999999999973,
+          66.70000000000027,
+          50,
+          83.29999999999973,
+          66.70000000000027,
+          66.59999999999991,
+          66.69999999999982,
+          50,
+          66.70000000000027,
+          66.69999999999982,
+          50,
+          66.59999999999991,
+          66.70000000000027,
+          66.59999999999991,
+          50,
+          66.69999999999982,
+          66.70000000000027,
+          66.59999999999991,
+          66.59999999999991,
+          66.80000000000018,
+          66.59999999999991,
+          66.69999999999982,
+          50,
+          66.60000000000036,
+          66.69999999999982,
+          66.69999999999982,
+          66.60000000000036
+        ],
+        "fps": [
+          15.015015015015036,
+          20,
+          12.004801920768347,
+          14.992503748125875,
+          20,
+          12.004801920768347,
+          14.992503748125875,
+          15.015015015015036,
+          14.992503748125978,
+          20,
+          14.992503748125875,
+          14.992503748125978,
+          20,
+          15.015015015015036,
+          14.992503748125875,
+          15.015015015015036,
+          20,
+          14.992503748125978,
+          14.992503748125875,
+          15.015015015015036,
+          15.015015015015036,
+          14.97005988023948,
+          15.015015015015036,
+          14.992503748125978,
+          20,
+          15.015015015014933,
+          14.992503748125978,
+          14.992503748125978,
+          15.015015015014933
+        ],
+        "frameTimeMs": {
+          "count": 29,
+          "min": 50,
+          "median": 66.60000000000036,
+          "p95": 76.69999999999987,
+          "max": 83.29999999999973,
+          "mean": 64.36206896551724
+        },
+        "fpsStats": {
+          "count": 29,
+          "min": 12.004801920768347,
+          "median": 15.015015015014933,
+          "p95": 20,
+          "max": 20,
+          "mean": 15.82870138228608
+        },
+        "fpsP05": 12.004801920768347,
+        "rafWork": {
+          "frameCount": 30,
+          "callbackCount": 88,
+          "totalCallbackMs": {
+            "count": 30,
+            "min": 59.30000019073486,
+            "median": 63.90000009536743,
+            "p95": 70.66000002622604,
+            "max": 81.30000019073486,
+            "mean": 64.86666669050852
+          },
+          "maxCallbackMs": {
+            "count": 30,
+            "min": 59.30000019073486,
+            "median": 63.90000009536743,
+            "p95": 70.60499994754791,
+            "max": 81.30000019073486,
+            "mean": 64.85333335399628
+          },
+          "callbackCountPerFrame": {
+            "count": 30,
+            "min": 2,
+            "median": 3,
+            "p95": 3,
+            "max": 3,
+            "mean": 2.933333333333333
+          }
+        },
+        "cubeUpdateMs": {
+          "count": 30,
+          "min": 1,
+          "median": 1.1000001430511475,
+          "p95": 1.2000000476837158,
+          "max": 1.2000000476837158,
+          "mean": 1.1333333651224773
+        },
+        "renderMs": null
+      }
+    },
+    {
+      "implementation": "three",
+      "run": 1,
+      "valid": true,
+      "errors": [],
+      "pageErrors": [],
+      "consoleErrors": [],
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+      "devicePixelRatio": 1,
+      "cpuProfilePath": null,
+      "screenshotPath": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/overflow/feat-20260901-ecs-transform-render-dataflow-rearchitecture/apps/perf/10k-cubes-lights/artifacts/three-100000-run-1.png",
+      "evidence": {
+        "implementation": "three",
+        "version": "0.184.0",
+        "backend": "webgpu",
+        "workloadFingerprint": "perf-10k-cubes-lights/v1|seed=17566517|bounds=-24,-16,-24..24,16,24|mesh=HANDLE_CUBE|material=shared-standard-pbr|camera=center-yaw|cubes=100000|pointLights=16|spotLights=16|hash=3ef421ee",
+        "seed": 17566517,
+        "requestedCounts": {
+          "cubeCount": 100000,
+          "pointLightCount": 16,
+          "spotLightCount": 16
+        },
+        "postSpawn": {
+          "cubeCount": 100000,
+          "pointLightCount": 16,
+          "spotLightCount": 16,
+          "positionChecksum": "60079430"
+        },
+        "frameProgress": 41,
+        "processedCubeCount": 100000,
+        "cameraRotationRadians": 0.12300000000000008,
+        "bootstrapMs": 332.09999990463257,
+        "frameErrors": [],
+        "appRendererErrors": [],
+        "profileCapture": null,
+        "profileSummary": null,
+        "rendererInfo": {
+          "autoReset": true,
+          "frame": 42,
+          "calls": 82,
+          "render": {
+            "calls": 82,
+            "frameCalls": 2,
+            "drawCalls": 15724,
+            "triangles": 188677,
+            "points": 0,
+            "lines": 0,
+            "timestamp": 0
+          },
+          "compute": {
+            "calls": 0,
+            "frameCalls": 0,
+            "timestamp": 0
+          },
+          "memory": {
+            "geometries": 2,
+            "textures": 3,
+            "attributes": 3,
+            "indexAttributes": 1,
+            "storageAttributes": 0,
+            "indirectStorageAttributes": 0,
+            "readbackBuffers": 0,
+            "programs": 4,
+            "renderTargets": 1,
+            "total": 843025,
+            "texturesSize": 692224,
+            "attributesSize": 612,
+            "indexAttributesSize": 144,
+            "storageAttributesSize": 0,
+            "indirectStorageAttributesSize": 0,
+            "readbackBuffersSize": 0,
+            "programsSize": 150045
+          },
+          "memoryMap": {}
+        },
+        "rendererInspection": null
+      },
+      "samples": {
+        "intervalsMs": [
+          133.30000000000018,
+          133.4000000000001,
+          133.29999999999973,
+          133.30000000000018,
+          133.4000000000001,
+          133.29999999999973,
+          116.70000000000027,
+          133.29999999999973,
+          133.30000000000018,
+          133.30000000000018,
+          133.29999999999973,
+          133.4000000000001,
+          133.30000000000018,
+          133.29999999999973,
+          133.29999999999973,
+          133.40000000000055,
+          133.30000000000018,
+          133.29999999999927,
+          133.40000000000055,
+          133.30000000000018,
+          133.29999999999927,
+          133.30000000000018,
+          133.30000000000018,
+          133.39999999999964,
+          133.30000000000018,
+          150.10000000000036,
+          133.30000000000018,
+          133.29999999999927,
+          133.30000000000018
+        ],
+        "fps": [
+          7.5018754688672065,
+          7.496251874062963,
+          7.501875468867232,
+          7.5018754688672065,
+          7.496251874062963,
+          7.501875468867232,
+          8.56898029134531,
+          7.501875468867232,
+          7.5018754688672065,
+          7.5018754688672065,
+          7.501875468867232,
+          7.496251874062963,
+          7.5018754688672065,
+          7.501875468867232,
+          7.501875468867232,
+          7.496251874062938,
+          7.5018754688672065,
+          7.501875468867258,
+          7.496251874062938,
+          7.5018754688672065,
+          7.501875468867258,
+          7.5018754688672065,
+          7.5018754688672065,
+          7.496251874062989,
+          7.5018754688672065,
+          6.662225183211176,
+          7.5018754688672065,
+          7.501875468867258,
+          7.5018754688672065
+        ],
+        "frameTimeMs": {
+          "count": 29,
+          "min": 116.70000000000027,
+          "median": 133.30000000000018,
+          "p95": 133.40000000000055,
+          "max": 150.10000000000036,
+          "mean": 133.32758620689654
+        },
+        "fpsStats": {
+          "count": 29,
+          "min": 6.662225183211176,
+          "median": 7.5018754688672065,
+          "p95": 7.501875468867258,
+          "max": 8.56898029134531,
+          "mean": 7.508555226384343
+        },
+        "fpsP05": 7.496251874062938,
+        "rafWork": {
+          "frameCount": 30,
+          "callbackCount": 118,
+          "totalCallbackMs": {
+            "count": 30,
+            "min": 130,
+            "median": 133.19999992847443,
+            "p95": 135.84000006914138,
+            "max": 137.70000004768372,
+            "mean": 133.23999998569488
+          },
+          "maxCallbackMs": {
+            "count": 30,
+            "min": 129.89999985694885,
+            "median": 133.19999992847443,
+            "p95": 135.84000006914138,
+            "max": 137.70000004768372,
+            "mean": 133.23333330949148
+          },
+          "callbackCountPerFrame": {
+            "count": 30,
+            "min": 3,
+            "median": 4,
+            "p95": 4,
+            "max": 4,
+            "mean": 3.933333333333333
+          }
+        },
+        "cubeUpdateMs": {
+          "count": 30,
+          "min": 8.599999904632568,
+          "median": 9.049999952316284,
+          "p95": 9.455000042915344,
+          "max": 9.5,
+          "mean": 9.05999998251597
+        },
+        "renderMs": {
+          "count": 30,
+          "min": 120.89999985694885,
+          "median": 124.14999997615814,
+          "p95": 126.63000003099441,
+          "max": 128.60000014305115,
+          "mean": 124.15999999841054
+        }
+      }
+    }
+  ]
+}

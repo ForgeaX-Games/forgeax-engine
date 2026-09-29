@@ -1,25 +1,22 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
-import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { createParticleCodeNativeCookerFromRoots } from '@forgeax/engine-vfx-compiler';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
-import { defineConfig } from 'vite';
+import { withRhiDebug } from '../../shared/src/rhi-debug-vite-preset';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const monorepoRoot = resolve(here, '..', '..', '..');
 const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-boss-lightning');
-export default defineConfig({
-  plugins: [
-    forgeaxShader({
-      materialPackages: [
-        resolve(here, 'assets/arc-nova-sigil.shader.pack.json'),
-        resolve(here, 'assets/arc-nova-violet-sigil.shader.pack.json'),
-        resolve(here, 'assets/arc-nova-shard.shader.pack.json'),
-        resolve(here, 'assets/arc-nova-ember-shard.shader.pack.json'),
-      ],
-    }) as never,
+export default withRhiDebug({
+  here,
+  rootDepth: 3,
+  port: 5274,
+  materialPackages: [
+    resolve(here, 'assets/arc-nova-sigil.shader.pack.json'),
+    resolve(here, 'assets/arc-nova-violet-sigil.shader.pack.json'),
+  ],
+  extraPlugins: [
     pluginPack({
       roots: [resolve(here, 'assets')],
       cookers: [
@@ -30,11 +27,4 @@ export default defineConfig({
       runtimeBinding,
     }),
   ],
-  server: {
-    fs: { allow: [monorepoRoot] },
-  },
-  build: {
-    target: 'esnext',
-    rollupOptions: { input: { main: resolve(here, 'index.html') } },
-  },
 });

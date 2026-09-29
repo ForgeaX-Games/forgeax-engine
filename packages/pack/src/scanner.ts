@@ -9,23 +9,28 @@ import type {
   SourceOverrideDescriptor,
 } from '@forgeax/engine-types';
 import { PACK_ERROR_HINTS } from '@forgeax/engine-types';
-import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
-import { isValidAssetGuidString } from './guid.js';
+import { isValidAssetGuidString, PackageId } from './guid.js';
+import {
+  type AnyScriptablePackDefinition,
+  parsePackSourceJson,
+  projectDirectPackJson,
+  projectScriptablePackMeta,
+  type ScriptablePackSourceMeta,
+} from './pack-authoring.js';
 import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import { validateMeta, validatePack } from './schema-compiled.js';
-import {
-  projectScriptablePackMeta,
-  type ScriptablePackDefinition,
-  type ScriptablePackMetaJson,
-  type ScriptablePackSourceClosureEntry,
-} from './scriptable-pack.js';
+import type { ScriptablePackSourceClosureEntry } from './scriptable-pack.js';
 import {
   inventoryScriptablePackSource,
   loadScriptablePack,
   type ScriptablePackModuleExecutor,
 } from './scriptable-pack-node.js';
+import {
+  createScriptablePackSourceSnapshot,
+  type ScriptablePackSourceSnapshot,
+} from './scriptable-pack-source-snapshot.js';
 
 // Minimal Result<T, E> — structurally compatible with @forgeax/engine-rhi Result
 // but defined locally to avoid a heavy runtime dep in this build-time package.
@@ -41,6 +46,10 @@ function packErr<E>(error: E): ScanResult<never, E> {
   return { ok: false, error };
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /** Host-owned source paths that should not enter the Pack catalog. */
 export interface ScanOptions {
   readonly ignorePath?: (path: string) => boolean;
@@ -49,6 +58,7 @@ export interface ScanOptions {
 
 /** One bounded executor policy shared by ScriptablePack inventory and production. */
 export interface ScriptablePackScanOptions {
+  readonly sourceSnapshot?: ScriptablePackSourceSnapshot;
   readonly timeoutMs?: number;
   readonly buildTimeoutMs?: number;
   readonly executor?: ScriptablePackModuleExecutor;
@@ -57,9 +67,13 @@ export interface ScriptablePackScanOptions {
 }
 
 /** Stable default policy shared by inventory and production owners. */
-export const STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS = Object.freeze(
-  {},
-) satisfies ScriptablePackScanOptions;
+export const STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS = Object.freeze({
+  // Scriptable Packs execute in an isolated worker. A cold worker must compile
+  // the authored source closure before it can return metadata. Keep the bound
+  // finite while allowing a heavy character/scene closure to complete on a
+  // busy host.
+  timeoutMs: 120_000,
+}) satisfies ScriptablePackScanOptions;
 
 export interface InventoryDeclaration {
   readonly guid: string;
@@ -80,8 +94,8 @@ export interface ScanInventory {
 export interface ScriptablePackInventoryDeclaration {
   readonly sourcePath: string;
   readonly sourceRevision: string;
-  readonly meta: ScriptablePackMetaJson;
-  readonly definition: Readonly<ScriptablePackDefinition>;
+  readonly meta: ScriptablePackSourceMeta;
+  readonly definition: Readonly<AnyScriptablePackDefinition>;
   readonly sourceClosure: readonly ScriptablePackSourceClosureEntry[];
 }
 
@@ -110,7 +124,7 @@ export interface MetaInventorySubAsset {
   readonly kind: string;
 }
 
-export interface PackInventoryDocument {
+export interface LegacyPackInventoryDocument {
   readonly schemaVersion: '1.0.0' | '2.0.0';
   readonly kind: 'internal-text-package';
   readonly packageId?: string;
@@ -119,6 +133,16 @@ export interface PackInventoryDocument {
   readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly assets: readonly PackInventoryAsset[];
 }
+
+export interface PackSourceInventoryDocument {
+  readonly schemaVersion: '3.0.0';
+  readonly packageId: string;
+  readonly assets?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly parent?: string;
+  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+export type PackInventoryDocument = LegacyPackInventoryDocument | PackSourceInventoryDocument;
 
 export interface PackInventoryAsset {
   readonly guid: string;
@@ -146,12 +170,14 @@ export type ScanSourceDeclaration =
       readonly sourceText: string;
       readonly value: PackInventoryDocument;
     }
-  | ({
+  | {
       readonly format: 'pack.ts';
       readonly sourcePath: string;
       readonly sourceRevision: string;
-      readonly value: ScriptablePackMetaJson;
-    } & ScriptablePackInventoryDeclaration);
+      readonly value: ScriptablePackSourceMeta;
+      readonly definition: AnyScriptablePackDefinition;
+      readonly sourceClosure: readonly ScriptablePackSourceClosureEntry[];
+    };
 
 interface ScanCapture {
   readonly declarations: Map<string, ScanSourceDeclaration>;
@@ -163,12 +189,13 @@ interface ScanCapture {
  * Requirements §3.4 + §5 blacklist.
  *
  * Re-exported as `SCANNER_BLACKLIST` for cross-package reuse: the
- * `forgeax-engine-remote-asset import --check` traversal (M4 / w21 +
+ * `forgeax asset import --check` traversal (M4 / w21 +
  * plan-strategy section 2.8 path b) walks the same set of source-orphan
  * candidates as the scanner, so we share the single SSOT here.
  */
 const BLACKLIST = new Set([
   'node_modules',
+  '__tests__',
   '.forgeax-harness',
   '.forgeax',
   '.git',
@@ -234,27 +261,35 @@ function makePackError(
 }
 
 /**
- * For scene assets with `payload.mounts[]`, return the lowercased GUID
- * each `mount.source` integer resolves to via `asset.refs[]`. Returns an
- * empty iterable for non-scene assets, scene assets without mounts, or
- * mounts with malformed `source` (out-of-range integer / non-integer) —
- * those are caught by ajv schema validation upstream. The yielded GUIDs
- * feed scanner step-6's mount-asset cycle DFS (D-1, R10).
+ * For keyed scene assets, return the lowercased GUID each nested instance
+ * source resolves to via `asset.refs[]` (or directly carries). The yielded GUIDs feed
+ * scanner step-6's scene dependency cycle DFS.
  */
-function* extractMountSourceGuids(asset: {
+function* extractInstanceSourceGuids(asset: {
   kind?: unknown;
   payload?: unknown;
   refs: readonly string[];
 }): Generator<string> {
   if (asset.kind !== 'scene') return;
-  const payload = asset.payload as { mounts?: unknown } | undefined;
-  if (!payload || !Array.isArray(payload.mounts)) return;
-  for (const rawMount of payload.mounts) {
-    const mount = rawMount as { source?: unknown };
-    const idx = mount.source;
-    if (typeof idx !== 'number' || !Number.isInteger(idx)) continue;
-    if (idx < 0 || idx >= asset.refs.length) continue;
-    const resolved = asset.refs[idx];
+  const payload = asset.payload as { entities?: unknown } | undefined;
+  if (
+    !payload ||
+    payload.entities === null ||
+    typeof payload.entities !== 'object' ||
+    Array.isArray(payload.entities)
+  )
+    return;
+  for (const rawEntity of Object.values(payload.entities as Record<string, unknown>)) {
+    if (rawEntity === null || typeof rawEntity !== 'object' || Array.isArray(rawEntity)) continue;
+    const instance = (rawEntity as { instance?: unknown }).instance;
+    if (instance === null || typeof instance !== 'object' || Array.isArray(instance)) continue;
+    const source = (instance as { source?: unknown }).source;
+    const resolved =
+      typeof source === 'number' && Number.isInteger(source)
+        ? asset.refs[source]
+        : typeof source === 'string'
+          ? source
+          : undefined;
     if (typeof resolved !== 'string') continue;
     yield resolved.toLowerCase();
   }
@@ -283,6 +318,8 @@ async function scanValidated(
   // Step 1: collect all authored package declarations. ScriptablePack runtime
   // validation belongs to its trusted module loader; scanner only inventories
   // the source path so CLI/Vite share one discovery set.
+  const sourceSnapshot =
+    opts.scriptablePack?.sourceSnapshot ?? createScriptablePackSourceSnapshot();
   const rawPaths: string[] = [];
   const explicitRootSet = new Set(roots);
 
@@ -351,11 +388,98 @@ async function scanValidated(
   // kind stays in the path/detail evidence; identity is the normalized GUID.
   const guidToPath = new Map<string, string>();
   const packRefs = new Map<string, string[]>(); // guid -> refs[]
+  const packageIdToPath = new Map<string, string>();
+  const packageKind = new Map<string, 'legacy' | 'direct' | 'instance' | 'scriptable'>();
+  const instanceParents: {
+    readonly path: string;
+    readonly packageId: string;
+    readonly parent: string;
+  }[] = [];
+
+  function registerPackage(
+    packageId: string | undefined,
+    path: string,
+    kind: 'legacy' | 'direct' | 'instance' | 'scriptable',
+  ): PackError | undefined {
+    if (packageId === undefined) return undefined;
+    const normalized = packageId.toLowerCase();
+    const existing = packageIdToPath.get(normalized);
+    if (existing !== undefined) {
+      return makePackError('pack-guid-collision', {
+        paths: [existing, path],
+        guid: normalized,
+      });
+    }
+    packageIdToPath.set(normalized, path);
+    packageKind.set(normalized, kind);
+    return undefined;
+  }
 
   for (const packPath of packPaths) {
     const loaded = await readValidatedJson(packPath, 'pack-malformed-pack', validatePack);
     if (!loaded.ok) return loaded;
     const { raw, parsed } = loaded.value;
+
+    if (record(parsed) && parsed.schemaVersion === '3.0.0') {
+      const authoring = parsePackSourceJson(parsed);
+      if (!authoring.ok) {
+        return packErr(
+          makePackError('pack-malformed-pack', {
+            path: packPath,
+            ajvErrors: [{ instancePath: '', message: authoring.error.code }],
+          }),
+        );
+      }
+      const packageId = authoring.value.packageId;
+      const packageCollision = registerPackage(
+        PackageId.format(packageId),
+        packPath,
+        authoring.value.format,
+      );
+      if (packageCollision !== undefined) return packErr(packageCollision);
+      if (authoring.value.format === 'instance') {
+        instanceParents.push({
+          path: packPath,
+          packageId: PackageId.format(authoring.value.packageId),
+          parent: PackageId.format(authoring.value.parent),
+        });
+      } else {
+        const projected = projectDirectPackJson(authoring.value);
+        if (!projected.ok) {
+          return packErr(
+            makePackError('pack-malformed-pack', {
+              path: packPath,
+              ajvErrors: [{ instancePath: '/assets', message: projected.error.code }],
+            }),
+          );
+        }
+        for (const asset of projected.value.assets) {
+          const normalizedGuid = asset.guid.toLowerCase();
+          const existing = guidToPath.get(normalizedGuid);
+          if (existing !== undefined) {
+            return packErr(
+              makePackError('pack-guid-collision', {
+                paths: [existing, packPath],
+                guid: normalizedGuid,
+              }),
+            );
+          }
+          guidToPath.set(normalizedGuid, packPath);
+          packRefs.set(normalizedGuid, [
+            ...asset.refs.map((ref) => ref.toLowerCase()),
+            ...extractInstanceSourceGuids(asset),
+          ]);
+        }
+      }
+      capture?.declarations.set(packPath, {
+        format: 'pack.json',
+        sourcePath: packPath,
+        sourceRevision: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+        sourceText: raw,
+        value: parsed as unknown as PackSourceInventoryDocument,
+      });
+      continue;
+    }
 
     const packageContract = validateProducerContract(parsed);
     if (!packageContract.ok) {
@@ -368,7 +492,9 @@ async function scanValidated(
     }
 
     // Step 3: validate GUIDs in pack
-    const packObj = parsed as unknown as PackInventoryDocument;
+    const packObj = parsed as unknown as LegacyPackInventoryDocument;
+    const packageCollision = registerPackage(packObj.packageId, packPath, 'legacy');
+    if (packageCollision !== undefined) return packErr(packageCollision);
     for (const asset of packObj.assets) {
       if (
         asset.kind === 'particle-effect' &&
@@ -454,20 +580,12 @@ async function scanValidated(
       }
       guidToPath.set(normalizedGuid, packPath);
 
-      // feat-20260608-scene-nesting-ecs-fication M1 / w14 (D-1):
-      // mount-payload-extract — for scene assets, redundantly inject the
-      // mount.source -> resolved GUID edge into the cycle graph alongside
-      // asset.refs[]. By the .pack.json convention mount.source is an
-      // integer index into the same asset.refs[], so the resolved GUID is
-      // already present in `existingRefs`; this defensive pass guarantees
-      // that any author-supplied mounts[] references participate in the
-      // cycle DFS even if the schema-emitter forgot to mirror them into
-      // refs[]. The `kind: 'mount-asset'` tag on the resulting
-      // pack-cyclic-reference detail is set by the cycle producer below
-      // (R10).
+      // Keyed scene instances are explicit dependency edges. Keep the
+      // producer source in the cycle graph alongside ordinary asset refs so
+      // recursive SceneAsset declarations fail before publication.
       packRefs.set(normalizedGuid, [
         ...asset.refs.map((ref) => ref.toLowerCase()),
-        ...extractMountSourceGuids(asset),
+        ...extractInstanceSourceGuids(asset),
       ]);
     }
     capture?.declarations.set(packPath, {
@@ -479,8 +597,9 @@ async function scanValidated(
     });
   }
 
-  // Step 2 + 3 + 5: parse + schema validate + GUID format validate + orphan check for meta files
-  const { paths: assetPaths } = loadAssetConfig(process.cwd());
+  // Step 2 + 3 + 5: parse + schema validate + GUID format validate + orphan check for meta files.
+  // Meta source paths are local to their sidecar: an omitted source names the
+  // companion file and an explicit source is resolved relative to the sidecar.
   for (const metaPath of metaPaths) {
     const loaded = await readValidatedJson(metaPath, 'pack-malformed-meta', validateMeta);
     if (!loaded.ok) return loaded;
@@ -498,6 +617,8 @@ async function scanValidated(
 
     // Step 3: validate GUIDs in meta subAssets
     const metaObj = parsed as unknown as MetaInventoryDocument;
+    const packageCollision = registerPackage(metaObj.packageId, metaPath, 'legacy');
+    if (packageCollision !== undefined) return packErr(packageCollision);
     capture?.declarations.set(metaPath, {
       format: 'meta.json',
       sourcePath: metaPath,
@@ -539,13 +660,7 @@ async function scanValidated(
     }
 
     // Step 5: orphan .meta.json check — the source file declared in meta.source must exist.
-    // Uses resolveAssetSource for three-mode dispatch (undefined derivation / @name/ path table /
-    // relative path), replacing the former hardcoded join(metaDir, metaObj.source).
-    const sourceResolved = resolveAssetSource(metaPath, metaObj.source, assetPaths);
-    if (!sourceResolved.ok) {
-      return packErr(sourceResolved.error);
-    }
-    const expectedSourcePath = sourceResolved.value;
+    const expectedSourcePath = resolveAssetSource(metaPath, metaObj.source);
     try {
       await stat(expectedSourcePath);
     } catch {
@@ -558,26 +673,29 @@ async function scanValidated(
     }
   }
 
-  // ScriptablePack identity enters the same topology and collision authority as JSON declarations.
-  for (const sourcePath of scriptablePaths) {
+  // Metadata reads release their isolated workers before returning. Parallelize
+  // only those reads; inventories retaining build leases and caller executors
+  // remain serial. Commit declarations in source order, not completion order.
+  const loaderOptions = {
+    ...(opts.scriptablePack ?? {}),
+    sourceSnapshot,
+    ...(capture === undefined ? { metadataOnly: true } : {}),
+  };
+  const loadSource = async (sourcePath: string) => {
     let source: string;
     try {
-      source = await readFile(sourcePath, 'utf8');
+      source = await sourceSnapshot.readText(sourcePath);
     } catch {
       return packErr(
         makePackError('pack-malformed-meta', {
           path: sourcePath,
-          ajvErrors: [{ instancePath: '', message: 'ScriptablePack source read failed' }],
+          ajvErrors: [{ instancePath: '', message: 'Pack source read failed' }],
         }),
       );
     }
-    const loaded = await loadScriptablePack(sourcePath, {
-      ...(opts.scriptablePack ?? {}),
-      ...(capture === undefined ? { metadataOnly: true } : {}),
-    });
+    const loaded = await loadScriptablePack(sourcePath, loaderOptions);
     if (!loaded.ok) {
-      const diagnostic =
-        'diagnostic' in loaded.error.detail ? loaded.error.detail.diagnostic : undefined;
+      const diagnostic = loaded.error.detail.diagnostic;
       return packErr(
         makePackError(
           'pack-malformed-meta',
@@ -587,9 +705,9 @@ async function scanValidated(
               {
                 instancePath: '',
                 message:
-                  diagnostic === undefined
-                    ? loaded.error.code
-                    : `${loaded.error.code}: ${diagnostic}`,
+                  typeof diagnostic === 'string'
+                    ? `${loaded.error.code}: ${diagnostic}`
+                    : loaded.error.code,
               },
             ],
           },
@@ -599,46 +717,107 @@ async function scanValidated(
     }
     let sourceClosure: readonly ScriptablePackSourceClosureEntry[];
     try {
-      sourceClosure = await inventoryScriptablePackSource(sourcePath, source);
+      sourceClosure = await inventoryScriptablePackSource(
+        sourcePath,
+        source,
+        undefined,
+        sourceSnapshot,
+      );
     } catch {
       return packErr(
         makePackError('pack-malformed-meta', {
           path: sourcePath,
-          ajvErrors: [{ instancePath: '', message: 'ScriptablePack source closure read failed' }],
+          ajvErrors: [{ instancePath: '', message: 'Pack source closure read failed' }],
         }),
       );
     }
-    const meta = projectScriptablePackMeta(loaded.value, sourcePath);
-    const topology = validateProducerOutputs(meta.subAssets);
-    if (!topology.ok) {
-      return packErr(
-        makePackError('pack-malformed-meta', {
-          path: sourcePath,
-          ajvErrors: [{ instancePath: '/subAssets', message: topology.error.code }],
-        }),
-      );
-    }
-    const declaration = {
+    return ok({
+      format: 'pack.ts' as const,
       sourcePath,
       sourceRevision: `sha256:${createHash('sha256').update(source).digest('hex')}`,
-      meta,
+      value: projectScriptablePackMeta(loaded.value, sourcePath),
       definition: loaded.value,
       sourceClosure,
-    } satisfies ScriptablePackInventoryDeclaration;
-    capture?.declarations.set(sourcePath, {
-      format: 'pack.ts',
-      ...declaration,
-      value: meta,
     });
-    for (const sub of meta.subAssets) {
-      const guid = sub.guid.toLowerCase();
-      const existing = guidToPath.get(guid);
-      if (existing !== undefined) {
+  };
+  const batchSize =
+    loaderOptions.metadataOnly === true && loaderOptions.executor === undefined ? 4 : 1;
+  for (let start = 0; start < scriptablePaths.length; start += batchSize) {
+    // Even a failed read must settle every started sibling before returning.
+    const completed = await Promise.allSettled(
+      scriptablePaths.slice(start, start + batchSize).map(loadSource),
+    );
+    for (const item of completed) {
+      if (item.status === 'rejected') throw item.reason;
+      if (!item.value.ok) return item.value;
+      const declaration = item.value.value;
+      const packageCollision = registerPackage(
+        PackageId.format(declaration.definition.packageId),
+        declaration.sourcePath,
+        'scriptable',
+      );
+      if (packageCollision !== undefined) return packErr(packageCollision);
+      capture?.declarations.set(declaration.sourcePath, declaration);
+    }
+  }
+
+  // v3 instance parent validation happens after all declarations have been
+  // registered, so scan order cannot change missing-parent or cycle results.
+  const parentByPackageId = new Map(
+    instanceParents.map((instance) => [instance.packageId.toLowerCase(), instance]),
+  );
+  for (const instance of instanceParents) {
+    const parentId = instance.parent.toLowerCase();
+    const parentPath = packageIdToPath.get(parentId);
+    if (parentPath === undefined) {
+      return packErr(
+        makePackError('pack-malformed-pack', {
+          path: instance.path,
+          reason: 'pack-parent-not-found',
+          ajvErrors: [
+            {
+              instancePath: '/parent',
+              message: `parent packageId ${instance.parent} was not found`,
+            },
+          ],
+        }),
+      );
+    }
+    const kind = packageKind.get(parentId);
+    if (kind !== 'scriptable' && kind !== 'instance') {
+      return packErr(
+        makePackError('pack-malformed-pack', {
+          path: instance.path,
+          reason: 'pack-parent-has-no-parameters',
+          ajvErrors: [
+            {
+              instancePath: '/parent',
+              message: `parent ${instance.parent} is not a ScriptablePack source with parameters`,
+            },
+          ],
+        }),
+      );
+    }
+  }
+  for (const instance of instanceParents) {
+    const chain = new Set<string>();
+    let current = instance.packageId.toLowerCase();
+    while (true) {
+      if (chain.has(current)) {
         return packErr(
-          makePackError('pack-guid-collision', { paths: [existing, sourcePath], guid }),
+          makePackError('pack-malformed-pack', {
+            path: instance.path,
+            reason: 'pack-parent-cycle',
+            ajvErrors: [
+              { instancePath: '/parent', message: `parent chain repeats packageId ${current}` },
+            ],
+          }),
         );
       }
-      guidToPath.set(guid, sourcePath);
+      chain.add(current);
+      const next = parentByPackageId.get(current);
+      if (next === undefined) break;
+      current = next.parent.toLowerCase();
     }
   }
 
@@ -681,6 +860,18 @@ async function scanValidated(
     }
   }
 
+  const current = await sourceSnapshot.verify();
+  if (!current.ok)
+    return packErr(
+      makePackError(
+        'pack-malformed-meta',
+        {
+          path: String(current.error.detail.sourcePath),
+          ajvErrors: [{ instancePath: '', message: current.error.code }],
+        },
+        current.error,
+      ),
+    );
   return ok(rawPaths);
 }
 
@@ -704,6 +895,38 @@ export async function scanInventory(
   for (const sourcePath of scanned.value) {
     const declaration = declarations.get(sourcePath);
     if (declaration?.format !== 'pack.json') continue;
+    if (declaration.value.schemaVersion === '3.0.0') {
+      const parsed = parsePackSourceJson(declaration.value);
+      if (!parsed.ok) {
+        return packErr(
+          makePackError('pack-malformed-pack', {
+            path: sourcePath,
+            ajvErrors: [{ instancePath: '', message: parsed.error.code }],
+          }),
+        );
+      }
+      if (parsed.value.format !== 'direct') continue;
+      const projected = projectDirectPackJson(parsed.value);
+      if (!projected.ok) {
+        return packErr(
+          makePackError('pack-malformed-pack', {
+            path: sourcePath,
+            ajvErrors: [{ instancePath: '/assets', message: projected.error.code }],
+          }),
+        );
+      }
+      for (const [index, asset] of projected.value.assets.entries()) {
+        inventory.push({
+          guid: asset.guid,
+          kind: asset.kind,
+          sourcePath,
+          sourceRevision: declaration.sourceRevision,
+          sourceKey: asset.sourceKey,
+          sourceIndex: index,
+        });
+      }
+      continue;
+    }
     for (const [index, asset] of declaration.value.assets.entries()) {
       inventory.push({
         guid: asset.guid,

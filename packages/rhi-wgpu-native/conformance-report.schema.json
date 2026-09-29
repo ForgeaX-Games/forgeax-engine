@@ -44,9 +44,9 @@
         "limits"
       ],
       "properties": {
-        "wgpuVersion": { "const": "30.0.0" },
-        "wgpuTag": { "const": "v30.0.0" },
-        "wgpuTagCommit": { "const": "8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1" },
+        "wgpuVersion": { "const": "30.0.1" },
+        "wgpuTag": { "const": "v30.0.1" },
+        "wgpuTagCommit": { "const": "40f4a34ebaf56f9a046231f54125ad046239d3f3" },
         "engineCommit": { "type": "string", "minLength": 1 },
         "rustc": { "type": "string", "minLength": 1 },
         "os": { "enum": ["macos", "linux", "windows"] },

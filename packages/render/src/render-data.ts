@@ -15,7 +15,6 @@
 // GPU-resource kind would surface as a `tsc -b` exhaustiveness error at the
 // switch rather than a silent fallthrough (AC-06).
 
-import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import {
   bytesPerRow as blockBytesPerRow,
   blockParamsForFormat,
@@ -29,9 +28,11 @@ import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
   type AssetError,
+  deriveTextureLayout,
   type MeshAsset,
   type Submesh,
   type TextureAsset,
+  type TextureShape,
 } from '@forgeax/engine-types';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
@@ -88,12 +89,16 @@ export interface MeshRenderData {
   readonly submeshes: readonly Submesh[];
 }
 
-/** Descriptor for a 2D texture's GPU resource (projected from POD). */
+/** Descriptor for a sampled texture's GPU resource (projected from POD). */
 export interface TextureRenderData {
   /** Logical width retained for existing projection consumers. */
   readonly width: number;
   /** Logical height retained for existing projection consumers. */
   readonly height: number;
+  /** Authored shape; the residency layer must preserve this view dimension. */
+  readonly shape: TextureShape;
+  /** Array layers for `2d-array`, depth slices for `3d`, otherwise one. */
+  readonly depthOrArrayLayers: number;
   /** Authored content extent; TextureAsset remains the logical asset SSOT. */
   readonly logicalExtent: TextureExtent;
   /** GPU allocation extent, derived from format + logicalExtent. */
@@ -105,10 +110,10 @@ export interface TextureRenderData {
   readonly usage: number;
   /**
    * Row pitch for the BASE mip (level 0) the store passes to `writeTexture`.
-   * Uncompressed: `width * 4` (RGBA8). Block-compressed: the block-padded
-   * `ceil(width / blockW) * bytesPerBlock` (feat-20260707 M5 / w35, AC-08).
-   * The per-mip layout for a multi-level compressed upload comes from
-   * {@link deriveMipUploadLayout}.
+   * Derived from the canonical texture layout, so format-specific uncompressed
+   * widths (for example R8 density) and block-compressed widths stay aligned
+   * with the upload contract. The per-mip layout for a multi-level compressed
+   * upload comes from {@link deriveMipUploadLayout}.
    */
   readonly bytesPerRow: number;
   /** True iff `format` is a block-compressed format (drives the store's upload arm). */
@@ -262,6 +267,8 @@ export function deriveRenderDataMesh(mesh: MeshAsset): Result<MeshRenderData, As
  * inconsistent (a `-srgb` format requires an `srgb` colorSpace and vice versa).
  */
 export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRenderData, AssetError> {
+  const width = tex.shape.extent.width;
+  const height = tex.shape.extent.height;
   const isSrgbFormat = tex.format.endsWith('-srgb');
   const expectedColorSpace: 'srgb' | 'linear' = isSrgbFormat ? 'srgb' : 'linear';
   if (tex.colorSpace !== expectedColorSpace) {
@@ -275,14 +282,23 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
   }
 
   const compressed = isCompressedFormat(tex.format);
+  const layout = deriveTextureLayout({ shape: tex.shape, format: tex.format, mips: tex.mips });
+  if (!layout.ok) {
+    return err(
+      projectionError({
+        code: 'invalid-source-format',
+        expected: layout.error.expected,
+        hint: layout.error.hint,
+      }),
+    );
+  }
   // feat-20260707 M5 / w35 (AC-09, D-9): a block-compressed texture cannot have
   // its mips GPU-generated (F-7). An OFFLINE chain baked into `data`
   // (mipLevelCount > 1, e.g. a KTX2 level chain) is the normal compressed path
   // and passes; requesting RUNTIME mip generation (`mipmap:true` with no offline
   // chain) fails fast with a self-recovery hint (fail-fast at the projection
   // layer -- producer self-validate).
-  const hasOfflineMipChain = (tex.mipLevelCount ?? 1) > 1;
-  if (compressed && tex.mipmap === true && !hasOfflineMipChain) {
+  if (compressed && tex.mips.kind === 'generate') {
     return err(
       projectionError({
         code: 'mipgen-unsupported-compressed-format',
@@ -296,15 +312,19 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
   // Uncompressed: runtime mip-gen count from the pixel size. Compressed: the
   // level count is authored (offline chain) -- honour the POD's mipLevelCount,
   // never re-derive it from the size (a compressed chain may stop early).
-  const mipLevelCount = compressed
-    ? Math.max(1, tex.mipLevelCount ?? 1)
-    : tex.mipmap
-      ? numMipLevels(tex)
-      : 1;
+  const mipLevelCount = layout.value.levels.length;
 
-  const uncompressedBytesPerTexel =
-    tex.format === 'rgba32float' ? 16 : tex.format === 'rgba16float' ? 8 : 4;
-  if (!compressed && tex.data.byteLength < tex.width * tex.height * uncompressedBytesPerTexel) {
+  const baseLevel = layout.value.levels[0];
+  if (baseLevel === undefined) {
+    return err(
+      projectionError({
+        code: 'invalid-source-format',
+        expected: 'texture layout contains a base mip level',
+        hint: ASSET_ERROR_HINTS['invalid-source-format'],
+      }),
+    );
+  }
+  if (!compressed && tex.data.byteLength < baseLevel.byteLength) {
     return err(
       projectionError({
         code: 'invalid-source-format',
@@ -318,8 +338,8 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
   // from the format, not aggregate payload length: imported images may retain
   // trailing decoder bytes and offline mip chains contain more than the base mip.
   const bytesPerRow = compressed
-    ? (blockBytesPerRow(tex.format, tex.width) ?? tex.width * 4)
-    : tex.width * uncompressedBytesPerTexel;
+    ? (blockBytesPerRow(tex.format, width) ?? baseLevel.bytesPerRow)
+    : baseLevel.bytesPerRow;
 
   // Compressed formats are not renderable -- RENDER_ATTACHMENT would fail
   // createTexture validation, and the runtime mipmap blit (which needs it) never
@@ -333,9 +353,16 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
       GPU_TEXTURE_USAGE_COPY_SRC;
 
   return ok({
-    width: tex.width,
-    height: tex.height,
-    ...deriveTextureExtent(tex.format, tex.width, tex.height),
+    width,
+    height,
+    shape: tex.shape,
+    depthOrArrayLayers:
+      tex.shape.viewDimension === '2d'
+        ? 1
+        : tex.shape.viewDimension === '2d-array'
+          ? tex.shape.extent.layers
+          : tex.shape.extent.depth,
+    ...deriveTextureExtent(tex.format, width, height),
     format: tex.format,
     mipLevelCount,
     usage,
@@ -373,8 +400,9 @@ export function deriveRenderDataCubemap(source: TextureAsset): Result<CubeRender
       }),
     );
   }
+  const sourceHeight = source.shape.viewDimension === '2d' ? source.shape.extent.height : 0;
   return ok({
-    cubeFaceSize: source.height,
+    cubeFaceSize: sourceHeight,
     outputFormat: 'rgba16float',
     needsHalfConversion: source.format === 'rgba32float',
     cubeUsage:

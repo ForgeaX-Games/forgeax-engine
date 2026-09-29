@@ -1,55 +1,85 @@
-import { readFileSync } from 'node:fs';
-import { type CookedMaterialRecord, createMaterialArtifactDigest } from '@forgeax/engine-pack';
 import { describe, expect, it } from 'vitest';
 import { MaterialGenerationCache } from '../material/generation-cache.js';
-import { createMaterialLoader } from '../material/loader.js';
-
-const CUSTOM_SHADER_FIXTURE = new URL(
-  '../../../../apps/hello/custom-shader/assets/pulse-material.pack.json',
-  import.meta.url,
-);
+import { inspectMaterialRuntime } from '../material/inspection.js';
+import { createMaterialLoader, type MaterialLoadError } from '../material/loader.js';
+import {
+  materialPublicationFixture,
+  materialRecordFixture,
+} from './fixtures/material-publication.js';
 
 const DERIVED_MATERIAL_GUID = '01935b00-7d8c-7c4e-9f12-345678abcd03';
 const SPECIALIZATION_KEY = 'my-game::pulse-material';
 const SPECIALIZATION_DEPENDENCIES = ['my-game::pulse-material', 'pack:pulse-material'] as const;
 
 function createCookedMaterialLoader() {
-  const fixture = JSON.parse(readFileSync(CUSTOM_SHADER_FIXTURE, 'utf8')) as {
-    assets: readonly { guid: string; payload?: { cooked?: unknown } }[];
-  };
-  const cookedByGuid = new Map(
-    fixture.assets.map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
-  );
+  const record = materialRecordFixture({
+    guid: DERIVED_MATERIAL_GUID,
+    specializationKey: SPECIALIZATION_KEY,
+  });
   return createMaterialLoader({
-    loadPublication: async (guid) => {
-      const raw = cookedByGuid.get(guid.toLowerCase()) as CookedMaterialRecord | undefined;
-      if (raw === undefined) return undefined;
-      const bytes = new TextEncoder().encode('published pulse artifact');
-      const digest = createMaterialArtifactDigest(bytes);
-      return {
-        guid,
-        record: {
-          ...raw,
-          materialGuid: raw.guid,
-          publicationGeneration: 1,
-          specializationKey: SPECIALIZATION_KEY,
-          artifactDigest: digest,
-          sourceClosure: raw.receipt.sourceClosure,
-          parameterContract: { parameters: raw.resolved.parameters, values: raw.resolved.values },
-          artifact: { ...raw.artifact, digest, bytes },
-          receipt: {
-            ...raw.receipt,
-            identity: { ...raw.receipt.identity, artifactDigest: digest, cookGeneration: 1 },
-          },
-        },
-        artifact: { bytes },
-      };
-    },
+    loadPublication: async () => materialPublicationFixture(record),
     loadReference: async () => true,
   });
 }
 
 describe('material stale generation publication', () => {
+  it('projects ready, pending, failed, and last-known-good producer states', async () => {
+    const loader = createCookedMaterialLoader();
+    const loaded = await loader.load({
+      guid: DERIVED_MATERIAL_GUID,
+      specializationKey: SPECIALIZATION_KEY,
+    });
+    expect(loaded.status).toBe('Ready');
+    if (loaded.status !== 'Ready') return;
+
+    expect(inspectMaterialRuntime(loaded)).toMatchObject({
+      materialGuid: DERIVED_MATERIAL_GUID,
+      readiness: 'ready',
+      status: 'Ready',
+    });
+
+    const failed: MaterialLoadError = {
+      status: 'Error',
+      error: {
+        code: 'material-specialization-not-cooked',
+        expected: 'a cooked material specialization record and artifact',
+        hint: 'run the material cooker',
+        retryable: true,
+        recoveryActions: ['retry-material-load'],
+        detail: { guid: DERIVED_MATERIAL_GUID, specializationKey: SPECIALIZATION_KEY },
+      },
+    };
+    expect(inspectMaterialRuntime(failed)).toMatchObject({
+      materialGuid: DERIVED_MATERIAL_GUID,
+      readiness: 'failed',
+      status: 'Error',
+      preparationFailure: failed.error,
+    });
+
+    const pending = inspectMaterialRuntime({
+      status: 'Pending',
+      guid: DERIVED_MATERIAL_GUID,
+      specializationKey: SPECIALIZATION_KEY,
+      reason: 'dependency-load',
+    });
+    expect(pending).toMatchObject({
+      materialGuid: DERIVED_MATERIAL_GUID,
+      readiness: 'pending',
+      status: 'Pending',
+      reason: 'dependency-load',
+    });
+
+    expect(
+      inspectMaterialRuntime({ status: 'LastKnownGood', ready: loaded, failure: failed }),
+    ).toMatchObject({
+      materialGuid: DERIVED_MATERIAL_GUID,
+      readiness: 'last-known-good',
+      status: 'LastKnownGood',
+      preparationFailure: failed.error,
+      lastKnownGood: { status: 'Ready', readiness: 'ready' },
+    });
+  });
+
   it('retries once and reports the generation vector when dependencies change', async () => {
     const cache = new MaterialGenerationCache();
     let calls = 0;
@@ -142,6 +172,34 @@ describe('material stale generation publication', () => {
     expect(loadCalls).toBe(3);
     if (fresh.ok) published.push(fresh.value);
     expect(published).toHaveLength(1);
+    expect(cache.generationError(DERIVED_MATERIAL_GUID)).toBeUndefined();
+  });
+
+  it('recovers device loss without changing the published generation', async () => {
+    const cache = new MaterialGenerationCache();
+    const publicationGeneration = 7;
+    let attempts = 0;
+    const observedGenerations: number[] = [];
+    const result = await cache.loadWithGeneration(
+      DERIVED_MATERIAL_GUID,
+      SPECIALIZATION_DEPENDENCIES,
+      async (generation) => {
+        attempts += 1;
+        observedGenerations.push(generation.dependencies[SPECIALIZATION_KEY] ?? 0);
+        if (attempts === 1) cache.bump(SPECIALIZATION_DEPENDENCIES[0]);
+        return {
+          generation,
+          value: { publicationGeneration, recovery: attempts === 1 ? 'device-loss' : 'retry' },
+        };
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { publicationGeneration, recovery: 'retry' },
+    });
+    expect(attempts).toBe(2);
+    expect(observedGenerations).toEqual([0, 1]);
     expect(cache.generationError(DERIVED_MATERIAL_GUID)).toBeUndefined();
   });
 });

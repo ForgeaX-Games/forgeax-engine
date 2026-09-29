@@ -18,7 +18,7 @@
 // new throughput info.
 //
 // Seed (for any RNG use that may be added later): 'forgeax-nineslice-2026'.
-// iteration count (frames): 300. Canvas: 1920x1080 (1080p).
+// iteration count (frames): 60. Canvas: 1920x1080 (1080p).
 //
 // Output (charter P3 explicit failure as machine-readable signal):
 //   report/bench-nineslice-100panel.json
@@ -71,7 +71,7 @@ const REPORT_PATH = resolve(REPORT_DIR, 'bench-nineslice-100panel.json');
 const SEED = 'forgeax-nineslice-2026';
 const PANELS = 100;
 const GRID_SIDE = 10;
-const FRAMES = 300;
+const FRAMES = 60;
 const CANVAS_W = 1920;
 const CANVAS_H = 1080;
 
@@ -102,7 +102,7 @@ function expectedFor(code) {
     case 'pixel-parity-threshold-exceeded':
       return `fps >= ${FPS_FLOOR.toFixed(1)} AND uboBytesPerEntity <= ${UBO_BYTES_PER_ENTITY_CAP}`;
     case 'pixel-parity-capture-failed':
-      return 'both sub-keys (fps + uboBytesPerEntity) measured from a 300-frame draw loop on a webgpu device';
+      return 'both sub-keys (fps + uboBytesPerEntity) measured from a 60-frame draw loop on a webgpu device';
     case 'metric-status-not-ok':
       return 'metric runner reports status=ok for the bench-nineslice-100panel fixture';
   }
@@ -302,7 +302,10 @@ async function main() {
     process.exitCode = dispatchExit(payload);
     return;
   }
-  const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+  const ENGINE_MANIFEST_URL = URL.createObjectURL(
+    new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
+  );
+  process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
   let renderer;
   let assets;

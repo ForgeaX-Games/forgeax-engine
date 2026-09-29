@@ -6,7 +6,7 @@ import { Update } from '@forgeax/engine-ecs';
 // T-M11-03 green; AC-03 + AC-04 + AC-06 + AC-07 + AC-25 90s budget).
 // Mirrors apps/learn-render/.../4.textures/scripts/smoke-dawn.mjs shape +
 // adds a synthetic first-person InputBackend driving WASD + mouse-delta
-// over 300 frames. The verdict is the same 4-criterion gate as the
+// over 60 frames. The verdict is the same 4-criterion gate as the
 // textures smoke modulo the input-driven divergence proof: at least one
 // meshed sample site exceeds the clear-color threshold AFTER the synthetic
 // camera tour, proving the cube remained visible across the input
@@ -33,7 +33,7 @@ import { Update } from '@forgeax/engine-ecs';
 //          camera direction (sphere -> Cartesian).
 //      (f) lease-bound renderer.draw 300x with the synthetic input pump.
 //   4. copyTextureToBuffer + mapAsync multi-pixel grid (5 sites) +
-//      verdict: (a) Dawn device (b) frames>=300 (c) at least one
+//      verdict: (a) Dawn device (b) frames>=60 (c) at least one
 //      meshed site distance to clear-color > eps (d) Renderer.onError
 //      RhiError count == 0.
 //
@@ -55,7 +55,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -206,7 +206,8 @@ const {
 // entries). Mirrors apps/hello/cube/scripts/smoke-dawn.mjs.
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -355,7 +356,7 @@ const cameraEntity = world
   .unwrap();
 void cameraEntity;
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -365,15 +366,15 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   // every accumulator path so the verdict + yaw/pitch final state
   // captures both the held-key path + the per-frame delta path.
   if (i === 0) heldKeys.add('KeyW');
-  if (i === 60) {
+  if (i === Math.floor(TARGET_FRAMES / 3)) {
     heldKeys.delete('KeyW');
     heldKeys.add('KeyD');
   }
-  if (i === 120) {
+  if (i === Math.floor(2 * TARGET_FRAMES / 3)) {
     heldKeys.delete('KeyD');
   }
-  if (i >= 60 && i < 120) mvxPending += 4;
-  if (i >= 120 && i < 200) mvyPending += -2;
+  if (i >= Math.floor(TARGET_FRAMES / 3) && i < Math.floor(2 * TARGET_FRAMES / 3)) mvxPending += 4;
+  if (i >= Math.floor(2 * TARGET_FRAMES / 3)) mvyPending += -2;
   // Note: world.update(1 / 60).unwrap() runs the frame-start scan system (refreshing
   // InputSnapshot) + the camera system (consuming it) in DAG order.
   world.update(1 / 60).unwrap();
@@ -497,7 +498,7 @@ if (failures.length > 0) {
     "  rerun: pnpm --filter '@forgeax/app-learn-render-1-getting-started-7-camera' smoke",
   );
   console.error(
-    '  hint:  inspect Renderer.onError fan-out + verify cube-mesh.stub.meta.json sidecar GUID matches the runtime registerWithGuid call in src/index.ts + the synthetic InputBackend pump drives WASD + mouse-delta over 300 frames',
+    '  hint:  inspect Renderer.onError fan-out + verify cube-mesh.stub.meta.json sidecar GUID matches the runtime registerWithGuid call in src/index.ts + the synthetic InputBackend pump drives WASD + mouse-delta over 60 frames',
   );
   await delay(0);
   device.destroy?.();

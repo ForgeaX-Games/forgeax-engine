@@ -13,5 +13,17 @@ export {
   type FullscreenRenderFeatureOptions,
 } from './features/fullscreen';
 export { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
+// Typed graph composition for custom material outputs. Renderer owns execution.
+export {
+  createRenderPipelineTarget,
+  importRenderPipelineSurface,
+  type RenderPipeline,
+  type RenderPipelineTarget,
+} from './render-pipeline';
 export { setActiveCamera } from './systems/active-camera';
 export { TransparentSort } from './systems/transparent-sort-config';
+export {
+  addTypedOutputTransformPass,
+  addTypedScenePass,
+  type TypedScenePassOptions,
+} from './typed-render-graph-primitives';

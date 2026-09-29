@@ -14,6 +14,20 @@ import type { RenderError, RenderErrorCode } from '@forgeax/engine-render';
 
 function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
   switch (code) {
+    case 'projected-decal-invalid':
+      return code;
+    case 'render-publication-invalid':
+      return code;
+    case 'auto-exposure-invalid-parameter':
+      return code;
+    case 'auto-exposure-capability-unavailable':
+      return code;
+    case 'auto-exposure-stale-generation':
+      return code;
+    case 'auto-exposure-stage-failed':
+      return code;
+    case 'motion-blur-invalid-params':
+      return code;
     case 'lifecycle-construction-failed':
       return code;
     case 'world-lease-invalid':
@@ -38,21 +52,75 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'cleanup-failed':
       return code;
+    case 'taa-unavailable':
+      return code;
+    case 'standard-profile-invalid':
+      return code;
     case 'frame-receipt-stale':
       return code;
     case 'renderer-contract-failed':
       return code;
     case 'observation-unavailable':
       return code;
+    case 'scene-data-unavailable':
+      return code;
     case 'shadow-invalid-config':
+      return code;
+    case 'environment-source-conflict':
+      return code;
+    case 'fog-cardinality':
+      return code;
+    case 'sun-cardinality':
+      return code;
+    case 'taa-caps-insufficient':
+      return code;
+    case 'dynamic-resolution-invalid-parameter':
+      return code;
+    case 'dynamic-resolution-requires-taa':
+      return code;
+    case 'dynamic-resolution-timing-unavailable':
+      return code;
+    case 'environment-generation-failed':
+      return code;
+    case 'cloud-layer-invalid-parameter':
+      return code;
+    case 'cloud-layer-owner-conflict':
+      return code;
+    case 'cloud-layer-cache-invalid':
+      return code;
+    case 'cloud-layer-capability-missing':
+      return code;
+    case 'cloud-layer-resource-failed':
+      return code;
+    case 'atmosphere-invalid-parameter':
+      return code;
+    case 'lens-effects-invalid-parameter':
+    case 'barrel-distortion-invalid-parameter':
+    case 'outline-invalid-parameter':
+      return code;
+    case 'owner-stage-failed':
       return code;
     case 'equirect-projection-failed':
       return code;
-    case 'hdrp-light-budget-exceeded':
+    case 'standard-light-budget-exceeded':
       return code;
-    case 'hdrp-index-list-overflow':
+    case 'standard-cluster-index-overflow':
       return code;
-    case 'hdrp-deferred-caps-insufficient':
+    case 'standard-cluster-transport-unavailable':
+      return code;
+    case 'render-target-descriptor-invalid':
+      return code;
+    case 'render-target-capability-missing':
+      return code;
+    case 'render-target-state-invalid':
+      return code;
+    case 'render-target-operation-failed':
+      return code;
+    case 'reflection-probe-budget-exceeded':
+      return code;
+    case 'planar-reflection-invalid':
+      return code;
+    case 'render-intent-invalid':
       return code;
     case 'point-shadow-atlas-uninitialized':
       return code;
@@ -84,6 +152,8 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'render-feature-draw-recording-failed':
       return code;
+    case 'transmission-capability-missing':
+      return code;
     case 'points-lines-invalid-style':
       return code;
     case 'points-lines-topology-mismatch':
@@ -96,6 +166,19 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'points-lines-prepare-failed':
       return code;
+    case 'light-resource-unavailable':
+    case 'projector-binding-failed':
+      return code;
+    case 'volume-owner-conflict':
+      return code;
+    case 'volume-density-shape-mismatch':
+      return code;
+    case 'volume-invalid-bounds':
+      return code;
+    case 'volume-invalid-parameters':
+      return code;
+    case 'camera-view-invalid':
+      return code;
     default: {
       const exhaustive: never = code;
       return exhaustive;
@@ -105,6 +188,37 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
 
 function narrowRenderError(err: RenderError): void {
   switch (err.code) {
+    case 'projected-decal-invalid':
+      void err.detail.field;
+      void err.expected;
+      break;
+    case 'render-publication-invalid':
+      void err.detail.reason;
+      void err.detail.subject;
+      break;
+    case 'auto-exposure-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      break;
+    case 'auto-exposure-capability-unavailable':
+      void err.detail.capability;
+      void err.detail.generation;
+      break;
+    case 'auto-exposure-stale-generation':
+      void err.detail.expectedGeneration;
+      void err.detail.actualGeneration;
+      break;
+    case 'auto-exposure-stage-failed':
+      void err.detail.stage;
+      void err.detail.operation;
+      break;
+    case 'motion-blur-invalid-params':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.min;
+      void err.detail.max;
+      void err.detail.integer;
+      break;
     case 'lifecycle-construction-failed':
       void err.detail.owner;
       void err.detail.generation;
@@ -152,11 +266,16 @@ function narrowRenderError(err: RenderError): void {
     case 'recovery-failed':
       void err.detail.operation;
       void err.detail.oldGeneration;
+      void err.detail.candidateGeneration;
       void err.detail.cause;
       break;
     case 'cleanup-failed':
       void err.detail.operation;
       void err.detail.causes;
+      break;
+    case 'standard-profile-invalid':
+      void err.detail.field;
+      void err.detail.actual;
       break;
     case 'frame-receipt-stale':
       void err.detail.frameId;
@@ -171,24 +290,106 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.reason;
       void err.detail.recovery;
       break;
+    case 'scene-data-unavailable':
+      void err.detail.featureIdentity;
+      void err.detail.schema;
+      void err.detail.lane;
+      void err.detail.reason;
+      void err.detail.missingContributorIds;
+      void err.detail.omittedMissingContributorCount;
+      void err.detail.recovery;
+      break;
     case 'shadow-invalid-config':
       void err.detail.field; // string
-      void err.detail.value; // number
+      void err.detail.actual; // number
+      void err.detail.bound;
+      void err.detail.reason; // string
+      break;
+    case 'environment-source-conflict':
+      void err.detail.owners;
+      break;
+    case 'fog-cardinality':
+      void err.detail.count;
+      break;
+    case 'taa-caps-insufficient':
+      void err.detail.required;
+      void err.detail.available;
+      break;
+    case 'dynamic-resolution-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.expected;
+      break;
+    case 'dynamic-resolution-requires-taa':
+      void err.detail.antialias;
+      break;
+    case 'dynamic-resolution-timing-unavailable':
+      void err.detail.generation;
+      void err.detail.operation;
+      break;
+    case 'environment-generation-failed':
+      void err.detail.sourceKey;
+      void err.detail.stage;
+      break;
+    case 'atmosphere-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      break;
+    case 'owner-stage-failed':
+      void err.detail.owner;
+      void err.detail.stage;
       break;
     case 'equirect-projection-failed':
       void err.detail.handle; // number
       break;
-    case 'hdrp-light-budget-exceeded':
+    case 'standard-light-budget-exceeded':
       void err.detail.actual; // number
       void err.detail.budget; // number
       break;
-    case 'hdrp-index-list-overflow':
+    case 'standard-cluster-index-overflow':
       void err.detail.actual; // number
       void err.detail.capacity; // number
       break;
-    case 'hdrp-deferred-caps-insufficient':
-      void err.detail.actual; // number
-      void err.detail.expected; // number
+    case 'standard-cluster-transport-unavailable':
+      void err.detail.requested; // number
+      void err.detail.admitted; // 0
+      break;
+    case 'render-target-descriptor-invalid':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.expected;
+      break;
+    case 'render-target-capability-missing':
+      void err.detail.operation;
+      void err.detail.requested;
+      void err.detail.capability;
+      void err.detail.actual;
+      break;
+    case 'render-target-state-invalid':
+      void err.detail.operation;
+      void err.detail.reason;
+      void err.detail.state;
+      void err.detail.generation;
+      break;
+    case 'render-target-operation-failed':
+      void err.detail.operation;
+      void err.detail.stage;
+      void err.detail.generation;
+      void err.detail.cause;
+      void err.detail.recovery;
+      break;
+    case 'reflection-probe-budget-exceeded':
+      void err.detail.actual;
+      void err.detail.budget;
+      break;
+    case 'planar-reflection-invalid':
+      void err.detail.field;
+      break;
+    case 'render-intent-invalid':
+      void err.detail.component;
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.allowed;
       break;
     case 'point-shadow-atlas-uninitialized':
       // No detail on this class.
@@ -247,6 +448,9 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.backendReason;
       void err.detail.operation;
       break;
+    case 'taa-unavailable':
+      void err.detail.reason;
+      break;
     case 'vertex-color-variant-conflict':
       void err.detail.authored;
       void err.detail.authoredValue;
@@ -275,6 +479,83 @@ function narrowRenderError(err: RenderError): void {
     case 'points-lines-prepare-failed':
       void err.detail.owner;
       void err.detail.generation;
+      break;
+    case 'light-resource-unavailable':
+      void err.detail.entity;
+      void err.detail.feature;
+      void err.detail.generation;
+      void err.detail.sourceKey;
+      void err.detail.reason;
+      void err.expected;
+      void err.hint;
+      break;
+    case 'transmission-capability-missing':
+      void err.detail.material;
+      void err.detail.capability;
+      void err.detail.stage;
+      break;
+    case 'projector-binding-failed':
+      void err.detail.guid;
+      void err.detail.status;
+      break;
+    case 'volume-owner-conflict':
+      void err.detail.ownerCount;
+      break;
+    case 'volume-density-shape-mismatch':
+      void err.detail.guid;
+      void err.detail.viewDimension;
+      break;
+    case 'volume-invalid-bounds':
+      void err.detail.min;
+      void err.detail.max;
+      break;
+    case 'volume-invalid-parameters':
+      void err.detail.field;
+      void err.detail.value;
+      break;
+    case 'cloud-layer-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.expected;
+      break;
+    case 'cloud-layer-owner-conflict':
+      void err.detail.count;
+      break;
+    case 'cloud-layer-cache-invalid':
+      void err.detail.sourceKey;
+      void err.detail.reason;
+      break;
+    case 'cloud-layer-capability-missing':
+      void err.detail.capability;
+      break;
+    case 'cloud-layer-resource-failed':
+      void err.detail.stage;
+      void err.detail.generation;
+      void err.detail.cause;
+      break;
+    case 'lens-effects-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.minimum;
+      void err.detail.maximum;
+      break;
+    case 'barrel-distortion-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      void err.detail.expected;
+      break;
+    case 'outline-invalid-parameter':
+      void err.detail.field;
+      void err.detail.value;
+      void err.expected;
+      break;
+    case 'sun-cardinality':
+      void err.detail.field;
+      void err.detail.value;
+      break;
+    case 'camera-view-invalid':
+      void err.detail.field;
+      void err.detail.value;
       break;
     default: {
       const exhaustive: never = err;

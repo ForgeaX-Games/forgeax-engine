@@ -27,6 +27,7 @@ function makeScheduler() {
 
 function makeRenderer(draw: (profileFrame: unknown) => void): Renderer {
   return {
+    state: () => 'alive' as const,
     attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
     draw: (request: RenderFrameInput) => {
       draw(request.profileFrame);

@@ -576,7 +576,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     registerStatesPlugin(world);
 
     // Build and instantiate a simple scene.
-    const nodes: SceneEntity[] = [{ localId: localId(0), components: {} }];
+    const nodes: SceneEntity[] = [{ key: 'entity-0', components: {} }];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
@@ -637,9 +637,9 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     // Build a multi-node scene with mapping entries.
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
-      { localId: localId(2), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
+      { key: 'entity-2', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -674,7 +674,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const world = new World();
     registerStatesPlugin(world);
 
-    const nodes: SceneEntity[] = [{ localId: localId(0), components: {} }];
+    const nodes: SceneEntity[] = [{ key: 'entity-0', components: {} }];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
@@ -787,7 +787,7 @@ describe('AC-13: schedule anchors', () => {
 //   SceneInstance members are NOT despawned by state transitions.
 // ──────────────────────────────────────────────────────────────────────────────
 
-import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import type { Handle, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 
 // SceneInstance must be registered for instantiateScene to resolve it.
 // Schema mirrors the runtime definition in @forgeax/engine-runtime
@@ -798,12 +798,11 @@ const SceneInstance = defineComponent('SceneInstance', {
   state: { type: 'unique<SceneInstanceState>' },
 });
 
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
-
-function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
-  return { kind: 'scene', entities: nodes };
+function buildScene(nodes: readonly (SceneEntity & { readonly key: string })[]): SceneAsset {
+  return {
+    kind: 'scene',
+    entities: Object.fromEntries(nodes.map((node) => [node.key, { components: node.components, ...(node.instance === undefined ? {} : { instance: node.instance }) }])),
+  };
 }
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
@@ -828,15 +827,15 @@ describe('SceneInstance transition survival (m5w1)', () => {
     // Build a simple 3-node scene
     const nodes: SceneEntity[] = [
       {
-        localId: localId(0),
+        key: 'entity-0',
         components: {}
       },
       {
-        localId: localId(1),
+        key: 'entity-1',
         components: {}
       },
       {
-        localId: localId(2),
+        key: 'entity-2',
         components: {}
       },
     ];
@@ -871,7 +870,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     registerStatesPlugin(world);
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
+      { key: 'entity-0', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -894,8 +893,8 @@ describe('SceneInstance transition survival (m5w1)', () => {
     registerStatesPlugin(world);
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -923,8 +922,8 @@ describe('SceneInstance transition survival (m5w1)', () => {
     registerStatesPlugin(world);
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -963,8 +962,8 @@ describe('SceneInstance transition survival (m5w1)', () => {
     registerStatesPlugin(world);
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -995,9 +994,9 @@ describe('SceneInstance transition survival (m5w1)', () => {
     registerStatesPlugin(world);
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
-      { localId: localId(2), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
+      { key: 'entity-2', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -1031,7 +1030,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     const nodes: SceneEntity[] = [
       {
-        localId: localId(0),
+        key: 'entity-0',
         components: { Transform_test_m5w1: { pos: [1, 2, 3]} },
       },
     ];
@@ -1110,10 +1109,10 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
 
     // A multi-node scene -> instantiateScene records every member in mapping.
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
-      { localId: localId(2), components: {} },
-      { localId: localId(3), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
+      { key: 'entity-2', components: {} },
+      { key: 'entity-3', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);
@@ -1152,8 +1151,8 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
     despawnOnExit(world, kccParent, LevelId, 'main-menu');
 
     const nodes: SceneEntity[] = [
-      { localId: localId(0), components: {} },
-      { localId: localId(1), components: {} },
+      { key: 'entity-0', components: {} },
+      { key: 'entity-1', components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = worldInstantiateScene(world, handle);

@@ -22,7 +22,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "hello-cube anchor only; structural-smoke covers 300-frame GPU path"
+        "reason": "hello-cube anchor only; structural-smoke covers 60-frame GPU path"
       },
       "bench": {
         "enabled": false,
@@ -52,11 +52,12 @@
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

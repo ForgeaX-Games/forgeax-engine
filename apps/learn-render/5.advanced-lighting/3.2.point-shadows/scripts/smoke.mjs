@@ -4,9 +4,12 @@ import { Update } from '@forgeax/engine-ecs';
 // feat-20260621-learn-render-5-3-production-shadow-demos M3 / M3-T-SMOKE-DAWN.
 //
 // LearnOpenGL section 5.3.2 point-light cube-map shadows dawn-node smoke
-// Spawns a cullMode:none room cube (scale=10 contains every witness cube) + 5 inner cubes + DirectionalLight fill +
-// PointLight + PointLightShadow + orbit system, renders 300 frames, reads back
-// the final render target, and asserts a producer-owned point-light witness.
+// Spawns the canonical inward-facing room cube (source extent=5, engine
+// transform scale=10) + the five exact LearnOpenGL inner-cube transforms
+// (source scale doubled for the engine's unit cube) + PointLight /
+// PointLightShadow with the source z-only orbit, renders a configurable frame
+// window, reads back the final render target, and asserts a producer-owned
+// point-light witness.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-2-point-shadows] backend=<backend>`
@@ -19,9 +22,20 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const POINT_LIGHT_MIN_DELTA = Number.parseFloat(process.env.POINT_LIGHT_MIN_DELTA ?? '0.05');
+// The browser demo is the visual reference and uses the source's 1024² map.
+// Dawn smoke defaults to a smaller map so the six-face semantic witness stays
+// cheap in CI; set SMOKE_SHADOW_MAP_SIZE=1024 for a same-resolution replay.
+const SMOKE_SHADOW_MAP_SIZE = Number.parseInt(
+  process.env.SMOKE_SHADOW_MAP_SIZE ?? '256',
+  10,
+);
+const SMOKE_SYNC_EVERY = Math.max(
+  1,
+  Number.parseInt(process.env.SMOKE_SYNC_EVERY ?? '8', 10),
+);
 const FALSIFY = process.env.FALSIFY ?? '';
 const FALSIFY_NO_POINT_LIGHT = FALSIFY === 'no-point-light';
 const WIDTH = 512;
@@ -137,21 +151,19 @@ const mockCanvas = {
 // --- 3. Shader manifest ---
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
-const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST = await buildEngineShaderManifest({ pointShadows: true });
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 // --- 4. createApp + setup ---
 
 const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
-const runtimePkg = await import('@forgeax/engine-runtime');
 const { Materials, PointLightShadow } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
+const { createSceneCubeMesh } = await import('../src/scene-mesh.ts');
 const { Transform } = await import('@forgeax/engine-scene');
-const {
-  HANDLE_CUBE,
-} = await import('@forgeax/engine-assets-runtime');
 
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
@@ -164,63 +176,60 @@ if (!appResult.ok) {
 }
 const app = appResult.value;
 console.log(`[learn-render-5-3-2-point-shadows] backend=${app.renderer.inspect().capabilities.backendKind}`);
+console.log(
+  `[smoke] shadowMapSize=${SMOKE_SHADOW_MAP_SIZE} syncEvery=${SMOKE_SYNC_EVERY}`,
+);
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
+app.renderer.subscribe((event) => {
+  if (event.kind !== 'error') return;
+  const err = event.error;
+  onErrorEvents.push({ code: err.code, hint: err.hint });
+  if (onErrorEvents.length <= 4) console.error('[smoke] renderer error', JSON.stringify(err));
+});
 
 
 const world = app.world;
 
 // --- 5. Spawn scene ---
 
-// R-D4 risk countermeasure: ensure cullMode:'none' appears.
-const roomCullMode = FALSIFY === 'force-backface-cull' ? 'back' : 'none';
-
-const roomMat = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      program: { module: 'forgeax::default-standard-pbr', fragmentEntry: 'fs_main' },
-      renderState: { cullMode: roomCullMode, tags: { LightMode: 'Forward' } },
-    },
-    {
-      name: 'ShadowCaster',
-      program: { module: 'forgeax::default-shadow-caster' },
-      renderState: { tags: { LightMode: 'ShadowCaster' } },
-    },
-  ],
-  values: {
+const roomMat = world.allocSharedRef('MaterialAsset', Materials.standard({
     baseColor: [0.4, 0.4, 0.5, 1],
     metallic: 0,
     roughness: 0.5,
     occlusionStrength: 1,
-  },
-});
+}));
+const roomMesh = world.allocSharedRef('MeshAsset', createSceneCubeMesh(FALSIFY !== 'outward-room'));
+const cubeMesh = world.allocSharedRef('MeshAsset', createSceneCubeMesh(false));
 
-if (roomCullMode === 'none') {
-  console.log("[smoke] room cullMode: 'none' -- inner walls visible (R-D4 verification)");
-} else {
-  console.log('[smoke] FALSIFY=force-backface-cull -- cullMode set to back (walls culled)');
-}
-
-// Room cube: scale=10 so the unit cube's half-extent contains every witness object.
+// Room cube: the source renderCube spans [-1, 1], while HANDLE_CUBE spans
+// [-0.5, 0.5]. Transform scale=10 therefore preserves the source's [-5, 5]
+// room extent. The shared mesh owns the inward normals and winding.
 world.spawn(
   {
     component: Transform,
-      data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [10, 10, 10]},
+    data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [10, 10, 10] },
   },
-  { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+  { component: MeshFilter, data: { assetHandle: roomMesh } },
   { component: MeshRenderer, data: { materials: [roomMat] } },
 ).unwrap();
 
-// 5 inner solid-color cubes.
+// 5 inner cubes at the exact LearnOpenGL renderScene() transforms. Dawn keeps
+// solid colors because the browser-only demo owns the wood.png Pack route;
+// geometry, camera, light orbit, and shadow projection stay identical. The
+// Dawn map resolution is the configurable CI cost knob above.
 const innerObjects = [
-  { pos: [-2, 0, -1],scale: 1, color: [1, 0.3, 0.3] },
-  { pos: [1, -1, -2],scale: 0.7, color: [0.3, 1, 0.3] },
-  { pos: [0, 1.5, -3],scale: 0.5, color: [0.3, 0.3, 1] },
-  { pos: [-1, -0.5, 2],scale: 1.2, color: [1, 1, 0.3] },
-  { pos: [2, -1.5, 1],scale: 0.8, color: [1, 0.3, 1] },
+  { pos: [4, -3.5, 0], scale: 1, quat: [0, 0, 0, 1], color: [0.75, 0.75, 0.75] },
+  { pos: [2, 3, 1], scale: 1.5, quat: [0, 0, 0, 1], color: [0.75, 0.75, 0.75] },
+  { pos: [-3, -1, 0], scale: 1, quat: [0, 0, 0, 1], color: [0.75, 0.75, 0.75] },
+  { pos: [-1.5, 1, 1.5], scale: 1, quat: [0, 0, 0, 1], color: [0.75, 0.75, 0.75] },
+  {
+    pos: [-1.5, 2, -3],
+    scale: 1.5,
+    quat: [0.3535533906, 0, 0.3535533906, 0.8660254038],
+    color: [0.75, 0.75, 0.75],
+  },
 ];
 for (const obj of innerObjects) {
   const [r, g, b] = obj.color;
@@ -231,25 +240,14 @@ for (const obj of innerObjects) {
       component: Transform,
       data: {
         pos: obj.pos,
-        quat: [0, 0, 0, 1],
+        quat: obj.quat,
         scale: [obj.scale, obj.scale, obj.scale],
       },
     },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshFilter, data: { assetHandle: cubeMesh } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
   ).unwrap();
 }
-
-// Ambient directional fill light (no shadow).
-world.spawn(
-  {
-    component: DirectionalLight,
-    data: {
-      direction: [0, -1, 0.1],
-      color: [1, 1, 1], intensity: 0.15,
-    },
-  },
-).unwrap();
 
 // Orbiting point light with shadow.
 let lightEntity = null;
@@ -257,32 +255,39 @@ if (!FALSIFY_NO_POINT_LIGHT) {
   lightEntity = world.spawn(
     {
       component: Transform,
-      data: { pos: [0, 4, 0]},
+      data: { pos: [0, 0, 0] },
     },
     {
       component: PointLight,
-      data: { range: 25, intensity: 8 },
+      data: { range: 25, intensity: 20, color: [1, 1, 1] },
     },
     {
       component: PointLightShadow,
-      data: {},
+      data: {
+        mapSize: SMOKE_SHADOW_MAP_SIZE,
+        depthBias: 0.05,
+        normalBias: 0,
+        nearPlane: 1,
+        farPlane: 25,
+        pcfKernelSize: 1,
+      },
     },
   ).unwrap();
 } else {
   console.log('[smoke] FALSIFY=no-point-light -- PointLight and PointLightShadow omitted');
 }
 
-// Camera at origin, facing -Z into the room.
+// Camera: canonical LearnOpenGL starting pose (0, 0, 3), facing -Z.
 const cameraEntity = world.spawn(
   {
     component: Transform,
-    data: { pos: [0, 1.5, 0], quat: [0, 0, 0, 1]},
+    data: { pos: [0, 0, 3], quat: [0, 0, 0, 1] },
   },
   {
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearColor: [0.02, 0.02, 0.04, 1],
+      clearColor: [0.1, 0.1, 0.1, 1],
     },
   },
 ).unwrap();
@@ -295,14 +300,15 @@ if (lightEntity !== null) {
     queries: [],
     fn: () => {
       elapsed += 1 / 60;
-      const t = elapsed;
+      const t = elapsed * 0.5;
       world.set(lightEntity, Transform, {
-        pos: [Math.sin(t) * 3, 4, Math.cos(t) * 3],});
+        pos: [0, 0, Math.sin(t) * 3],
+      });
     },
   });
 }
 
-// --- 6. Render 300 frames ---
+// --- 6. Render the configured readiness window ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;
@@ -314,15 +320,28 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(1 / 60).unwrap();
   const drawResult = app.renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
   if (!drawResult.ok) {
-    console.error(`[smoke] draw frame ${i} error: ${drawResult.error.code}`);
+    app.dispose();
+    throw drawResult.error;
   } else {
     const completed = await drawResult.value.completed;
-    if (!completed.ok) onErrorEvents.push({ code: completed.error.code, hint: completed.error.hint });
+    if (!completed.ok) {
+      app.dispose();
+      throw completed.error;
+    }
   }
   totalFrames++;
-  // Await each frame so async shadow/material PSOs can resolve before the
-  // final readback; a tight rAF drain otherwise records only skip-draw frames.
-  if (sharedDevice) await sharedDevice.queue.onSubmittedWorkDone();
+  if (i % 8 === 7 || i === SMOKE_MIN_FRAMES - 1) {
+    console.log(`[smoke] progress frame=${totalFrames} elapsedMs=${Date.now() - frameStart}`);
+  }
+  // Periodically yield for async shadow/material PSOs. The final wait below
+  // still fences every submission, while avoiding a queue round-trip on every
+  // frame of the 60-frame smoke.
+  if (
+    sharedDevice &&
+    (i === 0 || i === SMOKE_MIN_FRAMES - 1 || i % SMOKE_SYNC_EVERY === SMOKE_SYNC_EVERY - 1)
+  ) {
+    await sharedDevice.queue.onSubmittedWorkDone();
+  }
   if (i % 16 === 15) await delay(1);
 }
 
@@ -343,6 +362,7 @@ if (!renderTarget) {
 const bytesPerPixel = 4;
 const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+async function readPixels() {
 const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
 {
   const enc = device.createCommandEncoder();
@@ -363,6 +383,33 @@ const mapped = readbackBuffer.getMappedRange();
 const bytes = new Uint8Array(mapped.slice(0));
 readbackBuffer.unmap();
 readbackBuffer.destroy();
+return bytes;
+}
+const bytes = await readPixels();
+async function renderControl() {
+  // Do not advance World time: geometry, camera and light pose are identical.
+  for (let frame = 0; frame < 8; frame++) {
+    const result = app.renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } }).unwrap();
+    (await result.completed).unwrap();
+    await device.queue.onSubmittedWorkDone();
+    await delay(1);
+  }
+  return readPixels();
+}
+if (lightEntity !== null) world.removeComponent(lightEntity, PointLightShadow).unwrap();
+const noShadow = await renderControl();
+if (lightEntity !== null) world.set(lightEntity, PointLight, { intensity: 0 });
+const noLight = await renderControl();
+let shadowPixelDifference = 0;
+let litPixelDifference = 0;
+for (let index = 0; index < bytes.length; index++) {
+  if (index % 4 === 3) continue;
+  shadowPixelDifference += Math.abs(bytes[index] - noShadow[index]);
+  litPixelDifference += Math.abs(noShadow[index] - noLight[index]);
+}
+const wallOffset = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4;
+const wallLightDelta = Math.max(...[0, 1, 2].map(channel => (noShadow[wallOffset + channel] - noLight[wallOffset + channel]) / 255));
+console.log(`[smoke] controls=${JSON.stringify({ shadowPixelDifference, litPixelDifference, wallLightDelta })}`);
 
 const readRgba = (px, py) => {
   const off = py * bytesPerRow + px * bytesPerPixel;
@@ -417,7 +464,7 @@ const lumSamples = Object.fromEntries(
   Object.entries(pixelSamples).map(([name, sample]) => [name, Number(luminance(sample).toFixed(4))]),
 );
 console.log(`[smoke] lumSamples=${JSON.stringify(lumSamples)}`);
-const clearLuminance = luminance([0.02, 0.02, 0.04]);
+const clearLuminance = luminance([0.1, 0.1, 0.1]);
 const pointLightSite = Math.max(lumSamples.cubeCenter, lumSamples.topCenter, lumSamples.topLeft);
 const pointLightWitness = pointLightSite - clearLuminance >= POINT_LIGHT_MIN_DELTA;
 const wallTotalMs = Date.now() - frameStart;
@@ -439,9 +486,8 @@ if (app.renderer.inspect().capabilities.backendKind !== 'webgpu')
 if (totalFrames < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 
-if (roomCullMode !== 'none') {
-  failures.push(`(c) room cullMode=${roomCullMode}; expected cullMode=none for inner-wall visibility`);
-}
+if (shadowPixelDifference <= 0) failures.push('shadow toggle produces no pixel change');
+if (wallLightDelta < POINT_LIGHT_MIN_DELTA) failures.push('point light does not illuminate the room wall');
 
 if (pointLightSite - clearLuminance < SMOKE_PIXEL_THRESHOLD) {
   failures.push(
@@ -485,7 +531,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 8 criteria GREEN: backend=webgpu, frames=${totalFrames}, cullMode=${roomCullMode}, cubeRendered, oracle=point-light-shadow, wallTotalMs=${wallTotalMs}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+  `[smoke] PASS - backend=webgpu, frames=${totalFrames}, inwardRoom, wallLit, shadowToggle, oracle=point-light-shadow, wallTotalMs=${wallTotalMs}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

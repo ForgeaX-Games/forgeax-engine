@@ -26,7 +26,7 @@
  * |:--|:--|:--|
  * | `'skeleton-resolve-failed'` | `SkeletonResolveFailedError` | `assets.get<SkeletonAsset>(skin.skeleton)` returns null/undefined |
  * | `'joint-count-mismatch'` | `JointCountMismatchError` | `Skin.joints.length !== SkeletonAsset.jointCount` |
- * | `'joint-entity-dangling'` | `JointEntityDanglingError` | `Skin.joints[i]` Entity is despawned (Transform.world view undefined) |
+ * | `'joint-entity-dangling'` | `JointEntityDanglingError` | `Skin.joints[i]` Entity is despawned (GlobalTransform.world view undefined) |
  *
  * AI users discriminate via `switch (err.code)` over `RuntimeErrorCode`;
  * each member narrows to its `*Error` class with structured `.detail`.
@@ -293,7 +293,7 @@ export class JointCountMismatchError extends Error {
  *
  * Emitted at extract time when `Skin.joints[i]` points at an Entity that has
  * been despawned (or lost its Transform component) so
- * `worldInternal._getArrayView(jointEntity, Transform, 'world')` returns
+ * `worldInternal._getArrayView(jointEntity, GlobalTransform, 'world')` returns
  * undefined. `jointIndex` is the position within `Skin.joints[]`.
  */
 export interface JointEntityDanglingDetail {

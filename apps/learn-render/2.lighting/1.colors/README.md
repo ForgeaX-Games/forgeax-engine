@@ -66,18 +66,18 @@ FALSIFY_MATERIAL_EMISSIVE_INTENSITY=0 pnpm --filter "@forgeax/app-learn-render-2
 
 # Material control: change the specular tint on the same standard material;
 # the cube's PBR response must move away from the default material
-FALSIFY_MATERIAL_SPECULAR_TINT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_SPECULAR_COLOR=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
 # Material texture control: bind a real black linear TextureAsset to the same
 # standard material's specular tint slot; its PBR response must move from default
-FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
 # Material normal-map control: bind a real non-neutral RG normal TextureAsset to the same
 # standard material; its TBN/PBR response must move from the neutral fallback
 FALSIFY_MATERIAL_NORMAL_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
 # Material normal-scale control: keep the same normal texture but set its
-# nested MaterialTextureValue.normalScale to zero; the normal response must
+# MaterialAsset.values.normalScale to [0, 0]; the normal response must
 # return to the flat-normal baseline
 FALSIFY_MATERIAL_NORMAL_SCALE=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
@@ -290,7 +290,7 @@ FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB=0.5 pnpm --filter "@forgeax/app-learn-re
 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" preview
 ```
 
-The Dawn gate renders 300 frames and reads the final target. The normal white
+The Dawn gate renders 60 frames and reads the final target. The normal white
 light requires an orange ordering (`red > green > blue`) at `cubeCenter`; the
 blue-light control requires `blue > red` and `blue > green`. Both controls use
 the same scene and renderer, so the channel change is evidence for the
@@ -331,13 +331,13 @@ the calibrated default-material threshold. This isolates the scalar from the
 color witness and fails if the intensity is silently ignored or replaced with
 the default positive value.
 
-The specular-tint control adds only `specularTint=[1.0, 0.0, 0.0]` to the same material handle.
-It requires the same `cubeCenter` response to move beyond the calibrated specular-tint threshold,
+The specular-color control adds only `specularColor=[1.0, 0.0, 0.0]` to the same material handle.
+It requires the same `cubeCenter` response to move beyond the calibrated specular-color threshold,
 proving that the optional specular tint reaches the fragment path rather than being silently
 ignored.
 
-The specular-tint-texture control binds only a 1x1 linear black `TextureAsset` to
-`specularTintTexture` on the same material handle. It requires the same `cubeCenter` response to
+The specular-color-texture control binds only a 1x1 linear black `TextureAsset` to
+`specularColorTexture` on the same material handle. It requires the same `cubeCenter` response to
 move beyond the calibrated texture threshold, proving that texture upload, binding, and sampling
 reach the Standard PBR fragment path rather than being silently ignored.
 
@@ -347,8 +347,8 @@ calibrated normal threshold, proving that texture upload, binding, tangent-space
 composition, and Standard PBR lighting reach the fragment path rather than being silently ignored.
 
 The normal-scale control keeps that same RG normal map but passes it as the nested texture value
-`{ texture, normalScale: 0 }`. The fixed `cubeCenter` must return within the calibrated threshold
-of the flat-normal baseline. This proves the existing `MaterialTextureValue.normalScale` contract
+`normalScale: [0, 0]`. The fixed `cubeCenter` must return within the calibrated threshold
+of the flat-normal baseline. This proves the existing `MaterialAsset.values.normalScale` contract
 survives material extraction, the standard PBR UBO, and WGSL TBN composition instead of being
 dropped before the shader.
 

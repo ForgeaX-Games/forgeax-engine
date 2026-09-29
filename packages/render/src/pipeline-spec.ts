@@ -18,7 +18,9 @@
 //   P4: consistent abstraction — 4-axis aligns with wgpu/Bevy/Three.js
 
 import {
+  DEFAULT_VERTEX_ATTRIBUTE_MAP,
   deriveVertexBufferLayout,
+  deriveVertexBufferLayoutFromProjection,
   deriveVertexLayoutProjection,
   type VertexLayoutProjection,
 } from '@forgeax/engine-geometry';
@@ -29,9 +31,9 @@ import {
   ok,
   type PrimitiveTopology,
   type Result,
-  type VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { VertexColorVariantConflictError } from './errors/render';
+import { materialColorTarget, materialDepthStencil } from './material-render-state';
 
 export {
   type BglKind,
@@ -45,13 +47,16 @@ export { KNOWN_PASS_KINDS };
 
 /**
  * The engine-owned deferred material target layout. `fs_gbuffer` returns
- * normal+roughness, albedo+metallic, and emissive+AO in this order.
+ * SceneColor (emissive/opacity), then packed normal/roughness, F0/AO,
+ * albedo/metallic, and lighting context. Material data costs 16 bytes/pixel.
  */
-export const DEFERRED_COLOR_FORMATS: readonly GPUTextureFormat[] = [
+export const DEFERRED_COLOR_FORMATS = [
   'rgba16float',
-  'rgba8unorm',
-  'rgba16float',
-];
+  'r32uint',
+  'r32uint',
+  'r32uint',
+  'r32uint',
+] as const satisfies readonly GPUTextureFormat[];
 
 /** Derive the color attachment shape for a material pass kind. */
 export function colorFormatsForPassKind(
@@ -225,6 +230,24 @@ export function cacheKeyOf(spec: PipelineSpec): string {
 
   const uvSetCountSegment =
     geometry.shaderUvSetCount !== undefined ? `:uvsc${geometry.shaderUvSetCount}` : '';
+  // Prepared graphics may publish an explicit multi-stream layout (particle
+  // material-input lanes are the canonical example). The attribute map alone
+  // cannot describe those streams or their lane stride, so include the
+  // normalized descriptors in the cache identity as well.
+  const vertexBuffersSegment =
+    geometry.vertexBuffers === undefined
+      ? ''
+      : `:vbs:${JSON.stringify(
+          geometry.vertexBuffers.map((buffer) => ({
+            arrayStride: buffer.arrayStride,
+            stepMode: buffer.stepMode ?? 'vertex',
+            attributes: [...buffer.attributes].map((attribute) => ({
+              shaderLocation: attribute.shaderLocation,
+              offset: attribute.offset,
+              format: attribute.format,
+            })),
+          })),
+        )}`;
 
   // bug-20260708 M2 (b): sentinel `~` distinguishes `variantSet=undefined`
   // (no-variant / default-variant request) from canonical all-true key `''`
@@ -247,7 +270,17 @@ export function cacheKeyOf(spec: PipelineSpec): string {
       stripSegment,
       `vl:${vlDigest}`,
       renderStateHash(renderState),
-    ].join(':') + uvSetCountSegment
+    ].join(':') +
+    vertexBuffersSegment +
+    uvSetCountSegment +
+    (shader.constants === undefined
+      ? ''
+      : `:constants:${JSON.stringify(
+          Object.entries(shader.constants).sort(([left], [right]) => left.localeCompare(right)),
+        )}`) +
+    (shader.vertexEntry === undefined && shader.fragmentEntry === undefined
+      ? ''
+      : `:entries:${JSON.stringify([shader.vertexEntry ?? null, shader.fragmentEntry ?? null])}`)
   );
 }
 
@@ -285,6 +318,63 @@ export function variantSetFromVertexLayoutProjection(
   );
   parts.push(axis);
   return ok(parts.join('+'));
+}
+
+/** Explicit geometry and lighting facts survive composition before manifest key canonicalization. */
+export function standardCapabilityVariantSet(
+  clustered: boolean,
+  storageBuffer: boolean,
+  vertexColorAvailable: boolean,
+): string {
+  return `CLUSTER_FORWARD_AVAILABLE=${clustered}+STORAGE_BUFFER_AVAILABLE=${storageBuffer}+VERTEX_COLOR_AVAILABLE=${vertexColorAvailable}`;
+}
+
+/**
+ * Project the frame-owned Standard topology onto its material variant axes.
+ *
+ * `StandardTopologyInputValue.kind` is the only runtime authority for the
+ * cluster axis: a frame with local lights must request the clustered artifact,
+ * while the no-local-light topology requests the direct artifact.  Keeping
+ * this projection beside the canonical key builder prevents PBR, skin, and
+ * sprite-lit record owners from independently inferring the active lane from
+ * whichever bind group happened to be constructed first.
+ */
+export function standardTopologyVariantSet(
+  topology: { readonly kind: 'no-local-lights' | 'clustered' } | undefined,
+  storageBuffer: boolean,
+  vertexColorAvailable: boolean,
+  probeBlendAvailable = false,
+): string {
+  const capabilityVariantSet = standardCapabilityVariantSet(
+    topology?.kind === 'clustered',
+    storageBuffer,
+    vertexColorAvailable,
+  );
+  if (!probeBlendAvailable || !storageBuffer) return capabilityVariantSet;
+  return `${capabilityVariantSet}+PROBE_BLEND_AVAILABLE=true`;
+}
+
+/**
+ * Keep a clustered frame fail-closed when its unified group(2) resource is
+ * unavailable. A missing group is not evidence that the frame is direct; it
+ * is an invalid prepared resource state.
+ */
+export function standardTopologyBindGroupReady(
+  topology: { readonly kind: 'no-local-lights' | 'clustered' } | undefined,
+  clusterBindGroup: unknown,
+): boolean {
+  return (
+    topology?.kind !== 'clustered' || (clusterBindGroup !== null && clusterBindGroup !== undefined)
+  );
+}
+
+/** Derive the storage axis for Standard-compatible unlit material draws. */
+export function standardStorageVariantSet(
+  storageBuffer: boolean,
+  vertexColorAvailable: boolean,
+): string {
+  if (storageBuffer && vertexColorAvailable) return '';
+  return `STORAGE_BUFFER_AVAILABLE=${storageBuffer}+VERTEX_COLOR_AVAILABLE=${vertexColorAvailable}`;
 }
 
 /**
@@ -327,32 +417,25 @@ export function buildPipelineDescriptor(
   // A supplied projection is the geometry owner's immutable GPU descriptor.
   // Do not re-derive it from a possibly stale attribute map.
   const vertexBuffers =
-    geometry.vertexLayoutProjection === undefined
+    geometry.vertexBuffers ??
+    (geometry.vertexLayoutProjection === undefined
       ? deriveVertexBufferLayout(geometry.vertexLayout, {
           ...(geometry.shaderUvSetCount !== undefined
             ? { shaderUvSetCount: geometry.shaderUvSetCount }
             : {}),
         })
-      : geometry.vertexLayoutProjection.attributes.length === 0
-        ? []
-        : [
-            {
-              arrayStride: geometry.vertexLayoutProjection.arrayStride,
-              attributes: geometry.vertexLayoutProjection.attributes.map(
-                ({ shaderLocation, offset, format }) => ({
-                  shaderLocation,
-                  offset,
-                  format,
-                }),
-              ),
-            },
-          ];
+      : deriveVertexBufferLayoutFromProjection(geometry.vertexLayoutProjection, {
+          ...(geometry.shaderUvSetCount !== undefined
+            ? { shaderUvSetCount: geometry.shaderUvSetCount }
+            : {}),
+        }));
 
   const descriptor: Record<string, unknown> = {
     vertex: {
       module: modules.vertex,
-      entryPoint: modules.vertexEntryPoint ?? 'vs_main',
+      entryPoint: spec.shader.vertexEntry ?? modules.vertexEntryPoint ?? 'vs_main',
       buffers: vertexBuffers,
+      ...(spec.shader.constants === undefined ? {} : { constants: spec.shader.constants }),
     },
   };
 
@@ -360,14 +443,11 @@ export function buildPipelineDescriptor(
   if (attachments.colorFormats.length > 0) {
     descriptor.fragment = {
       module: modules.fragment,
-      entryPoint: modules.fragmentEntryPoint ?? 'fs_main',
-      targets: attachments.colorFormats.map((fmt) => {
-        const target: Record<string, unknown> = { format: fmt };
-        if (renderState?.blend !== undefined) {
-          target.blend = renderState.blend;
-        }
-        return target;
-      }),
+      entryPoint: spec.shader.fragmentEntry ?? modules.fragmentEntryPoint ?? 'fs_main',
+      ...(spec.shader.constants === undefined ? {} : { constants: spec.shader.constants }),
+      targets: attachments.colorFormats.map((format, index) =>
+        materialColorTarget(format, renderState, index),
+      ),
     };
   }
 
@@ -389,22 +469,7 @@ export function buildPipelineDescriptor(
 
   // Depth-stencil state.
   if (attachments.depthFormat !== undefined) {
-    const ds: Record<string, unknown> = {
-      format: attachments.depthFormat,
-      depthWriteEnabled: renderState?.depthWriteEnabled ?? true,
-      depthCompare: renderState?.depthCompare ?? 'less',
-    };
-    if (renderState?.stencilReadMask !== undefined) {
-      ds.stencilReadMask = renderState.stencilReadMask;
-    }
-    if (renderState?.stencilWriteMask !== undefined) {
-      ds.stencilWriteMask = renderState.stencilWriteMask;
-    }
-    if (renderState?.stencil !== undefined) {
-      ds.stencilFront = renderState.stencil;
-      ds.stencilBack = renderState.stencil;
-    }
-    descriptor.depthStencil = ds;
+    descriptor.depthStencil = materialDepthStencil(attachments.depthFormat, renderState);
   }
 
   // Multisample: absent for sampleCount=1 (undefined). For each value > 1,
@@ -441,7 +506,7 @@ export interface AttachmentColorOps {
  *
  * `stencilLoadOp` / `stencilStoreOp` are absent on the policy itself — the
  * stencil-op gate is auto-derived from `specAttachments.depthFormat` at call
- * time (`'depth24plus-stencil8'` → `'clear'+'discard'`; everything else
+ * time (`'depth32float-stencil8'` → `'clear'+'discard'`; everything else
  * elides stencil ops). This collapses the R3/R5 stencil-op duplicates that
  * previously lived inline at every forward-pass beginRenderPass call site.
  */
@@ -479,8 +544,8 @@ export interface PassKindAttachmentPolicy {
  * 4. `'point-shadow-caster'` — HDRP point-shadow caster: depth-only
  * 5. `'skybox'` — fullscreen skybox: color-only clear/store
  * 6. `'tonemap'` — HDR→LDR tonemap fullscreen: color-only clear/store
- * 7. `'bloom-bright'` / `'bloom-blur'` — bloom downsample/blur: color-only
- *    clear/store
+ * 7. `'bloom-downsample'` / `'bloom-upsample'` — multiscale Bloom pyramid:
+ *    color-only clear/store
  * 8. `'bloom-composite'` — bloom add-back: color-only load/store (NOT clear)
  * 9. `'fxaa'` — fullscreen FXAA: color-only clear/store
  * 10. `'post-process'` — generic fullscreen primitive (SSAO, render-graph
@@ -491,7 +556,7 @@ export interface PassKindAttachmentPolicy {
  * `options.colorLoadOp='load'` + `options.depthLoadOp='load'`.
  *
  * Stencil-op gate is NOT in this table — it is derived from
- * `specAttachments.depthFormat` inside the helper (depth24plus-stencil8
+ * `specAttachments.depthFormat` inside the helper (depth32float-stencil8
  * → emit `stencilLoadOp:'clear' / stencilStoreOp:'discard'`).
  */
 export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPolicy>> = {
@@ -502,7 +567,7 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
       storeOp: 'store',
       clearValue: { r: 0, g: 0, b: 0, a: 1 },
     },
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
   },
   deferred: {
     shape: 'color-and-depth',
@@ -511,17 +576,26 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
       storeOp: 'store',
       clearValue: { r: 0, g: 0, b: 0, a: 0 },
     },
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
+  },
+  temporal: {
+    shape: 'color-and-depth',
+    defaultColorOps: {
+      loadOp: 'clear',
+      storeOp: 'store',
+      clearValue: { r: 0, g: 0, b: -1, a: 1 },
+    },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
   },
   'shadow-caster': {
     shape: 'depth-only',
     defaultColorOps: undefined,
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
   },
   'point-shadow-caster': {
     shape: 'depth-only',
     defaultColorOps: undefined,
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
   },
   skybox: {
     shape: 'color-only',
@@ -541,7 +615,7 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
     },
     defaultDepthOps: undefined,
   },
-  'bloom-bright': {
+  'bloom-downsample': {
     shape: 'color-only',
     defaultColorOps: {
       loadOp: 'clear',
@@ -550,7 +624,7 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
     },
     defaultDepthOps: undefined,
   },
-  'bloom-blur': {
+  'bloom-upsample': {
     shape: 'color-only',
     defaultColorOps: {
       loadOp: 'clear',
@@ -601,7 +675,7 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
  * clearColor) flow through `options`.
  *
  * Stencil-op gate is auto-derived from `specAttachments.depthFormat`:
- * - `'depth24plus-stencil8'` → emits `stencilLoadOp:'clear', stencilStoreOp:'discard'`
+ * - `'depth32float-stencil8'` → emits `stencilLoadOp:'clear', stencilStoreOp:'discard'`
  * - every other depth format → omits stencil ops entirely
  *
  * This collapses the R3/R5 stencil-op duplicates that previously lived inline
@@ -699,8 +773,11 @@ export function buildBeginRenderPassDescriptor(
     if (depthLoadOp === 'clear') {
       ds.depthClearValue = dOps.clearValue;
     }
-    // Stencil-op gate: only depth24plus-stencil8 carries a stencil aspect.
-    if (specAttachments.depthFormat === 'depth24plus-stencil8') {
+    // Stencil formats require explicit stencil operations.
+    if (
+      specAttachments.depthFormat === 'depth32float-stencil8' ||
+      specAttachments.depthFormat === 'depth24plus-stencil8'
+    ) {
       ds.stencilClearValue = 0;
       ds.stencilLoadOp = 'clear';
       ds.stencilStoreOp = 'discard';
@@ -731,6 +808,22 @@ export function validateSpec(
 ):
   | { ok: true }
   | { ok: false; code: PipelineSpecErrorCode; detail: Record<string, unknown>; hint?: string } {
+  const outputs = spec.renderState?.outputs;
+  if (
+    outputs !== undefined &&
+    (outputs.length !== spec.attachments.colorFormats.length ||
+      outputs.some((output, index) => output.format !== spec.attachments.colorFormats[index]))
+  ) {
+    return {
+      ok: false,
+      code: 'attachment-format-incompatible',
+      detail: {
+        expected: outputs.map((output) => output.format),
+        actual: spec.attachments.colorFormats,
+      },
+      hint: 'bind graph color attachments in the declared material output location order',
+    };
+  }
   // Check 1: sampleCount=4 with empty colorFormats is inconsistent —
   // multisample requires a colour target to resolve to.
   if (spec.attachments.sampleCount === 4 && spec.attachments.colorFormats.length === 0) {
@@ -764,7 +857,7 @@ export function validateSpec(
         expected: 'depthFormat must be set when depth testing or a depth-only pass is requested',
         actual: `depthFormat=${String(spec.attachments.depthFormat)}, depthCompare=${spec.renderState?.depthCompare}`,
       },
-      hint: 'set attachments.depthFormat (e.g. depth24plus-stencil8 or depth32float) when renderState specifies depthCompare',
+      hint: 'set attachments.depthFormat (e.g. depth32float-stencil8 or depth32float) when renderState specifies depthCompare',
     };
   }
 
@@ -873,15 +966,10 @@ export function getOrBuildPipeline(
 // SPEC_CONST_TABLE — 12 boot-time pre-warm variants (M1-T5)
 // ══════════════════════════════════════════════════════════════════════════════
 
-const PROCEDURAL_ATTR_LAYOUT: VertexAttributeMap = {
-  position: new Float32Array(0),
-  normal: new Float32Array(0),
-  uv: new Float32Array(0),
-  tangent: new Float32Array(0),
-};
+const PROCEDURAL_ATTR_LAYOUT = DEFAULT_VERTEX_ATTRIBUTE_MAP;
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
-const DEPTH_DS: GPUTextureFormat = 'depth24plus-stencil8';
+const DEPTH_DS: GPUTextureFormat = 'depth32float-stencil8';
 
 /**
  * Default LDR view format used when callers ask for the SPEC_CONST table
@@ -916,14 +1004,14 @@ const TRI_GEOMETRY_PBR = {
   shaderUvSetCount: 8,
 };
 
-// M6 fix-up: URP-variant key string for the standard PBR shader. Mirrors the
-// boot-time variantSet computed at createRenderer.ts step 1b when
-// `isHdrpActive=false` and `storageBufferCapable=true` (the URP default
-// surface). The URP record path requests this exact string at every
+// M6 fix-up: non-clustered boot-variant key string for the standard PBR shader.
+// Mirrors the boot-time variantSet computed at createRenderer.ts step 1b when
+// clustered lighting is not yet admitted and `storageBufferCapable=true` (the
+// surface). The default record path requests this exact string at every
 // `getMaterialShaderPipeline` call site, so seeding the table with these
-// variants keeps the URP cache lookup hot from frame 1 instead of
+// variants keeps the default cache lookup hot from frame 1 instead of
 // skip-drawing the first ~1 frames while the async compile resolves.
-const URP_PBR_VARIANT_SET = 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
+const STANDARD_BOOT_VARIANT_SET = standardCapabilityVariantSet(false, true, false);
 
 /**
  * Build the boot-time pre-warm table: 15 standard PipelineSpec variants.
@@ -935,22 +1023,22 @@ const URP_PBR_VARIANT_SET = 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAI
  *
  * Matrix:
  *   - 8 base material variants — {unlit, standard-pbr} x {LDR, HDR} x {S1, S4}
- *   - 4 URP-variant standard-pbr — standard-pbr (variantSet=URP_PBR_VARIANT_SET)
- *     x {LDR, HDR} x {S1, S4}; URP record path requests these specs by
+ *   - 4 non-clustered standard-pbr — standard-pbr (variantSet=STANDARD_BOOT_VARIANT_SET)
+ *     x {LDR, HDR} x {S1, S4}; the default record path requests these specs by
  *     `getMaterialShaderPipeline` keying off `cacheKeyOf` so the boot-time
  *     prewarm seeds `materialShaderPipelineCache` and avoids a 1-frame
- *     async-compile skip-draw (M6 fix-up; see render-system-record.ts §URP)
+ *     async-compile skip-draw (M6 fix-up; see render-system-record.ts)
  *   - 3 fullscreen-post — tonemap (LDR S1) + skybox (HDR S1, HDR S4)
  *
- * Total: 15. The URP variant is PBR-only because:
- *   - unlit URP record path passes `variantSet=undefined` (the no-variant
+ * Total: 15. The non-clustered variant is PBR-only because:
+ *   - unlit record path passes `variantSet=undefined` (the no-variant
  *     boot-default entries already cover it; createRenderer.ts §unlitRsp)
  *   - sprite goes through `getMaterialShaderPipeline('forgeax::sprite', ...)`
  *     lazily at first transparent-LDR-split draw — no boot-time pre-warm.
- *   - HDRP variant (`variantSet=''` or compound `=true` form) is registered
+ *   - clustered variant (`variantSet=''` or compound `=true` form) is registered
  *     lazily when the clustered Standard profile activates, not at boot — adding clustered
  *     prewarm here would build PSOs against the URP layout (the boot-time
- *     `pbrModule` is the URP variant when `isHdrpActive=false`)
+ *     `pbrModule` is the non-clustered variant before a frame admits local lights)
  *
  * `ldrViewFormat` parameterises the LDR color attachment format. Callers
  * pass the runtime-resolved swap-chain view format (Channel 2 typically
@@ -1065,12 +1153,12 @@ export function buildSpecConstTable(
       renderState: undefined,
     },
 
-    // ── M6 fix-up: URP-variant standard-pbr prewarm ─────────────────────────
-    // URP record path (`getMaterialShaderPipeline`) requests
-    // `variantSet=URP_PBR_VARIANT_SET` for standard-shading entities; pre-M6
+    // ── M6 fix-up: non-clustered standard-pbr prewarm ─────────────────────────
+    // The default record path (`getMaterialShaderPipeline`) requests
+    // `variantSet=STANDARD_BOOT_VARIANT_SET` for standard-shading entities; pre-M6
     // the silent `selectStandardFallbackPipeline` shim served the no-variant
     // boot prewarm during the 1-frame async-compile warmup. With M6's
-    // explicit-failure surface, those URP requests must hit the boot prewarm
+    // explicit-failure surface, those requests must hit the boot prewarm
     // by their own variantSet — these 4 entries close that gap.
 
     // standard PBR URP LDR S1
@@ -1078,7 +1166,7 @@ export function buildSpecConstTable(
       shader: {
         id: 'forgeax::default-standard-pbr',
         passKind: 'forward',
-        variantSet: URP_PBR_VARIANT_SET,
+        variantSet: STANDARD_BOOT_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_LDR_S1,
       geometry: TRI_GEOMETRY_PBR,
@@ -1089,7 +1177,7 @@ export function buildSpecConstTable(
       shader: {
         id: 'forgeax::default-standard-pbr',
         passKind: 'forward',
-        variantSet: URP_PBR_VARIANT_SET,
+        variantSet: STANDARD_BOOT_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_LDR_S4,
       geometry: TRI_GEOMETRY_PBR,
@@ -1100,7 +1188,7 @@ export function buildSpecConstTable(
       shader: {
         id: 'forgeax::default-standard-pbr',
         passKind: 'forward',
-        variantSet: URP_PBR_VARIANT_SET,
+        variantSet: STANDARD_BOOT_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_HDR_S1,
       geometry: TRI_GEOMETRY_PBR,
@@ -1111,7 +1199,7 @@ export function buildSpecConstTable(
       shader: {
         id: 'forgeax::default-standard-pbr',
         passKind: 'forward',
-        variantSet: URP_PBR_VARIANT_SET,
+        variantSet: STANDARD_BOOT_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_HDR_S4,
       geometry: TRI_GEOMETRY_PBR,
@@ -1133,7 +1221,7 @@ export function buildSpecConstTable(
     // has sampleCount=4. Both use empty vertexLayout (fullscreen triangle, no
     // attributes) and cullMode='none' (forward cull for fullscreen-quad passthrough).
     //
-    // Shadow-probe / fxaa / bloom 4-stage / SSAO 2-stage are lazy-build — not in
+    // Shadow-probe / fxaa / Bloom 10-pass / SSAO 2-stage are lazy-build — not in
     // SPEC_CONST_TABLE (R-D4 decision: only entries that are always-present on
     // every boot).
 

@@ -98,6 +98,8 @@ describe('prepared graphics resolver', () => {
     });
 
     expect(resolver.resolve(bindings.unwrap()).ok).toBe(true);
+    expect(resolver.requiresGraphRebuild).toBe(false);
+    expect(resolver.leases).toHaveLength(1);
     expect(resolver.release().ok).toBe(true);
     expect(resolver.release().ok).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
@@ -171,6 +173,7 @@ describe('prepared graphics resolver', () => {
     const resolvedBindings = resolver.resolve(bindingsRef);
     const resolvedVertex = resolver.resolve(vertexRef);
     const resolvedIndex = resolver.resolve(indexRef);
+    expect(resolver.requiresGraphRebuild).toBe(true);
     const resolvedExternalVertex = resolver.resolve(externalVertex.unwrap());
     const resolvedExternalIndex = resolver.resolve(externalIndex.unwrap());
 

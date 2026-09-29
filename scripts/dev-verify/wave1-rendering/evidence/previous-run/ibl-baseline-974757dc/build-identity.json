@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "engineHead": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+  "assetsCommit": "377dd57a0c147a16f0e453d65d43f23e5087d717",
+  "buildCommands": [
+    {
+      "command": "pnpm install --frozen-lockfile",
+      "exitCode": 0,
+      "workspaceLocalLinks": true
+    },
+    {
+      "command": "pnpm build:packages",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm build:shared",
+      "exitCode": 0
+    },
+    {
+      "command": "FORGEAX_BUILD_CONCURRENCY=1 pnpm exec node scripts/build-apps.mjs --shared-input-manifest shared-build-inputs/manifest.json apps/learn-render/6.pbr/2.ibl-irradiance apps/learn-render/6.pbr/3.ibl-specular",
+      "exitCode": 0
+    }
+  ],
+  "buildReceipts": {
+    "packageBuildSummary": {
+      "path": "node_modules/.cache/forgeax-build/summary.json",
+      "sha256": "d64a4e8a4be6202f8b4b704fd1b5d7410fbdf991320ed405121f9daf264456dc"
+    },
+    "packageFacts": {
+      "path": "node_modules/.cache/forgeax-build/package-facts.json",
+      "sha256": "bfab9f307616e3b4e638de24ffd2ebc98242a949d75b283638332e029971f4fb"
+    },
+    "sharedManifest": {
+      "path": "shared-build-inputs/manifest.json",
+      "sha256": "729994452739a45611eb72fd5ea80adf8183c951063469384e39b589a690bbd2"
+    },
+    "selectedAppReceipts": [
+      {
+        "path": "node_modules/.cache/forgeax-build/receipts/apps/QGZvcmdlYXgvYXBwLWxlYXJuLXJlbmRlci02LXBici0yLWlibC1pcnJhZGlhbmNl.json",
+        "sha256": "a82904df41bd80d9b788a6d8fabbac4242e3ac38b9774343b6522886e8dae1ee"
+      },
+      {
+        "path": "node_modules/.cache/forgeax-build/receipts/apps/QGZvcmdlYXgvYXBwLWxlYXJuLXJlbmRlci02LXBici0zLWlibC1zcGVjdWxhcg.json",
+        "sha256": "967d89bf1db61d400d2f77a0589abc2a334e3e97aebdb6e6f390bafc43517b24"
+      }
+    ],
+    "selectedPackIndexes": [
+      {
+        "path": "apps/learn-render/6.pbr/2.ibl-irradiance/dist/pack-index.json",
+        "sha256": "7a560e42668ae1664549c8463829a578ea541b44526227bd98b31e575c98fae2"
+      },
+      {
+        "path": "apps/learn-render/6.pbr/3.ibl-specular/dist/pack-index.json",
+        "sha256": "7a560e42668ae1664549c8463829a578ea541b44526227bd98b31e575c98fae2"
+      }
+    ],
+    "baselinePackageSet": [
+      "packages/render",
+      "packages/runtime",
+      "packages/ecs",
+      "packages/geometry",
+      "packages/scene",
+      "packages/vite-plugin-shader",
+      "packages/pack"
+    ]
+  },
+  "runtime": {
+    "node": "v26.4.0",
+    "pnpm": "11.7.0",
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O"
+  }
+}

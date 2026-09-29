@@ -10,6 +10,7 @@ import {
 
 const RENDER_PHASES: readonly RenderPhase[] = [
   'extract',
+  'occlusion-prepare',
   'bind-groups',
   'features',
   'sort',

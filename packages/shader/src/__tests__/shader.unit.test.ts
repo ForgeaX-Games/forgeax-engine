@@ -16,11 +16,13 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import { readFileSync } from 'node:fs';
 import type { Result, RhiError, ShaderModule } from '@forgeax/engine-rhi';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ShaderError } from '../errors.js';
 import { err as errResult, ok as okResult } from '../errors.js';
 import { TONEMAP_LUMINANCE_EPSILON } from '../index.js';
+import { STANDARD_PIPELINE_PARAM_SCHEMA } from '../material-schemas.js';
 import {
   registerDefaultStandardPbrSkin,
   type SkinCaps,
@@ -30,6 +32,19 @@ import {
   type MaterialShaderEntry,
   ShaderRegistry,
 } from '../ShaderRegistry.js';
+
+{
+  const sceneTemporalSource = readFileSync(
+    new URL('../scene-temporal.wgsl', import.meta.url),
+    'utf8',
+  );
+  describe('scene-temporal accessor ABI', () => {
+    it('keeps the public shader module free of compiler and backend policy imports', () => {
+      expect(sceneTemporalSource).toContain('forgeax_scene_temporal');
+      expect(sceneTemporalSource).not.toMatch(/naga|shader-compiler|engine-rhi/i);
+    });
+  });
+}
 
 {
   // --- from fullscreen-triangle.test.ts ---
@@ -150,6 +165,7 @@ import {
   }
 
   let fxaaSource!: string;
+  let commonSource!: string;
 
   beforeAll(async () => {
     const fsId = 'node:fs';
@@ -160,7 +176,9 @@ import {
     const url = (await import(/* @vite-ignore */ urlId)) as NodeUrl;
     const here = url.fileURLToPath(import.meta.url);
     const fxaaPath = path.resolve(path.dirname(here), '..', 'fxaa.wgsl');
+    const commonPath = path.resolve(path.dirname(here), '..', 'common.wgsl');
     fxaaSource = fs.readFileSync(fxaaPath, 'utf8');
+    commonSource = fs.readFileSync(commonPath, 'utf8');
   });
 
   describe('fxaa.wgsl content markers', () => {
@@ -179,7 +197,7 @@ import {
     });
   });
 
-  describe('fxaa.wgsl SSOT gate (AC-05)', () => {
+  describe('fxaa.wgsl display-encoded SSOT gate (AC-05)', () => {
     it('does NOT define fullscreen_triangle (SSOT is in common.wgsl)', () => {
       expect(fxaaSource).not.toMatch(/fn fullscreen_triangle/);
     });
@@ -189,7 +207,33 @@ import {
     });
 
     it('imports forgeax_view::common::FullscreenOutput', () => {
-      expect(fxaaSource).toContain('#import forgeax_view::common::FullscreenOutput');
+      expect(fxaaSource).toContain('#import forgeax_view::common::{FullscreenOutput');
+    });
+
+    it('declares display-encoded input/output without an OETF owner', () => {
+      expect(fxaaSource).toContain('display-encoded');
+      expect(fxaaSource).not.toContain('linearLdrColorDomain');
+      expect(fxaaSource).not.toContain('linearToSrgbOetf');
+    });
+
+    it('gates dither at both early and final paths with the per-pass policy UBO', () => {
+      expect(fxaaSource).toContain('struct FxaaParams');
+      expect(fxaaSource).toMatch(
+        /@group\(0\)\s+@binding\(2\)\s+var<uniform> params\s*:\s*FxaaParams/,
+      );
+      expect(fxaaSource).toContain(
+        'select(centerColor, ditherUnorm8(centerColor, in.position.xy), params.ditherEnabled > 0.5)',
+      );
+      expect(fxaaSource).toContain(
+        'select(finalColor, ditherUnorm8(finalColor, in.position.xy), params.ditherEnabled > 0.5)',
+      );
+    });
+
+    it('uses the shared output-boundary dither implementation', () => {
+      expect(commonSource).toContain('fn ditherUnorm8');
+      expect(commonSource).toContain('fn ditherNoise');
+      expect(fxaaSource).not.toContain('fn ditherUnorm8');
+      expect(fxaaSource).not.toContain('fn ditherNoise');
     });
   });
 
@@ -202,8 +246,8 @@ import {
       expect(fxaaSource).toMatch(/@binding\(1\)\s+var\s+samp.*sampler/);
     });
 
-    it('has no @binding(2) (no UBO, 2-entry BGL per D-2)', () => {
-      expect(fxaaSource).not.toMatch(/@binding\(2\)/);
+    it('declares @group(0) @binding(2) FxaaParams uniform', () => {
+      expect(fxaaSource).toMatch(/@binding\(2\)\s+var<uniform>\s+params\s*:\s*FxaaParams/);
     });
   });
 }
@@ -369,8 +413,44 @@ import {
     it('pads ibl-prefilter PrefilterUniforms to a 16-byte block', () => {
       const src = readSource('ibl-prefilter.wgsl');
       expect(src).toMatch(
-        /struct\s+PrefilterUniforms\s*\{[\s\S]*?roughness:\s*f32,[\s\S]*?faceSize:\s*f32,[\s\S]*?_pad0:\s*f32,[\s\S]*?_pad1:\s*f32,/,
+        /struct\s+PrefilterUniforms\s*\{[\s\S]*?roughness:\s*f32,[\s\S]*?faceSize:\s*f32,[\s\S]*?sourceMipLevelCount:\s*f32,[\s\S]*?sourceIsCameraCube:\s*f32,/,
       );
+    });
+
+    it('bounds prefilter mip selection to the allocated cube levels', () => {
+      const src = readSource('ibl-prefilter.wgsl');
+      expect(src).toContain('PREFILTER_MIP_LEVEL_COUNT');
+      expect(src).toMatch(/sourceMipLevelCount:\s*f32,/);
+      expect(src).toMatch(
+        /clamp\(\s*requestedMipLevel,\s*0\.0,\s*max\(\s*prefUniforms\.sourceMipLevelCount\s*-\s*1\.0,\s*0\.0\s*\),\s*\)/s,
+      );
+      expect(src).toMatch(/max\(4\.0\s*\*\s*HdotV,\s*0\.0001\)/);
+    });
+
+    it('evaluates the real Hammersley domain without a zero GGX denominator', () => {
+      const radicalInverseVdC = (bits: number) => {
+        let value = bits >>> 0;
+        value = ((value << 16) | (value >>> 16)) >>> 0;
+        value = (((value & 0x55555555) << 1) | ((value & 0xaaaaaaaa) >>> 1)) >>> 0;
+        value = (((value & 0x33333333) << 2) | ((value & 0xcccccccc) >>> 2)) >>> 0;
+        value = (((value & 0x0f0f0f0f) << 4) | ((value & 0xf0f0f0f0) >>> 4)) >>> 0;
+        value = (((value & 0x00ff00ff) << 8) | ((value & 0xff00ff00) >>> 8)) >>> 0;
+        return value * 2.3283064365386963e-10;
+      };
+      const sampleCount = 1024;
+      const roughness = 0;
+      let maximumXiY = 0;
+      let minimumDenominator = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < sampleCount; index += 1) {
+        const xiY = radicalInverseVdC(index);
+        const denominator = 1 + (roughness ** 4 - 1) * xiY;
+        maximumXiY = Math.max(maximumXiY, xiY);
+        minimumDenominator = Math.min(minimumDenominator, denominator);
+        expect(Number.isFinite(denominator)).toBe(true);
+      }
+      expect(maximumXiY).toBeLessThan(1);
+      expect(minimumDenominator).toBeGreaterThan(0);
+      expect(minimumDenominator).toBeCloseTo(1 / sampleCount, 12);
     });
   });
 
@@ -769,7 +849,7 @@ import {
       expect(src).toMatch(/#if\s+STORAGE_BUFFER_AVAILABLE\s*==\s*true[\s\S]*@group\(3\)/);
     });
 
-    it('(b) default-standard-pbr.wgsl declares storage, cluster, and vertex-color variant axes', () => {
+    it('(b) default-standard-pbr.wgsl declares its complete capability variant-axis contract', () => {
       // feat-20260609-hdrp-cluster-fragment-ggx M1: added CLUSTER_FORWARD_AVAILABLE as a
       // second variant axis so the standard-pbr fragment can switch between URP-style
       // (single dirlight + ambient) and HDRP-style (cluster forward 256 punctual lights).
@@ -779,6 +859,15 @@ import {
         '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
         '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE',
         '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+        '#pragma variant_axis PROBE_BLEND_AVAILABLE',
+        '#pragma variant_axis EXTENDED_LIGHTING_AVAILABLE',
+        '#pragma variant_axis TRANSMISSION_AVAILABLE',
+        '#pragma variant_axis DIRECTIONAL_PCSS_AVAILABLE',
+        '#pragma variant_axis PROJECTOR_AVAILABLE',
+        '#pragma variant_axis GPU_DRIVEN_SCENE_INDEX_AVAILABLE',
+        '#pragma variant_axis REFLECTION_FALLBACK_AVAILABLE',
+        '#pragma variant_axis COVERAGE_ONLY',
+        '#pragma variant_axis VISIBLE_SURFACE_AVAILABLE',
       ]);
     });
 
@@ -788,6 +877,7 @@ import {
       expect(variantAxes).toEqual([
         '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
         '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+        '#pragma variant_axis COVERAGE_ONLY',
       ]);
     });
 
@@ -902,35 +992,6 @@ import {
   //   - R-10 paramSchema reuse assertion
   //   - plan-strategy section 5.3 critical test point register
 
-  // Inline summary of the paramSchema fields for verification — mirrors
-  // default-standard-pbr.material.json paramSchema[] field-for-field.
-  // feat-20260613 fix-issue-1 (D-8): channelMap split into 4 f32 selectors;
-  // emissive / emissiveIntensity / occlusionStrength are schema-owned values;
-  // normalScale and the engine-injection textures remain in the same contract.
-  const EXPECTED_PARAM_NAMES = [
-    'baseColor',
-    'metallic',
-    'roughness',
-    'metallicChannel',
-    'roughnessChannel',
-    'aoChannel',
-    'extraChannel',
-    'emissive',
-    'emissiveIntensity',
-    'occlusionStrength',
-    'alphaCutoff',
-    'clearcoat',
-    'clearcoatRoughness',
-    'specularTint',
-    'normalScale',
-    'baseColorTexture',
-    'metallicRoughnessTexture',
-    'normalTexture',
-    'specularTintTexture',
-    'emissiveTexture',
-    'occlusionTexture',
-  ] as const;
-
   const STUB_WGSL = '// stub composed pbr-skin wgsl\n';
   const STORAGE_CAPS: SkinCaps = { storageBuffer: true };
 
@@ -987,49 +1048,23 @@ import {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      expect(entry.paramSchema).toHaveLength(21);
+      expect(entry.paramSchema).toHaveLength(STANDARD_PIPELINE_PARAM_SCHEMA.length);
     });
 
     it('paramSchema names match default-standard-pbr schema field-for-field', () => {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      const names = entry.paramSchema.map((p) => p.name);
-      expect(names).toEqual(EXPECTED_PARAM_NAMES);
+      expect(entry.paramSchema).toEqual(STANDARD_PIPELINE_PARAM_SCHEMA);
     });
 
     it('paramSchema types match expected value-level types', () => {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      const types = entry.paramSchema.map((p) => p.type);
-      expect(types).toEqual([
-        'color',
-        'f32',
-        'f32',
-        // 4 channel selectors (D-8 split).
-        'f32',
-        'f32',
-        'f32',
-        'f32',
-        // emissive vec3 + emissiveIntensity + occlusionStrength.
-        'vec3',
-        'f32',
-        'f32',
-        // alpha cutoff + clearcoat controls.
-        'f32',
-        'f32',
-        'f32',
-        // specular tint and its texture map.
-        'vec3',
-        'f32',
-        'texture2d',
-        'texture2d',
-        'texture2d',
-        'texture2d',
-        'texture2d',
-        'texture2d',
-      ]);
+      expect(entry.paramSchema.map((p) => p.type)).toEqual(
+        STANDARD_PIPELINE_PARAM_SCHEMA.map((p) => p.type),
+      );
     });
   });
 
@@ -1248,6 +1283,96 @@ import {
       }
     });
 
+    it('forks validated CPU inputs across two devices without fetching or reusing GPU modules', async () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(VALID_FIXTURE)]));
+      try {
+        const firstDevice = createMockDevice();
+        const first = new ShaderRegistry({ device: firstDevice, manifestUrl: url });
+        expect((await first.loadManifest()).ok).toBe(true);
+        first.installMaterialArtifact('custom::recovery', {
+          source: 'shader source',
+          paramSchema: [],
+        });
+        const firstModule = first.get('abc12345');
+        expect(firstModule.ok).toBe(true);
+        URL.revokeObjectURL(url);
+        let previous = first;
+        let previousModule = firstModule;
+        for (let generation = 1; generation <= 2; generation += 1) {
+          const device = createMockDevice();
+          const candidate = previous.forkForDevice(device);
+          expect((await candidate.loadManifest()).ok).toBe(true);
+          expect([...candidate.entries()]).toEqual(VALID_FIXTURE.entries);
+          expect(candidate.findMaterialArtifact('custom::recovery').ok).toBe(false);
+          const module = candidate.get('abc12345');
+          expect(module.ok).toBe(true);
+          expect(module.value).not.toBe(previousModule.value);
+          expect(previous.get('abc12345').value).toBe(previousModule.value);
+          candidate.installMaterialArtifact(`custom::generation-${generation}`, {
+            source: 'candidate-only source',
+            paramSchema: [],
+          });
+          expect(previous.findMaterialArtifact(`custom::generation-${generation}`).ok).toBe(false);
+          previous = candidate;
+          previousModule = module;
+        }
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    });
+
+    it('can fork manifest metadata without carrying material artifacts', async () => {
+      const manifest = {
+        ...VALID_FIXTURE,
+        materialShaders: [
+          {
+            identifier: 'engine::manifest',
+            sourcePath: 'engine.wgsl',
+            composedWgsl: 'manifest shader source',
+            paramSchema: '[]',
+            variants: [],
+          },
+        ],
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)]));
+      try {
+        const original = new ShaderRegistry({ device: createMockDevice(), manifestUrl: url });
+        expect((await original.loadManifest()).ok).toBe(true);
+        original.installMaterialArtifact('custom::recovery', {
+          source: 'shader source',
+          paramSchema: [],
+        });
+        original.installMaterialArtifact('engine::manifest', {
+          source: 'manifest shader source',
+          paramSchema: [],
+        });
+        const candidate = original.forkForDevice(createMockDevice());
+        expect((await candidate.loadManifest()).ok).toBe(true);
+        expect(candidate.findMaterialArtifact('custom::recovery').ok).toBe(false);
+        expect(candidate.findMaterialArtifact('engine::manifest').ok).toBe(false);
+        expect(original.findMaterialArtifact('engine::manifest').ok).toBe(true);
+        expect([...candidate.entries()]).toEqual(VALID_FIXTURE.entries);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    });
+
+    it('does not admit an unloaded manifest when forking a device', async () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(VALID_FIXTURE)]));
+      try {
+        const original = new ShaderRegistry({ device: createMockDevice(), manifestUrl: url });
+        const candidate = original.forkForDevice(createMockDevice());
+        expect([...candidate.entries()]).toEqual([]);
+        expect((await candidate.loadManifest()).ok).toBe(true);
+        URL.revokeObjectURL(url);
+        expect((await original.loadManifest()).ok).toBe(false);
+        expect((await original.forkForDevice(createMockDevice()).loadManifest()).ok).toBe(false);
+        expect([...original.entries()]).toEqual([]);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    });
+
     it('hash miss path: get(unknown hash) → Result.err(ShaderError.shader-not-found)', async () => {
       const device = createMockDevice();
       const registry = new ShaderRegistry({
@@ -1457,7 +1582,7 @@ import {
     //   inv = (1/m32) * [[0, -m32], [1, m22]]
     //   so inv(proj)[10] = 0, inv(proj)[11] = 1/m32,
     //      inv(proj)[14] = -1, inv(proj)[15] = m22/m32
-    const out = [1 / m00, 0, 0, 0, 0, 1 / m11, 0, 0, 0, 0, 0, -1, 0, 0, 1 / m32, m22 / m32];
+    const out = [1 / m00, 0, 0, 0, 0, 1 / m11, 0, 0, 0, 0, 0, 1 / m32, 0, 0, -1, m22 / m32];
     // ignore m23 reference for byte-stable structure
     void m23;
     return out;
@@ -1488,16 +1613,34 @@ import {
   function skyboxDirectionTS(
     uv: [number, number],
     inverseViewProj: number[],
+    cameraPos: [number, number, number] = [0, 0, 0],
   ): [number, number, number] {
     // bug fix: the V-flip in fullscreen_triangle's `v = 1 - (y + 1) * 0.5`
     // is undone here so ndc.y matches the actual fragment NDC.y. Pre-fix
     // line was `uv.y * 2 - 1`, which produced the OPPOSITE sign of NDC.y.
     const ndcX = uv[0] * 2.0 - 1.0;
     const ndcY = 1.0 - uv[1] * 2.0;
-    const worldDir = mat4MulVec4(inverseViewProj, [ndcX, ndcY, 1.0, 1.0]);
-    const w = worldDir[3];
-    const dir = normalize3([worldDir[0] / w, worldDir[1] / w, worldDir[2] / w]);
+    const worldPoint = mat4MulVec4(inverseViewProj, [ndcX, ndcY, 0.5, 1.0]);
+    const w = worldPoint[3];
+    const dir = normalize3([
+      worldPoint[0] / w - cameraPos[0],
+      worldPoint[1] / w - cameraPos[1],
+      worldPoint[2] / w - cameraPos[2],
+    ]);
     return [dir[0], -dir[1], dir[2]];
+  }
+
+  // inv(P * V) for an unrotated camera at `cameraPos`: inv(V) * inv(P), where
+  // inv(V) only adds the camera translation to each column's xyz scaled by w.
+  function translateInverseViewProj(invP: number[], cameraPos: [number, number, number]): number[] {
+    const out = [...invP];
+    for (let column = 0; column < 4; column++) {
+      const w = invP[column * 4 + 3] ?? 0;
+      for (let row = 0; row < 3; row++) {
+        out[column * 4 + row] = (invP[column * 4 + row] ?? 0) + cameraPos[row] * w;
+      }
+    }
+    return out;
   }
 
   describe('skybox.wgsl skyboxDirection (TS-equivalence)', () => {
@@ -1539,6 +1682,22 @@ import {
       expect(dir[1]).toBeGreaterThan(0);
     });
 
+    // Regression: the unprojected NDC sample is a world point, not a ray. A
+    // camera away from the origin collapsed every fragment onto
+    // normalize(cameraPos) -- a flat single-color skybox (learn-render 6.3).
+    it('camera away from the origin keeps per-fragment view rays', () => {
+      const cameraPos: [number, number, number] = [0, 2, 8];
+      const translated = translateInverseViewProj(invVP, cameraPos);
+      const center = skyboxDirectionTS(interpolateUvAtNdc([0, 0]), translated, cameraPos);
+      const left = skyboxDirectionTS(interpolateUvAtNdc([-0.8, 0]), translated, cameraPos);
+      const right = skyboxDirectionTS(interpolateUvAtNdc([0.8, 0]), translated, cameraPos);
+      expect(Math.abs(center[0])).toBeLessThan(1e-5);
+      expect(Math.abs(center[1])).toBeLessThan(1e-5);
+      expect(center[2]).toBeLessThan(-0.999);
+      expect(left[0]).toBeLessThan(-0.3);
+      expect(right[0]).toBeGreaterThan(0.3);
+    });
+
     // Source-text grep gate so a regression that re-introduces the double-
     // Y-flip is caught at unit-test time, not on visual smoke. Dynamic node
     // imports mirror ibl-modules-parse.test.ts (the package's tsconfig does
@@ -1562,6 +1721,9 @@ import {
       const src = fs.readFileSync(path.resolve(path.dirname(here), '..', 'skybox.wgsl'), 'utf8');
       expect(src).toEqual(expect.stringContaining('1.0 - uv.y * 2.0'));
       expect(src).not.toEqual(expect.stringContaining('uv.y * 2.0 - 1.0'));
+      expect(src).toEqual(
+        expect.stringContaining('worldPoint.xyz / worldPoint.w - view.cameraPos'),
+      );
     });
   });
 }
@@ -1700,10 +1862,10 @@ import {
       expect(src).toMatch(/applyTBN/);
     });
 
-    it('default-standard-pbr.wgsl imports forgeax_pbr::lighting_directional + lighting_punctual', () => {
+    it('default-standard-pbr.wgsl imports directional lighting and the shared cluster owner', () => {
       const src = readSource('default-standard-pbr.wgsl');
       expect(src).toMatch(/#import\s+forgeax_pbr::lighting_directional::/);
-      expect(src).toMatch(/#import\s+forgeax_pbr::lighting_punctual::/);
+      expect(src).toMatch(/#import\s+forgeax_standard::cluster::/);
     });
 
     it('default-standard-pbr.wgsl no longer defines fn evalDirectional / evalPoint / evalSpot inline', () => {
@@ -1714,16 +1876,17 @@ import {
       expect(codeOnly).not.toMatch(/fn\s+evalPunctualBody\s*\(/);
     });
 
-    it('built-in PBR shaders evaluate directional CSM once and reuse it for clearcoat', () => {
+    it('built-in PBR shaders evaluate directional CSM for base and clearcoat contributions', () => {
       for (const file of ['default-standard-pbr.wgsl', 'default-standard-pbr-skin.wgsl']) {
         const codeOnly = stripComments(readSource(file));
         expect(codeOnly.match(/evalDirectionalShadowFactor\s*\(/g)).toHaveLength(1);
         expect(codeOnly).not.toMatch(/evalDirectional\s*\(/);
-        expect(codeOnly.match(/evalDirectionalNoShadow\s*\(/g)).toHaveLength(2);
+        expect(codeOnly.match(/evalDirectionalNoShadow\s*\(/g)).toHaveLength(1);
+        expect(codeOnly.match(/evaluateStandardDirect\s*\(/g)).toHaveLength(1);
       }
     });
 
-    it('directional CSM skips atlas projection and PCF beyond the authored shadow distance', () => {
+    it('directional CSM skips shadow projection and PCF beyond the authored shadow distance', () => {
       const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
       expect(codeOnly).toMatch(
         /if\s*\(viewDepth\s*>\s*view\.splitPlanes\[count\s*-\s*1u\]\.x\)\s*\{\s*return\s+1\.0\s*;/,
@@ -1737,14 +1900,14 @@ import {
       );
     });
 
-    it('directional CSM samples the compact two-cascade 2x1 atlas without halving Y', () => {
+    it('directional CSM samples each cascade from its own depth-array layer', () => {
       const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
-      expect(codeOnly).toMatch(
-        /let\s+rows\s*:\s*u32\s*=\s*\(count\s*\+\s*columns\s*-\s*1u\)\s*\/\s*columns/,
+      expect(codeOnly).toMatch(/let\s+uv\s*=\s*tileUv\s*;/);
+      expect(codeOnly).toMatch(/let\s+shadowLayer\s*=\s*i32\(layer\)/);
+      expect(codeOnly).not.toMatch(/_atlasTile/);
+      expect(stripComments(readSource('common.wgsl'))).toMatch(
+        /var\s+shadowMap\s*:\s*texture_depth_2d_array\s*;/,
       );
-      expect(codeOnly).toMatch(/let\s+tileScale\s*=\s*_atlasTileScale\(count\)/);
-      expect(codeOnly).toMatch(/let\s+uv\s*=\s*tileUv\s*\*\s*tileScale\s*\+\s*tileOrigin/);
-      expect(codeOnly).not.toMatch(/tileUv\s*\*\s*inv\s*\+\s*tileOrigin/);
     });
 
     it('directional PCF selects fixed 1x1, 3x3, or 5x5 paths without per-tap radius branches', () => {

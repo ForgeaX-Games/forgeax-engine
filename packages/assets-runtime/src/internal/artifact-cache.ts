@@ -1,4 +1,4 @@
-import type { AssetLoadError, Result } from '@forgeax/engine-types';
+import { type AssetLoadError, ok, type Result } from '@forgeax/engine-types';
 
 export interface ArtifactCacheSnapshot {
   readonly entries: number;
@@ -20,10 +20,7 @@ export class ArtifactCache {
     const value = this.values.get(contentAddress);
     if (value !== undefined) {
       this.hits += 1;
-      return Promise.resolve({ ok: true, value: new Uint8Array(value) } as Result<
-        Uint8Array,
-        AssetLoadError
-      >);
+      return Promise.resolve(ok(new Uint8Array(value)));
     }
     const pending = this.pending.get(contentAddress);
     if (pending !== undefined) {
@@ -34,7 +31,9 @@ export class ArtifactCache {
     const request = Promise.resolve()
       .then(reader)
       .then((result) => {
-        if (result.ok) this.values.set(contentAddress, new Uint8Array(result.value));
+        if (result.ok && this.pending.get(contentAddress) === request) {
+          this.values.set(contentAddress, new Uint8Array(result.value));
+        }
         return result;
       })
       .finally(() => {

@@ -14,10 +14,11 @@ consistent abstraction).
    instances). The importer composes `N*16` column-major mat4 floats into
    `NodeIr.instancing.transforms` (no GPU upload yet).
 2. `gltfDocToSceneAsset(doc, ctx)` converts the IR into a `SceneAsset`
-   POD. The `InstancedBox` node receives:
+   POD without a Renderer or a runtime collection-ID map. The `InstancedBox`
+   node receives:
    - `Transform` (translation/rotation/scale from glTF node TRS)
    - `MeshFilter` + `MeshRenderer` (mesh / material handles from `ctx`)
-   - `Instances { transforms: Float32Array }` (per-instance mat4 column-major buffer)
+   - `Instances { transforms }` (World-owned per-instance mat4 data)
    - `Name { value: 'InstancedBox' }`
 3. `assets.loadByGuid<SceneAsset>` resolves the freshly registered scene
    asset; `sceneInstances.instantiate` materialises ECS entities — one
@@ -34,10 +35,10 @@ assets/
 ## Smoke invocation
 
 ```sh
-pnpm --filter @forgeax/hello-gltf-instancing smoke
+SMOKE_MIN_FRAMES=300 pnpm --filter @forgeax/hello-gltf-instancing smoke
 ```
 
-The smoke script runs 300 frames through dawn-node, asserts
+The full-roster invocation runs 300 frames through dawn-node, asserts
 `backend === 'webgpu'`, frames produced >= 300, multi-pixel readback
 distance from clear color above the threshold, and zero `RhiError`
 events. Single SSOT for AC-13.

@@ -4,14 +4,19 @@ import devkitPackage from '../package.json' with { type: 'json' };
 import type { SdkManifest } from './sdk.js';
 import type { CommandResult, InitOptions, ProjectFacts } from './types.js';
 
+// Vitest 4.1 adds a Vite peer chain that triggers npm 10 Arborist's
+// `edgesOut` failure while installing the published SDK closure.
+const sdkVitestVersion = devkitPackage.dependencies.vitest;
+
 const STANDARD_SCRIPTS = {
-  dev: 'forgeax dev',
-  build: 'forgeax build',
-  package: 'forgeax package',
-  serve: 'forgeax serve',
-  preview: 'forgeax preview',
-  doctor: 'forgeax doctor',
-  test: 'forgeax test',
+  dev: 'forgeax dev start',
+  build: 'forgeax project build',
+  package: 'forgeax project package',
+  serve: 'forgeax project preview',
+  preview: 'forgeax project preview',
+  doctor: 'forgeax project check',
+  test: 'forgeax project test',
+  typecheck: 'pnpm exec tsc --noEmit',
 } as const;
 
 const SDK_DEV_DEPENDENCIES = {
@@ -19,8 +24,12 @@ const SDK_DEV_DEPENDENCIES = {
   '@webgpu/types': '0.1.71',
   tsx: '4.23.1',
   typescript: '6.0.3',
-  vitest: '4.1.11',
+  vitest: sdkVitestVersion,
 } as const;
+
+function isEnginePackage(name: string): boolean {
+  return name === '@forgeax/engine' || name.startsWith('@forgeax/engine-');
+}
 
 export interface InitPlan {
   readonly root: string;
@@ -49,7 +58,7 @@ export function createInitPlan(
       const dependencies = manifest[section];
       if (dependencies === null || typeof dependencies !== 'object') continue;
       const unsupported = Object.keys(dependencies).filter(
-        (name) => !name.startsWith('@forgeax/engine-') && !(name in SDK_DEV_DEPENDENCIES),
+        (name) => !isEnginePackage(name) && !(name in SDK_DEV_DEPENDENCIES),
       );
       if (unsupported.length > 0) {
         return {
@@ -68,11 +77,7 @@ export function createInitPlan(
     const dependencies = manifest[section];
     if (dependencies === null || typeof dependencies !== 'object') continue;
     for (const [name, value] of Object.entries(dependencies)) {
-      if (
-        name.startsWith('@forgeax/engine-') &&
-        typeof value === 'string' &&
-        value.startsWith('workspace:')
-      ) {
+      if (isEnginePackage(name) && typeof value === 'string' && value.startsWith('workspace:')) {
         const version = packageVersions.get(name) ?? devkitVersion;
         dependencyChanges.push({ section, name, from: value, to: version });
       }
@@ -83,7 +88,7 @@ export function createInitPlan(
       ['dependencies', 'devDependencies'].flatMap((section) => {
         const value = manifest[section];
         return value !== null && typeof value === 'object'
-          ? Object.keys(value).filter((name) => name.startsWith('@forgeax/engine-'))
+          ? Object.keys(value).filter((name) => isEnginePackage(name))
           : [];
       }),
     );
@@ -124,7 +129,7 @@ export function createInitPlan(
         error: {
           code: 'project-script-conflict',
           expected: `package.json#scripts.${name} to be absent or ${JSON.stringify(command)}`,
-          hint: `Rename the existing ${name} script, then rerun forgeax init.`,
+          hint: `Rename the existing ${name} script, then rerun forgeax project init.`,
           detail: { root: facts.root, script: name, existing },
         },
       };

@@ -1,6 +1,6 @@
 # Hello transform hierarchy
 
-This demo is the focused `ChildOf`/`Transform.world` propagation oracle. A
+This demo is the focused `ChildOf`/`GlobalTransform.world` propagation oracle. A
 parent cube moves in an `Update` system, a child keeps only its local offset,
 and `registerPropagateTransforms(world)` derives the child's world matrix before
 render extraction. A static sphere is the stability landmark.
@@ -11,7 +11,7 @@ render extraction. A static sphere is the stability landmark.
 flowchart LR
     P["parent Transform"] --> S["Update: world.set(parent)"]
     S --> W["registerPropagateTransforms"]
-    W --> C["ChildOf + child Transform.world"]
+    W --> C["ChildOf + child GlobalTransform.world"]
     C --> R["render extract"]
 ```
 
@@ -29,7 +29,7 @@ pnpm --filter @forgeax/hello-transform-hierarchy smoke
 
 ## Template boundary
 
-`templates/game-default` already owns hierarchy through authored SceneAsset
+`templates/game-3d` already owns hierarchy through authored SceneAsset
 mounts, `ChildOf` projection, imported FBX/glTF targets, physics, gameplay,
 render evidence, and typed reset. This static parent/child gallery is therefore
 kept as the canonical propagation oracle rather than copied as a second scene.

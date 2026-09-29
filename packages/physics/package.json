@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./rapier3d": {
+      "types": "./dist/rapier3d.d.ts",
+      "import": "./dist/rapier3d.mjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
@@ -29,6 +33,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
@@ -37,6 +42,18 @@
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-shader": "workspace:*"
+  },
+  "peerDependencies": {
+    "@forgeax/engine-physics-rapier2d": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@forgeax/engine-physics-rapier2d": {
+      "optional": true
+    },
+    "@forgeax/engine-physics-rapier3d": {
+      "optional": true
+    }
   },
   "forgeax": {
     "metrics": {

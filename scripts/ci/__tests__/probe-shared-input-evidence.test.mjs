@@ -69,4 +69,7 @@ test('shared evidence probe is opt-in and feeds cost-reporter through one job ou
   assert.match(workflow, /evidence_payload: \$\{\{ steps\.encode\.outputs\.evidence_payload \}\}/);
   assert.match(workflow, /needs: \[build-artifacts,[\s\S]*shared-evidence-probe\]/);
   assert.match(workflow, /--shared-evidence ci-cost-input\/shared-evidence\.json/);
+  assert.match(workflow, /PRESERVE_PROBE_ARTIFACTS:/);
+  assert.match(workflow, /--preserve-name "core-build-a\$\{GITHUB_RUN_ATTEMPT\}"/);
+  assert.match(workflow, /--preserve-name "shared-app-inputs-a\$\{GITHUB_RUN_ATTEMPT\}"/);
 });

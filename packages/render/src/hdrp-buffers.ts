@@ -19,7 +19,7 @@
 // usage owner; this module stays decoupled from renderer bootstrap.
 //
 // Sizes:
-//   - light_data        : 256 x 64 B  = 16 384 B
+//   - light_data        : 256 x 80 B  = 20 480 B
 //   - cluster_grid      : maxGridCells x 8 B = 64 x 64 x 64 x 8 B = 2 097 152 B max
 //                         (plan D-grid: x,y,z each in [1..64]; maxCells=262144;
 //                          stride 2 u32 = 8B; we allocate at the install-time
@@ -47,7 +47,8 @@ import {
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
 } from './gpu-usage';
-import { BYTES_PER_LIGHT_SLOT } from './light-buffer-layout';
+import { BYTES_PER_DIRECT_LIGHT_SLOT } from './light-buffer-layout';
+import { createPbrSkinMeshBindGroupEntries } from './pbr-pipeline';
 import {
   CLUSTER_GRID_STRIDE_U32,
   DEFAULT_CLUSTER_GRID,
@@ -55,19 +56,12 @@ import {
   MAX_LIGHTS,
 } from './pipeline/standard-profile';
 import { createHdrpBindGroupLayoutDescriptor } from './pipeline-spec';
-import { MESH_PER_ENTITY_STRIDE, MESH_UBO_FULL_ARRAY_BYTES } from './record/mesh-ssbo';
+import { MESH_PER_ENTITY_STRIDE } from './record/mesh-ssbo';
 import type { RenderSystemRuntime } from './record/render-context';
+import type { GpuDrivenSceneMeshBinding } from './render-pipeline';
 import { getOrCreateSsaoFallbackTexture } from './ssao-buffers';
 
 export { getOrCreateSsaoFallbackTexture } from './ssao-buffers';
-
-/**
- * WebGL2 HDRP downlevel light-list capacity. 128 x 64 B = 8 KiB, below the
- * WebGL2 minimum uniform-buffer binding size of 16 KiB. The storage path
- * keeps the full MAX_LIGHTS budget; the uniform path uses the same LightSlot
- * POD and only changes the transport.
- */
-export const HDRP_UNIFORM_LIGHT_CAPACITY = 128;
 
 /** Bind-group layout used only by the WebGPU cluster membership producer. */
 export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGroupLayoutDescriptor {
@@ -102,8 +96,8 @@ export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGrou
  * The persistent HDRP GPU buffers (plan D-1, BGL slot 3..6) plus the unified
  * BGL layout for group(2) (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
  *
- * AC-11: light_data stride = `BYTES_PER_LIGHT_SLOT` = 64 (double-sided lock with
- * WGSL hdrp-cluster-forward.wgsl LightSlot).
+ * AC-11: light_data stride = `BYTES_PER_DIRECT_LIGHT_SLOT` = 80 (double-sided
+ * lock with WGSL hdrp-cluster-forward.wgsl DirectLightSlot).
  * AC-13: 4 distinct RHI Buffer handles, ready for slot-3..6 BGL binding.
  * AC-14: clusterUniform is a uniform buffer (not storage); runtime grid change
  * is a writeBuffer field update, not a PSO rebuild.
@@ -111,9 +105,9 @@ export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGrou
  * cluster 4 buffer).
  */
 export interface HdrpBuffers {
-  /** Whether bindings 3..5 carry storage buffers or uniform-buffer fallback data. */
-  readonly storageBuffer: boolean;
-  /** light_data -- 256 x 64 B on storage, 128 x 64 B on uniform fallback. */
+  /** Device identity that owns every handle in this bundle. */
+  readonly device: RenderSystemRuntime['device'];
+  /** light_data -- the full 256 x 80 B DirectLightSlot budget. */
   readonly lightDataBuffer: Buffer;
   readonly lightDataBytes: number;
   /** cluster_grid SSBO -- gridX*gridY*gridZ * 2 u32, BGL slot 4. */
@@ -145,66 +139,92 @@ const cache = new WeakMap<RenderSystemRuntime, HdrpBuffers>();
  * pipeline disable (charter P3 explicit failure).
  *
  * `grid` defaults to `DEFAULT_CLUSTER_GRID` when undefined (matches the M5
- * record-stage default). The buffers are sized at the *first* call's grid; a
- * later install with a different grid keeps the existing allocation as long as
- * it has enough capacity (gridX*gridY*gridZ <= cached.grid product). Different
- * grids that exceed capacity are not currently re-allocated -- M-future.
+ * record-stage default). A smaller grid reuses the existing capacity. When a
+ * later install requests a larger grid, this owner allocates a complete new
+ * bundle, publishes it atomically, and retires the previous bundle after the
+ * device queue fence so graph and bind-group caches never observe a partially
+ * replaced resource set.
  */
 export function getOrCreateHdrpBuffers(
   runtime: RenderSystemRuntime,
   grid: { x: number; y: number; z: number } = DEFAULT_CLUSTER_GRID,
 ): HdrpBuffers | null {
+  // Cluster has one code-level transport. Capability failure is handled by
+  // Standard transport admission; this owner never creates a second UBO ABI.
+  if (runtime.device.caps?.storageBuffer !== true) return null;
+  // Contract tests and reduced host adapters may advertise storage buffers
+  // without implementing the resource-creation surface. Treat that as a
+  // capability miss rather than dereferencing an absent method; callers
+  // already route `null` through the structured cluster-transport fallback.
+  const deviceSurface = runtime.device as unknown as {
+    readonly createBuffer?: unknown;
+    readonly createBindGroupLayout?: unknown;
+    readonly destroyBuffer?: unknown;
+  };
+  if (
+    typeof deviceSurface.createBuffer !== 'function' ||
+    typeof deviceSurface.createBindGroupLayout !== 'function' ||
+    typeof deviceSurface.destroyBuffer !== 'function'
+  ) {
+    return null;
+  }
   const cached = cache.get(runtime);
-  if (cached !== undefined) return cached;
-
+  if (cached !== undefined && cached.device === runtime.device) {
+    const requestedCells = grid.x * grid.y * grid.z;
+    const cachedCells = cached.grid.x * cached.grid.y * cached.grid.z;
+    if (requestedCells <= cachedCells) return cached;
+  }
   const device = runtime.device;
-  const storageBuffer = runtime.device.caps?.storageBuffer === true;
   const clusterUniformBytes = 32;
-  const lightDataBytes =
-    (storageBuffer ? MAX_LIGHTS : HDRP_UNIFORM_LIGHT_CAPACITY) * BYTES_PER_LIGHT_SLOT;
+  const lightDataBytes = MAX_LIGHTS * BYTES_PER_DIRECT_LIGHT_SLOT;
   const clusterCells = grid.x * grid.y * grid.z;
-  const clusterGridBytes = storageBuffer
-    ? clusterCells * CLUSTER_GRID_STRIDE_U32 * 4
-    : clusterUniformBytes;
-  const lightIndexListBytes = storageBuffer ? LIGHT_INDEX_LIST_CAPACITY * 4 : clusterUniformBytes;
+  const clusterGridBytes = clusterCells * CLUSTER_GRID_STRIDE_U32 * 4;
+  const lightIndexListBytes = LIGHT_INDEX_LIST_CAPACITY * 4;
   const lightBoundsBytes = MAX_LIGHTS * 6 * 4;
+  const created: Buffer[] = [];
+  const releaseCreated = (): void => {
+    for (const buffer of created) {
+      const result = device.destroyBuffer(buffer);
+      if (!result.ok) runtime.errorRegistry.fire(result.error);
+    }
+    created.length = 0;
+  };
+  const failAllocation = (error: RhiError): null => {
+    runtime.errorRegistry.fire(error);
+    releaseCreated();
+    return null;
+  };
 
   const lightData = device.createBuffer({
     label: 'hdrp-light-data',
     size: lightDataBytes,
-    usage:
-      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightData.ok) {
-    runtime.errorRegistry.fire(lightData.error);
-    return null;
+    return failAllocation(lightData.error);
   }
+  created.push(lightData.value);
   const clusterGrid = device.createBuffer({
     label: 'hdrp-cluster-grid',
     size: clusterGridBytes,
-    usage:
-      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!clusterGrid.ok) {
-    runtime.errorRegistry.fire(clusterGrid.error);
-    return null;
+    return failAllocation(clusterGrid.error);
   }
+  created.push(clusterGrid.value);
   const lightIndexList = device.createBuffer({
     label: 'hdrp-light-index-list',
     size: lightIndexListBytes,
-    usage:
-      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightIndexList.ok) {
-    runtime.errorRegistry.fire(lightIndexList.error);
-    return null;
+    return failAllocation(lightIndexList.error);
   }
+  created.push(lightIndexList.value);
   const clusterUniform = device.createBuffer({
     label: 'hdrp-cluster-uniform',
     size: clusterUniformBytes,
@@ -212,36 +232,30 @@ export function getOrCreateHdrpBuffers(
     mappedAtCreation: false,
   });
   if (!clusterUniform.ok) {
-    runtime.errorRegistry.fire(clusterUniform.error);
-    return null;
+    return failAllocation(clusterUniform.error);
   }
+  created.push(clusterUniform.value);
   const lightBounds = device.createBuffer({
     label: 'hdrp-light-bounds',
     size: lightBoundsBytes,
-    usage:
-      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightBounds.ok) {
-    runtime.errorRegistry.fire(lightBounds.error);
-    return null;
+    return failAllocation(lightBounds.error);
   }
+  created.push(lightBounds.value);
 
   // Create the unified 7-entry BGL layout for group(2)
   // (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
   // The HDRP BGL descriptor is owned by pipeline-spec and shared with the
   // pipeline dispatcher and its byte-identical tests.
-  const storageBufferCap = runtime.device.caps?.storageBuffer === true;
-  const unifiedBglRes = device.createBindGroupLayout(
-    createHdrpBindGroupLayoutDescriptor(storageBufferCap),
-  );
+  const unifiedBglRes = device.createBindGroupLayout(createHdrpBindGroupLayoutDescriptor());
   if (!unifiedBglRes.ok) {
-    runtime.errorRegistry.fire(unifiedBglRes.error);
-    return null;
+    return failAllocation(unifiedBglRes.error);
   }
   const buffers: HdrpBuffers = {
-    storageBuffer,
+    device,
     lightDataBuffer: lightData.value,
     lightDataBytes,
     clusterGridBuffer: clusterGrid.value,
@@ -256,7 +270,48 @@ export function getOrCreateHdrpBuffers(
     unifiedBindGroupLayout: unifiedBglRes.value,
   };
   cache.set(runtime, buffers);
+  if (cached !== undefined) {
+    retireHdrpBuffers(runtime, cached);
+  }
   return buffers;
+}
+
+/**
+ * Drop the cached bundle before a device recovery or renderer disposal. The
+ * bundle carries the old device identity, so retirement fences that device's
+ * queue instead of consulting the replacement runtime device.
+ */
+export function resetHdrpBuffers(runtime: RenderSystemRuntime): void {
+  const cached = cache.get(runtime);
+  if (cached === undefined) return;
+  cache.delete(runtime);
+  retireHdrpBuffers(runtime, cached);
+}
+
+function retireHdrpBuffers(runtime: RenderSystemRuntime, buffers: HdrpBuffers): void {
+  const device = buffers.device;
+  const destroy = (): void => {
+    for (const buffer of [
+      buffers.lightDataBuffer,
+      buffers.clusterGridBuffer,
+      buffers.lightIndexListBuffer,
+      buffers.clusterUniformBuffer,
+      buffers.lightBoundsBuffer,
+    ]) {
+      const result = device.destroyBuffer(buffer);
+      if (!result.ok) runtime.errorRegistry.fire(result.error);
+    }
+  };
+  const queue = device.queue as {
+    readonly onSubmittedWorkDone?: () => Promise<undefined>;
+  };
+  if (typeof queue.onSubmittedWorkDone === 'function') {
+    queue.onSubmittedWorkDone().then(destroy, destroy);
+  } else {
+    // Minimal null/test devices may not expose queue fences; they also have no
+    // submitted work that can retain the old bundle, so release synchronously.
+    destroy();
+  }
 }
 
 /**
@@ -265,7 +320,7 @@ export function getOrCreateHdrpBuffers(
  *   [0] gridX  u32 (cast in shader)
  *   [1] gridY  u32
  *   [2] gridZ  u32
- *   [3] lightCount u32 (vec4 alignment; capped by the active transport)
+ *   [3] lightCount u32 (vec4 alignment; capped by MAX_LIGHTS)
  *   [4] near   f32
  *   [5] far    f32
  *   [6] logFarOverNear  f32
@@ -286,7 +341,6 @@ export function packClusterUniform(
   far: number,
   ssaoIntensity: number = 0,
   lightCount: number = 0,
-  lightCapacity: number = HDRP_UNIFORM_LIGHT_CAPACITY,
 ): ArrayBuffer {
   const buf = new ArrayBuffer(32);
   const u32 = new Uint32Array(buf);
@@ -294,7 +348,7 @@ export function packClusterUniform(
   u32[0] = grid.x >>> 0;
   u32[1] = grid.y >>> 0;
   u32[2] = grid.z >>> 0;
-  u32[3] = Math.min(Math.max(lightCount, 0), lightCapacity) >>> 0;
+  u32[3] = Math.min(Math.max(lightCount, 0), MAX_LIGHTS) >>> 0;
   f32[4] = near;
   f32[5] = far;
   // logFarOverNear: log(far/near) used by the shader for log-z slice mapping.
@@ -318,7 +372,7 @@ export function packClusterUniform(
  * feat-20260609-hdrp-cluster-fragment-ggx M4 / w19. Called per-frame from the
  * recordFrame HDRP block after binner+writeBuffer; the resulting BindGroup
  * lands on `passCtx.hdrpClusterBindGroup` and recordMainPass binds it at
- * group(2) when `frameState.isHdrpActive`.
+ * group(2) when the prepared Standard topology selects clustered lighting.
  *
  * Returns `null` on `device.createBindGroup` failure (a structured RhiError
  * is fired on `runtime.errorRegistry`); recordMainPass gracefully falls back
@@ -361,11 +415,151 @@ export type SsaoBindOptions =
     }
   | { readonly enabled: false };
 
+function standardLightingEntries(
+  hdrpBuffers: HdrpBuffers,
+  ssaoTexView: TextureView,
+  ssaoSampler: Sampler,
+): import('@forgeax/engine-rhi').BindGroupEntry[] {
+  return [
+    {
+      binding: 3,
+      resource: {
+        kind: 'buffer',
+        value: { buffer: hdrpBuffers.lightDataBuffer },
+      },
+    },
+    {
+      binding: 4,
+      resource: {
+        kind: 'buffer',
+        value: { buffer: hdrpBuffers.clusterGridBuffer },
+      },
+    },
+    {
+      binding: 5,
+      resource: {
+        kind: 'buffer',
+        value: { buffer: hdrpBuffers.lightIndexListBuffer },
+      },
+    },
+    {
+      binding: 6,
+      resource: {
+        kind: 'buffer',
+        value: { buffer: hdrpBuffers.clusterUniformBuffer },
+      },
+    },
+    {
+      binding: 7,
+      resource: { kind: 'textureView', value: ssaoTexView },
+    },
+    {
+      binding: 8,
+      resource: { kind: 'sampler', value: ssaoSampler },
+    },
+  ];
+}
+
+const sceneLightingBindings = new WeakMap<
+  HdrpBuffers,
+  WeakMap<
+    Buffer,
+    {
+      readonly layout: BindGroupLayout;
+      readonly palette: Buffer | undefined;
+      readonly ssao: TextureView;
+      readonly bindGroup: BindGroup;
+    }
+  >
+>();
+
+/** Bind a complete GPU scene-row projection alongside the current lighting/AO resources. */
+export function createGpuDrivenLightingBindGroup(
+  runtime: RenderSystemRuntime,
+  buffers: HdrpBuffers,
+  layout: BindGroupLayout,
+  binding: GpuDrivenSceneMeshBinding,
+  ssaoView?: TextureView,
+): BindGroup | null {
+  const fallback = getOrCreateSsaoFallbackTexture(runtime);
+  if (fallback === null) return null;
+  const ssao = ssaoView ?? fallback.view;
+  let cache = sceneLightingBindings.get(buffers);
+  if (cache === undefined) {
+    cache = new WeakMap();
+    sceneLightingBindings.set(buffers, cache);
+  }
+  const cached = cache.get(binding.meshBuffer);
+  if (cached?.layout === layout && cached.palette === binding.paletteBuffer && cached.ssao === ssao)
+    return cached.bindGroup;
+  const result = runtime.device.createBindGroup({
+    label: 'gpu-driven-scene-lighting',
+    layout,
+    entries: [
+      {
+        binding: 0,
+        resource: {
+          kind: 'buffer',
+          value: { buffer: binding.meshBuffer, size: binding.meshBytes },
+        },
+      },
+      ...(binding.paletteBuffer === undefined
+        ? []
+        : [1, 2].map((index) => ({
+            binding: index,
+            resource: {
+              kind: 'buffer' as const,
+              value: { buffer: binding.paletteBuffer as Buffer },
+            },
+          }))),
+      ...standardLightingEntries(buffers, ssao, fallback.sampler),
+    ],
+  });
+  if (!result.ok) {
+    runtime.errorRegistry.fire(result.error);
+    return null;
+  }
+  cache.set(binding.meshBuffer, {
+    layout,
+    palette: binding.paletteBuffer,
+    ssao,
+    bindGroup: result.value,
+  });
+  return result.value;
+}
+
+/** Standard surface resources without scene geometry tables. */
+export function createStandardSurfaceLightingBindGroup(
+  runtime: RenderSystemRuntime,
+  layout: BindGroupLayout,
+  grid: { readonly x: number; readonly y: number; readonly z: number },
+  ssaoOptions: SsaoBindOptions = { enabled: false },
+): BindGroup | null {
+  const buffers = getOrCreateHdrpBuffers(runtime, grid);
+  const fallback = getOrCreateSsaoFallbackTexture(runtime);
+  if (buffers === null || fallback === null) return null;
+  const result = runtime.device.createBindGroup({
+    label: 'standard-surface-lighting',
+    layout,
+    entries: standardLightingEntries(
+      buffers,
+      ssaoOptions.enabled ? ssaoOptions.ssaoBlurredView : fallback.view,
+      fallback.sampler,
+    ),
+  });
+  if (!result.ok) {
+    runtime.errorRegistry.fire(result.error);
+    return null;
+  }
+  return result.value;
+}
+
 export function createHdrpUnifiedBindGroup(
   runtime: RenderSystemRuntime,
   hdrpBuffers: HdrpBuffers,
   meshStorageBuffer: Buffer,
   ssaoOptions: SsaoBindOptions = { enabled: false },
+  meshBindingBytes = MESH_PER_ENTITY_STRIDE,
 ): BindGroup | null {
   const fallback = getOrCreateSsaoFallbackTexture(runtime);
   if (fallback === null) return null;
@@ -386,46 +580,64 @@ export function createHdrpUnifiedBindGroup(
           value: {
             buffer: meshStorageBuffer,
             offset: 0,
-            size: hdrpBuffers.storageBuffer ? MESH_PER_ENTITY_STRIDE : MESH_UBO_FULL_ARRAY_BYTES,
+            size: meshBindingBytes,
           },
         },
       },
-      {
-        binding: 3,
-        resource: {
-          kind: 'buffer',
-          value: { buffer: hdrpBuffers.lightDataBuffer },
-        },
-      },
+      ...standardLightingEntries(hdrpBuffers, ssaoTexView, ssaoSampler),
+    ],
+  });
+  if (!result.ok) {
+    runtime.errorRegistry.fire(result.error);
+    return null;
+  }
+  return result.value;
+}
+
+/** Build the clustered skin group(2) bind group with one shared palette window. */
+export function createHdrpSkinUnifiedBindGroup(
+  runtime: RenderSystemRuntime,
+  hdrpBuffers: HdrpBuffers,
+  layout: BindGroupLayout,
+  meshStorageBuffer: Buffer,
+  paletteBuffer: Buffer,
+  paletteBindingWindowBytes: number,
+  ssaoOptions: SsaoBindOptions = { enabled: false },
+  meshBindingBytes = MESH_PER_ENTITY_STRIDE,
+): BindGroup | null {
+  const fallback = getOrCreateSsaoFallbackTexture(runtime);
+  if (fallback === null) return null;
+  const result = runtime.device.createBindGroup({
+    label: 'hdrp-skin-unified-bg-group2',
+    layout,
+    entries: [
+      ...createPbrSkinMeshBindGroupEntries(
+        meshStorageBuffer,
+        meshBindingBytes,
+        paletteBuffer,
+        paletteBindingWindowBytes,
+      ),
+      { binding: 3, resource: { kind: 'buffer', value: { buffer: hdrpBuffers.lightDataBuffer } } },
       {
         binding: 4,
-        resource: {
-          kind: 'buffer',
-          value: { buffer: hdrpBuffers.clusterGridBuffer },
-        },
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.clusterGridBuffer } },
       },
       {
         binding: 5,
-        resource: {
-          kind: 'buffer',
-          value: { buffer: hdrpBuffers.lightIndexListBuffer },
-        },
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.lightIndexListBuffer } },
       },
       {
         binding: 6,
-        resource: {
-          kind: 'buffer',
-          value: { buffer: hdrpBuffers.clusterUniformBuffer },
-        },
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.clusterUniformBuffer } },
       },
       {
         binding: 7,
-        resource: { kind: 'textureView', value: ssaoTexView },
+        resource: {
+          kind: 'textureView',
+          value: ssaoOptions.enabled ? ssaoOptions.ssaoBlurredView : fallback.view,
+        },
       },
-      {
-        binding: 8,
-        resource: { kind: 'sampler', value: ssaoSampler },
-      },
+      { binding: 8, resource: { kind: 'sampler', value: fallback.sampler } },
     ],
   });
   if (!result.ok) {

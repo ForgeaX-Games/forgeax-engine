@@ -9,32 +9,19 @@ import {
   type Result,
 } from '@forgeax/engine-types';
 import { decodeMeshBinary, normalizeMeshPayload } from './mesh-binary';
-import { createPrimitiveMesh, type PrimitiveMeshKind } from './primitive-mesh';
+import { createProceduralMesh } from './primitive-mesh';
 
 export const meshAssetKind: AssetKind<MeshAsset, 'mesh'> = {
   kind: 'mesh',
 } as AssetKind<MeshAsset, 'mesh'>;
 
-const PROCEDURAL_MESH_KINDS: Readonly<Record<string, PrimitiveMeshKind>> = {
-  'procedural-cube': 'cube',
-  'procedural-triangle': 'triangle',
-  'procedural-quad': 'quad',
-  'procedural-sphere': 'sphere',
-  'procedural-cylinder': 'cylinder',
-  'procedural-nine-slice-quad': 'nine-slice-quad',
-};
-
 function proceduralMesh(payload: unknown): Result<MeshAsset, AssetLoadError> | undefined {
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
-  const geometry = (payload as { readonly geometry?: unknown }).geometry;
-  if (typeof geometry !== 'string') return undefined;
-  const kind = PROCEDURAL_MESH_KINDS[geometry];
-  if (kind === undefined) return undefined;
-  const result = createPrimitiveMesh(kind);
+  const result = createProceduralMesh(payload);
+  if (result === undefined) return undefined;
   if (result.ok) return result;
   return err({
     code: 'asset-package-invalid',
-    expected: `a valid procedural ${kind} mesh payload`,
+    expected: result.error.expected,
     hint: 'recook the authored procedural mesh descriptor',
     detail: { guid: '', reason: 'procedural mesh creation failed' },
   });
@@ -64,7 +51,7 @@ export const meshAssetDecoder: AssetDecoder<MeshAsset> = {
       if (decoded === undefined) {
         return err({
           code: 'asset-package-invalid',
-          expected: 'a valid mesh-binary/4 body artifact with a local-space AABB',
+          expected: 'a valid mesh-binary/4 or /5 body artifact with a local-space AABB',
           hint: 'recook the mesh binary and publish its validated geometry payload',
           detail: { guid: envelope.guid, reason: 'mesh binary decode failed' },
         });

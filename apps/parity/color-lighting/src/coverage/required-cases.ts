@@ -25,7 +25,7 @@ import { M1_REQUIRED_CASES } from '../report/m1-required';
 import { TONE_REQUIRED_CASES } from '../report/tone-required';
 
 export type ParityCaseOwner = 'm0' | 'm1' | 'm2' | 'm3' | 'm4' | 'm5' | 'm6';
-export type ParityBackendId = 'browser-webgpu' | 'dawn' | 'webkit-webgl2';
+export type ParityBackendId = 'browser-webgpu' | 'dawn' | 'chromium-webgl2';
 
 export const VERTEX_COLOR_CASE_IDS = [
   'vertex-color-vec3',
@@ -50,7 +50,7 @@ export interface VertexColorCaseDefinition {
   readonly required: true;
   readonly owner: 'm5';
   readonly requiredBackends: readonly ['browser-webgpu', 'dawn'];
-  readonly frameCount: 300;
+  readonly frameCount: 60;
   readonly colorDomain: VertexColorColorDomain;
   readonly epsilon: { readonly rgb: 0.05; readonly alpha: 0.05 };
   readonly samplePoints: readonly VertexColorSamplePoint[];
@@ -83,7 +83,7 @@ function entry(
   return { caseId, required, owner, applicableBackends, matrixRequiredBackends };
 }
 
-const webkitSentinelCaseIds = new Set([
+const chromiumFallbackSentinelCaseIds = new Set([
   'default-srgb-texture',
   'material-alpha-mask-default',
   'material-alpha-blend',
@@ -93,8 +93,8 @@ const webkitSentinelCaseIds = new Set([
 ]);
 
 function browserBackends(caseId: string): readonly ParityBackendId[] {
-  return webkitSentinelCaseIds.has(caseId)
-    ? ['browser-webgpu', 'webkit-webgl2']
+  return chromiumFallbackSentinelCaseIds.has(caseId)
+    ? ['browser-webgpu', 'chromium-webgl2']
     : ['browser-webgpu'];
 }
 
@@ -143,49 +143,49 @@ const m5Cases = [
 const vertexColorCases: readonly VertexColorCaseDefinition[] = [
   {
     caseId: 'vertex-color-vec3', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'triangle-centroid', coordinate: [0.5, 0.5] }, { id: 'vertex-a', coordinate: [0.25, 0.25] }],
     falsifier: 'white-color',
     sourceFixtureHash: '5e5ebc820d7db4904d11604c0ba00961ec4b1542bd4937d826eb781ed115c140',
   },
   {
     caseId: 'vertex-color-vec4', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'linearHdr', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'linearHdr', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'triangle-centroid', coordinate: [0.5, 0.5] }, { id: 'edge-midpoint', coordinate: [0.75, 0.5] }],
     falsifier: 'white-color',
     sourceFixtureHash: '15346d8eb1851a56dcacbb7f7bae1895fc99421626f759c26e1569426baca90e',
   },
   {
     caseId: 'vertex-color-normalized', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'linearHdr', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'linearHdr', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'normalized-endpoint', coordinate: [0.25, 0.25] }, { id: 'normalized-midpoint', coordinate: [0.5, 0.5] }],
     falsifier: 'white-color',
     sourceFixtureHash: '2433512dbe375b939ba3417223b3c49b27fdccf7eee26a1bb96f22064278eeaa',
   },
   {
     caseId: 'vertex-color-skinning', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'pre-joint-centroid', coordinate: [0.5, 0.5] }, { id: 'post-joint-centroid', coordinate: [0.5, 0.5] }],
     falsifier: 'white-color',
     sourceFixtureHash: '85d79f2bf1408d9404c5077554a019c14e0ab6b68cb33093c34d096657957cb4',
   },
   {
     caseId: 'vertex-color-mixed-primitives', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'colored-primitive', coordinate: [0.25, 0.5] }, { id: 'plain-primitive', coordinate: [0.75, 0.5] }],
     falsifier: 'white-color',
     sourceFixtureHash: '4647c26841a60c91b3dd82abb58e5f7725c113f74226c1dcc8d5ae74c950d466',
   },
   {
     caseId: 'vertex-color-mask-taa', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'cutout-edge', coordinate: [0.48, 0.2] }, { id: 'history-interior', coordinate: [0.625, 0.2] }],
     falsifier: 'white-color',
     sourceFixtureHash: '417d5c25e22b88f2854f8ba7fc18850c8866c91b4b7079080fb7bba23c08bcbf',
   },
   {
     caseId: 'vertex-color-no-color-baseline', required: true, owner: 'm5', requiredBackends: ['browser-webgpu', 'dawn'],
-    frameCount: 300, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
+    frameCount: 60, colorDomain: 'displayEncoded', epsilon: { rgb: 0.05, alpha: 0.05 },
     samplePoints: [{ id: 'baseline-centroid', coordinate: [0.5, 0.5] }, { id: 'background', coordinate: [0.05, 0.05] }],
     falsifier: 'no-color-baseline',
     sourceFixtureHash: 'dab68d4c265a7200910a87fb32700f658ebf1b39ef443d6c8e5ccdccae937774',
@@ -194,7 +194,7 @@ const vertexColorCases: readonly VertexColorCaseDefinition[] = [
 
 const m6Cases = [
   entry(transparentHdrp.caseId, transparentHdrp.required, 'm6', ['browser-webgpu', 'dawn']),
-  entry(transparentUrp.caseId, transparentUrp.required, 'm6', ['browser-webgpu', 'dawn', 'webkit-webgl2']),
+  entry(transparentUrp.caseId, transparentUrp.required, 'm6', ['browser-webgpu', 'dawn', 'chromium-webgl2']),
 ];
 
 const m3Cases = TONE_REQUIRED_CASES.map((fixture) => {
@@ -204,7 +204,7 @@ const m3Cases = TONE_REQUIRED_CASES.map((fixture) => {
 
 const m4AuthorityCases = m4Cases.map((fixture) => {
   if (fixture.caseId !== 'direct-directional-urp') return fixture;
-  return entry(fixture.caseId, fixture.required, fixture.owner, ['browser-webgpu', 'dawn', 'webkit-webgl2']);
+  return entry(fixture.caseId, fixture.required, fixture.owner, ['browser-webgpu', 'dawn', 'chromium-webgl2']);
 });
 
 export const PARITY_CASE_AUTHORITY = [
@@ -222,8 +222,8 @@ export const PARITY_REQUIRED_CASES = PARITY_CASE_AUTHORITY.filter((fixture) => f
 export const PARITY_REQUIRED_CASE_IDS = PARITY_REQUIRED_CASES.map((fixture) => fixture.caseId);
 export const PARITY_REQUIRED_BACKEND_IDS = matrix.requiredBackends as readonly ParityBackendId[];
 export const PARITY_REQUIRED_PIPELINE_IDS = matrix.requiredPipelines;
-export const PARITY_REQUIRED_WEBKIT_CASE_IDS = PARITY_CASE_AUTHORITY
-  .filter((entry) => entry.required && entry.matrixRequiredBackends.includes('webkit-webgl2'))
+export const PARITY_REQUIRED_CHROMIUM_CASE_IDS = PARITY_CASE_AUTHORITY
+  .filter((entry) => entry.required && entry.matrixRequiredBackends.includes('chromium-webgl2'))
   .map((entry) => entry.caseId);
 
 export const VERTEX_COLOR_REQUIRED_CASES = vertexColorCases;

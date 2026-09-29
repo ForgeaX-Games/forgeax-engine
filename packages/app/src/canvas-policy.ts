@@ -11,6 +11,7 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
     if (!camera.ok) continue;
     if (camera.value.autoAspect !== true) continue;
     if (camera.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+    if (camera.value.aspect === Math.fround(aspect)) continue;
     world.set(row.entity, Camera, { aspect });
   }
 }

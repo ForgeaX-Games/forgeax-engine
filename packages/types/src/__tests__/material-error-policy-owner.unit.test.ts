@@ -10,11 +10,14 @@ import {
 } from '../material/errors.js';
 
 const expectedCodes = [
+  'material-output-contract-invalid',
   'material-parent-not-found',
   'material-circular-inheritance',
+  'material-child-contract-invalid',
   'material-no-effective-pass',
   'material-value-unknown',
   'material-value-type-mismatch',
+  'material-parameter-type-unsupported',
   'material-contract-program-mismatch',
   'shader-module-id-missing',
   'shader-module-id-duplicate',
@@ -27,9 +30,19 @@ const expectedCodes = [
   'material-derived-interface-mismatch',
   'material-texture-coordinate-invalid',
   'material-payload-bounds',
+  'material-transmission-contract-invalid',
+  'material-physical-contract-invalid',
+  'material-tangent-required',
+  'material-surface-slot-missing',
+  'material-surface-abi-mismatch',
+  'material-surface-forbidden-interface',
 ] as const;
 
 const expectedPolicy = {
+  'material-output-contract-invalid': {
+    expected: 'ordered named color outputs with valid formats and independent blend/write states',
+    hint: 'repair the material output declaration and bind matching RenderGraph attachments',
+  },
   'material-parent-not-found': {
     expected: 'every parent GUID resolves to a MaterialAsset',
     hint: 'fix the parent GUID and resolve the material again',
@@ -37,6 +50,10 @@ const expectedPolicy = {
   'material-circular-inheritance': {
     expected: 'the parent chain is acyclic',
     hint: 'remove the repeated GUID from the parent chain',
+  },
+  'material-child-contract-invalid': {
+    expected: 'a parent-bearing material child contains only parent and authored values',
+    hint: 'remove colorSpace, passes, parameters, and surface from the child; let the MaterialTable root provide the effective contract',
   },
   'material-no-effective-pass': {
     expected: 'the resolved material has at least one pass',
@@ -49,6 +66,10 @@ const expectedPolicy = {
   'material-value-type-mismatch': {
     expected: 'each value matches its declared parameter type',
     hint: 'change the value to the declared parameter type',
+  },
+  'material-parameter-type-unsupported': {
+    expected: 'each material parameter uses a producer-supported ABI type',
+    hint: 'replace the boolean parameter with a supported numeric, vector, color, or texture type and recook the material',
   },
   'material-contract-program-mismatch': {
     expected: 'the program satisfies the material contract',
@@ -98,10 +119,35 @@ const expectedPolicy = {
     expected: 'every material payload write stays within the derived payload',
     hint: 'repair the derived payload owner before submitting the draw',
   },
+  'material-transmission-contract-invalid': {
+    expected: 'transmission material values satisfy finite ranges and Forward depth rules',
+    hint: 'repair the named transmission value or pass state before publishing the material',
+  },
+  'material-physical-contract-invalid': {
+    expected: 'the Standard physical contract contains complete declared layers and valid passes',
+    hint: 'repair the root parameters or pass policy and derive the material again',
+  },
+  'material-tangent-required': {
+    expected: 'the physical material tangent input is complete and valid before draw admission',
+    hint: 'provide a finite tangent: vec4 or repair the named normal, UV, and triangle topology inputs',
+  },
+  'material-surface-slot-missing': {
+    expected: 'the Standard material pass has one surface module slot',
+    hint: 'add moduleSlots.surface to the Standard pass and recook the material',
+  },
+  'material-surface-abi-mismatch': {
+    expected:
+      'the Surface module exports evaluate_surface with the input and output types required by its selected material model',
+    hint: 'repair the authored Surface export to the producer-reported ABI and recook the material',
+  },
+  'material-surface-forbidden-interface': {
+    expected: 'the Surface module declares no stage entry, resource binding, or vertex mutation',
+    hint: 'remove the forbidden interface from the Surface source and recook the material',
+  },
 } satisfies Record<MaterialErrorCode, { expected: string; hint: string }>;
 
 describe('MaterialError policy ownership', () => {
-  it('preserves the exact fourteen-code tuple and its public type', () => {
+  it('preserves the exact material error tuple and its public type', () => {
     expect(MATERIAL_ERROR_CODES).toEqual(expectedCodes);
     expectTypeOf<typeof MATERIAL_ERROR_CODES>().toEqualTypeOf<typeof expectedCodes>();
     expectTypeOf<MaterialErrorCode>().toEqualTypeOf<(typeof expectedCodes)[number]>();

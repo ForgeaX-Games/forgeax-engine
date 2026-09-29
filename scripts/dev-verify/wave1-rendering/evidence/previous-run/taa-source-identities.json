@@ -1,0 +1,23 @@
+{
+  "note": "Source SHA is the base HEAD of the dirty measurement worktree, not an implementation commit. Shader source and compiled manifest hashes distinguish measured versions. Manifest hashes also change when unrelated shader entries change.",
+  "shaders": [
+    {
+      "label": "baseline",
+      "source": "artifacts/wave1-rendering/taa-baseline.wgsl",
+      "sha256": "4a7a7c7def9cb860da2a92ad960aa6be1d41d6c6551e0e77093cd5d2cc99ea9d",
+      "runs": [
+        "taa-baseline-a.json.gz",
+        "taa-baseline-b.json.gz"
+      ]
+    },
+    {
+      "label": "final",
+      "source": "packages/shader/src/taa-resolve.wgsl",
+      "sha256": "f2416c4078ad08cfd5b2057a255f04e355269077b6ad0d6cd19a96fe46a6dc8a",
+      "runs": [
+        "taa-final-a.json.gz",
+        "taa-final-b.json.gz"
+      ]
+    }
+  ]
+}

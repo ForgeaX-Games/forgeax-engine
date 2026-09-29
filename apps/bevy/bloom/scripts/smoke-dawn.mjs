@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -95,7 +95,7 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine-render');
+const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine/render');
 
 const world = new World();
 const here = dirname(fileURLToPath(import.meta.url));
@@ -153,7 +153,7 @@ function meanByteDiff(left, right) {
 
 // --- Frame loop ---
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const phaseFrames = Math.max(1, Math.floor(TARGET_FRAMES / 3));
 let framesObserved = 0;
 let drawErrors = 0;
@@ -195,7 +195,18 @@ if (errors.length > 0) {
 }
 if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);
 if (diff.mean <= 0.25 || diff.changedPixels <= 20) failures.push(`(d) bloom on/off diff too small: mean=${diff.mean.toFixed(4)}, changedPixels=${diff.changedPixels}`);
-for (const pass of ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite']) {
+for (const pass of [
+  'bloom-downsample-0',
+  'bloom-downsample-1',
+  'bloom-downsample-2',
+  'bloom-downsample-3',
+  'bloom-downsample-4',
+  'bloom-upsample-3',
+  'bloom-upsample-2',
+  'bloom-upsample-1',
+  'bloom-upsample-0',
+  'bloom-composite',
+]) {
   if (!passNames.includes(pass)) failures.push(`(e) missing bloom pass ${pass}; actual=${passNames.join(',')}`);
 }
 

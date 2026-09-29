@@ -25,7 +25,7 @@ function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
 }
 
-function localId(n: number): LocalEntityId {
+function _localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
@@ -37,10 +37,7 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
   it('2-level hierarchy: no entity has Children in collect output', () => {
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: {} },
-        { localId: localId(1), components: {} },
-      ],
+      entities: { 'entity-0': { components: {} }, 'entity-1': { components: {} } },
     };
 
     const world = new World();
@@ -59,12 +56,12 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     if (!collected.ok) return;
 
     // Verify: no entity in the collected scene has 'Children' component.
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       expect(hasComp(ent, 'Children')).toBe(false);
     }
 
     // Also verify no entity has 'SceneInstance'.
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       expect(hasComp(ent, 'SceneInstance')).toBe(false);
     }
   });
@@ -76,18 +73,15 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     // Level 3: leaf scene instantiated under mid scene entity.
     const leafAsset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     const midAsset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     const outerAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: {} },
-        { localId: localId(1), components: {} },
-      ],
+      entities: { 'entity-0': { components: {} }, 'entity-1': { components: {} } },
     };
 
     const world = new World();
@@ -131,10 +125,10 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
 
     // Hierarchy: outer root + (2 outer children) + mid root + (1 mid child) + leaf root + (1 leaf child) >= 7 entities.
     // But the exact count depends on mount-collapse logic — focus on the Children assertion.
-    expect(collected.value.entities.length).toBeGreaterThan(0);
+    expect(Object.keys(collected.value.entities).length).toBeGreaterThan(0);
 
     // No entity has Children or SceneInstance.
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       expect(hasComp(ent, 'Children')).toBe(false);
       expect(hasComp(ent, 'SceneInstance')).toBe(false);
     }
@@ -143,7 +137,7 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
   it('degenerate: zero-hierarchy scene has no Children', () => {
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
 
     const world = new World();
@@ -161,7 +155,7 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       expect(hasComp(ent, 'Children')).toBe(false);
     }
   });

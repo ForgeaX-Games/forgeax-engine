@@ -1,3 +1,13 @@
+export { createDevKitBackend, type DevKitBackend } from './backend.js';
+export {
+  callDevKitBackend,
+  devKitBackendStatus,
+  startDevKitBackend,
+  stopDevKitBackend,
+} from './backend-process.js';
+export { preparePackProgramSource, prepareRuntimePackProgram } from './build/pack-program.js';
+export { createNodePackProgramHost } from './build/pack-program-host.js';
+export { createNodePackProgramImports } from './build/pack-program-imports.js';
 export {
   assetAddCommand,
   assetInspectCommand,
@@ -15,9 +25,11 @@ export {
   initCommand,
   newCommand,
   packageCommand,
-  pluginInstallCommand,
-  pluginUninstallCommand,
+  pluginCreateCommand,
+  pluginInspectCommand,
+  pluginRootCommand,
   previewCommand,
+  projectLintCommand,
   runRhiDebugCommand,
   sdkInstallCommand,
   shaderCheckCommand,
@@ -41,14 +53,44 @@ export {
   inspectEngineWorkspace,
   readEngineBinding,
 } from './engine-binding.js';
-export type { BootstrapRoot } from './host/base-host.js';
-export type { ProjectBootstrapPlan } from './host/project-bootstrap.js';
+export { createViteConfig } from './host.js';
+export {
+  composeBoundHostAssembly,
+  type DevKitHostBinding,
+  hostBindingError,
+  validateHostBinding,
+} from './host-binding.js';
 export type {
-  ResourceBootstrapPlan,
-  ResourceBootstrapTrace,
-} from './host/resource-bootstrap.js';
-export { createInitPlan } from './init.js';
-export { readProjectFacts } from './project.js';
+  LiveDevBackend,
+  LiveDevDaemonOptions,
+  LiveDevStatus,
+} from './live-dev.js';
+export {
+  liveDevControl,
+  liveDevStatus,
+  removeLiveDevSession,
+  runLiveDevDaemon,
+  runLiveProjectProcess,
+  startLiveDev,
+} from './live-dev.js';
+export { type PluginMigrationOptions, pluginMigrateCommand } from './plugin/migration.js';
+export {
+  type BootstrapRoot,
+  createInitPlan,
+  type ProjectBootstrapPlan,
+  type ResourceBootstrapPlan,
+  type ResourceBootstrapTrace,
+  readProjectFacts,
+} from './project/index.js';
+export type {
+  ProjectLintDiagnostic,
+  ProjectLintError,
+  ProjectLintReport,
+  ProjectLintResult,
+  ProjectLintRuleId,
+  ProjectOwnershipGraph,
+  ProjectOwnershipNode,
+} from './project/lint.js';
 export type {
   ArtifactRef,
   CapturedRhiTape,
@@ -72,155 +114,78 @@ export {
   runRhiDebugOperation,
 } from './rhi-debug/operations.js';
 export type {
+  SingleHtmlBundle,
+  SingleHtmlBundleArtifact,
+  SingleHtmlPackageOptions,
+  SingleHtmlPackageResult,
+} from './single-html.js';
+export {
+  bundleSingleHtmlEntry,
+  packageFormatError,
+  packageOutputError,
+  writeSingleHtml,
+} from './single-html.js';
+export type {
   BrowserCapture,
   BrowserCaptureCheckpointOptions,
   BrowserCaptureOpenOptions,
   BrowserCaptureRecord,
+  BrowserCaptureRequestReport,
+  BrowserCaptureRequestWitness,
   BrowserCaptureRunReport,
   BrowserCaptureRuntimeWitness,
+  BrowserCaptureTarget,
+  BrowserLaunchProfile,
   CapturePixelWitness,
   SoftwareBrowser,
   SoftwareBrowserOpenOptions,
   SoftwareBrowserSession,
   SoftwareCaptureCheckpointOptions,
   SoftwareCaptureRecord,
+  SoftwareCaptureRequestReport,
+  SoftwareCaptureRequestWitness,
   SoftwareCaptureRunReport,
   SoftwareCaptureRuntimeWitness,
 } from './software-capture.js';
-export { createBrowserCapture, createSoftwareBrowser } from './software-capture.js';
 export {
-  type AdmissionThresholds,
-  type BenchmarkAdmissionReport,
-  type BenchmarkMeasurement,
-  type BenchmarkRecipe,
-  type BenchmarkSample,
-  createAdmissionReport,
-  DEFAULT_ADMISSION_THRESHOLDS,
-  runBenchmarkAdmission,
-  summarizeBenchmarkSamples,
-} from './tools/benchmark/index.js';
-export {
-  bootstrapRealm,
-  type RealmBootstrapInput,
-  type RealmBootstrapResult,
-  type RealmLifecycleAdapter,
-  type RealmLifecycleHandle,
-} from './tools/bootstrap.js';
-export { createServiceCache, type ServiceCache, type ServiceCacheEntry } from './tools/cache.js';
-export {
-  createServiceCapability,
-  type ServiceAdmissionExpectation,
-  type ServiceAdmissionRef,
-  type ServiceCapability,
-} from './tools/capability.js';
-export {
-  type CarrierProvider,
-  type CarrierProviderService,
-  type CarrierProviderServiceOptions,
-  createCarrierProvider,
-  createCarrierProviderService,
-} from './tools/carrier-provider.js';
-export {
-  type CarrierRendezvous,
-  type CarrierRendezvousOptions,
-  createCarrierRendezvous,
-} from './tools/carrier-rendezvous.js';
-export {
-  describeTool,
-  listTools,
-  materializeToolCatalog,
-  rebuildToolCatalog,
-} from './tools/catalog.js';
-export { runGenericTool, runNamedTool } from './tools/cli-adapter.js';
-export {
-  createToolClient,
-  type ToolClient,
-  type ToolClientOptions,
-} from './tools/client.js';
-export type { ForgeaXExecContext } from './tools/commands.js';
-export {
-  createAuthorContribution,
-  createBuildContribution,
-  createDefaultContributions,
-} from './tools/contributions.js';
-export { runLibraryTool } from './tools/library.js';
-export {
-  createCapabilityToken,
-  createMigrationRecipe,
-  createMigrationRoster,
-  type MigrationCapabilityProbe,
-  type MigrationOperation,
-  type MigrationPath,
-  type MigrationRecipe,
-  type MigrationResolution,
-  type MigrationResolutionResult,
-  type MigrationRosterEntry,
-  type MigrationTarget,
-  probeMigrationTarget,
-  resolveMigration,
-} from './tools/migration.js';
-export {
-  analyzePreviewArtifacts,
-  type OfflineAnalysisRequest,
-  type OfflineAnalysisResult,
-} from './tools/offline-analysis.js';
-export {
-  createDomainPreviewContributions,
-  createOfflineAnalysisContribution,
-  createPreviewContribution,
-  createPreviewContributions,
-} from './tools/preview-contributions.js';
-export {
-  type PreviewCarrierRoute,
-  type PreviewHostRequest,
-  type PreviewHostResult,
-  type PreviewHostRunner,
-  runCarrierPreviewRoute,
-  runPreviewHost,
-} from './tools/preview-host.js';
-export { runPrivateTool } from './tools/private-executor.js';
-export {
-  createRealmCapabilityMatrix,
-  createResourceProbe,
-  type RealmCapability,
-  type RealmCapabilityInput,
-  type RealmCapabilityMatrix,
-  type ResourceOwner,
-  resolveRealmCapability,
-} from './tools/realms.js';
-export { createDevkitToolRuntime, createPreviewToolRuntime } from './tools/runtime.js';
-export {
-  createServiceExecutor,
-  type ServiceExecutor,
-  type ServiceExecutorOptions,
-} from './tools/service.js';
-export {
-  type AuthenticatedLoopbackService,
-  type AuthenticatedLoopbackServiceOptions,
-  type AuthenticatedLoopbackTransport,
-  type AuthenticatedLoopbackTransportOptions,
-  createAuthenticatedLoopbackService,
-  createAuthenticatedLoopbackTransport,
-  type ServiceWireHandler,
-  type ServiceWireRequest,
-} from './tools/service-transport.js';
+  captureBrowserExecutionSurface,
+  createBrowserCapture,
+  createSoftwareBrowser,
+} from './software-capture.js';
+export { assetSourceImportCommand, type SourceTransferOptions } from './source-transfer.js';
+export * from './tools/index.js';
 export type {
   AssetAddOptions,
   AssetInspectOptions,
+  AssetListOptions,
   BrowserCaptureOptions,
   BuildOptions,
   CaptureBackend,
-  CommandEnvelope,
   CommandError,
   CommandResult,
-  ForgeaXCommand,
   InitOptions,
   NewOptions,
-  PluginInstallOptions,
-  PluginUninstallOptions,
+  PackageFormat,
+  PackageOptions,
+  PluginCreateOptions,
+  PluginInspectOptions,
+  PluginRootOptions,
   ProjectCommandOptions,
   ProjectFacts,
   ShaderCheckOptions,
   SoftwareCaptureOptions,
 } from './types.js';
 export { resolveProjectPort } from './types.js';
+export { runUnifiedCli, type UnifiedCliResult } from './unified-cli.js';
+export {
+  type DevKitWorkspacePluginOptions,
+  devKitWorkspacePlugin,
+  ENGINE_WORKSPACE_CALL_SERVICE,
+  ENGINE_WORKSPACE_CAPABILITIES_SERVICE,
+} from './workspace-plugin.js';
+export {
+  createDevKitWorkspaceProvider,
+  DevKitWorkspaceError,
+  type DevKitWorkspaceProviderOptions,
+  type DevKitWorkspaceTargetOptions,
+} from './workspace-provider.js';

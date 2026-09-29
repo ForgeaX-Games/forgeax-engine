@@ -24,7 +24,7 @@ function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
 }
 
-function localId(n: number): LocalEntityId {
+function _localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
@@ -41,7 +41,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
   it('(a) SceneInstance absent from collect output', () => {
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
 
     const world = new World();
@@ -58,7 +58,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       expect(hasComp(ent, 'SceneInstance')).toBe(false);
     }
   });
@@ -68,10 +68,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     // (instance-level isRoot && ChildOf skip is independent of transient).
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: {} },
-        { localId: localId(1), components: {} },
-      ],
+      entities: { 'entity-0': { components: {} }, 'entity-1': { components: {} } },
     };
 
     const world = new World();
@@ -88,34 +85,27 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    // root + 2 children = 3 entities.
-    // Children (non-root) should have ChildOf. Root should NOT have ChildOf.
-    const rootWithChildOf = false;
+    // Both entities are authored roots. Their runtime ChildOf edges point to
+    // the transient synthetic root and are therefore omitted on collect.
     let childrenWithChildOf = 0;
 
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       if (hasComp(ent, 'ChildOf')) {
         childrenWithChildOf++;
       }
     }
 
-    // At least one non-root entity has ChildOf.
-    // Root ChildOf is skipped by isRoot && ChildOf instance-level check.
-    expect(childrenWithChildOf).toBeGreaterThan(0);
-    // No root entity should have ChildOf (the only root is the synthetic scene root).
-    // We verify by counting: all entities with ChildOf are children, root has none.
-    // The sum indicates root coverage is correct.
-    expect(rootWithChildOf).toBe(false);
+    expect(childrenWithChildOf).toBe(0);
   });
 
   it('(c) non-root entities retain ChildOf', () => {
     // Non-root entities (instantiated from SceneAsset localIds) must carry ChildOf.
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: {} },
-        { localId: localId(1), components: {} },
-      ],
+      entities: {
+        'entity-0': { components: {} },
+        'entity-1': { components: { ChildOf: { parent: 'entity-0' } } },
+      },
     };
 
     const world = new World();
@@ -132,9 +122,12 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    // root + 2 children = 3 entities. 2 children have ChildOf.
-    const childOfEntities = collected.value.entities.filter((e) => hasComp(e, 'ChildOf'));
-    expect(childOfEntities.length).toBe(2);
+    // The explicit authored edge survives; the implicit synthetic-root edges
+    // are omitted by the collector.
+    const childOfEntities = Object.values(collected.value.entities).filter((e) =>
+      hasComp(e, 'ChildOf'),
+    );
+    expect(childOfEntities.length).toBe(1);
 
     // Each child ChildOf.parent should point to root handle.
     for (const c of childOfEntities) {
@@ -149,7 +142,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { M1T2_Ctrl: { val: 42, label: 'hello' } } }],
+      entities: { 'entity-0': { components: { M1T2_Ctrl: { val: 42, label: 'hello' } } } },
     };
 
     const world = new World();
@@ -166,7 +159,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const found = collected.value.entities.find((e) => hasComp(e, 'M1T2_Ctrl'));
+    const found = Object.values(collected.value.entities).find((e) => hasComp(e, 'M1T2_Ctrl'));
     expect(found).toBeDefined();
     const c = (found?.components as Record<string, Record<string, unknown>>).M1T2_Ctrl;
     expect(c).toBeDefined();

@@ -18,20 +18,22 @@ describe('morph RenderFeature plan', () => {
         },
       ],
     });
-    const extracted = feature.extract({ worlds: [], owner: 0, frameNumber: 1 });
+    const extracted = feature.extract({ worlds: [], owner: 0, frameNumber: 1, views: [] });
     expect(extracted.ok).toBe(true);
     if (!extracted.ok) return;
     const planned = feature.plan(extracted.value, {
       caps: {} as never,
       frame: { frameNumber: 1 },
       generation: 1,
-      targets: [],
+      views: [],
     });
 
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    expect(freezeRenderFeaturePlan(feature.identity, planned.value).ok).toBe(true);
-    expect(planned.value.resources).toEqual(
+    const plannedWork = planned.value.work[0];
+    if (plannedWork === undefined) throw new Error('planned work missing');
+    expect(freezeRenderFeaturePlan(feature.identity, plannedWork).ok).toBe(true);
+    expect(plannedWork.resources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'compute-program' }),
         expect.objectContaining({
@@ -43,7 +45,7 @@ describe('morph RenderFeature plan', () => {
         expect.objectContaining({ kind: 'vertex-data', buffer: 'morph.draw-0.output' }),
       ]),
     );
-    expect(planned.value.passes).toEqual([
+    expect(plannedWork.passes).toEqual([
       expect.objectContaining({
         kind: 'compute',
         dispatches: [expect.objectContaining({ entryPoint: 'morph_main' })],

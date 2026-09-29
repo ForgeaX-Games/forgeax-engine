@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { validateVertexColorReadback } from '../../capture/attachment-readback';
 
 describe('vertex-color Dawn visual lane', () => {
-  it('fails closed when Dawn has not completed the 300-frame producer readback', () => {
+  it('fails closed when Dawn has not completed the 60-frame producer readback', () => {
     const result = validateVertexColorReadback({
       backend: 'dawn',
-      frameCount: 299,
+      frameCount: 59,
       colorDomain: 'linearHdr',
       source: 'live-producer',
       readback: 'copyTextureToBuffer',

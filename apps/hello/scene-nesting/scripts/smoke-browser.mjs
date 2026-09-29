@@ -185,11 +185,9 @@ try {
   const repairedPath = resolve(artifactDir, 'scene-nesting-repaired.png');
   await page.locator('#canvas').screenshot({ path: repairedPath });
   const recovery = repairedReport.recovery;
-  assert(recovery.exactDiagnostic === true, `diagnostic mismatch: ${JSON.stringify(recovery)}`);
-  assert(JSON.stringify(recovery.diagnostics) === JSON.stringify([
-    { component: 'Transform', field: 'unknownField', localId: 0 },
-  ]), `wrong diagnostic: ${JSON.stringify(recovery.diagnostics)}`);
-  assert(recovery.knownFieldValue[0] === 1, `mount override was lost: ${JSON.stringify(recovery.knownFieldValue)}`);
+  assert(recovery.rejectedBeforeSpawn === true, `rejection mismatch: ${JSON.stringify(recovery)}`);
+  assert(recovery.error?.code === 'asset-package-invalid', `wrong rejection code: ${JSON.stringify(recovery.error)}`);
+  assert(recovery.error?.detail?.reason === 'unknown component field', `wrong rejection detail: ${JSON.stringify(recovery.error)}`);
   assert(recovery.inputUnchanged === true && recovery.correctedInputUnchanged === true, 'scene input was mutated');
   assert(recovery.loadedInputsUnchanged === true, 'loader-fed SceneAsset payload changed');
   assert(recovery.noOrphanAfterFault === true, 'fault cleanup left an orphan');

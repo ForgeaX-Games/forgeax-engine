@@ -1,6 +1,6 @@
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { ScriptablePackError } from '@forgeax/engine-pack/source';
-import type { Asset, AssetGuid as AssetGuidType, ImportError, Result } from '@forgeax/engine-types';
+import type { PackAuthoringError } from '@forgeax/engine-pack/source';
+import type { AssetGuid as AssetGuidType, ImportError, Result } from '@forgeax/engine-types';
 import { AssetError, err, ok } from '@forgeax/engine-types';
 import type {
   ScriptablePackAssetSnapshot,
@@ -8,11 +8,12 @@ import type {
   ScriptablePackDomainError,
   ScriptablePackStagedOutput,
 } from './scriptable-pack.js';
+import { scriptablePackFingerprint as assetDigest } from './scriptable-pack-fingerprint.js';
 
 export type ScriptablePackSnapshotError =
   | AssetError
   | ImportError
-  | ScriptablePackError
+  | PackAuthoringError
   | ScriptablePackDomainError;
 
 export interface ScriptablePackStagedOwner {
@@ -29,42 +30,22 @@ export interface ScriptablePackStagedSnapshotOptions {
   readonly declaredExternalOutputs?: readonly ScriptablePackStagedOutput[];
 }
 
-function stable(value: unknown): string {
-  if (ArrayBuffer.isView(value)) {
-    return `${value.constructor.name}:${JSON.stringify(Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)))}`;
-  }
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stable(record[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-async function assetDigest(asset: Asset): Promise<string> {
-  const bytes = new TextEncoder().encode(stable(asset));
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
-}
-
-function cycleError(stack: readonly string[], owner: string, guid: string): ScriptablePackError {
+function cycleError(
+  stack: readonly string[],
+  owner: string,
+  guid: string,
+): ScriptablePackDomainError {
   const cycleStart = stack.indexOf(owner);
   const cycle = [...stack.slice(cycleStart), owner];
   return {
-    code: 'pack-source-build-cycle',
-    expected: 'an acyclic graph of ScriptablePack content dependencies',
-    actual: cycle.join(' -> '),
-    hint: 'break one content read edge or convert it to a reference-only dependency',
-    retryable: false,
-    recoveryActions: ['inspect-content-dependency-graph', 'edit-source'],
-    detail: { sourcePath: owner, sourceKey: guid, incomingRefs: cycle },
+    code: 'pack-content-dependency-stalled',
+    expected: 'the content dependency worklist to make progress',
+    hint: 'inspect the waiting GUID and pending subjects, then break the content-read cycle',
+    detail: { waitingGuids: [guid], pendingSubjects: cycle, iterations: 1 },
   };
 }
 
-function missingOutputError(owner: string, guid: string): ScriptablePackError {
+function missingOutputError(owner: string, guid: string): ScriptablePackDomainError {
   return {
     code: 'pack-source-output-invalid',
     expected: `owner ${owner} to stage every declared output including ${guid}`,
@@ -79,7 +60,10 @@ function missingOutputError(owner: string, guid: string): ScriptablePackError {
  */
 export function createScriptablePackStagedAssetSnapshotSource(
   options: ScriptablePackStagedSnapshotOptions,
-): ScriptablePackAssetSnapshotSource {
+): ScriptablePackAssetSnapshotSource & {
+  /** Materialize an owner without copying its asset into an inspection-only reader. */
+  prepareByGuid(guid: AssetGuidType): Promise<Result<void, ScriptablePackSnapshotError>>;
+} {
   const owners =
     options.declaredExternalOutputs === undefined || options.declaredExternalOutputs.length === 0
       ? options.owners
@@ -93,9 +77,12 @@ export function createScriptablePackStagedAssetSnapshotSource(
           } satisfies ScriptablePackStagedOwner,
           ...options.owners,
         ];
+  const ownerIds = new Set<string>();
   const ownerByGuid = new Map<string, ScriptablePackStagedOwner>();
   for (const owner of owners) {
-    if (owner.id.trim().length === 0) throw new TypeError('staged owner id must be non-empty');
+    if (owner.id.trim().length === 0 || ownerIds.has(owner.id))
+      throw new TypeError('staged owner ids must be non-empty and unique');
+    ownerIds.add(owner.id);
     for (const guid of owner.guids) {
       const key = AssetGuid.format(guid).toLowerCase();
       const existing = ownerByGuid.get(key);
@@ -109,11 +96,19 @@ export function createScriptablePackStagedAssetSnapshotSource(
   const snapshots = new Map<string, ScriptablePackAssetSnapshot>();
   const builds = new Map<string, Promise<Result<void, ScriptablePackSnapshotError>>>();
 
-  const sourceFor = (stack: readonly string[]): ScriptablePackAssetSnapshotSource => ({
-    async readByGuid(guid) {
+  // Active wait edges also detect cycles whose roots started concurrently.
+  const waits = new Map<string, Set<string>>();
+  const reaches = (from: string, target: string, visited = new Set<string>()): boolean => {
+    if (from === target) return true;
+    if (visited.has(from)) return false;
+    visited.add(from);
+    return [...(waits.get(from) ?? [])].some((next) => reaches(next, target, visited));
+  };
+  const sourceFor = (stack: readonly string[]) => ({
+    async prepareByGuid(guid: AssetGuidType): Promise<Result<void, ScriptablePackSnapshotError>> {
       const key = AssetGuid.format(guid).toLowerCase();
       const cached = snapshots.get(key);
-      if (cached !== undefined) return ok(structuredClone(cached));
+      if (cached !== undefined) return ok(undefined);
       const owner = ownerByGuid.get(key);
       if (owner === undefined) {
         return err(
@@ -126,9 +121,26 @@ export function createScriptablePackStagedAssetSnapshotSource(
       }
       if (stack.includes(owner.id)) return err(cycleError(stack, owner.id, key));
 
+      const requester = stack.at(-1);
+      if (requester !== undefined && reaches(owner.id, requester)) {
+        return err(cycleError([...stack, owner.id], requester, key));
+      }
+      const dependencies =
+        requester === undefined ? undefined : (waits.get(requester) ?? new Set<string>());
+      if (requester !== undefined && dependencies !== undefined) {
+        dependencies.add(owner.id);
+        waits.set(requester, dependencies);
+      }
       let building = builds.get(owner.id);
       if (building === undefined) {
-        building = (async () => {
+        let complete!: (result: Result<void, ScriptablePackSnapshotError>) => void;
+        let reject!: (reason: unknown) => void;
+        building = new Promise((resolve, fail) => {
+          complete = resolve;
+          reject = fail;
+        });
+        builds.set(owner.id, building);
+        void (async () => {
           const built = await owner.build(sourceFor([...stack, owner.id]));
           if (!built.ok) {
             builds.delete(owner.id);
@@ -156,15 +168,29 @@ export function createScriptablePackStagedAssetSnapshotSource(
           }
           for (const [outputGuid, snapshot] of next) snapshots.set(outputGuid, snapshot);
           return ok(undefined);
-        })();
-        builds.set(owner.id, building);
+        })().then(complete, (reason) => {
+          builds.delete(owner.id);
+          reject(reason);
+        });
       }
-      const built = await building;
-      if (!built.ok) return built;
-      const staged = snapshots.get(key);
-      return staged === undefined
-        ? err(missingOutputError(owner.id, key))
-        : ok(structuredClone(staged));
+      try {
+        const built = await building;
+        if (!built.ok) return built;
+        return snapshots.has(key) ? ok(undefined) : err(missingOutputError(owner.id, key));
+      } finally {
+        dependencies?.delete(owner.id);
+      }
+    },
+    async readByGuid(
+      guid: AssetGuidType,
+    ): Promise<Result<ScriptablePackAssetSnapshot, ScriptablePackSnapshotError>> {
+      const ready = await this.prepareByGuid(guid);
+      if (!ready.ok) return ready;
+      const key = AssetGuid.format(guid).toLowerCase();
+      const snapshot = snapshots.get(key);
+      return snapshot === undefined
+        ? err(missingOutputError('<prepared>', key))
+        : ok(structuredClone(snapshot));
     },
   });
 

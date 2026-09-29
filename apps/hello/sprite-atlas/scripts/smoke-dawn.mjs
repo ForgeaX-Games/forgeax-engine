@@ -4,11 +4,12 @@
 //
 // What this smoke proves (structural-only; pixel-parity baseline regen
 // is verify-stage SSOT per plan-strategy §5.1 charter P5):
-//   1. 10000 independent sprite entities (no Instances component)
-//      collapse to ONE drawIndexed per frame (record-stage fold operator
-//      M1 / w4).
-//   2. instanceCount==10000 on that drawIndexed (10000 entries fold into
-//      a single instanced draw).
+//   1. A large set of independent sprite entities (no Instances component)
+//      collapses to ONE drawIndexed per frame (record-stage fold operator
+//      M1 / w4). The default/local fixture is 10000 entities; PR CI may use
+//      the same fold assertion with a smaller fixture to avoid spending a
+//      minute constructing an identical 10000-entity world on lavapipe.
+//   2. instanceCount matches the fixture on that drawIndexed.
 //   3. Runtime assembly diagnostics snapshot `render.instancing.foldedDraws`
 //      monotonically advances at 1/frame (M3 / w13 metric increment).
 //
@@ -19,10 +20,10 @@
 //      `bgra8unorm-srgb` viewFormat).
 //   3. Register a synthetic 64x64 RGBA atlas texture + default sampler
 //      so the sprite material loads without a /pack-index.json fetch.
-//   4. Spawn 10000 independent sprite entities; the engine's record-stage
+//   4. Spawn independent sprite entities; the engine's record-stage
 //      fold operator collapses them transparently. No Instances component
 //      on any entity.
-//   5. drive 300 frames; assert structural counters every frame.
+//   5. drive 60 frames; assert structural counters every frame.
 //
 // Metric semantics (foldedDraws):
 //   The counter increments once per fold-eligible head bucket per frame.
@@ -40,6 +41,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '1000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
@@ -47,7 +49,8 @@ const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 1
 const WIDTH = 200;
 const HEIGHT = 150;
 const CLEAR_RGBA = [0.07, 0.07, 0.09, 1];
-const SPRITE_GRID = 100;
+const lightweight = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+const SPRITE_GRID = lightweight ? 32 : 100;
 const SPRITE_COUNT = SPRITE_GRID * SPRITE_GRID;
 const SPRITE_SPACING = 0.018;
 
@@ -216,7 +219,8 @@ const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 let renderer;
 try {
@@ -244,12 +248,11 @@ if (!assets) {
 const synth = buildSyntheticAtlas();
 const synthPod = {
   kind: 'texture',
-  width: synth.width,
-  height: synth.height,
+  shape: { viewDimension: '2d', extent: { width: synth.width, height: synth.height } },
   format: 'rgba8unorm-srgb',
   data: synth.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
@@ -310,7 +313,7 @@ okResult(
   ),
 );
 
-// 10000 independent sprite entities. fold operator collapses to 1
+// Independent sprite entities. The fold operator collapses them to 1
 // drawIndexed because (Layer.value=0, pos z=0, materialHandle) is uniform.
 const half = (SPRITE_GRID - 1) / 2;
 for (let i = 0; i < SPRITE_COUNT; i++) {
@@ -338,7 +341,7 @@ for (let i = 0; i < SPRITE_COUNT; i++) {
 }
 console.log(`[sprite-atlas] spawned ${SPRITE_COUNT} independent sprite entities (no Instances component)`);
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 
 let drawCallCount = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -356,7 +359,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     continue;
   }
 
-  // AC-01: 10000 entities fold to exactly 1 drawIndexed per frame.
+  // AC-01: every fixture entity folds to exactly 1 drawIndexed per frame.
   if (rhiDrawIndexedCallsThisFrame !== 1) {
     console.error(
       `[smoke] FAIL - frame ${i} drawIndexed count = ${rhiDrawIndexedCallsThisFrame}, expected 1 (fold collapse)`,
@@ -364,7 +367,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     sharedDevice?.destroy?.();
     process.exit(1);
   }
-  // AC-01: instanceCount == SPRITE_COUNT (all 10000 instanced into one draw).
+  // AC-01: instanceCount == SPRITE_COUNT (all fixture entities in one draw).
   if (rhiLastInstanceCount !== SPRITE_COUNT) {
     console.error(
       `[smoke] FAIL - frame ${i} instanceCount = ${rhiLastInstanceCount}, expected ${SPRITE_COUNT}`,
@@ -392,6 +395,7 @@ console.log(
   `[smoke] PASS - ${SPRITE_COUNT} entities folded to 1 drawIndexed/frame, ` +
     `instanceCount=${SPRITE_COUNT}, frames=${drawCallCount}`,
 );
+emitSmokeReceipt('hello-sprite-atlas/smoke', drawCallCount);
 
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

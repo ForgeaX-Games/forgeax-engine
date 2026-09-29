@@ -12,7 +12,11 @@
 import type { Buffer, RhiCaps, RhiDevice, Texture } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
 import type { RenderSystemRuntime } from '../../../render/src/render-system';
-import { getOrCreateSsaoBuffers } from '../../../render/src/ssao-buffers';
+import {
+  getOrCreateSsaoBuffers,
+  getOrCreateSsaoFallbackTexture,
+  resetSsaoResources,
+} from '../../../render/src/ssao-buffers';
 
 function mockTexture(label?: string): Texture {
   return { label: label ?? 'mock-tex' } as unknown as Texture;
@@ -26,11 +30,21 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
   runtime: RenderSystemRuntime;
   createBuffer: ReturnType<typeof vi.fn>;
   createTexture: ReturnType<typeof vi.fn>;
+  createTextureView: ReturnType<typeof vi.fn>;
   createSampler: ReturnType<typeof vi.fn>;
+  destroyBuffer: ReturnType<typeof vi.fn>;
+  destroyTexture: ReturnType<typeof vi.fn>;
+  writeBuffer: ReturnType<typeof vi.fn>;
+  writeTexture: ReturnType<typeof vi.fn>;
 } {
-  const createBuffer = vi.fn().mockReturnValue({ ok: true, value: mockBuffer() });
-  const createTexture = vi.fn().mockReturnValue({ ok: true, value: mockTexture() });
+  const createBuffer = vi.fn(() => ({ ok: true, value: mockBuffer() }));
+  const createTexture = vi.fn(() => ({ ok: true, value: mockTexture() }));
+  const createTextureView = vi.fn().mockReturnValue({ ok: true, value: {} });
   const createSampler = vi.fn().mockReturnValue({ ok: true, value: { label: 'mock-sampler' } });
+  const destroyBuffer = vi.fn().mockReturnValue({ ok: true, value: undefined });
+  const destroyTexture = vi.fn().mockReturnValue({ ok: true, value: undefined });
+  const writeBuffer = vi.fn().mockReturnValue({ ok: true, value: undefined });
+  const writeTexture = vi.fn().mockReturnValue({ ok: true, value: undefined });
 
   const device = {
     caps: {
@@ -43,10 +57,13 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
     },
     createBuffer,
     createTexture,
+    createTextureView,
     createSampler,
+    destroyBuffer,
+    destroyTexture,
     queue: {
-      writeBuffer: vi.fn().mockReturnValue({ ok: true, value: undefined }),
-      writeTexture: vi.fn().mockReturnValue({ ok: true, value: undefined }),
+      writeBuffer,
+      writeTexture,
     },
   } as unknown as RhiDevice;
 
@@ -62,7 +79,17 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
     errorRegistry,
   } as unknown as RenderSystemRuntime;
 
-  return { runtime, createBuffer, createTexture, createSampler };
+  return {
+    runtime,
+    createBuffer,
+    createTexture,
+    createTextureView,
+    createSampler,
+    destroyBuffer,
+    destroyTexture,
+    writeBuffer,
+    writeTexture,
+  };
 }
 
 describe('getOrCreateSsaoBuffers', () => {
@@ -207,5 +234,51 @@ describe('getOrCreateSsaoBuffers', () => {
     expect(getOrCreateSsaoBuffers(runtime)).toBe(first);
 
     expect(runtime.errorRegistry.fire).not.toHaveBeenCalled();
+  });
+
+  it('resetSsaoResources destroys cached buffers and fallback texture exactly once', () => {
+    const { runtime, destroyBuffer, destroyTexture } = makeMockRuntime();
+
+    expect(getOrCreateSsaoBuffers(runtime)).not.toBeNull();
+    expect(getOrCreateSsaoFallbackTexture(runtime)).not.toBeNull();
+    resetSsaoResources(runtime);
+    resetSsaoResources(runtime);
+
+    expect(destroyBuffer).toHaveBeenCalledTimes(2);
+    expect(destroyTexture).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls back the kernel buffer when its initial upload fails', () => {
+    const { runtime, destroyBuffer, writeBuffer } = makeMockRuntime();
+    writeBuffer.mockReturnValueOnce({
+      ok: false,
+      error: { code: 'webgpu-runtime-error', expected: 'writeBuffer ok', hint: 'boom' },
+    });
+
+    expect(getOrCreateSsaoBuffers(runtime)).toBeNull();
+    expect(destroyBuffer).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back created buffers and texture when the noise upload fails', () => {
+    const { runtime, destroyBuffer, destroyTexture, writeTexture } = makeMockRuntime();
+    writeTexture.mockReturnValueOnce({
+      ok: false,
+      error: { code: 'webgpu-runtime-error', expected: 'writeTexture ok', hint: 'boom' },
+    });
+
+    expect(getOrCreateSsaoBuffers(runtime)).toBeNull();
+    expect(destroyBuffer).toHaveBeenCalledTimes(1);
+    expect(destroyTexture).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back the fallback texture when its upload fails', () => {
+    const { runtime, destroyTexture, writeTexture } = makeMockRuntime();
+    writeTexture.mockReturnValueOnce({
+      ok: false,
+      error: { code: 'webgpu-runtime-error', expected: 'writeTexture ok', hint: 'boom' },
+    });
+
+    expect(getOrCreateSsaoFallbackTexture(runtime)).toBeNull();
+    expect(destroyTexture).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,7 +25,8 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function identityTx() {
@@ -64,13 +65,12 @@ function registerQuadMesh(world: World): Handle<'MeshAsset', 'shared'> {
 function textureAsset(red = 255): TextureAsset {
   return {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format: 'rgba8unorm',
     data: new Uint8Array([red, 255, 255, 255]),
     colorSpace: 'linear',
-    mipmap: false,
-  } as unknown as TextureAsset;
+    mips: { kind: 'none' },
+  };
 }
 
 // Build a loadByGuid-shaped scene: the material's baseColorTexture paramValue is

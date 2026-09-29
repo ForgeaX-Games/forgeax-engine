@@ -37,7 +37,8 @@ describe('execution bootstrap isolation', () => {
     expect(pointerLock).toHaveBeenCalledWith(false);
     await context.fiber.dispose();
     expect(world.getResource('cleaned')).toBe(true);
-    expect(close).toHaveBeenCalledOnce();
+    // A rebuilt World borrows the same session channel; its Fiber must not close it.
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('keeps schedule identity in the realm-local World', async () => {

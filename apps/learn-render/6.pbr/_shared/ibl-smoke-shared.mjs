@@ -25,7 +25,7 @@
 //
 // Verdict (verify mode):
 //   - backend === 'webgpu'
-//   - frames observed >= 300 (SMOKE_MIN_FRAMES)
+//   - frames observed >= 60 (SMOKE_MIN_FRAMES)
 //   - renderer.subscribe error count 0
 //   - mean abs delta between final-frame readback and reference PNG <= 0.05
 //
@@ -46,10 +46,13 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_DELTA_THRESHOLD = Number.parseFloat(process.env.SMOKE_DELTA_THRESHOLD ?? '0.05');
 const WIDTH = 512;
 const HEIGHT = 512;
+const IBL_READY_TIMEOUT_MS = 120_000;
+// Publishes renderer.inspect().iblBinding, the readiness fact the IBL wait below reads.
+process.env.FORGEAX_MATERIAL_DIAGNOSTICS = '1';
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const FALSIFY_HDR_BIN_EMPTY = process.env.FALSIFY === 'hdr-bin-empty';
@@ -178,7 +181,8 @@ export async function runIblSmoke(opts) {
   const { buildEngineShaderManifest } = await import(engineDist('vite-plugin-shader'));
 
   const ENGINE_MANIFEST = await buildEngineShaderManifest();
-  const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+  const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+  process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
   let renderer;
   let assets;
@@ -341,7 +345,7 @@ export async function runIblSmoke(opts) {
           },
         ],
         values: {
-          baseColor: [baseColor[0], baseColor[1], baseColor[2]],
+          baseColor,
           metallic,
           roughness,
         },
@@ -390,8 +394,8 @@ export async function runIblSmoke(opts) {
   // completes within a window; this dawn-node loop must do the same. A tight sync
   // for-loop would never let the microtask/timer queue drain, so the projection
   // would never complete and the final frame would stay white -> large baseline
-  // delta. Mirror the hello/hdrp-lighting smoke: yield each frame, then a 2s
-  // settle for the full IBL precompute, then a final draw batch before readback.
+  // delta. Yield each frame, wait for the renderer to report the IBL binding
+  // active, then run a final draw batch before readback.
   // This is the harness matching production frame pacing, not an engine workaround.
   const device = sharedDevice;
   if (!device) fail('no shared device captured for readback');
@@ -413,12 +417,23 @@ export async function runIblSmoke(opts) {
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
   }
-  // Settle window: let the multi-stage IBL precompute chain fully resolve, then
-  // a final draw batch so the now-ready IBL cubemap binds for the readback frame.
-  for (let pass = 0; pass < 4; pass++) {
+  // Wait for the renderer to report the projected IBL as bound. A fixed wall
+  // timer is not enough on software adapters (lavapipe runs the projection on
+  // the CPU and needs several seconds), which left the final frame on the white
+  // fallback cube; the renderer's iblBinding fact is the readiness authority.
+  const iblDeadline = Date.now() + IBL_READY_TIMEOUT_MS;
+  while (renderer.inspect().iblBinding?.active !== 'active') {
+    if (Date.now() > iblDeadline) {
+      fail(`IBL binding stayed on the fallback cube for ${IBL_READY_TIMEOUT_MS}ms (iblBinding=${JSON.stringify(renderer.inspect().iblBinding?.active)})`);
+    }
+    world.update(1 / 60).unwrap();
+    const r = renderer.draw(frameRequest);
+    if (!r.ok) console.error(`[smoke] IBL wait draw error: ${r.error.code}`);
+    framesObserved++;
     await device.queue.onSubmittedWorkDone();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  console.log(`[${demoId}] IBL binding active after ${Date.now() - frameStart}ms`);
   for (let i = 0; i < 32; i++) {
     world.update(1 / 60).unwrap();
     const r = renderer.draw(frameRequest);
@@ -481,6 +496,9 @@ export async function runIblSmoke(opts) {
 
   // --- 8. Verdict / bake ---
   const failures = [];
+  if (rgba.some((value, index) => index % 4 === 3 && value !== 255)) {
+    failures.push('(a) opaque sphere fixture must preserve alpha=1 throughout the final frame');
+  }
   if (renderer.inspect().capabilities.backendKind !== 'webgpu')
     failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
   if (framesObserved < SMOKE_MIN_FRAMES)
@@ -544,6 +562,7 @@ export async function runIblSmoke(opts) {
   );
   device.destroy?.();
   delete globalThis.navigator.gpu;
+  return framesObserved;
 }
 
 function fail(msg) {

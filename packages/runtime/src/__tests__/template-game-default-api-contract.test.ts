@@ -1,5 +1,5 @@
 // template-game-default-api-contract.test - the surface APIs that the
-// `templates/game-default/main.ts` `instantiateScenePack` helper relies on
+// `apps/game-capability-lab/main.ts` scene instantiation relies on
 // must continue to exist and compose. Catches the API drift that produced
 // `TypeError: Cannot read properties of undefined (reading
 // 'setSceneAssetResolver')` at runtime when an earlier
@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { componentDefinition } from '@forgeax/engine-ecs/internal';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { AssetGuid, PackageId } from '@forgeax/engine-pack/guid';
 import { MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 // Importing the runtime components barrel populates the global component
 // table consulted by `World._buildSceneEntityComponentDatas` — without
@@ -38,16 +38,12 @@ import { MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 // undefined during instantiate. ChildOf + SceneInstance are used directly
 // below as values; Transform / MeshRenderer pin the side-effect import.
 import { ChildOf, Transform } from '@forgeax/engine-scene';
-import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 import { registerRuntimeComponents } from './helpers/register-runtime-components';
 
-function lid(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
-
-// Shape this fixture mirrors the `templates/game-default/scene.pack.json`
+// Shape this fixture mirrors the `apps/game-capability-lab/assets/scene.pack.json`
 // SceneAsset payload after the template's `instantiateScenePack` helper has
 // rewritten ref-int → GUID strings + lifted MeshRenderer.material → materials[].
 // We register one MaterialAsset so the SceneAsset's MeshRenderer GUID slot
@@ -61,9 +57,8 @@ function buildSceneAssetWithGuidRef(): SceneAsset {
   void Transform;
   void MeshRenderer;
 
-  const nodes: SceneEntity[] = [
-    {
-      localId: lid(0),
+  const nodes = {
+    'entity-0': {
       components: {
         Transform: { pos: [0, 0, 0] },
         // GUID string (post template ref-int → GUID rewrite). The registry's
@@ -72,18 +67,17 @@ function buildSceneAssetWithGuidRef(): SceneAsset {
         MeshRenderer: { materials: [MAT_GUID] },
       },
     },
-    {
-      localId: lid(1),
+    'entity-1': {
       components: {
         Transform: { pos: [1, 0, 0] },
-        ChildOf: { parent: 0 as unknown as EntityHandle },
+        ChildOf: { parent: 'entity-0' },
       },
     },
-  ];
+  };
   return { kind: 'scene', entities: nodes };
 }
 
-describe('templates/game-default API contract (regression for `world.sceneInstances` drift)', () => {
+describe('game-capability-lab API contract (regression for `world.sceneInstances` drift)', () => {
   it('(a) assets.instantiate returns the synthetic root Entity directly (no `byRef` indirection)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
@@ -208,11 +202,11 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   // doesn't pass while runtime explodes (the template is a workspace
   // sibling that the engine packages don't import — typecheck never sees
   // it).
-  it('(c2) [regression] templates/game-default/main.ts must not call `world.sceneInstances`', () => {
+  it('(c2) [regression] apps/game-capability-lab/main.ts must not call `world.sceneInstances`', () => {
     const here = fileURLToPath(import.meta.url);
     // here = packages/runtime/src/__tests__/<file> → 4 levels up = repo root
     const repoRoot = resolve(here, '..', '..', '..', '..', '..');
-    const main = readFileSync(resolve(repoRoot, 'templates', 'game-default', 'main.ts'), 'utf-8');
+    const main = readFileSync(resolve(repoRoot, 'apps', 'game-capability-lab', 'main.ts'), 'utf-8');
     // Strip line comments so prose explaining the rename does not trip the
     // grep gate; the gate targets actual member access only.
     const noComments = main
@@ -267,22 +261,37 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
 
     const here = fileURLToPath(import.meta.url);
     const repoRoot = resolve(here, '..', '..', '..', '..', '..');
-    const packPath = resolve(repoRoot, 'templates', 'game-default', 'assets', 'scene.pack.json');
+    const packPath = resolve(repoRoot, 'apps', 'game-capability-lab', 'assets', 'scene.pack.json');
     const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
-      assets: {
-        kind: string;
-        payload?: { entities?: SceneEntity[]; nodes?: SceneEntity[] };
-      }[];
+      assets:
+        | {
+            kind: string;
+            payload?: {
+              entities?: Record<string, { components: Record<string, Record<string, unknown>> }>;
+              nodes?: Record<string, { components: Record<string, Record<string, unknown>> }>;
+            };
+          }[]
+        | Record<
+            string,
+            {
+              kind: string;
+              payload?: {
+                entities?: Record<string, { components: Record<string, Record<string, unknown>> }>;
+                nodes?: Record<string, { components: Record<string, Record<string, unknown>> }>;
+              };
+            }
+          >;
     };
+    const assets = Array.isArray(pack.assets) ? pack.assets : Object.values(pack.assets);
 
     const offenders: string[] = [];
     let scanned = 0;
-    for (const asset of pack.assets) {
+    for (const asset of assets) {
       // The envelope `kind` is the authoritative asset discriminant; the payload
       // no longer restates it (Derive, Don't Duplicate — the loader synthesises
       // Asset.kind from the envelope on load).
       if (asset.kind !== 'scene') continue;
-      for (const node of asset.payload?.entities ?? asset.payload?.nodes ?? []) {
+      for (const node of Object.values(asset.payload?.entities ?? asset.payload?.nodes ?? {})) {
         for (const [compName, data] of Object.entries(node.components)) {
           if (STRIP_COMPONENTS.has(compName)) continue;
           scanned++;
@@ -296,9 +305,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
           for (const rawField of Object.keys(data ?? {})) {
             const field = rename[rawField] ?? rawField;
             if (!(field in schema)) {
-              offenders.push(
-                `${compName}.${rawField} (localId ${node.localId as unknown as number})`,
-              );
+              offenders.push(`${compName}.${rawField} (scene entity key)`);
             }
           }
         }
@@ -317,27 +324,42 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   it('(e2) [regression] every inline template material is referenced by a MeshRenderer', () => {
     const here = fileURLToPath(import.meta.url);
     const repoRoot = resolve(here, '..', '..', '..', '..', '..');
-    const packPath = resolve(repoRoot, 'templates', 'game-default', 'assets', 'scene.pack.json');
-    const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
-      assets: {
-        guid: string;
-        kind: string;
-        payload?: { entities?: { components: { MeshRenderer?: { materials?: number[] } } }[] };
-        refs?: string[];
-      }[];
+    const packPath = resolve(repoRoot, 'apps', 'game-capability-lab', 'assets', 'scene.pack.json');
+    type TemplatePackAsset = {
+      guid?: string;
+      kind: string;
+      payload?: {
+        entities?: Record<string, { components: { MeshRenderer?: { materials?: number[] } } }>;
+      };
+      refs?: string[];
     };
-    const scene = pack.assets.find((asset) => asset.kind === 'scene');
+    const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
+      packageId?: string;
+      assets: TemplatePackAsset[] | Record<string, TemplatePackAsset>;
+    };
+    const entries = Array.isArray(pack.assets)
+      ? pack.assets.map((asset) => ({ asset, sourceKey: undefined }))
+      : Object.entries(pack.assets).map(([sourceKey, asset]) => ({ asset, sourceKey }));
+    const sceneEntry = entries.find(({ asset }) => asset.kind === 'scene');
+    const scene = sceneEntry?.asset;
     expect(scene).toBeDefined();
     if (scene === undefined) return;
 
     const referencedMaterialGuids = new Set(
-      (scene.payload?.entities ?? []).flatMap((entity) =>
+      Object.values(scene.payload?.entities ?? {}).flatMap((entity) =>
         (entity.components.MeshRenderer?.materials ?? []).map((index) => scene.refs?.[index]),
       ),
     );
-    const orphanedMaterialGuids = pack.assets
-      .filter((asset) => asset.kind === 'material')
-      .map((asset) => asset.guid)
+    const packageId = pack.packageId === undefined ? undefined : PackageId.parse(pack.packageId);
+    const guidFor = ({ asset, sourceKey }: (typeof entries)[number]): string | undefined => {
+      if (asset.guid !== undefined) return asset.guid;
+      if (sourceKey === undefined || packageId === undefined || !packageId.ok) return undefined;
+      return AssetGuid.format(AssetGuid.derive(packageId.value, sourceKey));
+    };
+    const orphanedMaterialGuids = entries
+      .filter(({ asset }) => asset.kind === 'material')
+      .map(guidFor)
+      .filter((guid): guid is string => guid !== undefined)
       .filter((guid) => !referencedMaterialGuids.has(guid));
 
     expect(orphanedMaterialGuids).toEqual([]);
@@ -347,7 +369,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const sceneGuid = AssetGuid.parse(SCENE_GUID);
     if (!sceneGuid.ok) throw new Error('parse');
-    const payload: SceneAsset = { kind: 'scene', entities: [] };
+    const payload: SceneAsset = { kind: 'scene', entities: {} };
     const cataloged = reg.catalog<SceneAsset>(sceneGuid.value, payload);
     expect(cataloged.ok).toBe(true);
     if (!cataloged.ok) return;

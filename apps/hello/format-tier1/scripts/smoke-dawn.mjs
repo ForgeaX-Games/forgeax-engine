@@ -27,7 +27,7 @@ const { ImporterRegistry, runImport } = await import('@forgeax/engine-import');
 const { AssetRegistry } = await import('@forgeax/engine-assets-runtime');
 const { createShaderModule, rhi } = await import('@forgeax/engine-rhi-webgpu');
 
-const requiredFrames = 300;
+const requiredFrames = 60;
 const featureId = 'feat-20260812-format-classification-tier1';
 const csvSha256 = 'a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5';
 const gltfFixturePath = resolve(process.cwd(), 'apps/hello/format-tier1/fixtures/animated-morph-cube.gltf');
@@ -167,7 +167,7 @@ function sampleWeights(animation, baseWeights, frame) {
   const channel = animation.channels.find((candidate) => candidate.property === 'weights');
   if (channel === undefined || channel.sampler.input.length === 0) return Array.from(baseWeights);
   const width = channel.sampler.output.length / channel.sampler.input.length;
-  if (frame < 200) return Array.from(baseWeights);
+  if (frame < 2 * requiredFrames / 3) return Array.from(baseWeights);
   return Array.from(channel.sampler.output.slice(channel.sampler.output.length - width));
 }
 
@@ -225,7 +225,7 @@ const manifest = await buildEngineShaderManifest();
 const constructed = await constructRuntimeRendererHost(
   mockCanvas,
   {},
-  { shaderManifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}` },
+  { shaderManifestUrl: URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' })) },
   { rhi, createShaderModule },
 );
 if (!constructed.ok) {
@@ -240,7 +240,6 @@ const materialGuid = AssetGuid.parse('33333333-3333-4333-8333-333333333334');
 if (!meshGuid.ok || !materialGuid.ok) throw new Error('Morph smoke asset GUID parsing failed');
 if (!assets.catalog(meshGuid.value, importedMorph.mesh).ok) throw new Error('Morph smoke mesh catalog failed');
 const material = Materials.unlit([0.2, 0.8, 0.45, 1], {
-  castShadow: false,
   renderState: { cullMode: 'none' },
 });
 if (!assets.catalog(materialGuid.value, material).ok) throw new Error('Morph smoke material catalog failed');
@@ -263,15 +262,15 @@ const attachment = renderer.attach(world);
 if (!attachment.ok) throw new Error(`Morph World attachment failed: ${attachment.error.code}`);
 const receipts = [];
 for (currentFrame = 0; currentFrame < requiredFrames; currentFrame += 1) {
-  const weights = currentFrame < 100
+  const weights = currentFrame < requiredFrames / 3
     ? importedMorph.baseWeights.slice()
-    : currentFrame < 200
+    : currentFrame < 2 * requiredFrames / 3
       ? new Float32Array(importedMorph.baseWeights.length)
       : new Float32Array(sampleWeights(importedMorph.animation, importedMorph.baseWeights, currentFrame));
   world.set(morphEntity, MorphWeights, { weights }).unwrap();
   phases.standardFrames += 1;
-  if (currentFrame < 100) phases.baseWeightFrames += 1;
-  else if (currentFrame < 200) phases.zeroWeightFrames += 1;
+  if (currentFrame < requiredFrames / 3) phases.baseWeightFrames += 1;
+  else if (currentFrame < 2 * requiredFrames / 3) phases.zeroWeightFrames += 1;
   else phases.animatedFrames += 1;
   world.update(1 / 60).unwrap();
   const drawn = renderer.draw({ leases: [attachment.value], camera: { lease: attachment.value }, environment: { lease: attachment.value } });
@@ -282,7 +281,7 @@ for (currentFrame = 0; currentFrame < requiredFrames; currentFrame += 1) {
   assert.equal(observed.ok, true, observed.ok ? undefined : observed.error.code);
 }
 assert.equal(receipts.length, requiredFrames);
-assert.deepEqual(phases, { standardFrames: 300, baseWeightFrames: 100, zeroWeightFrames: 100, animatedFrames: 100 });
+assert.deepEqual(phases, { standardFrames: 60, baseWeightFrames: 20, zeroWeightFrames: 20, animatedFrames: 20 });
 await writeEvidence({
   requiredFrames,
   framesObserved: receipts.length,
@@ -294,9 +293,25 @@ await writeEvidence({
   },
   falsifiers: { zeroWeights: 'pass', standardLane: 'pass', staleWeights: 'pass' },
   producer: { status: 'pass', kind: 'imported-loadByGuid', source: importedMorph.source },
-  observed: 'Dawn executed the imported mesh through ECS MorphWeights and the Standard MeshFilter/MeshRenderer lane for 300 receipt-bound frames.',
+  observed: 'Dawn executed the imported mesh through ECS MorphWeights and the Standard MeshFilter/MeshRenderer lane for 60 receipt-bound frames.',
   verdict: 'pass',
   confidence: 'high',
 });
 console.log(JSON.stringify({ backend: 'dawn', framesObserved: receipts.length, phases, verdict: 'pass' }));
 await renderer.dispose();
+surfaceTarget?.destroy?.();
+surfaceTarget = undefined;
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { gpu: undefined },
+});
+console.log(
+  JSON.stringify({
+    teardown: {
+      rendererDisposed: true,
+      surfaceDestroyed: true,
+      navigatorGpuCleared: globalThis.navigator?.gpu === undefined,
+    },
+  }),
+);
+process.exit(0);

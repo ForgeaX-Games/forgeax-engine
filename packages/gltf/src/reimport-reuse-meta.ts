@@ -49,7 +49,9 @@ export interface GltfMetaJson {
   readonly importer: 'gltf';
   readonly source: string;
   readonly subAssets: readonly GltfSubAssetEntry[];
-  readonly sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly sourceOverrides?:
+    | Readonly<Record<string, Readonly<Record<string, unknown>>>>
+    | undefined;
   readonly sourceOverrideDescriptors?: readonly import('@forgeax/engine-types').SourceOverrideDescriptor[];
   readonly importSettings: {
     readonly defaultSceneIndex: number;

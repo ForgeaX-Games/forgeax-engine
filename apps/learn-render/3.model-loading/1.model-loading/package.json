@@ -14,6 +14,7 @@
     "visual": "node scripts/visual.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-3-model-loading-1-model-loading smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -57,7 +58,7 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

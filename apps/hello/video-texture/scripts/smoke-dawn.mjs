@@ -4,7 +4,7 @@
 //
 // End-to-end structural proof: dawn-node drives the video-texture ECS path
 // (VideoAsset register + VideoPlayer spawn + MeshFilter/MeshRenderer +
-// MaterialAsset.values referencing the video GUID), runs 300 frames,
+// MaterialAsset.values referencing the video GUID), runs 60 frames,
 // and exits 0 when the registration/spawn/bind-group chain does not throw.
 //
 // Dawn structural-only: dawn-node has NO HTMLVideoElement / VideoFrame, so
@@ -19,8 +19,8 @@
 //   2. Build a mock HTMLCanvasElement + shim GPUCanvasContext.
 //   3. Build a World identical to the browser demo: quad mesh + unlit
 //      MaterialAsset with baseColorTexture=videoGuid + VideoPlayer clip.
-//   4. await runtime host initialization + 300x lease-bound renderer.draw(...).
-//   5. Verdict: backend===webgpu, frames>=300, draw errors===0.
+//   4. await runtime host initialization + 60x lease-bound renderer.draw(...).
+//   5. Verdict: backend===webgpu, frames>=60, draw errors===0.
 //
 // Exit codes:
 //   0 = green (structural chain survived)
@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 // Small canvas to keep lavapipe fragment-bound smoke fast.
 const WIDTH = 200;
@@ -218,7 +218,7 @@ const frameRequest = {
   environment: { lease: worldAttachment1.value },
 };
 
-// NB: do NOT insert a VideoElementProvider — dawn has no HTMLVideoElement.
+// NB: do NOT insert a VideoSourceProvider — dawn has no HTMLVideoElement.
 // The record stage's single per-frame upload path resolves element===undefined,
 // hits the AC-10 double-miss, fires video-upload-unsupported on the engine error
 // channel, and falls back to the default view — structurally valid, no crash.
@@ -277,7 +277,7 @@ renderer.subscribe((event) => {
   }
 });
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

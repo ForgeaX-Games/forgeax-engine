@@ -14,9 +14,9 @@
 //   exposes the spec Promise without a second cache.
 //
 // w3 / w5 / w6 (feat-20260508-rhi-surface-completion, co-commit):
-// - createCommandEncoder + 12 RhiCommandEncoder methods + 3 mixin (w3)
-// - 17 RhiRenderPassEncoder spec stable methods + 1 setBindGroup overload +
-//   3 placeholders (executeBundles / beginOcclusionQuery / endOcclusionQuery) (w5)
+// - createCommandEncoder + 12 RhiCommandEncoder spec methods plus the
+//   ForgeaX encodeEmptyComputePass compound operation + 3 mixin (w3)
+// - Shared draw/binding commands, pass state, queries and immutable bundles
 // - Queue.submit / writeBuffer real implementation + bounds validation (w6)
 //
 // co-commit reason: w3, w5, w6 each modify both `@forgeax/engine-rhi/src/index.ts`
@@ -33,6 +33,7 @@ import type {
   BindGroupLayout,
   BindGroupLayoutDescriptor,
   Buffer,
+  BufferCopyDestination,
   BufferDescriptor,
   CanvasConfiguration,
   CommandBuffer,
@@ -46,6 +47,8 @@ import type {
   PipelineLayoutDescriptor,
   QuerySet,
   QuerySetDescriptor,
+  RenderBundle,
+  RenderBundleEncoderDescriptor,
   RenderPassDescriptor,
   RenderPipeline,
   RenderPipelineDescriptor,
@@ -59,10 +62,13 @@ import type {
   RhiFeatures,
   RhiLimits,
   RhiQueue,
+  RhiRenderBundleEncoder,
+  RhiRenderCommands,
   RhiRenderPassEncoder,
   Sampler,
   SamplerDescriptor,
   Texture,
+  TextureCopySource,
   TextureDescriptor,
   TextureView,
   TextureViewDescriptor,
@@ -75,7 +81,8 @@ import {
   queueWriteBufferOutOfBounds,
   renderPassNotEnded,
 } from './errors';
-import { resolveTimestampQueries, writeTimestamp } from './internal/timestamp-query';
+import { probeR32FloatCapability } from './internal/r32float-capability';
+import { resolveTimestampQueries } from './internal/timestamp-query';
 
 /**
  * Mirror forgeax `?: T | undefined` descriptor onto the spec GPUXxxDescriptor
@@ -167,6 +174,12 @@ const QUERY_SET_COUNT_LIMIT = 4096;
  * forward recording calls to the underlying GPUCommandEncoder.
  */
 const RAW_DEVICE_MAP: WeakMap<RhiDevice, GPUDevice> = new WeakMap();
+const RAW_DEVICE_GENERATION_MAP: WeakMap<GPUDevice, number> = new WeakMap();
+const R32FLOAT_PROBE_CACHE: WeakMap<
+  RhiDevice,
+  Promise<Result<import('@forgeax/engine-rhi').RhiTextureFormatCapabilityReceipt, RhiError>>
+> = new WeakMap();
+let NEXT_DEVICE_GENERATION = 1;
 const BUFFER_RAW_MAP: WeakMap<Buffer, GPUBuffer> = new WeakMap();
 const TEXTURE_VIEW_RAW_MAP: WeakMap<TextureView, GPUTextureView> = new WeakMap();
 const ENCODER_STATE: WeakMap<RhiCommandEncoder, EncoderState> = new WeakMap();
@@ -414,21 +427,11 @@ function deriveCaps(
   };
 }
 
-/**
- * Build a RhiRenderPassEncoder around a raw GPURenderPassEncoder (w5).
- *
- * - 14 real-path methods forward to GPURenderPassEncoder.
- * - 3 placeholders (executeBundles / beginOcclusionQuery / endOcclusionQuery)
- *   return Result.err({ code: 'rhi-not-available' }) per D-S4.
- * - end() flips PassState.ended so the encoder finish() can detect a
- *   render-pass-not-ended condition (D-S3 template 2).
- */
-function makeRenderPassEncoder(
-  rawPass: GPURenderPassEncoder,
-  encoder: RhiCommandEncoder,
-  occlusionQuerySet: QuerySet | null,
-): RhiRenderPassEncoder {
-  const pass: RhiRenderPassEncoder = {
+/** Shared native draw, binding and debug commands for passes and bundles. */
+function makeRenderCommands(
+  rawPass: GPURenderPassEncoder | GPURenderBundleEncoder,
+): RhiRenderCommands {
+  return {
     setPipeline(pipeline: RenderPipeline): void {
       rawPass.setPipeline(pipeline as unknown as GPURenderPipeline);
     },
@@ -494,6 +497,33 @@ function makeRenderPassEncoder(
     ): void {
       rawPass.drawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     },
+    drawIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
+      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
+      rawPass.drawIndirect(rawBuf, indirectOffset);
+    },
+    drawIndexedIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
+      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
+      rawPass.drawIndexedIndirect(rawBuf, indirectOffset);
+    },
+    pushDebugGroup(groupLabel: string): void {
+      rawPass.pushDebugGroup(groupLabel);
+    },
+    popDebugGroup(): void {
+      rawPass.popDebugGroup();
+    },
+    insertDebugMarker(markerLabel: string): void {
+      rawPass.insertDebugMarker(markerLabel);
+    },
+  };
+}
+
+function makeRenderPassEncoder(
+  rawPass: GPURenderPassEncoder,
+  encoder: RhiCommandEncoder,
+  occlusionQuerySet: QuerySet | null,
+): RhiRenderPassEncoder {
+  const pass: RhiRenderPassEncoder = {
+    ...makeRenderCommands(rawPass),
     setViewport(
       x: number,
       y: number,
@@ -513,31 +543,21 @@ function makeRenderPassEncoder(
     setStencilReference(reference: number): void {
       rawPass.setStencilReference(reference);
     },
-    drawIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
-      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
-      rawPass.drawIndirect(rawBuf, indirectOffset);
-    },
-    drawIndexedIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
-      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
-      rawPass.drawIndexedIndirect(rawBuf, indirectOffset);
-    },
-    pushDebugGroup(groupLabel: string): void {
-      rawPass.pushDebugGroup(groupLabel);
-    },
-    popDebugGroup(): void {
-      rawPass.popDebugGroup();
-    },
-    insertDebugMarker(markerLabel: string): void {
-      rawPass.insertDebugMarker(markerLabel);
-    },
-    executeBundles(_bundles: Iterable<unknown>): Result<void, RhiError> {
-      return err(
-        new RhiErrorClass({
-          code: 'rhi-not-available',
-          expected: 'render bundle creation requires future closed loop',
-          hint: 'see feat-future-rhi-render-bundle',
-        }),
-      );
+    executeBundles(bundles: Iterable<RenderBundle>): Result<void, RhiError> {
+      try {
+        rawPass.executeBundles(
+          Array.from(bundles, (bundle) => bundle as unknown as GPURenderBundle),
+        );
+        return ok(undefined);
+      } catch (cause) {
+        return err(
+          new RhiErrorClass({
+            code: 'webgpu-runtime-error',
+            expected: 'compatible render bundles from this device in an open render pass',
+            hint: String(cause),
+          }),
+        );
+      }
     },
     beginOcclusionQuery(queryIndex: number): Result<void, RhiError> {
       const state = PASS_STATE.get(pass);
@@ -812,11 +832,7 @@ function mirrorRenderPipelineDescriptor(
  *   - render-pass-not-ended is detected by tracking activePass; finish()
  *     while a pass has not been end()-ed returns the structured error.
  */
-function makeCommandEncoder(
-  rawEncoder: GPUCommandEncoder,
-  caps: { readonly timestampQuery: boolean },
-  fireFeatureNotEnabled: (featureName: string, hint: string) => void,
-): RhiCommandEncoder {
+function makeCommandEncoder(rawEncoder: GPUCommandEncoder): RhiCommandEncoder {
   function mirrorComputePassDescriptor(
     desc: ComputePassDescriptor | undefined,
   ): GPUComputePassDescriptor | undefined {
@@ -890,6 +906,12 @@ function makeCommandEncoder(
       };
       return pass;
     },
+    encodeEmptyComputePass(desc: ComputePassDescriptor): void {
+      const state = ENCODER_STATE.get(enc);
+      throwIfFinished(state);
+      const rawPass = rawEncoder.beginComputePass(mirrorComputePassDescriptor(desc));
+      rawPass.end();
+    },
     copyBufferToBuffer(
       source: Buffer,
       arg2: number | Buffer,
@@ -933,19 +955,27 @@ function makeCommandEncoder(
       rawEncoder.copyBufferToTexture(rawSrc, destination, copySize);
     },
     copyTextureToBuffer(
-      source: GPUTexelCopyTextureInfo,
-      destination: GPUTexelCopyBufferInfo,
+      source: GPUTexelCopyTextureInfo | TextureCopySource,
+      destination: GPUTexelCopyBufferInfo | BufferCopyDestination,
       copySize: GPUExtent3DStrict,
     ): void {
       const state = ENCODER_STATE.get(enc);
       throwIfFinished(state);
-      const rawDst = {
-        ...destination,
+      const rawSource: GPUTexelCopyTextureInfo = {
+        texture: source.texture as unknown as GPUTexture,
+      };
+      if (source.mipLevel !== undefined) rawSource.mipLevel = source.mipLevel;
+      if (source.origin !== undefined) rawSource.origin = source.origin;
+      if (source.aspect !== undefined) rawSource.aspect = source.aspect;
+      const rawDst: GPUTexelCopyBufferInfo = {
         buffer:
           BUFFER_RAW_MAP.get(destination.buffer as unknown as Buffer) ??
           (destination.buffer as unknown as GPUBuffer),
       };
-      rawEncoder.copyTextureToBuffer(source, rawDst, copySize);
+      if (destination.offset !== undefined) rawDst.offset = destination.offset;
+      if (destination.bytesPerRow !== undefined) rawDst.bytesPerRow = destination.bytesPerRow;
+      if (destination.rowsPerImage !== undefined) rawDst.rowsPerImage = destination.rowsPerImage;
+      rawEncoder.copyTextureToBuffer(rawSource, rawDst, copySize);
     },
     copyTextureToTexture(
       source: GPUTexelCopyTextureInfo,
@@ -1044,25 +1074,6 @@ function makeCommandEncoder(
     },
     insertDebugMarker(markerLabel: string): void {
       rawEncoder.insertDebugMarker(markerLabel);
-    },
-    writeTimestamp(querySet: QuerySet, queryIndex: number): void {
-      // M5 / K-3 (research §2.4): timestamp-query feature gate. spec
-      // writeTimestamp returns void; the forgeax form keeps the void shape
-      // and fans out 'feature-not-enabled' through the engine onError
-      // channel rather than wrapping in Result. When the capability is true,
-      // a missing or throwing raw write is a structured runtime failure so a
-      // Render capture cannot publish a fabricated interval.
-      const state = ENCODER_STATE.get(enc);
-      throwIfFinished(state);
-      if (caps.timestampQuery !== true) {
-        fireFeatureNotEnabled(
-          'timestamp-query',
-          'check device.caps.timestampQuery before calling writeTimestamp',
-        );
-        return;
-      }
-      const rawQs = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
-      writeTimestamp({ rawEncoder, rawQuerySet: rawQs, queryIndex });
     },
     finish(): Result<CommandBuffer, RhiError> {
       const state = ENCODER_STATE.get(enc);
@@ -1502,12 +1513,32 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
   const limits = rawDevice.limits as RhiLimits;
 
   const queue: RhiQueue = makeQueue(rawDevice.queue);
+  const deviceGeneration =
+    RAW_DEVICE_GENERATION_MAP.get(rawDevice) ??
+    (() => {
+      const generation = NEXT_DEVICE_GENERATION++;
+      RAW_DEVICE_GENERATION_MAP.set(rawDevice, generation);
+      return generation;
+    })();
 
   const device: RhiDevice = {
     caps,
     features,
     limits,
+    probeTextureFormatCapability(): Promise<
+      Result<import('@forgeax/engine-rhi').RhiTextureFormatCapabilityReceipt, RhiError>
+    > {
+      const cached = R32FLOAT_PROBE_CACHE.get(device);
+      if (cached !== undefined) return cached;
+      const probe = probeR32FloatCapability(rawDevice, deviceGeneration);
+      R32FLOAT_PROBE_CACHE.set(device, probe);
+      return probe;
+    },
     queue,
+    // The raw backend owns the only real loss-injection seam. Keep this
+    // Promise as a transparent observation boundary; a test provider must
+    // operate on the backend before this shim and must never be added to the
+    // public RHI surface.
     lost: rawDevice.lost as unknown as Promise<{
       readonly reason: 'destroyed' | 'unknown';
       readonly message: string;
@@ -1906,6 +1937,49 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       if (marker !== undefined) marker.destroyed = true;
       return ok(undefined);
     },
+    createRenderBundleEncoder(
+      desc: RenderBundleEncoderDescriptor,
+    ): Result<RhiRenderBundleEncoder, RhiError> {
+      try {
+        const raw = rawDevice.createRenderBundleEncoder(desc as GPURenderBundleEncoderDescriptor);
+        let finished = false;
+        return ok({
+          ...makeRenderCommands(raw),
+          finish(descriptor) {
+            if (finished)
+              return err(
+                new RhiErrorClass({
+                  code: 'command-encoder-finished',
+                  expected: 'an unfinished render bundle encoder',
+                  hint: 'create a new bundle encoder',
+                }),
+              );
+            finished = true;
+            try {
+              return ok(
+                raw.finish(descriptor as GPURenderBundleDescriptor) as unknown as RenderBundle,
+              );
+            } catch (cause) {
+              return err(
+                new RhiErrorClass({
+                  code: 'webgpu-runtime-error',
+                  expected: 'a valid render bundle command sequence',
+                  hint: String(cause),
+                }),
+              );
+            }
+          },
+        });
+      } catch (cause) {
+        return err(
+          new RhiErrorClass({
+            code: 'webgpu-runtime-error',
+            expected: 'a valid render bundle descriptor',
+            hint: String(cause),
+          }),
+        );
+      }
+    },
     createCommandEncoder(
       desc?: CommandEncoderDescriptor | undefined,
     ): Result<RhiCommandEncoder, RhiError> {
@@ -1915,29 +1989,7 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
           : rawDevice.createCommandEncoder(
               mirror(desc, ENC_KEYS) as unknown as GPUCommandEncoderDescriptor,
             );
-      // M5 / w39: pass caps.timestampQuery + an onError-style fan-out so
-      // writeTimestamp can fire 'feature-not-enabled' through the engine
-      // channel when caps.timestampQuery is false (K-3: spec writeTimestamp
-      // returns void; the forgeax form keeps that shape).
-      //
-      // Round 3 fix-up F-P3-3: the forgeax RhiDevice
-      // does not expose `onError` directly (charter proposition 5: keep
-      // RHI math-free + listener-free), so the shim writes a structured
-      // diagnostic to `console.error` matching the RhiError shape. The
-      // engine layer subscribes through `Renderer.onError` and fans the
-      // same RhiError out; this keeps the unsupported capability observable
-      // for pure-RHI consumers (mock unit tests, dawn-real-gpu probes) that
-      // never instantiate a Renderer.
-      const fireFeatureNotEnabled = (featureName: string, hint: string): void => {
-        // Diagnostic channel (a) of the K-9 double-channel pattern: default
-        // console.error so AI consumers running headless / mock paths still
-        // observe the unsupported capability without subscribing to a
-        // listener. The capability-disabled entry remains non-throwing.
-        console.error(
-          `[RhiError feature-not-enabled] expected: device.features.has('${featureName}') === true; hint: ${hint}`,
-        );
-      };
-      return ok(makeCommandEncoder(rawEnc, caps, fireFeatureNotEnabled));
+      return ok(makeCommandEncoder(rawEnc));
     },
     // fix-f3: synchronous createShaderModule placeholder removed; the
     // shader-compile-failed path lives in the top-level async factory

@@ -1,8 +1,9 @@
 import { World } from '@forgeax/engine-ecs';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 describe('render feature visibility report deduplication', () => {
   it('deduplicates a built-in and feature report by World identity and entity', () => {
@@ -13,11 +14,11 @@ describe('render feature visibility report deduplication', () => {
         context.reportHiddenEntity?.({ world, entity: 3 as never });
         return ok({ count: context.worlds.length });
       },
-      plan: () => ok({ resources: [], passes: [] }),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
 
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [world],
       owner: 0,
       frameNumber: 1,
@@ -38,10 +39,10 @@ describe('render feature visibility report deduplication', () => {
         context.reportHiddenEntity?.({ world: second, entity: 1 as never });
         return ok({ count: context.worlds.length });
       },
-      plan: () => ok({ resources: [], passes: [] }),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [first, second],
       owner: 0,
       frameNumber: 1,

@@ -45,7 +45,7 @@ function publicPreparedRecipe(frame: PreparedFrame): RenderFeature<PreparedFrame
     extract: () => ok(frame),
     plan: (data) => {
       void data.items.length;
-      return ok({ resources: [], passes: [] });
+      return ok({ work: [{ scope: 'frame', resources: [], passes: [] }] });
     },
   };
   return feature;

@@ -3,9 +3,9 @@
 // physicsPlugin lives in @forgeax/engine-physics (the interface package, C-9)
 // and accepts an interface->backend dependency inversion: its async apply
 // dynamic-imports the rapier 2D / 3D backend on demand. The backends are
-// declared as devDependencies in this package's package.json (a regular
+// optional peerDependencies in this package's package.json (a regular
 // dependency would form a physics <-> rapier cycle since the backends depend on
-// the interface package); the consuming app declares the real runtime dep.
+// the interface package); the consuming app declares the selected runtime dep.
 //
 // charter awareness:
 //   P3 explicit failure: WASM load failure rejects plugin activation and the
@@ -14,10 +14,11 @@
 //       transform / audio -- one mental model covers every wiring.
 
 import type { Plugin } from '@forgeax/engine-plugin';
-import { registerPhysicsComponents } from './components';
-import { PhysicsError } from './errors';
+import { registerPhysicsComponents } from './components.js';
+import { PhysicsError } from './errors.js';
 import { loadRapier2DBackend, loadRapier3DBackend } from './load-rapier-backend.mjs';
-import type { PhysicsWorld, PhysicsWorld2D } from './physics-world';
+import { registerMobilityPhysicsConflict } from './mobility-conflict.js';
+import type { PhysicsWorld, PhysicsWorld2D } from './physics-world.js';
 
 interface Rapier3DBackendModule {
   loadRapier3D(): Promise<unknown>;
@@ -33,6 +34,22 @@ interface Rapier2DBackendModule {
 
 /** Rapier backend selector. */
 export type PhysicsBackend = 'rapier-2d' | 'rapier-3d';
+
+/**
+ * Install the built-in physics component vocabulary without starting a
+ * simulation backend. Resource previews use this narrow plugin so a valid
+ * SceneAsset can be instantiated in a fresh World even when Rapier is not
+ * part of that preview's execution assembly.
+ */
+export function physicsComponentsPlugin(): Plugin {
+  return {
+    name: 'physics-components',
+    inject: ['world'],
+    apply(ctx) {
+      ctx.effect(() => registerPhysicsComponents(ctx.world), 'physics/components');
+    },
+  };
+}
 
 function normalizeWasmLoadFailure(backend: PhysicsBackend, cause: unknown): PhysicsError {
   if (cause instanceof PhysicsError && cause.code === 'wasm-load-failed') return cause;
@@ -110,6 +127,7 @@ export function physicsPlugin(backend: PhysicsBackend): Plugin {
         const unregister = registerSystems();
         return () => unregister();
       }, 'physics/systems');
+      ctx.effect(() => registerMobilityPhysicsConflict(world), 'physics/mobility-conflict');
       ctx.provide('physics', physics);
     },
   };

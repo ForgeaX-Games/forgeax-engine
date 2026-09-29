@@ -127,6 +127,18 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
   /** Entity (raw number) -> PhysicsEntityRecord mapping. */
   private readonly entityMap = new Map<number, PhysicsEntityRecord>();
 
+  /**
+   * Entities whose dynamic pose is written back at the next writeback even if
+   * Rapier no longer reports them active: bodies awake at the previous
+   * writeback (their final pose before sleeping), newly registered bodies, and
+   * dynamic bodies whose ECS Transform was overwritten (Rapier owns that pose).
+   */
+  private poseWritebackEntities = new Set<number>();
+  private activeWritebackEntities = new Set<number>();
+  private poseEdits:
+    | { readonly world: World; readonly query: Iterable<{ entity: EntityHandle }> }
+    | undefined;
+
   /** Pending teleports: entity -> target position and rotation. */
   private readonly pendingTeleports = new Map<number, { x: number; y: number; rotation: number }>();
 
@@ -341,9 +353,8 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
   writebackCollidingEntities(world: World, component: Component = CollidingEntities): void {
     for (const [entity, others] of this.collisionPairs) {
       const handle = entity as EntityHandle;
-      if (world.get(handle, component).ok) {
-        world.set(handle, component, { entities: [...others] });
-      }
+      if (!world.hasComponent(handle, component)) continue;
+      world.set(handle, component, { entities: [...others] });
     }
   }
 
@@ -704,6 +715,25 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
 
   registerBody(entity: number, bodyHandle: number): void {
     this.entityMap.set(entity, { bodyHandle });
+    this.poseWritebackEntities.add(entity);
+  }
+
+  /**
+   * Queue writeback for bodies whose ECS Transform changed since the previous
+   * sync, so an ECS write to a sleeping dynamic body is still replaced by the
+   * Rapier-owned pose. Cost follows the changed Transform blocks, not the body
+   * count.
+   */
+  collectTransformEdits(world: World, transform: Component): void {
+    if (this.poseEdits?.world !== world) {
+      this.poseEdits = {
+        world,
+        query: world.query({ read: [transform], with: [RigidBody], changed: [transform] }).unwrap(),
+      };
+    }
+    for (const row of this.poseEdits.query) {
+      if (this.entityMap.has(row.entity)) this.poseWritebackEntities.add(row.entity);
+    }
   }
 
   applyPendingTeleports(): void {
@@ -746,7 +776,17 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       pos: { x: number; y: number };
       rotation: number;
     }> = [];
-    for (const [entity, record] of this.entityMap) {
+    const pending = this.poseWritebackEntities;
+    const active = this.activeWritebackEntities;
+    this.raw.forEachActiveRigidBody((body: { userData: unknown; handle: number }) => {
+      const entity = body.userData as number;
+      if (this.entityMap.get(entity)?.bodyHandle !== body.handle) return;
+      active.add(entity);
+      pending.add(entity);
+    });
+    for (const entity of pending) {
+      const record = this.entityMap.get(entity);
+      if (record === undefined) continue;
       // biome-ignore lint/suspicious/noExplicitAny: Rapier bodies API needs any-cast
       const body = (this.raw as any).bodies.get(record.bodyHandle) as RapierRigidBody2D | null;
       if (!body) continue;
@@ -759,6 +799,9 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
         rotation,
       });
     }
+    pending.clear();
+    this.poseWritebackEntities = active;
+    this.activeWritebackEntities = pending;
     return results;
   }
 
@@ -883,7 +926,8 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
   after: ['propagateTransformsFixed'],
   fn: (world) => {
     const transformComponent = resolveTransform(world);
-    if (transformComponent === undefined) return;
+    const globalTransformComponent = world.components.resolve('GlobalTransform');
+    if (transformComponent === undefined || globalTransformComponent === undefined) return;
     let pw: RapierPhysicsWorld2D;
     try {
       pw = world.getResource<RapierPhysicsWorld2D>('PhysicsWorld');
@@ -894,7 +938,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
     pw.applyPendingTeleports();
 
     const queryResult = world.query({
-      read: [Collider, transformComponent],
+      read: [Collider, transformComponent, globalTransformComponent],
       optional: [RigidBody, CharacterController],
     });
     if (!queryResult.ok) return;
@@ -922,7 +966,9 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         pos: Float32Array;
         quat: Float32Array;
         scale: Float32Array;
-        world?: Float32Array;
+      };
+      const globalTransformData = rowView.get(globalTransformComponent) as unknown as {
+        world: Float32Array;
       };
       const rigidBodyData = rowView.has(RigidBody)
         ? (rowView.get(RigidBody) as unknown as {
@@ -960,7 +1006,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       const tfPos = transformData.pos;
       const tfQuat = transformData.quat;
       const tfScale = transformData.scale;
-      const tfWorld = transformData.world;
+      const tfWorld = globalTransformData.world;
 
       // rb* views are intentionally NOT guarded here: a bare-Collider archetype
       // has no RigidBody column, so they are legitimately undefined and the
@@ -1089,6 +1135,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       }
     }
     pw.pruneMissingEntities(activeEntities);
+    pw.collectTransformEdits(world, transformComponent);
   },
 });
 
@@ -1144,11 +1191,26 @@ export const PhysicsWriteback2D: SystemHandle<readonly []> = defineSystem({
       const outQuat = quat.create();
       // biome-ignore lint/suspicious/noExplicitAny: quat accepts Vec3 array
       quat.fromAxisAngle(outQuat, [0, 0, 1] as any as Vec3Like, r.rotation);
+      const current = world.get(entity, transformComponent);
+      const stored = current.ok
+        ? (current.value as unknown as { pos?: ArrayLike<number>; quat?: ArrayLike<number> })
+        : undefined;
+      // Component order [x, y, z, w] (E6). `?? 0/1` narrows the
+      // noUncheckedIndexedAccess undefined out of the quat elements.
+      const nextQuat = [outQuat[0] ?? 0, outQuat[1] ?? 0, outQuat[2] ?? 0, outQuat[3] ?? 1];
+      // Skipping a bit-identical write keeps an unchanged pose out of `changed`
+      // filters, so downstream transform propagation stays O(moving bodies).
+      if (
+        stored?.pos?.[0] === Math.fround(r.pos.x) &&
+        stored.pos[1] === Math.fround(r.pos.y) &&
+        stored.quat !== undefined &&
+        nextQuat.every((value, index) => stored.quat?.[index] === value)
+      ) {
+        continue;
+      }
       world.set(entity, transformComponent, {
-        pos: [r.pos.x, r.pos.y, readTransformPosZ(world, entity, transformComponent)],
-        // Component order [x, y, z, w] (E6). `?? 0/1` narrows the
-        // noUncheckedIndexedAccess undefined out of the quat elements.
-        quat: [outQuat[0] ?? 0, outQuat[1] ?? 0, outQuat[2] ?? 0, outQuat[3] ?? 1],
+        pos: [r.pos.x, r.pos.y, stored?.pos?.[2] ?? 0],
+        quat: nextQuat,
       });
     }
   },

@@ -7,19 +7,19 @@ import { Update, type EntityHandle } from '@forgeax/engine-ecs';
 //   - createRenderer + new World() (NOT createApp) -- the explicit path
 //     that lets the demo own component registration + the propagate wiring.
 //   - registerPropagateTransforms(world) -- this wires the per-frame kernel
-//     that derives every entity's resolved Transform.world mat4 (root: world =
+//     that derives every entity's resolved GlobalTransform.world mat4 (root: world =
 //     compose(local); child: world = parent.world x compose(local)). The
-//     Transform.world column is always present (feat-20260601 unified Transform),
-//     so a ChildOf entity follows its parent with no extra component to
-//     register (plan-strategy D-3).
+//     Every transform-bearing entity carries the ordinary GlobalTransform
+//     output component as the C-carrier pair; a ChildOf entity therefore has
+//     an authored local input and an automatically materialized world output.
 //   - A non-identity parent (pos x shifted) + a child entity carrying
 //     ChildOf{parent} + Transform (local offset) + MeshFilter + MeshRenderer.
-//     The child's Transform.world = parent.world x child-local, so moving the
+//     The child's GlobalTransform.world = parent.world x child-local, so moving the
 //     parent at runtime drags the child across the screen.
 //   - Runtime parent move: a frame system slides the parent back and forth
 //     along +X via world.set(parent, Transform). The next world.update(1 / 60).unwrap()
 //     runs propagateTransforms, the extract stage reads the child's refreshed
-//     Transform.world, and the child moves with the parent. The dual-frame
+//     GlobalTransform.world, and the child moves with the parent. The dual-frame
 //     smoke (scripts/smoke-dawn.mjs) is the machine-checkable proof of this;
 //     this demo is the human/orchestrator visual confirmation surface
 //     (charter P5 produce/consume split).
@@ -35,6 +35,7 @@ import {
   ChildOf,
   projectHierarchy,
   propagateTransforms,
+  GlobalTransform,
   Transform,
   registerPropagateTransforms,
 } from '@forgeax/engine-scene';
@@ -47,6 +48,16 @@ import { World } from '@forgeax/engine-ecs';
 
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { setMalformedParentEdge } from './test-fixtures/malformed-hierarchy-edge';
+
+const DATAFLOW_WORKLOADS = [
+  { id: 'flat-dynamic', entityCount: 10_000, movers: 10_000, shape: 'flat' },
+  { id: 'hierarchy-dynamic', entityCount: 10_000, movers: 10_000, shape: 'hierarchy' },
+  { id: 'sparse-dynamic', entityCount: 100_000, movers: 1, shape: 'sparse' },
+  { id: 'structural-churn', entityCount: 100_000, movers: 10_000, shape: 'churn' },
+  { id: 'multi-view', entityCount: 100_000, movers: 10_000, shape: 'multi-view' },
+  { id: 'temporal', entityCount: 10_000, movers: 10_000, shape: 'temporal' },
+] as const;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
@@ -76,9 +87,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Step 2: wire the propagate kernel. The registerPropagateTransforms line
   // is the whole point of this demo -- it derives every entity's
-  // Transform.world each frame so the ChildOf entity follows its parent (the
-  // world mat4 lives on Transform; defineComponent makes every component
-  // usable, so spawn is direct with no per-World registration).
+  // GlobalTransform.world each frame so the ChildOf entity follows its parent.
+  // The world matrix is owned by GlobalTransform; Transform's generic ECS
+  // requirement materializes that derived column at spawn without a scene scan.
   const world = new World();
   const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
@@ -183,7 +194,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .unwrap();
 
   // Step 7: a frame system slides the parent left<->right along X. The slide
-  // runs as an unconstrained system and the parent's NEXT-frame Transform.world
+  // runs as an unconstrained system and the parent's NEXT-frame GlobalTransform.world
   // picks up the change -- a one-frame latency that is invisible at rAF rates
   // and keeps the demo's data flow obvious (Transform write -> next-frame
   // propagate -> extract). The child's world position tracks the parent every
@@ -227,10 +238,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   function transformSnapshot(entity: EntityHandle): { pos: number[]; world: number[] } | null {
     const result = world.get(entity, Transform);
-    if (!result.ok) return null;
+    const global = world.get(entity, GlobalTransform);
+    if (!result.ok || !global.ok) return null;
     return {
       pos: Array.from(result.value.pos),
-      world: Array.from(result.value.world),
+      world: Array.from(global.value.world),
     };
   }
 
@@ -271,6 +283,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const controller = {
+    describeDataflow() {
+      return {
+        schemaVersion: 1,
+        seed: 20260901,
+        timestep: 1 / 60,
+        camera: { position: [0, 0, 7], target: [0, 0, 0], fovRadians: Math.PI / 4 },
+        frameCount: 60,
+        workloads: DATAFLOW_WORKLOADS,
+        frameIdentity: 'runtime-probe-requires-exact-head',
+      };
+    },
     beginProbe(): ReturnType<typeof sceneSnapshot> {
       paused = true;
       if (hudEl) hudEl.textContent = 'hierarchy probe paused';
@@ -288,14 +311,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     injectFaults() {
       paused = true;
-      const stale = world.set(child, ChildOf, { parent: staleParent });
-      const firstCycleEdge = world.set(cycleA, ChildOf, { parent: cycleB });
-      const secondCycleEdge = world.set(cycleB, ChildOf, { parent: cycleA });
-      if (!stale.ok || !firstCycleEdge.ok || !secondCycleEdge.ok) {
-        throw new Error('failed to inject public ChildOf faults');
-      }
-      const hierarchy = projectHierarchy(world);
-      const propagation = propagateTransforms(world, hierarchy);
+      // The public relationship owner rejects these malformed writes. The
+      // hello diagnostic journey uses a test-owned internal fixture so it can
+      // exercise Scene's fail-closed recovery without reopening that bypass.
+      setMalformedParentEdge(world, child, staleParent, ChildOf);
+      setMalformedParentEdge(world, cycleA, cycleB, ChildOf);
+      setMalformedParentEdge(world, cycleB, cycleA, ChildOf);
+      const propagation = propagateTransforms(world);
+      if (!propagation.ok) console.error(propagation.error);
       const draw = drawProbeFrame();
       if (!draw.ok) throw new Error(`probe fault draw failed: ${draw.error}`);
       return {

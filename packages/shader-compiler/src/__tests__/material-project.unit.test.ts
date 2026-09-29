@@ -96,10 +96,24 @@ describe('MaterialAsset runtime and module projection', () => {
     if (!context.ok) return;
     expect(lowerMaterialVariantContext(context.value)).toEqual({
       STORAGE_BUFFER_AVAILABLE: true,
+      CLUSTER_FORWARD_AVAILABLE: true,
+      PROBE_BLEND_AVAILABLE: true,
       WEBGL2_COMPAT: false,
       PER_INSTANCE_REGION: false,
+      SKINNING_DISABLED: true,
       POINT_SHADOW_AVAILABLE: false,
+      MATERIAL_VALIDATION_ENABLED: false,
+      VISIBLE_SURFACE_AVAILABLE: false,
     });
+    expect(
+      lowerMaterialVariantContext({ ...context.value, capability: 'uniform-fallback' }),
+    ).toMatchObject({
+      CLUSTER_FORWARD_AVAILABLE: false,
+      PROBE_BLEND_AVAILABLE: false,
+    });
+    expect(lowerMaterialVariantContext({ ...context.value, pipeline: 'deferred' })).toEqual(
+      lowerMaterialVariantContext(context.value),
+    );
     expect(
       createMaterialVariantContext({
         backend: 'webgpu',

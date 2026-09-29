@@ -1,12 +1,12 @@
 // w4 type-level - RhiRenderPassEncoder spec method-set alignment (research F-2 /
-// plan-strategy D-S4: 17 spec stable + 1 setBindGroup overload + 3 placeholder).
+// plan-strategy D-S4: 17 spec stable + 1 setBindGroup overload + 1 unavailable public entry).
 //
 // Asserts (RED until w5 lands the impl):
 //   - 17 spec stable methods exist on RhiRenderPassEncoder
 //   - setBindGroup has both overloads (a) array form (b) Uint32Array form
-//   - 3 placeholder methods (executeBundles / beginOcclusionQuery /
-//     endOcclusionQuery) are present in the interface and return
-//     Result<void, RhiError> (so AI users can route 'rhi-not-available' at
+//   - executeBundles is the one unavailable public entry; begin/end occlusion
+//     query are real stateful operations. All three methods return
+//     Result<void, RhiError> (so AI users can route structured failure at
 //     runtime; charter proposition 4 explicit failure).
 //   - setImmediates (PROPOSED) is NOT exposed (per D-S4 explicit non-receipt;
 //     charter proposition 4: untested features hide behind caps, not surfaces).
@@ -32,7 +32,7 @@ import type {
   TextureView,
 } from '../index';
 
-describe('w4 - RhiRenderPassEncoder spec method set (17 stable + 1 overload + 3 placeholders)', () => {
+describe('w4 - RhiRenderPassEncoder spec method set (17 stable + 1 overload + 1 unavailable entry)', () => {
   // 7 already-shipped methods (Round 1 baseline; locked in this closure):
   it('keeps existing setPipeline / setIndexBuffer / setVertexBuffer', () => {
     expectTypeOf<RhiRenderPassEncoder['setPipeline']>().toBeFunction();
@@ -109,21 +109,21 @@ describe('w4 - RhiRenderPassEncoder spec method set (17 stable + 1 overload + 3 
     expectTypeOf<HasSliceOverload>().toEqualTypeOf<true>();
   });
 
-  // 3 placeholders: signature lives in the interface; shim returns Result.err
-  // ({ code: 'rhi-not-available' }) at runtime per D-S4.
-  it('exposes executeBundles (placeholder; capability-gated by RenderBundle)', () => {
+  // The unavailable public entry keeps a typed Result so callers can branch on
+  // the structured rhi-not-available error until RenderBundle is constructible.
+  it('exposes executeBundles (unavailable until RenderBundle is constructible)', () => {
     type Method = RhiRenderPassEncoder['executeBundles'];
     expectTypeOf<Method>().toBeFunction();
     expectTypeOf<Method>().returns.toEqualTypeOf<Result<void, RhiError>>();
   });
 
-  it('exposes beginOcclusionQuery (placeholder; capability-gated by QuerySet)', () => {
+  it('exposes beginOcclusionQuery (stateful occlusion-query operation)', () => {
     type Method = RhiRenderPassEncoder['beginOcclusionQuery'];
     expectTypeOf<Method>().toBeFunction();
     expectTypeOf<Method>().returns.toEqualTypeOf<Result<void, RhiError>>();
   });
 
-  it('exposes endOcclusionQuery (placeholder; capability-gated by QuerySet)', () => {
+  it('exposes endOcclusionQuery (stateful occlusion-query operation)', () => {
     type Method = RhiRenderPassEncoder['endOcclusionQuery'];
     expectTypeOf<Method>().toBeFunction();
     expectTypeOf<Method>().returns.toEqualTypeOf<Result<void, RhiError>>();

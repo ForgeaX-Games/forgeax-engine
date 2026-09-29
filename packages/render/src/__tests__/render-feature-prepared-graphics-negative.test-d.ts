@@ -13,7 +13,7 @@ const feature = {
     void context.caps;
     void context.frame;
     void context.generation;
-    void context.targets;
+    void context.views.map((view) => view.targets);
 
     // @ts-expect-error plan descriptors cannot access a raw device
     context.device;
@@ -29,7 +29,7 @@ const feature = {
     context.graphics;
     // @ts-expect-error plan descriptors replace graph staging callbacks
     context.staging;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [] });
   },
 } satisfies RenderFeature<Frame>;
 

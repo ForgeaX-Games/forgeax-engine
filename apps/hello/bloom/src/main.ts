@@ -1,5 +1,5 @@
-import { Update } from '@forgeax/engine-ecs';
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
+import { Update } from '@forgeax/engine/ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine/input';
 // apps/hello/bloom -- Bloom real-time comparison demo
 // (feat-20260531-bloom-first-declarative-render-graph-pass / M4 / w18).
 //
@@ -13,15 +13,16 @@ import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine
 //     derives a press-edge from prev-frame level tracking, toggles
 //     Camera.bloom between BLOOM_DISABLED and BLOOM_ENABLED via
 //     world.set(camEntity, Camera, { bloom }). The engine extract
-//     stage re-reads bloom every frame (zero engine-side code change).
+//     stage re-reads bloom every frame; the shared Standard post chain
+//     retires the disabled roster before re-admitting it.
 //   - DOM HUD overlay (charter F2 text over image): #bloom-hud span
 //     updates textContent to "Bloom: ON" / "Bloom: OFF" on every toggle.
 //   - Tonemap: TONEMAP_REINHARD_EXTENDED -- HDR target must be active
-//     for bloom to operate (bloom gate requires tonemapActive=true).
+//     for Bloom to operate (the gate requires tonemapActive=true).
 //
 // Scene: emissive sphere + cube under a slant directional light. The
 // sphere has emissiveIntensity=2.0 to produce pixels >1.0 in HDR that
-// the bloom bright-pass extracts. The cube has emissiveIntensity=0.5
+// Bloom extracts it. The cube has emissiveIntensity=0.5
 // to stay below the default 1.0 threshold.
 //
 // Recipe (charter P1 progressive disclosure):
@@ -33,17 +34,25 @@ import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine
 //   (6) world.addSystem press-edge toggle + HUD sync
 //   (7) app.start()
 
-import { createApp } from '@forgeax/engine-app';
-import type { CanvasAppError } from '@forgeax/engine-app';
+import { createApp } from '@forgeax/engine/app';
+import type { CanvasAppError } from '@forgeax/engine/app';
 
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine/assets-runtime';
+import { Transform } from '@forgeax/engine/scene';
 
-import { BLOOM_DISABLED, BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
-import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  BLOOM_DISABLED,
+  BLOOM_ENABLED,
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  perspective,
+  TONEMAP_REINHARD_EXTENDED,
+} from '@forgeax/engine/render';
+import { EngineEnvironmentError } from '@forgeax/engine/runtime';
 
-import type { MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset } from '@forgeax/engine/types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -73,6 +82,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
 
   const world = app.world;
+  const carrierErrors: Array<{ code: string; hint: string; detail: unknown }> = [];
+  const submittedFrames: Array<{ frameId: number; deviceGeneration: number }> = [];
+  const rendererTransitions: Array<{ previous: string; current: string }> = [];
+  let carrierStage = 'on';
+  app.onError((error) => {
+    carrierErrors.push({
+      code: error.code,
+      hint: error.hint,
+      detail: 'detail' in error ? error.detail : undefined,
+    });
+  });
+  app.renderer.subscribe((event) => {
+    if (event.kind === 'frame-submitted') {
+      submittedFrames.push({ frameId: event.frameId, deviceGeneration: event.deviceGeneration });
+    }
+    if (event.kind === 'state-changed') {
+      rendererTransitions.push({ previous: event.previous, current: event.current });
+    }
+  });
 
   // Step 2: alloc standard PBR material for non-emissive geometry.
   // feat-20260614 M8 (D-18): material handles are minted per-World via
@@ -91,7 +119,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Step 3: alloc emissive PBR material (emissiveIntensity > 1.0).
   // The default-standard-pbr emissive factor produces >1.0 HDR values
-  // that the bloom bright-pass extracts (threshold 1.0).
+  // that Bloom extracts (threshold 1.0).
   const emissiveHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -154,7 +182,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         bloom: BLOOM_DISABLED,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
-        bloomBlurRadius: 4.0,
+        bloomSoftKnee: 0.5,
+        bloomScatter: 0.7,
       },
     },
   ).unwrap();
@@ -165,8 +194,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // (that is ev.code). See packages/input/src/input-snapshot.ts down() doc.
   let prevSpace = false;
   let currentBloom: number = BLOOM_DISABLED;
+  let currentBloomIntensity = 1.0;
 
   const hudEl = document.getElementById('bloom-hud');
+  const updateBloomHud = (): void => {
+    if (hudEl) hudEl.textContent = currentBloom === BLOOM_ENABLED && currentBloomIntensity > 0 ? 'Bloom: ON' : 'Bloom: OFF';
+  };
+  const applyBloom = (enabled: boolean): boolean => {
+    const bloom = enabled ? BLOOM_ENABLED : BLOOM_DISABLED;
+    const result = world.set(camEntity, Camera, { bloom });
+    if (!result.ok) {
+      console.error('[bloom] bloom update failed:', result.error.code);
+      return false;
+    }
+    currentBloom = bloom;
+    updateBloomHud();
+    return true;
+  };
 
   world.addSystem(Update, {
     name: 'bloom-space-toggle',
@@ -178,22 +222,79 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
       const cur = snap.keyboard.down(' ');
       if (cur && !prevSpace) {
-        const target =
-          currentBloom === BLOOM_ENABLED ? BLOOM_DISABLED : BLOOM_ENABLED;
-        const setRes = world.set(camEntity, Camera, { bloom: target });
-        if (setRes.ok) {
-          currentBloom = target;
-          if (hudEl) {
-            hudEl.textContent =
-              target === BLOOM_ENABLED ? 'Bloom: ON' : 'Bloom: OFF';
-          }
-        } else {
-          console.error('[bloom] toggle world.set failed:', setRes.error.code);
-        }
+        applyBloom(currentBloom !== BLOOM_ENABLED);
       }
       prevSpace = cur;
     },
   });
+
+  const inspectCarrier = () => {
+    const inspection = app.renderer.inspect();
+    return {
+      stage: carrierStage,
+      frame: inspection.frame,
+      state: inspection.state,
+      passes: [...inspection.perFramePassNames],
+      bloom: inspection.bloom,
+      hud: hudEl?.textContent ?? '',
+      submittedFrames: submittedFrames.length,
+      rendererTransitions: [...rendererTransitions],
+      errors: [...carrierErrors],
+    };
+  };
+  (globalThis as unknown as {
+    __bloomCarrierProbe?: {
+      ready: () => boolean;
+      setStage: (stage: string) => void;
+      setBloom: (enabled: boolean) => boolean;
+      setBloomIntensity: (intensity: number) => boolean;
+      setBloomScatter: (scatter: number) => boolean;
+      resize: (width: number, height: number) => void;
+      reconfigureSurface: () => { release: unknown; restore: unknown };
+      recoverDeviceLoss: () => Promise<unknown>;
+      inspect: () => ReturnType<typeof inspectCarrier>;
+    };
+  }).__bloomCarrierProbe = {
+    ready: () => app.renderer.state() === 'alive',
+    setStage: (stage) => {
+      carrierStage = stage;
+    },
+    setBloom: (enabled) => {
+      return applyBloom(enabled);
+    },
+    setBloomIntensity: (intensity) => {
+      const result = world.set(camEntity, Camera, { bloomIntensity: intensity });
+      if (!result.ok) {
+        console.error('[bloom] bloom intensity update failed:', result.error.code);
+        return false;
+      }
+      currentBloomIntensity = intensity;
+      updateBloomHud();
+      return true;
+    },
+    setBloomScatter: (scatter) => {
+      const result = world.set(camEntity, Camera, { bloomScatter: scatter });
+      if (!result.ok) {
+        console.error('[bloom] bloom scatter update failed:', result.error.code);
+        return false;
+      }
+      return true;
+    },
+    resize: (width, height) => {
+      target.style.width = `${width}px`;
+      target.style.height = `${height}px`;
+      target.width = width;
+      target.height = height;
+      window.dispatchEvent(new Event('resize'));
+    },
+    reconfigureSurface: () => {
+      const release = app.renderer.releaseSurface();
+      const restore = app.renderer.restoreSurface();
+      return { release, restore };
+    },
+    recoverDeviceLoss: () => app.renderer.recover(),
+    inspect: inspectCarrier,
+  };
 
   // Step 9: arm the rAF loop.
   const startRes = app.start();

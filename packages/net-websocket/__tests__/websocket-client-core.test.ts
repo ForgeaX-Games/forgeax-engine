@@ -50,3 +50,38 @@ describe('WebSocket client core option preflight', () => {
     expect(constructions).toBe(0);
   });
 });
+
+it('bounds bytes waiting for asynchronous conversion before retaining more wire messages', async () => {
+  let socket!: WebSocketLike;
+  let closes = 0;
+  let conversions = 0;
+  class Socket implements WebSocketLike {
+    readonly CONNECTING = 0;
+    readonly OPEN = 1;
+    readonly CLOSING = 2;
+    readonly CLOSED = 3;
+    readyState = this.OPEN;
+    onopen: WebSocketLike['onopen'] = null;
+    onmessage: WebSocketLike['onmessage'] = null;
+    onerror: WebSocketLike['onerror'] = null;
+    onclose: WebSocketLike['onclose'] = null;
+    constructor() { socket = this; }
+    send() {}
+    close() { closes++; this.readyState = this.CLOSED; this.onclose?.({}); }
+  }
+  const connected = createWebSocketClientEndpoint(Socket, {
+    url: 'ws://local',
+    toBytes: async () => { conversions++; return new Uint8Array(); },
+  });
+  socket.onopen?.({});
+  const endpoint = (await connected).unwrap();
+  endpoint.poll();
+  const data = new ArrayBuffer(5 * 1024 * 1024);
+  socket.onmessage?.({ data });
+  socket.onmessage?.({ data });
+  expect(closes).toBe(1);
+  expect(endpoint.poll().filter(event => event.kind === 'peer-disconnected')).toHaveLength(1);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(conversions).toBe(0);
+  expect(endpoint.poll()).toEqual([]);
+});

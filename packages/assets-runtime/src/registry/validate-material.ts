@@ -10,6 +10,60 @@ import {
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 
+export interface TexturePublicationStateSnapshot {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly acceptedGeneration: number;
+  readonly acceptedDigest: string;
+  readonly candidateGeneration?: number;
+  readonly candidateFailure?: string;
+}
+
+export interface TexturePublicationState {
+  reject(candidate: {
+    readonly generation: number;
+    readonly reason: string;
+  }): TexturePublicationStateSnapshot;
+  accept(candidate: {
+    readonly generation: number;
+    readonly digest: string;
+  }): TexturePublicationStateSnapshot;
+}
+
+/** Candidate/accepted state that keeps the last known good publication honest. */
+export function createTexturePublicationState(input: {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly generation: number;
+  readonly digest: string;
+}): TexturePublicationState {
+  let accepted = {
+    generation: input.generation,
+    digest: input.digest,
+  };
+  let candidate: { readonly generation: number; readonly reason: string } | undefined;
+  const snapshot = (): TexturePublicationStateSnapshot => ({
+    guid: input.guid,
+    sourceKey: input.sourceKey,
+    acceptedGeneration: accepted.generation,
+    acceptedDigest: accepted.digest,
+    ...(candidate === undefined
+      ? {}
+      : { candidateGeneration: candidate.generation, candidateFailure: candidate.reason }),
+  });
+  return {
+    reject(next) {
+      candidate = next;
+      return snapshot();
+    },
+    accept(next) {
+      accepted = next;
+      candidate = undefined;
+      return snapshot();
+    },
+  };
+}
+
 /**
  * Validate a MaterialAsset's passes[] against the ShaderRegistry's
  * paramSchema (union semantics: all declared params across all passes
@@ -23,10 +77,7 @@ import type { AssetRegistry } from '../asset-registry';
  *
  * @returns AssetError on failure, null on success
  */
-export function validateMaterialPasses(
-  registry: AssetRegistry,
-  asset: MaterialAsset,
-): AssetError | null {
+export function validateMaterialPasses(registry: unknown, asset: MaterialAsset): AssetError | null {
   const passes = asset.passes;
   // undefined passes is valid (material inherits from parent at resolve time);
   // only explicit empty passes[] is an error.
@@ -112,9 +163,105 @@ export function validateMaterialPasses(
   return null;
 }
 
+type TransmissionParameter =
+  | 'transmission'
+  | 'ior'
+  | 'thickness'
+  | 'attenuationColor'
+  | 'attenuationDistance'
+  | 'transmissionTexture'
+  | 'thicknessTexture';
+
+function transmissionError(
+  material: string,
+  parameter: TransmissionParameter,
+  reason: 'non-finite' | 'range' | 'shape' | 'blend' | 'depth-write',
+  actual?: unknown,
+): MaterialError {
+  return createMaterialError('material-transmission-contract-invalid', {
+    code: 'material-transmission-contract-invalid',
+    material,
+    parameter,
+    reason,
+    ...(actual === undefined ? {} : { actual }),
+  });
+}
+
+function validateTransmissionNumber(
+  material: string,
+  values: Record<string, unknown>,
+  parameter: 'transmission' | 'ior' | 'thickness' | 'attenuationDistance',
+  minimum: number,
+  maximum?: number,
+): MaterialError | null {
+  const value = values[parameter];
+  if (value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return transmissionError(material, parameter, 'non-finite', value);
+  }
+  if (value < minimum || (maximum !== undefined && value > maximum)) {
+    return transmissionError(material, parameter, 'range', value);
+  }
+  return null;
+}
+
+export function validateMaterialTransmissionContract(asset: MaterialAsset): MaterialError | null {
+  const material = (asset.values?.materialName as string | undefined) ?? '<unnamed>';
+  const values = (asset.values ?? {}) as Record<string, unknown>;
+  const numericChecks: ReadonlyArray<
+    ['transmission' | 'ior' | 'thickness' | 'attenuationDistance', number, number | undefined]
+  > = [
+    ['transmission', 0, 1],
+    ['ior', 1, undefined],
+    ['thickness', 0, undefined],
+    ['attenuationDistance', Number.MIN_VALUE, undefined],
+  ];
+  for (const [parameter, minimum, maximum] of numericChecks) {
+    const error = validateTransmissionNumber(material, values, parameter, minimum, maximum);
+    if (error !== null) return error;
+  }
+  const attenuationColor = values.attenuationColor;
+  if (attenuationColor !== undefined) {
+    if (
+      !Array.isArray(attenuationColor) ||
+      attenuationColor.length !== 3 ||
+      attenuationColor.some(
+        (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1,
+      )
+    ) {
+      return transmissionError(material, 'attenuationColor', 'shape', attenuationColor);
+    }
+  }
+  for (const parameter of ['transmissionTexture', 'thicknessTexture'] as const) {
+    const value = values[parameter];
+    if (
+      value !== undefined &&
+      typeof value !== 'string' &&
+      !(typeof value === 'number' && Number.isInteger(value) && value >= 0) &&
+      (typeof value !== 'object' || value === null || Array.isArray(value))
+    ) {
+      return transmissionError(material, parameter, 'shape', value);
+    }
+  }
+  const transmission = values.transmission;
+  if (typeof transmission === 'number' && transmission > 0) {
+    for (const pass of asset.passes ?? []) {
+      if (pass.renderState?.blend !== undefined) {
+        return transmissionError(material, 'transmission', 'blend');
+      }
+      if (pass.renderState?.depthWriteEnabled === true) {
+        return transmissionError(material, 'transmission', 'depth-write');
+      }
+    }
+  }
+  return null;
+}
+
 export interface MaterialEffectiveRootIdentity {
   readonly guid: string;
   readonly layoutIdentity: string;
+  /** Admission-time Standard layer identity from the same effective root. */
+  readonly layerPlanIdentity?: string;
 }
 
 export function validateMaterialCookIdentity(
@@ -122,9 +269,11 @@ export function validateMaterialCookIdentity(
   root: MaterialEffectiveRootIdentity,
 ): MaterialError | null {
   const actual = record.receipt.identity.layoutIdentity;
+  const actualLayerPlan = record.receipt.derivedInterface.layerPlanIdentity;
   if (
     actual !== root.layoutIdentity ||
-    record.receipt.derivedInterface.layoutIdentity !== root.layoutIdentity
+    record.receipt.derivedInterface.layoutIdentity !== root.layoutIdentity ||
+    (root.layerPlanIdentity !== undefined && actualLayerPlan !== root.layerPlanIdentity)
   ) {
     return createMaterialError('material-derived-interface-mismatch', {
       code: 'material-derived-interface-mismatch',
@@ -165,10 +314,7 @@ export function validateMaterialCookIdentity(
  *
  * @returns AssetError on failure, null on success.
  */
-export function validateSpriteSlices(
-  _registry: AssetRegistry,
-  asset: MaterialAsset,
-): AssetError | null {
+export function validateSpriteSlices(_registry: unknown, asset: MaterialAsset): AssetError | null {
   const passes = asset.passes;
   if (passes === undefined || passes.length === 0) return null;
   const firstPass = passes[0];
@@ -281,7 +427,7 @@ export function validateSpriteSlices(
 }
 
 export function validateParamType(
-  _registry: AssetRegistry,
+  _registry: unknown,
   _name: string,
   type: string,
   value: unknown,
@@ -304,6 +450,7 @@ export function validateParamType(
         value.every((v) => typeof v === 'number')
       );
     case 'texture':
+    case 'texture_cube':
       // A cooked pack may keep an asset GUID as the compact texture
       // shorthand. The render material resolver expands that reference at
       // the resource boundary; rejecting it here makes authored packs fail

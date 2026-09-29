@@ -1,4 +1,5 @@
-import type { Buffer, Texture, TextureView } from '@forgeax/engine-rhi';
+import type { Buffer, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
+import { ok } from './errors.js';
 import type {
   GraphAccess,
   GraphBuffer,
@@ -127,7 +128,36 @@ export interface CompiledResource<FrameCtx> {
   readonly firstUse: number | null;
   readonly lastUse: number | null;
   readonly texture?: Texture | undefined;
+  readonly textureAllocation?: GraphTextureAllocation | undefined;
   readonly buffer?: Buffer | undefined;
+}
+
+export interface GraphTextureAllocation {
+  readonly texture: Texture;
+  readonly signature: string;
+  references: number;
+}
+
+export function releaseGraphTexture(device: RhiDevice, allocation: GraphTextureAllocation) {
+  if (allocation.references > 1) {
+    allocation.references -= 1;
+    return ok(undefined);
+  }
+  const result = device.destroyTexture(allocation.texture);
+  if (result.ok) allocation.references = 0;
+  return result;
+}
+
+const allocationKeys = new WeakMap<object, string>();
+let nextAllocationKey = 1;
+
+export function physicalAllocationKey(handle: object): string {
+  let key = allocationKeys.get(handle);
+  if (key === undefined) {
+    key = `allocation-${nextAllocationKey++}`;
+    allocationKeys.set(handle, key);
+  }
+  return key;
 }
 
 export interface CompiledView<FrameCtx extends RenderGraphFrame = RenderGraphFrame> {
@@ -145,4 +175,90 @@ export function accessResourceId(access: GraphAccess): number | undefined {
   const data = handleData(access.resource);
   if (data?.kind === 'texture-view') return data.textureId;
   return data?.id;
+}
+
+export function snapshotTextureDescriptor<T extends GraphTextureDescriptor>(descriptor: T): T {
+  return Object.freeze({
+    ...descriptor,
+    size:
+      typeof descriptor.size === 'string' ? descriptor.size : Object.freeze({ ...descriptor.size }),
+    ...(descriptor.viewFormats === undefined
+      ? {}
+      : { viewFormats: Object.freeze([...descriptor.viewFormats]) }),
+  });
+}
+
+/** Own descriptor data while retaining opaque handles and explicit frame callbacks. */
+export function snapshotPass<FrameCtx>(pass: GraphPass<FrameCtx>): GraphPass<FrameCtx> {
+  const accesses = Object.freeze(
+    pass.descriptor.accesses.map((access) => Object.freeze({ ...access })),
+  );
+  switch (pass.kind) {
+    case 'copy': {
+      const descriptor = pass.descriptor;
+      return {
+        kind: 'copy',
+        descriptor: Object.freeze({
+          ...descriptor,
+          accesses,
+          encode: descriptor.encode.bind(descriptor),
+          executeIf: descriptor.executeIf?.bind(descriptor),
+        }),
+      };
+    }
+    case 'compute': {
+      const descriptor = pass.descriptor;
+      return {
+        kind: 'compute',
+        descriptor: Object.freeze({
+          ...descriptor,
+          accesses,
+          encode: descriptor.encode.bind(descriptor),
+          executeIf: descriptor.executeIf?.bind(descriptor),
+          begin: descriptor.begin?.bind(descriptor),
+          onBeginError: descriptor.onBeginError?.bind(descriptor),
+          after: descriptor.after?.bind(descriptor),
+        }),
+      };
+    }
+    case 'raster': {
+      const descriptor = pass.descriptor;
+      const querySet = descriptor.occlusionQuerySet;
+      return {
+        kind: 'raster',
+        descriptor: Object.freeze({
+          ...descriptor,
+          accesses,
+          encode: descriptor.encode.bind(descriptor),
+          executeIf: descriptor.executeIf?.bind(descriptor),
+          occlusionQuerySet: typeof querySet === 'function' ? querySet.bind(descriptor) : querySet,
+          colorAttachments: Object.freeze(
+            descriptor.colorAttachments.map((attachment) => {
+              const color = attachment.clearValue;
+              return Object.freeze({
+                ...attachment,
+                ...(color === undefined
+                  ? {}
+                  : {
+                      clearValue:
+                        typeof color === 'function' ? color.bind(attachment) : snapshotColor(color),
+                    }),
+              });
+            }),
+          ),
+          ...(descriptor.depthStencilAttachment === undefined
+            ? {}
+            : {
+                depthStencilAttachment: Object.freeze({ ...descriptor.depthStencilAttachment }),
+              }),
+        }),
+      };
+    }
+  }
+}
+
+function snapshotColor(color: GPUColor): GPUColor {
+  const copy = Array.isArray(color) ? [...color] : { ...color };
+  Object.freeze(copy);
+  return copy;
 }

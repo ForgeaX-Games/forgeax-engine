@@ -7,8 +7,7 @@ function facts(packageJson: Record<string, unknown>): ProjectFacts {
     root: '/game',
     id: 'game',
     name: 'Game',
-    entry: 'main.ts',
-    plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+    roots: {},
     assetRoots: ['assets'],
     packageJson,
   };
@@ -27,11 +26,12 @@ describe('createInitPlan', () => {
         expect.objectContaining({ name: '@forgeax/engine-devkit', to: '0.0.0' }),
       ]),
     );
-    expect(result.value.scriptChanges).toHaveLength(7);
+    expect(result.value.scriptChanges).toHaveLength(8);
     expect(result.value.scriptChanges).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'preview', to: 'forgeax preview' }),
-        expect.objectContaining({ name: 'package', to: 'forgeax package' }),
+        expect.objectContaining({ name: 'preview', to: 'forgeax project preview' }),
+        expect.objectContaining({ name: 'package', to: 'forgeax project package' }),
+        expect.objectContaining({ name: 'typecheck', to: 'pnpm exec tsc --noEmit' }),
       ]),
     );
   });
@@ -70,7 +70,35 @@ describe('createInitPlan', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.dependencyChanges).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: 'vitest', to: '4.1.11' })]),
+      expect.arrayContaining([expect.objectContaining({ name: 'vitest', to: '4.0.18' })]),
+    );
+  });
+
+  it('accepts the public Engine umbrella dependency in an archive-backed project', () => {
+    const result = createInitPlan(facts({ dependencies: { '@forgeax/engine': 'workspace:*' } }), {
+      sdkVersion: '0.1.0',
+      packages: [
+        {
+          name: '@forgeax/engine',
+          version: '0.1.0',
+          root: 'packages/engine',
+          fileCount: 1,
+          byteCount: 1,
+        },
+      ],
+      requirements: { node: '>=22.13.0', pnpm: '11.7.0', pnpmStoreFormat: 'v11' },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.dependencyChanges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: '@forgeax/engine',
+          from: 'workspace:*',
+          to: '0.1.0',
+        }),
+      ]),
     );
   });
 });

@@ -12,6 +12,17 @@ const TARGET_ROI = { x0: 280, y0: 225, x1: 360, y1: 315 };
 const SHADOW_ROI = { x0: 220, y0: 310, x1: 320, y1: 355 };
 const CHILD_ROI = { x0: 380, y0: 200, x1: 480, y1: 310 };
 
+function describeStructuredError(error) {
+  if (typeof error !== 'object' || error === null) return error;
+  return {
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    detail: error.detail,
+    message: error.message,
+  };
+}
+
 const variant = process.env.FORGEAX_FALSIFY_VARIANT ?? '';
 const port = process.env.FORGEAX_ENTITY_VISIBILITY_PORT ?? '5173';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -228,7 +239,7 @@ try {
     await browser.close();
   }
 } catch (error) {
-  console.error(`[smoke-browser] FAIL: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[smoke-browser] FAIL: ${JSON.stringify(describeStructuredError(error))}`);
   process.exitCode = 1;
 } finally {
   try {

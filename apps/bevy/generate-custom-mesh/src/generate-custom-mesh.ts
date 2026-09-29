@@ -1,3 +1,4 @@
+import { RuntimeMeshVertices } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { Transform } from '@forgeax/engine-scene';
@@ -31,6 +32,7 @@ const CUBE_INDICES = new Uint16Array([
 export const CUSTOM_TEXTURE_SIZE = 64;
 
 export interface CustomMeshState {
+  readonly meshContent: EntityHandle;
   readonly meshEntity: EntityHandle;
   readonly meshHandle: Handle<'MeshAsset', 'shared'>;
   readonly baseVertices: Float32Array;
@@ -61,12 +63,14 @@ export function makeCustomMeshTexture(): TextureAsset {
   }
   return {
     kind: 'texture',
-    width: CUSTOM_TEXTURE_SIZE,
-    height: CUSTOM_TEXTURE_SIZE,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: CUSTOM_TEXTURE_SIZE, height: CUSTOM_TEXTURE_SIZE },
+    },
     format: 'rgba8unorm-srgb',
     data,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 
@@ -122,10 +126,10 @@ export function buildCustomMeshWorld(world: World, textureHandle?: number): Cust
   const mesh = customCubeMesh(baseVertices);
   const material = Materials.unlit([1, 1, 1, 1], {
     ...(textureHandle === undefined ? {} : { baseColorTexture: textureHandle }),
-    castShadow: false,
   });
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material);
   const meshHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', mesh);
+  const meshContent = world.spawn({ component: RuntimeMeshVertices, data: { asset: meshHandle, vertices: baseVertices } }).unwrap();
   const meshEntity = world.spawn(
     { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1.6, 1.6, 1.6] } },
     { component: MeshFilter, data: { assetHandle: meshHandle } },
@@ -136,16 +140,13 @@ export function buildCustomMeshWorld(world: World, textureHandle?: number): Cust
     { component: Transform, data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0, 0], [0, 1, 0]), scale: [1, 1, 1] } },
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }) },
   );
-  return { meshEntity, meshHandle, baseVertices, alternateVertices, indices: CUBE_INDICES, uvMode: 'upper', toggles: 0 };
+  return { meshEntity, meshContent, meshHandle, baseVertices, alternateVertices, indices: CUBE_INDICES, uvMode: 'upper', toggles: 0 };
 }
 
 export function toggleCustomMesh(world: World, state: CustomMeshState): void {
-  const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(state.meshHandle);
-  if (!mesh.ok) return;
   state.uvMode = state.uvMode === 'upper' ? 'lower' : 'upper';
   state.toggles += 1;
-  mesh.value.vertices.set(state.uvMode === 'upper' ? state.baseVertices : state.alternateVertices);
-  world.sharedRefs.markChanged(state.meshHandle);
+  world.set(state.meshContent, RuntimeMeshVertices, { vertices: state.uvMode === 'upper' ? state.baseVertices : state.alternateVertices }).unwrap();
 }
 
 export function stepCustomMesh(world: World, state: CustomMeshState, input: InputSnapshot): void {

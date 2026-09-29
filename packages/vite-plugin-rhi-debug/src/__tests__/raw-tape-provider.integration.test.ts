@@ -17,6 +17,35 @@ async function validTapeBytes(): Promise<Uint8Array> {
 }
 
 describe('raw .rhitape provider', () => {
+  it('contains an interrupted upload inside the middleware and remains usable', async () => {
+    let middleware!: (request: unknown, response: unknown, next: () => void) => Promise<void>;
+    const plugin = vitePluginRhiDebug();
+    if (typeof plugin.configureServer !== 'function') throw new Error('missing configureServer');
+    plugin.configureServer.call(
+      undefined as never,
+      {
+        middlewares: {
+          use: (handler: typeof middleware) => {
+            middleware = handler;
+          },
+        },
+      } as never,
+    );
+    const response = { statusCode: 0, setHeader() {}, end() {} };
+    const interrupted = {
+      method: 'POST',
+      url: '/__forgeax-debug/tape?runId=interrupted',
+      headers: { 'content-type': RHITAPE_MIME },
+      async *[Symbol.asyncIterator]() {
+        yield new Uint8Array([82, 72, 73]);
+        throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+      },
+    };
+    await expect(middleware(interrupted, response, () => {})).resolves.toBeUndefined();
+    expect(response.statusCode).toBe(400);
+    await middleware({ method: 'GET', url: interrupted.url }, response, () => {});
+    expect(response.statusCode).toBe(405);
+  });
   it('accepts one raw v7 body, validates it, and returns one digest-bearing artifact', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'forgeax-rhitape-provider-'));
     try {

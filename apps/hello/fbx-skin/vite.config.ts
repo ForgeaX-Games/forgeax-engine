@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
@@ -27,7 +28,13 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     ...optionalAssetPack(assetRoots, () =>
-      pluginPack({ runtimeBinding, refresh: reloadAssetHost(), roots: assetRoots, importers: [fbxImporter] }),
+      pluginPack({
+        runtimeBinding,
+        refresh: reloadAssetHost(),
+        roots: assetRoots,
+        importers: [fbxImporter],
+        cookers: [createMaterialPackCooker()],
+      }),
     ),
   ],
   server: {

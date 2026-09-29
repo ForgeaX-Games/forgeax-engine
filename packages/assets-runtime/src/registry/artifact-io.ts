@@ -2,6 +2,8 @@ import { decompressZstd } from '@forgeax/engine-codec';
 import { validateArtifactPath } from '@forgeax/engine-pack';
 import type { ArtifactDescriptor, AssetArtifactError } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
+import { bytesOf, type PackageFetcher, readPackage } from '../internal/package-read.js';
+import { traceAssetLoadPhase } from './load-trace';
 
 export interface ArtifactReadRequest {
   readonly packageUrl: string;
@@ -10,7 +12,7 @@ export interface ArtifactReadRequest {
   readonly descriptor: ArtifactDescriptor;
 }
 
-export type ArtifactFetcher = (url: string) => Promise<Response>;
+export type ArtifactFetcher = PackageFetcher;
 
 function failure(
   code: AssetArtifactError['code'],
@@ -156,7 +158,7 @@ async function verifyBytes(
 
 export async function readArtifact(
   request: ArtifactReadRequest,
-  fetcher: ArtifactFetcher = (url) => globalThis.fetch(url),
+  fetcher: ArtifactFetcher = (url, init) => globalThis.fetch(url, init),
 ): Promise<Result<Uint8Array, AssetArtifactError>> {
   if (request.descriptor.mediaType.trim().length === 0) {
     return err(
@@ -190,49 +192,47 @@ export async function readArtifact(
   }
 
   const url = artifactUrl(request.packageUrl, path.value);
-  let response: Response;
-  try {
-    response = await fetcher(url);
-  } catch (cause) {
+  traceAssetLoadPhase('artifact.fetch.start', {
+    guid: request.guid,
+    packageUrl: request.packageUrl,
+    artifactKey: request.artifactKey,
+    detail: { url },
+  });
+  const read = await readPackage(fetcher, url, bytesOf);
+  if (!read.ok) {
     return err(
       failure(
         'asset-artifact-missing',
         request,
         `readable artifact at ${path.value}`,
-        'publish the artifact at the declared package-relative path and retry the load',
-        cause instanceof Error ? cause.message : 'artifact fetch failed',
+        `publish the artifact at the declared package-relative path and retry the load (${read.error.attempts} request(s))`,
+        read.error.observed,
       ),
     );
   }
-  if (!response.ok) {
-    return err(
-      failure(
-        'asset-artifact-missing',
-        request,
-        `HTTP 200 for artifact at ${path.value}`,
-        'publish the missing artifact and retry the load',
-        `HTTP ${response.status}`,
-      ),
-    );
-  }
-
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await response.arrayBuffer());
-  } catch (cause) {
-    return err(
-      failure(
-        'asset-artifact-missing',
-        request,
-        `readable artifact at ${path.value}`,
-        'repair the published artifact and retry the load',
-        cause instanceof Error ? cause.message : 'artifact body unreadable',
-      ),
-    );
-  }
+  const bytes = read.value;
+  traceAssetLoadPhase('artifact.body.complete', {
+    guid: request.guid,
+    packageUrl: request.packageUrl,
+    artifactKey: request.artifactKey,
+    detail: { byteLength: bytes.byteLength },
+  });
   const decoded = await decodeOuter(bytes, request);
   if (!decoded.ok) return decoded;
-  return verifyBytes(decoded.value, request);
+  traceAssetLoadPhase('artifact.decode.complete', {
+    guid: request.guid,
+    packageUrl: request.packageUrl,
+    artifactKey: request.artifactKey,
+    detail: { byteLength: decoded.value.byteLength },
+  });
+  const verified = await verifyBytes(decoded.value, request);
+  traceAssetLoadPhase('artifact.verify.complete', {
+    guid: request.guid,
+    packageUrl: request.packageUrl,
+    artifactKey: request.artifactKey,
+    detail: { ok: verified.ok },
+  });
+  return verified;
 }
 
 export class ArtifactReadCache {
@@ -247,7 +247,8 @@ export class ArtifactReadCache {
     const pending = reader();
     this.cache.set(key, pending);
     void pending.then((result) => {
-      if (!result.ok) this.cache.delete(key);
+      // An invalidated old read must not erase a newer read of the same key.
+      if (!result.ok && this.cache.get(key) === pending) this.cache.delete(key);
     });
     return pending;
   }
@@ -255,5 +256,9 @@ export class ArtifactReadCache {
   clear(key?: string): void {
     if (key === undefined) this.cache.clear();
     else this.cache.delete(key);
+  }
+
+  clearPrefix(prefix: string): void {
+    for (const key of this.cache.keys()) if (key.startsWith(prefix)) this.cache.delete(key);
   }
 }

@@ -14,6 +14,7 @@ import {
   type MipmapShaderModuleFactory,
   mipmapCacheSize,
   numMipLevels,
+  prepareMipmaps,
 } from '../mipmap-generator';
 
 let nextId = 0;
@@ -115,6 +116,21 @@ describe('generateMipmaps (async build path)', () => {
     expect(mipmapCacheSize(device)).toBe(0); // never built a pipeline
   });
 
+  it('mipmap disabled by an explicit single level never builds or records a pass', async () => {
+    const renderPasses: unknown[] = [];
+    const device = makeBlitDevice(renderPasses);
+    const res = await generateMipmaps(
+      device,
+      { tag: 'tex' },
+      { format: 'rgba8unorm', width: 256, height: 256, levels: 1 },
+      stubShaderFactory,
+    );
+
+    expect(res.ok).toBe(true);
+    expect(mipmapCacheSize(device)).toBe(0);
+    expect(renderPasses).toHaveLength(0);
+  });
+
   it('builds + blits the full mip chain for a 4x4 texture', async () => {
     const device = makeBlitDevice();
     const res = await generateMipmaps(
@@ -160,6 +176,42 @@ describe('generateMipmaps (async build path)', () => {
 });
 
 describe('blitMipmapsSync (prewarmed path)', () => {
+  it('prepares mip work without finishing or submitting', async () => {
+    let finishCount = 0;
+    let submitCount = 0;
+    const device = makeBlitDevice();
+    const originalEncoder = device.createCommandEncoder;
+    device.createCommandEncoder = () => {
+      const result = originalEncoder();
+      if (!result.ok) return result;
+      const encoder = result.value as { finish: () => unknown };
+      const finish = encoder.finish;
+      encoder.finish = () => {
+        finishCount += 1;
+        return finish();
+      };
+      return result;
+    };
+    device.queue.submit = () => {
+      submitCount += 1;
+      return rhiOk(undefined);
+    };
+    await getOrCreateMipmapPipeline(device, 'rgba8unorm', stubShaderFactory);
+    const prepared = prepareMipmaps(
+      device,
+      { tag: 'tex' },
+      { format: 'rgba8unorm', width: 4, height: 4 },
+    );
+    expect(prepared.ok).toBe(true);
+    expect(finishCount).toBe(0);
+    expect(submitCount).toBe(0);
+    if (!prepared.ok) return;
+    const finished = prepared.value.finish();
+    expect(finished.ok).toBe(true);
+    expect(finishCount).toBe(1);
+    expect(submitCount).toBe(0);
+  });
+
   it('returns ok immediately when levels <= 1', () => {
     const res = blitMipmapsSync(
       makeBlitDevice(),

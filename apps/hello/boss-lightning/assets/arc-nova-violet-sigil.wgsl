@@ -1,4 +1,4 @@
-#define_import_path boss_lightning_vfx::arc_nova_violet_sigil
+#define_import_path hello_boss_lightning::arc_nova_violet_sigil
 
 @group(0) @binding(0) var scene_depth: texture_depth_2d;
 

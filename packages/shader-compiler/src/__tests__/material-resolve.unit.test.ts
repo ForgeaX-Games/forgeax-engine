@@ -21,7 +21,7 @@ const root: MaterialAsset = {
 };
 
 describe('MaterialAsset inheritance resolution', () => {
-  it('walks root-first and creates one effective view without compiling parents', () => {
+  it('walks root-first and inherits the root pass contract without compiling parents', () => {
     let compileCount = 0;
     const result = resolveMaterialAsset(
       'leaf',
@@ -30,7 +30,6 @@ describe('MaterialAsset inheritance resolution', () => {
         mid: {
           kind: 'material',
           parent: guid('root'),
-          passes: [pass('Forward', 'game::mid'), pass('Depth', 'game::depth')],
           values: { baseColor: [0.5, 0.5, 0.5, 1], optionalTexture: null },
         },
         leaf: {
@@ -49,23 +48,18 @@ describe('MaterialAsset inheritance resolution', () => {
     if (result.ok) {
       expect(result.value.chain).toEqual(['root', 'mid', 'leaf']);
       expect(result.value.asset.values).toEqual({ baseColor: [0.5, 0.5, 0.5, 1], roughness: 0.25 });
-      expect(result.value.asset.passes?.map(({ name }) => name)).toEqual([
-        'Forward',
-        'Shadow',
-        'Depth',
-      ]);
-      expect(result.value.asset.passes?.[0]?.program.module).toBe('game::mid');
+      expect(result.value.asset.passes?.map(({ name }) => name)).toEqual(['Forward', 'Shadow']);
+      expect(result.value.asset.passes?.[0]?.program.module).toBe('game::root');
     }
   });
 
-  it('treats null as an optional clear and keeps pass replacement atomic', () => {
+  it('treats null as an optional clear and keeps the inherited pass contract atomic', () => {
     const result = resolveMaterialAsset('leaf', {
       root,
       leaf: {
         kind: 'material',
         parent: guid('root'),
         values: { optionalTexture: null },
-        passes: [pass('Forward', 'game::leaf')],
       },
     });
 
@@ -73,7 +67,7 @@ describe('MaterialAsset inheritance resolution', () => {
     if (result.ok) {
       expect(result.value.asset.values).toEqual({ baseColor: [1, 1, 1, 1], roughness: 0.5 });
       expect(result.value.asset.passes).toEqual([
-        pass('Forward', 'game::leaf'),
+        pass('Forward', 'game::root'),
         pass('Shadow', 'game::shadow'),
       ]);
     }

@@ -16,6 +16,7 @@ adding a new package surface.
 
 | 任务 | skill |
 |:--|:--|
+| 复杂或原因不明的渲染问题：黑屏/缺物体、光照/阴影、闪烁、后处理、浏览器/后端分歧 | **先读 `forgeax-engine-rhi-debug`**：真实失败帧 → work/binding/resource/像素证据 → owning subsystem；再按证据加载领域 skill |
 | 引导 app / 跑游戏循环 / 读输入快照 | `forgeax-engine-app` |
 | 定义组件 / 写查询与系统 / 关系 / 反射 | `forgeax-engine-ecs` |
 | `NetSession` / replication / protocol-v2 / reconnect / resync / ACK / `SessionId` vs `PeerId` | `@forgeax/engine-net`（见 `packages/net/README.md`） |
@@ -24,7 +25,7 @@ adding a new package surface.
 | 场景身份 / hierarchy / Transform propagation / `scenePlugin` | `@forgeax/engine-scene`（见 `packages/scene/README.md`） |
 | Skin / joint binding / skeletal errors | `@forgeax/engine-skinning`（见 `packages/skinning/README.md`） |
 | Animation graph / player / clip lookup / playback | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |
-| Render vocabulary / frame stages / Renderer construction | `@forgeax/engine-render` + `forgeax-engine-app`（见 `packages/render/README.md`） |
+| Render vocabulary / frame stages / Renderer construction | `@forgeax/engine/render` + `forgeax-engine-app`（物理 owner 为 `packages/render/`，见 `packages/render/README.md`） |
 | 让东西可见：MeshFilter + MeshRenderer + Material + 灯光（含 `forgeax::sprite-lit` per-light forward） | `forgeax-engine-material` |
 | 写自定义 WGSL + cooked MaterialAsset module | `forgeax-engine-shader` |
 | 加 pass / 后处理 / tonemap / bloom / fxaa / skybox | `forgeax-engine-render-pipeline` |
@@ -40,7 +41,8 @@ adding a new package surface.
 | 纯逻辑图形附属：字形布局/烘焙 `layoutGlyphText`/`bakeGlyphMesh` / 图块位编解码 `encodeTileBits`/`decodeTileBits` / 视频 `VideoPlayer`/`VideoElementProvider`/`videoLoader`/`probeVideoHighPerfUpload` | `@forgeax/engine-graphics-extras`（无独立 skill,见 `packages/graphics-extras/README.md`；系统入口 `tilemapChunkExtractSystem`/`glyphTextLayoutSystem` 仍在 runtime） |
 | 状态机 / defineState / setNextState / 状态 scoped 实体 / OnEnter/OnExit | `forgeax-engine-state` |
 | 底层后端（贡献者）：opaque handle / capability / 双实现 | `forgeax-engine-rhi` |
-| 渲染 / 测试 / CI 出错 — 症状→根因→修法 | `forgeax-engine-debug` |
+| 明确错误 / 测试 / CI 出错 — 症状索引与 owner 路由 | `forgeax-engine-debug`；复杂渲染问题优先上面的 RHI Debug 路径 |
+| Slow/flaky CI, changed-source focused reruns, or missing CI artifacts | `forgeax-engine-debug` → `scripts/ci/README.md` |
 | RHI 录帧 / replay / 离线 per-draw inspect (capture→inspect→dispose) — 查 bindings+drawCall+RT PNG 定位渲染症状 | `forgeax-engine-rhi-debug` |
 
 聚合非 1:1 对包：`input` 折进 `app`,`pack` 折进 `assets`,`geometry` 折进 `material`。包名册全表：`AGENTS.md §Packages`。
@@ -51,4 +53,6 @@ API 签名 / error 码 / capability 全表 SSOT 在 `packages/<pkg>/src/` 与 `p
 
 任何对 AI 用户面的影响（公共 API 重命名、入口参数变化、`*ErrorCode` 增删、pack schema 变化、内置组件/系统默认行为变化、新增 `@forgeax/engine-*` 包、反复踩中的坑）必须在 finalize 前同步对应 skill。plan 阶段加 milestone `M-N: 同步 forgeax-engine-<cluster> skill`,与代码同 PR。direct-edit 也算。
 
-基线：commit [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03, #297) 一次性产出 11 skill;累积偏离显著时再统一 bump。
+能力目录三件套同改：新增或改变一项引擎能力时，同一 PR 同步 `skills/forgeax-engine-sdk/references/feature-catalog.md` 的能力行、`apps/feature-lab` 的对应 feature（`catalog` 字段逐字等于行名；确实无法在 Lab 承载的行改为登记进 `apps/feature-lab/__tests__/catalog-coverage.test.ts` 的 `GATE_PROVED_ROWS`，并在手册写明其 CI/发布 gate）与 Harness 手册 `.forgeax-harness/docs/feature-manual/<area>/<slug>.md`。`form`（Built-in / Opt-in / ...）只写在目录行里，Lab 由目录派生，feature 不再重复。修掉一个已知问题时，同 PR 删除 feature 的 `knownIssue`、目录的 "Known issue at baseline" 说明与 `known-issues.md` 对应行。`catalog-coverage.test.ts` 双向把关（目录行缺 feature、feature 指向不存在的行、`GATE_PROVED_ROWS` 过期都会失败）。目录头部的 generation baseline commit 由 `sdk:build` 校验祖先关系，不需要每个 PR 刷新。
+
+基线：commit [`5c8c90f1`](https://github.com/ForgeaX-Games/forgeax-engine/commit/5c8c90f1) (2026-06-03, #297) 一次性产出 11 skill;累积偏离显著时再统一 bump。

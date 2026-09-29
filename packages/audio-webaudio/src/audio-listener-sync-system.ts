@@ -3,7 +3,7 @@
 // Syncs the first AudioListener entity's resolved world transform to the Web
 // Audio listener (position + forward/up orientation).
 //
-// feat-20260601 D-6: the sync consumes the single `Transform.world` mat4 (16
+// feat-20260601 D-6: the sync consumes the single `GlobalTransform.world` mat4 (16
 // column-major floats, written by propagateTransforms) instead of a decomposed
 // GlobalTransform TRS. forward / up / position are extracted via the
 // `@forgeax/engine-math` mat4 helpers (getForward = -col2 normalized; getUp =
@@ -19,7 +19,7 @@
 // Architecture note: the audio-webaudio package has no dependency on
 // engine-runtime (where Transform lives). The sync function is a pure helper
 // exported for host assembly. The host (engine-runtime or app layer) queries
-// the first AudioListener entity, reads its `Transform.world` mat4 (a 16-float
+// the first AudioListener entity, reads its `GlobalTransform.world` mat4 (a 16-float
 // Float32Array), obtains the AudioContext listener from the AudioBackend, and
 // calls `syncListenerFromWorldMatrix(listener, worldMatrix)`.
 //
@@ -33,7 +33,7 @@ import { mat4, vec3 } from '@forgeax/engine-math';
 
 /**
  * Resolved world transform shape (feat-20260601 D-6): a single column-major
- * mat4 carried as 16 contiguous floats -- the `Transform.world` column array
+ * mat4 carried as 16 contiguous floats -- the `GlobalTransform.world` column array
  * view written by propagateTransforms.
  */
 export interface WorldMatrixData {
@@ -45,7 +45,7 @@ export interface WorldMatrixData {
  * listener's AudioParams.
  *
  * Exported for unit testing (listener-sync.test.ts) and for host assembly (the
- * host reads `Transform.world` + AudioListener from the World and calls this
+ * host reads `GlobalTransform.world` + AudioListener from the World and calls this
  * each frame).
  *
  * - position = `mat4.getTranslation(world)` (col3, copied directly, not normalized)
@@ -84,14 +84,14 @@ export function syncListenerFromWorldMatrix(
  * The host is responsible for:
  * 1. Querying the World for entities with AudioListener
  * 2. Taking the first AudioListener entity (E-3)
- * 3. Reading its `Transform.world` mat4 (16-float Float32Array)
+ * 3. Reading its `GlobalTransform.world` mat4 (16-float Float32Array)
  * 4. Calling this function with the AudioContext's listener
  *
  * This function is a convenience wrapper that calls
  * `syncListenerFromWorldMatrix(ctx.listener, worldMatrix)`.
  *
  * @param ctx The Web Audio AudioContext (whose .listener receives position/orientation)
- * @param worldMatrix The `Transform.world` mat4 from the AudioListener entity
+ * @param worldMatrix The `GlobalTransform.world` mat4 from the AudioListener entity
  */
 export function audioListenerSyncSystem(ctx: AudioContext, worldMatrix: Float32Array): void {
   syncListenerFromWorldMatrix(ctx.listener, worldMatrix);

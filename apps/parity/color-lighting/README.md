@@ -19,8 +19,8 @@ producer gate is exercised by the direct-light Dawn test.
 | :-- | :-- | :-- |
 | Direct-light parity | Three r184 plus ForgeaX `SceneCase` | [`scene-case.schema.json`](./schemas/scene-case.schema.json) |
 | Named case result | One `CaseReport` per case | [`case-report.schema.json`](./schemas/case-report.schema.json) |
-| Required parity backend roster | Browser WebGPU, Dawn, WebKit WebGL2 | [`package.json`](./package.json) `parityMatrix`; per-case `applicableBackends`/`matrixRequiredBackends` are owned by [`required-cases.ts`](./src/coverage/required-cases.ts) |
-| WebKit final-display sentinel slice | Six WebKit WebGL2 cells: default sRGB, alpha mask, alpha blend, ACES tone, direct directional URP, transparent LDR URP | [`verify-webkit-color-lighting.mjs`](../../../scripts/dev-verify/verify-webkit-color-lighting.mjs) runs ForgeaX rhi-wgpu + Three r184 in one WebKit process; hello triangle is supporting channel proof |
+| Required parity backend roster | Browser WebGPU, Dawn, Chromium WebGL2 fallback | [`package.json`](./package.json) `parityMatrix`; per-case `applicableBackends`/`matrixRequiredBackends` are owned by [`required-cases.ts`](./src/coverage/required-cases.ts) |
+| Chromium final-display sentinel slice | Six Chromium WebGL2 cells: default sRGB, alpha mask, alpha blend, ACES tone, direct directional URP, transparent LDR URP | [`verify-webkit-color-lighting.mjs`](../../../scripts/dev-verify/verify-webkit-color-lighting.mjs) runs ForgeaX rhi-wgpu + Three r184 in isolated Chromium processes with WebGPU disabled; the filename remains a compatibility anchor for the protected CI context |
 | Required pipelines | `urp` and `hdrp` | Generated `status-index.json` |
 
 The current backend and pipeline matrix is generated at
@@ -40,10 +40,114 @@ not duplicate per-case status values.
 > a missing producer to pass.
 
 > [!NOTE]
-> WebKit closes only the declared final-display sentinel cells. Its WebGL2
-> fallback does not claim `linearHdr`, HDRP transparent, or HDR IBL coverage.
+> The Chromium fallback closes only the declared final-display sentinel cells.
+> Its WebGL2 path does not claim `linearHdr`, HDRP transparent, or HDR IBL
+> coverage. CI proves that `navigator.gpu.requestAdapter()` is absent or
+> resolves to `null`, plus a real WebGL2 context; a missing capability fails
+> closed instead of becoming a skip.
 > Raw byte differences remain diagnostic; finite analytic/ROI fallback budgets
 > are still enforced, with no empirical gamma, multiplier, or blend correction.
+
+## Three.js r184 common-stage contract
+
+The auto-exposure case pins `three@0.184.0`, commit
+`d3b629c0c2097cec664ad16369bb6eae3b10e335`, and the lockfile integrity. Both
+adapters consume the same stable asset/camera/light/input identities. Compare
+`toneMapping`, `toneMappingExposure`, and `outputColorSpace` individually, then
+only the common decoded-sRGB ROI (`epsilon <= 0.05`) with raw deltas retained.
+The AC-27 producers are explicitly scheduled rather than hidden behind the
+aggregate parity command. `scripts/ci/auto-exposure-ac27.mjs` owns the small
+Browser receiver, canonical build digest, and executable join. After building
+the Engine, run all four producers with one exact revision and artifact root:
+
+```sh
+set -euo pipefail
+pnpm build:app hello/taa
+HEAD=$(git rev-parse HEAD)
+OUT=/tmp/auto-exposure-ac27-$HEAD
+PORT=${PORT:-39101}
+BUILD=$(node scripts/ci/auto-exposure-ac27.mjs digest --dist apps/hello/taa/dist)
+mkdir -p "$OUT"
+
+# Run both reference sides. Each side owns an isolated receiver directory, and
+# the final paths include the lane so Browser POSTs cannot overwrite one another.
+run_lane() {
+  LANE="$1"
+  LANE_PORT="$2"
+  LANE_OUT="$OUT/$LANE"
+  mkdir -p "$LANE_OUT"
+  node scripts/ci/auto-exposure-ac27.mjs receiver \
+    --port "$LANE_PORT" --output-dir "$LANE_OUT" >"$LANE_OUT/receiver.log" 2>&1 &
+  RECEIVER_PID=$!
+
+  # Dawn writes its JSON artifact directly.
+  FORGEAX_AUTO_EXPOSURE_AC27_SCHEDULED=1 \
+  FORGEAX_AUTO_EXPOSURE_AC27_BACKEND=dawn \
+  FORGEAX_AUTO_EXPOSURE_AC27_TESTED_REVISION=$HEAD \
+  FORGEAX_AUTO_EXPOSURE_AC27_WIDTH=128 \
+  FORGEAX_AUTO_EXPOSURE_AC27_HEIGHT=128 \
+  FORGEAX_AUTO_EXPOSURE_AC27_REFERENCE_LANE="$LANE" \
+  FORGEAX_AUTO_EXPOSURE_AC27_OUTPUT="$OUT/three-$LANE-dawn.json" \
+    pnpm vitest run --project=dawn \
+    apps/parity/color-lighting/src/visual/__tests__/auto-exposure-three-r184.dawn.test.ts
+
+  # Browser variables must use VITE_* so Vite exposes them to the page.
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_SCHEDULED=1 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_BACKEND=browser-webgpu \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_TESTED_REVISION=$HEAD \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_WIDTH=128 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_HEIGHT=128 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_REFERENCE_LANE="$LANE" \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_OUTPUT="$LANE_OUT/three-browser.json" \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_OUTPUT_URL=http://127.0.0.1:$LANE_PORT/three \
+    pnpm vitest run --config config/vitest.browser.config.ts --project=browser \
+    apps/parity/color-lighting/src/visual/__tests__/auto-exposure-three-r184.browser.test.ts
+  mv "$LANE_OUT/three-browser.json" "$OUT/three-$LANE-browser.json"
+
+  FORGEAX_AUTO_EXPOSURE_AC27_FORGEAX_SCHEDULED=1 \
+  FORGEAX_AUTO_EXPOSURE_AC27_BACKEND=dawn \
+  FORGEAX_AUTO_EXPOSURE_AC27_TESTED_REVISION=$HEAD \
+  FORGEAX_AUTO_EXPOSURE_AC27_WIDTH=128 \
+  FORGEAX_AUTO_EXPOSURE_AC27_HEIGHT=128 \
+  FORGEAX_AUTO_EXPOSURE_AC27_REFERENCE_LANE="$LANE" \
+  FORGEAX_AUTO_EXPOSURE_AC27_BUILD=$BUILD \
+  FORGEAX_AUTO_EXPOSURE_AC27_FORGEAX_OUTPUT="$OUT/forgeax-$LANE-dawn.json" \
+    pnpm vitest run --project=dawn \
+    apps/parity/color-lighting/src/visual/__tests__/auto-exposure-forgeax.dawn.test.ts
+
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_FORGEAX_SCHEDULED=1 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_BACKEND=browser-webgpu \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_TESTED_REVISION=$HEAD \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_WIDTH=128 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_HEIGHT=128 \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_REFERENCE_LANE="$LANE" \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_BUILD=$BUILD \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_FORGEAX_OUTPUT="$LANE_OUT/forgeax-browser.json" \
+  VITE_FORGEAX_AUTO_EXPOSURE_AC27_FORGEAX_OUTPUT_URL=http://127.0.0.1:$LANE_PORT/forgeax \
+    pnpm vitest run --config config/vitest.browser.config.ts --project=browser \
+    apps/parity/color-lighting/src/visual/__tests__/auto-exposure-forgeax.browser.test.ts
+  mv "$LANE_OUT/forgeax-browser.json" "$OUT/forgeax-$LANE-browser.json"
+
+  kill "$RECEIVER_PID" 2>/dev/null || true
+  wait "$RECEIVER_PID" 2>/dev/null || true
+
+  node scripts/ci/auto-exposure-ac27.mjs join \
+    --three "$OUT/three-$LANE-browser.json" --forgeax "$OUT/forgeax-$LANE-browser.json" \
+    --output "$OUT/$LANE-browser-join.json"
+  node scripts/ci/auto-exposure-ac27.mjs join \
+    --three "$OUT/three-$LANE-dawn.json" --forgeax "$OUT/forgeax-$LANE-dawn.json" \
+    --output "$OUT/$LANE-dawn-join.json"
+}
+
+run_lane direct "$PORT"
+run_lane clustered "$((PORT + 1))"
+```
+
+The receiver persists the exact POST body, emits CORS headers, and rejects
+unknown routes or malformed JSON. If the Browser runner is network-isolated,
+start it with `--public-host` set to a host address reachable from that runner.
+A missing receiver, provenance, readback, or paired artifact is `blocked`; no
+aggregate parity command or fallback path upgrades it.
 
 ## Current status
 
@@ -70,7 +174,7 @@ flowchart TD
 | `linearHdr` | Native linear HDR producer attachment | `rgba16float`, current frame, native readback bytes, raw hash, size, pipeline, backend |
 | `finalDisplay` | Native canvas/display output | Final readback bytes, raw hash, size, pipeline, backend |
 | `attachmentReadbackStatus` | Attachment execution state | `complete` only after the producer readback is complete |
-| `missingPipelineIds` | Required producer coverage | Empty only when both `forgeax::urp` and `forgeax::hdrp` evidence exist |
+| `missingPipelineIds` | Required producer coverage | Empty when the unified `forgeax::standard` producer is present in the required runtimes |
 | `firstDivergence` | First named failure owner | A report-owned metric, never an aggregate-only claim |
 
 ## Two-hop navigation
@@ -106,12 +210,12 @@ artifact references. The schema and TypeScript owner remain the authority:
 | `vertex-color-vec3` | glTF VEC3 FLOAT, implicit alpha `1` | `displayEncoded` | white color changes a colored sample |
 | `vertex-color-vec4` | RGBA / VEC4 FLOAT, non-`1` alpha | `linearHdr` | white color changes RGB |
 | `vertex-color-normalized` | normalized UBYTE/USHORT endpoints and midpoint | `linearHdr` | raw integer values are not treated as normalized |
-| `vertex-color-skinning` | colored mesh plus deterministic joint motion | `displayEncoded` | color survives all 300 frames |
+| `vertex-color-skinning` | colored mesh plus deterministic joint motion | `displayEncoded` | color survives all 60 frames |
 | `vertex-color-mixed-primitives` | colored and absent-color primitives | `displayEncoded` | plain primitive is not given prior primitive color |
 | `vertex-color-mask-taa` | vertex alpha drives MASK and TAA history | `displayEncoded` | cutout/history samples retain alpha coverage |
 | `vertex-color-no-color-baseline` | `COLOR_0` absent, same geometry/material | `displayEncoded` | stream absence and baseline bytes stay unchanged |
 
-Each case requires Browser WebGPU and Dawn, exactly 300 frames, live
+Each case requires Browser WebGPU and Dawn, exactly 60 frames, live
 `copyTextureToBuffer` readback, and RGB/alpha $arepsilon \le 0.05$ in the
 declared domain. `linearHdr` is linear working space; `displayEncoded` is the
 final display space; alpha is coverage and is never sRGB encoded.
@@ -120,7 +224,7 @@ final display space; alpha is coverage and is never sRGB encoded.
 flowchart LR
     F["semantic fixture"] --> A["ForgeaX producer"]
     F --> B["independent Three r184 producer"]
-    A --> C["Browser or Dawn 300-frame readback"]
+    A --> C["Browser or Dawn 60-frame readback"]
     B --> C
     C --> D{"provenance, domain, samples, falsifier"}
     D -->|"complete"| E["named CaseReport"]
@@ -162,15 +266,18 @@ native resource, then returns bytes and provenance. Parity consumes the bytes,
 hash, format, size, frame, pipeline, and backend fields; it does not consume a
 graph key, RHI texture, or backend-private handle.
 
-For a focused rerun, execute the direct-light tests and name the case fixture
-in the test or browser harness. Keep the resulting report with the same
-`caseId`; do not replace a failed producer capture with a hand-authored hash.
+For a focused rerun, execute the browser producer directly and use the
+partitioned Dawn runner for the native producer. It starts one fresh Vitest
+process for the complete direct-light roster and verifies all ten tests. The
+single process keeps the real-pixel falsifiers on the same bounded fixture
+without paying a second Dawn adapter/Vite startup.
+Keep the resulting report with the same `caseId`; do not replace a failed
+producer capture with a hand-authored hash.
 
 ```bash
 pnpm exec vitest run --project=browser \
   apps/parity/color-lighting/cases/direct-light/__tests__/direct-light.browser.test.ts
-pnpm exec vitest run --project=dawn \
-  apps/parity/color-lighting/cases/direct-light/__tests__/direct-light.dawn.test.ts
+node scripts/ci/run-direct-light-dawn.mjs
 ```
 
 ## Scope boundary

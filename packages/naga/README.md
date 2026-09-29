@@ -24,3 +24,8 @@
 - 决策 plan-strategy §D-P3（`ensureReady` SSOT）/ §D-P4（薄壳 surface byte-for-byte 等价历史上 wasm-pack 形态的 naga shim，已在 feat-20260511-naga-rhi-wgpu-merge M5 整体归档删除——保留 surface 形态延续不变）。
 - 上游物理底层 `@forgeax/engine-wgpu-wasm`（合并 wgpu 29 RHI + naga 29 三段函数 raw bindings 的单 wasm 出包）。
 - 下游消费 `@forgeax/engine-shader-compiler`（仅消费者）；`@forgeax/engine-shader` runtime 物理隔离（AC-06 闸门守护）。
+
+
+`validateRenderEntries(module, vertex, fragment, colorFormats?)` optionally
+validates the selected fragment color interface against ordered attachment
+formats through Naga IR. This is build-time validation; it allocates no GPU resources.

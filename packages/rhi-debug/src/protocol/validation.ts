@@ -93,6 +93,7 @@ function isResourceKind(value: string): value is ResourceKind {
   return [
     'buffer',
     'texture',
+    'query-set',
     'texture-view',
     'sampler',
     'shader-module',
@@ -112,8 +113,10 @@ function eventResources(event: RhiCallEvent): EventResources {
   switch (event.kind) {
     case 'createBuffer':
     case 'createTexture':
+    case 'createQuerySet':
     case 'createSampler':
     case 'createBindGroupLayout':
+    case 'getBindGroupLayout':
     case 'createBindGroup':
     case 'createPipelineLayout':
     case 'createRenderPipeline':
@@ -123,6 +126,7 @@ function eventResources(event: RhiCallEvent): EventResources {
         created: [event.handleId],
         reads: handleRefs(event, [
           'layoutHandleId',
+          'pipelineHandleId',
           'vertexShaderModuleHandleId',
           'fragmentShaderModuleHandleId',
           'computeShaderModuleHandleId',
@@ -135,6 +139,7 @@ function eventResources(event: RhiCallEvent): EventResources {
       return { created: [event.cmdHandleId], reads: [], destroyed: [] };
     case 'destroyBuffer':
     case 'destroyTexture':
+    case 'destroyQuerySet':
       return { created: [], reads: [event.handleId], destroyed: [event.handleId] };
     case 'writeBuffer':
     case 'writeTexture':
@@ -156,6 +161,38 @@ function eventResources(event: RhiCallEvent): EventResources {
         ]),
         destroyed: [],
       };
+    case 'resolveQuerySet':
+      return {
+        created: [],
+        reads: handleRefs(event, ['cmdHandleId', 'querySetHandleId', 'destinationHandleId']),
+        destroyed: [],
+      };
+    case 'beginRenderPass':
+      return {
+        created: [event.passHandleId],
+        reads: handleRefs(event, [
+          'cmdHandleId',
+          'occlusionQuerySetHandleId',
+          'timestampQuerySetHandleId',
+          'colorAttachmentViewHandleIds',
+          'colorAttachmentResolveTargetHandleIds',
+          'depthStencilViewHandleId',
+        ]),
+        destroyed: [],
+      };
+    case 'beginComputePass':
+      return {
+        created: [event.passHandleId],
+        reads: handleRefs(event, ['cmdHandleId', 'timestampQuerySetHandleId']),
+        destroyed: [],
+      };
+    case 'endRenderPass':
+    case 'endComputePass':
+      return { created: [], reads: [event.passHandleId], destroyed: [event.passHandleId] };
+    case 'resetRenderState':
+    case 'beginOcclusionQuery':
+    case 'endOcclusionQuery':
+      return { created: [], reads: handleRefs(event, ['passHandleId']), destroyed: [] };
     default:
       return { created: [], reads: [], destroyed: [] };
   }

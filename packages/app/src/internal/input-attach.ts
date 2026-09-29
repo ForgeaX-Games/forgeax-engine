@@ -1,7 +1,8 @@
 import {
   attachBrowserInputBackend,
   type BrowserInputBackendOptions,
-  type InputBackend,
+  type CompositeInputBackend,
+  makeCompositeBackend,
   type PointerLockProvider,
   type VirtualJoystickConfig,
 } from '@forgeax/engine-input';
@@ -14,7 +15,8 @@ import { APP_ERROR_HINTS, APP_EXPECTED, AppError } from '../errors';
  * frame-loop / app-stop / device-lost paths share (R-4).
  */
 export interface InputAttachHandle {
-  readonly backend: InputBackend;
+  /** Browser backend decorated with the owner-scoped synthetic input lease. */
+  readonly backend: CompositeInputBackend;
   cleanup(): void;
   /**
    * M2: install the error dispatch callback for onLockError events.
@@ -84,7 +86,10 @@ export function attachInputAuto(
     },
   };
   const detach = attachBrowserInputBackend(canvas, backendOpts);
-  const backend = detach.backend;
+  // Keep one input boundary for both physical and programmatic controls. The
+  // composite owns only injected state; the browser backend remains the
+  // physical listener owner and is still detached by this handle.
+  const backend = makeCompositeBackend(detach.backend);
 
   let cleanedUp = false;
 
@@ -98,6 +103,7 @@ export function attachInputAuto(
         return;
       }
       cleanedUp = true;
+      backend.revokeInjectedLease();
       detach();
     },
   };

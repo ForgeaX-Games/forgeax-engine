@@ -10,6 +10,8 @@ const vitePluginSource = readFileSync(
 );
 
 describe('shader pragma owner', () => {
+  // Keep the runtime and source-ownership contracts separate so the perf guard
+  // reports the expensive compiler assertion without hiding the smaller checks.
   it('normalizes entry pragmas at the compiler boundary', async () => {
     const result = await compileShader(
       '#pragma variant_axis STORAGE_BUFFER_AVAILABLE\n@compute @workgroup_size(1) fn main() {}',
@@ -18,7 +20,13 @@ describe('shader pragma owner', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.wgsl).not.toContain('#pragma');
+  });
+
+  it('keeps the pragma normalizer owned by the compiler', () => {
     expect(compilerSource.match(/const PRAGMA_RE =/g)).toHaveLength(1);
+  });
+
+  it('keeps downstream shader producers free of duplicate pragma stripping', () => {
     expect(materialCookSource).not.toMatch(/const PRAGMA_RE =/);
     expect(materialCookSource).not.toMatch(/\.replace\(PRAGMA_RE/);
     expect(vitePluginSource).not.toMatch(/const PRAGMA_RE =/);

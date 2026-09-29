@@ -5,6 +5,7 @@ import type {
   CommandBuffer,
   ComputePipeline,
   PipelineLayout,
+  QuerySet,
   RenderPipeline,
   RhiCommandEncoder,
   RhiComputePassEncoder,
@@ -24,6 +25,7 @@ export type ReplayResource = {
 } & (
   | { readonly kind: 'buffer'; readonly value: Buffer }
   | { readonly kind: 'texture'; readonly value: Texture }
+  | { readonly kind: 'query-set'; readonly value: QuerySet }
   | { readonly kind: 'texture-view'; readonly value: TextureView }
   | { readonly kind: 'sampler'; readonly value: Sampler }
   | { readonly kind: 'shader-module'; readonly value: ShaderModule }
@@ -130,6 +132,10 @@ export class ResourceTable {
           firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
       } else if (entry.resource.kind === 'texture') {
         const result = this.device.destroyTexture(entry.resource.value);
+        if (!result.ok && firstFailure === undefined)
+          firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
+      } else if (entry.resource.kind === 'query-set') {
+        const result = this.device.destroyQuerySet(entry.resource.value);
         if (!result.ok && firstFailure === undefined)
           firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
       }

@@ -88,6 +88,8 @@ describe('LoaderRegistry', () => {
       'animation-graph',
       'audio',
       'particle-effect',
+      'ies-profile',
+      'plugin',
     ];
     const registry = createDefaultLoaderRegistry();
     expect(

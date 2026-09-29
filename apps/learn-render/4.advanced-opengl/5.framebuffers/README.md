@@ -42,7 +42,7 @@ The scene uses two unlit textured cubes and a floor quad (the canonical LO 4.5 l
 ## Run
 
 ```bash
-# Dev server (port 5181)
+# Dev server (port 5202)
 pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers" dev
 
 # Build
@@ -117,7 +117,7 @@ The Standard topology is fixed; only the fullscreen mode payload changes. The re
 ## Smoke
 
 ```bash
-# Dawn-node pixel-readback smoke (300 frames, in-process passthrough -> inversion swap)
+# Dawn-node pixel-readback smoke (60 frames, in-process passthrough -> inversion swap)
 pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers" smoke
 
 # Falsify mode: invert the assertion -- GREEN smoke fails (exit != 0)
@@ -131,7 +131,7 @@ The smoke harness:
 - Asserts: for all pixels over the cube+floor region, `|B - (255 - A)| <= 0.05 * 255` (epsilon <= 0.05).
 - `FORGEAX_SMOKE_FALSIFY=1` flips the assertion: expects the inequality to be **violated** (exit != 0), confirming the smoke is testing a real difference.
 
-Total frames: 300 minimum (`SMOKE_MIN_FRAMES`). Zero RHI errors required (bus monitored at exit).
+Total frames: 60 minimum (`SMOKE_MIN_FRAMES`). Zero RHI errors required (bus monitored at exit).
 
 ## Same-process feature-plan recovery
 

@@ -22,9 +22,10 @@ await mkdir(resolve(dist, 'facades'), { recursive: true });
 await mkdir(resolve(dist, 'bin'), { recursive: true });
 await writeFile(resolve(dist, 'index.mjs'), "export * from '@forgeax/engine-runtime';\n");
 await writeFile(resolve(dist, 'index.d.ts'), "export * from '@forgeax/engine-runtime';\n");
-for (const { source, subpath } of publicEngineFacades(members)) {
+for (const { source, subpath, hasDefault } of publicEngineFacades(members)) {
   const target = resolve(dist, 'facades', subpath);
-  const facadeSource = `export * from '${source}';\n`;
+  const defaultExport = hasDefault ? `export { default } from '${source}';\n` : '';
+  const facadeSource = `${defaultExport}export * from '${source}';\n`;
   await mkdir(dirname(target), { recursive: true });
   await writeFile(`${target}.mjs`, facadeSource);
   await writeFile(`${target}.d.ts`, facadeSource);

@@ -5,7 +5,7 @@
 // feat-20260702-postprocess-camera-depth-read M4 w17: rewrite from 5-variant
 // regex-swap + re-installPipeline to single shader with structured reads
 // ({key, sampleType:'depth'}) + uniform params (PostProcessParams ECS
-// component). Mode switching goes from "re-install whole URP" to "write 16 B
+// component). Mode switching goes from "re-install whole URP" to "write 32 B
 // UBO" (D-8: params@2, always present for fullscreen-post-with-scene-depth).
 //
 // The overlay is wired through the engine M4' post-URP post-process hook:
@@ -19,14 +19,13 @@ import { PostProcessParams } from '@forgeax/engine-render';
 import overlayShader from './cascade-overlay.wgsl';
 
 const POSTPROCESS_ID = 'learn-render-5-3-3-csm::overlay';
-const PARAMS_BYTE_SIZE = 16;
+const PARAMS_BYTE_SIZE = 32;
 
 /**
- * PSSM split config baked into cascade-overlay.wgsl; asserted at install.
- * The engine PSSM range is [camera near, DirectionalLight.shadowDistance], so
- * CSM_NEAR must equal the demo camera near (CAMERA_NEAR=0.1) and CSM_FAR must
- * equal the light's shadowDistance (50) for the overlay bands to match the
- * engine's cascade selection.
+ * PSSM split config for the demo overlay. The engine PSSM range is [camera
+ * near, DirectionalLight.shadowDistance], so the active scene's shadow
+ * distance must be supplied to the overlay params rather than baked into its
+ * shader source.
  */
 const CSM_NEAR = 0.1;
 const CSM_FAR = 50;
@@ -59,15 +58,15 @@ export function csmOverlayModeForKey(key: string): CsmOverlayMode | null {
 /**
  * Recompute the PSSM cascade split distances demo-side with the SAME formula
  * the engine uses (render-system-extract.ts pssmSplit, not re-exported from
- * the runtime barrel -- research F6). These match the SPLIT_* constants baked
- * into cascade-overlay.wgsl.
+ * the runtime barrel -- research F6). The active shadow distance is carried in
+ * PostProcessParams so the overlay follows the selected MVD scene.
  *
  *   C_i = lambda * n * (f/n)^(i/m) + (1 - lambda) * (n + (i/m)(f - n)),  i=1..m
  */
-export function computeCsmSplits(): Float32Array {
+export function computeCsmSplits(shadowDistance = CSM_FAR): Float32Array {
   const m = CSM_CASCADE_COUNT;
   const n = CSM_NEAR;
-  const f = CSM_FAR;
+  const f = shadowDistance;
   const lambda = CSM_SPLIT_LAMBDA;
   const ratio = f / n;
   const out = new Float32Array(m);
@@ -81,16 +80,17 @@ export function computeCsmSplits(): Float32Array {
 }
 
 /**
- * Pack a CsmOverlayMode into 16 B of UBO data for the PostProcessParams struct
- * (tintMode: f32 @ offset 0, fakeDepth: f32 @ offset 4, _pad: vec2<f32> @ offset 8).
+ * Pack overlay mode and active PSSM splits into the PostProcessParams struct
+ * (tintMode/fakeDepth at 0/4, padding at 8, splits at 16).
  */
-function packModeBytes(mode: CsmOverlayMode): Uint8Array {
+function packModeBytes(mode: CsmOverlayMode, splits: Float32Array): Uint8Array {
   const buf = new ArrayBuffer(PARAMS_BYTE_SIZE);
   const f32 = new Float32Array(buf);
   f32[0] = TINT_MODE_BY_MODE[mode];
   f32[1] = 0; // fakeDepth: 0 = real depth from engine channel
   f32[2] = 0; // pad
   f32[3] = 0; // pad
+  f32.set(splits, 4);
   return new Uint8Array(buf);
 }
 
@@ -102,7 +102,7 @@ export const csmOverlayFeature = createFullscreenRenderFeature({
   identity: POSTPROCESS_ID,
   source: overlayShader.wgsl,
   reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
-  params: { byteSize: PARAMS_BYTE_SIZE, defaultValue: packModeBytes('all') },
+  params: { byteSize: PARAMS_BYTE_SIZE, defaultValue: packModeBytes('all', computeCsmSplits()) },
 });
 
 type WorldLike = {
@@ -112,22 +112,36 @@ type WorldLike = {
 
 let activeWorld: WorldLike | null = null;
 let activeParamsEntity: unknown = null;
+let activeSplits = computeCsmSplits();
+let activeMode: CsmOverlayMode = 'all';
 
 /**
  * Spawn the parameter entity for per-frame mode switching. The feature itself
  * is supplied at app construction, so there is no late registry mutation.
  */
-export function installCsmOverlay(world: WorldLike): Float32Array {
+export function installCsmOverlay(world: WorldLike, shadowDistance = CSM_FAR): Float32Array {
+  activeSplits = computeCsmSplits(shadowDistance);
+  activeMode = 'all';
   // Spawn PostProcessParams entity so the engine writes params UBO per-frame.
   // tintMode changes via world.set() in setCsmOverlayMode (D-8: UBO write
   // replaces re-installPipeline).
   activeParamsEntity = world.spawn({
     component: PostProcessParams,
-    data: { shader: POSTPROCESS_ID, data: packModeBytes('all') },
+    data: { shader: POSTPROCESS_ID, data: packModeBytes('all', activeSplits) },
   }).unwrap();
 
   activeWorld = world;
-  return computeCsmSplits();
+  return activeSplits;
+}
+
+/** Update the demo overlay's split facts when the active MVD scene changes. */
+export function setCsmOverlaySplits(shadowDistance: number): boolean {
+  if (activeWorld === null || activeParamsEntity === null) return false;
+  activeSplits = computeCsmSplits(shadowDistance);
+  activeWorld.set(activeParamsEntity, PostProcessParams, {
+    data: packModeBytes(activeMode, activeSplits),
+  });
+  return true;
 }
 
 /**
@@ -136,6 +150,9 @@ export function installCsmOverlay(world: WorldLike): Float32Array {
  */
 export function setCsmOverlayMode(mode: CsmOverlayMode): boolean {
   if (activeWorld === null || activeParamsEntity === null) return false;
-  activeWorld.set(activeParamsEntity, PostProcessParams, { data: packModeBytes(mode) });
+  activeMode = mode;
+  activeWorld.set(activeParamsEntity, PostProcessParams, {
+    data: packModeBytes(mode, activeSplits),
+  });
   return true;
 }

@@ -1,4 +1,4 @@
-import type { MeshAsset, PrimitiveTopology } from '@forgeax/engine-types';
+import { type MeshAsset, type PrimitiveTopology, withClipping } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import {
   PointsLinesBudgetExceededError,
@@ -11,7 +11,7 @@ import {
 import { Materials } from '../../materials';
 import { admitPointsLines, type PointsLinesAdmissionInput } from '../../points-lines/admission';
 
-const unlitMaterial = Materials.unlit([1, 0.5, 0.25, 1], { castShadow: false });
+const unlitMaterial = Materials.unlit([1, 0.5, 0.25, 1]);
 
 function mesh(topology: PrimitiveTopology, count = 4, indexed = false): MeshAsset {
   const vertices = new Float32Array(count * 3);
@@ -71,6 +71,14 @@ function expectRefusal(
 }
 
 describe('Points and Lines admission', () => {
+  it('refuses unsupported local clipping instead of silently dropping planes', () => {
+    const result = admitPointsLines(
+      pointsInput({ material: withClipping(unlitMaterial, { planes: [[1, 0, 0, 0]] }) }),
+    );
+    expectRefusal(result, 'points-lines-material-unsupported', {
+      reason: expect.stringContaining('camera ClippingPlanes'),
+    });
+  });
   it('accepts indexed and non-indexed point and line-list geometry', () => {
     const indexedPoints = admitPointsLines(pointsInput({ mesh: mesh('point-list', 3, true) }));
     const nonIndexedLines = admitPointsLines(linesInput());
@@ -106,7 +114,7 @@ describe('Points and Lines admission', () => {
   });
 
   it('rejects unsupported topologies, odd line tails, and mixed candidates atomically', () => {
-    const strip = admitPointsLines(linesInput({ mesh: mesh('line-strip', 4) }));
+    const strip = admitPointsLines(linesInput({ mesh: mesh('line-strip', 1) }));
     const triangles = admitPointsLines(pointsInput({ mesh: mesh('triangle-list', 3) }));
     const odd = admitPointsLines(linesInput({ mesh: mesh('line-list', 3) }));
     const baseMixedMesh = mesh('line-list', 2);
@@ -125,11 +133,7 @@ describe('Points and Lines admission', () => {
     };
     const mixed = admitPointsLines(linesInput({ mesh: mixedMesh }));
 
-    expectRefusal(strip, 'points-lines-style-unsupported', {
-      lane: 'admission',
-      field: 'topology',
-      member: 'line-strip',
-    });
+    expectRefusal(strip, 'points-lines-topology-mismatch', { actual: 'short strip' });
     expectRefusal(triangles, 'points-lines-topology-mismatch', {
       entity: 7,
       expected: 'point-list',

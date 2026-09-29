@@ -1,13 +1,18 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { createServer } from 'vite';
 import { describe, expect, it } from 'vitest';
+import { executionWorkerEntries } from '../build/execution-workers.js';
+import { runtimeProgramIdentity } from '../build/pack-program-imports.js';
 import {
   engineDoctorCommand,
   engineStatusCommand,
   engineUnlinkCommand,
   engineUseLocalCommand,
 } from '../engine-binding.js';
+import { createEngineWorkspaceResolverForProject } from '../host.js';
 
 async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
@@ -25,21 +30,24 @@ async function fixture(workspaceDependency = false): Promise<{
     mkdir(resolve(game, '.forgeax'), { recursive: true }),
     mkdir(resolve(engine, 'packages', 'engine', 'dist'), { recursive: true }),
     mkdir(resolve(engine, 'packages', 'engine-render', 'dist'), { recursive: true }),
+    mkdir(resolve(engine, 'packages', 'engine-render', 'dist', 'engine-inputs', 'point-ssao'), {
+      recursive: true,
+    }),
+    mkdir(resolve(engine, 'packages', 'engine-render', 'pkg'), { recursive: true }),
+    mkdir(resolve(engine, 'packages', 'engine-render', 'assets'), { recursive: true }),
+    mkdir(resolve(engine, 'packages', 'net-websocket', 'dist'), { recursive: true }),
     writeFile(resolve(engine, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n'),
     writeFile(resolve(game, 'main.ts'), 'export default {};\n'),
   ]);
   await writeJson(resolve(game, 'forge.json'), {
     id: 'binding-fixture',
     name: 'Binding Fixture',
-    schemaVersion: '1.0.0',
-    entry: 'main.ts',
-    plugins: [],
+    schemaVersion: '3.0.0',
+    roots: {},
   });
   await writeJson(resolve(game, 'package.json'), {
     name: 'binding-fixture',
-    ...(workspaceDependency
-      ? { dependencies: { '@forgeax/engine': 'workspace:*' } }
-      : { forgeax: { assets: { roots: [] } } }),
+    ...(workspaceDependency ? { dependencies: { '@forgeax/engine': 'workspace:*' } } : {}),
   });
   for (const [directory, name] of [
     ['engine', '@forgeax/engine'],
@@ -49,10 +57,51 @@ async function fixture(workspaceDependency = false): Promise<{
       name,
       version: '0.1.7',
       type: 'module',
-      exports: { '.': './dist/index.mjs' },
+      exports: { '.': './dist/index.mjs', './package.json': './package.json' },
     });
-    await writeFile(resolve(engine, 'packages', directory, 'dist/index.mjs'), 'export {};\n');
+    await writeFile(
+      resolve(engine, 'packages', directory, 'dist/index.mjs'),
+      directory === 'engine-render'
+        ? "export { value } from './chunk-render.mjs';\n"
+        : 'export {};\n',
+    );
   }
+  await Promise.all([
+    writeFile(
+      resolve(engine, 'packages', 'engine-render', 'dist/chunk-render.mjs'),
+      'export const value = 1;\n',
+    ),
+    writeFile(
+      resolve(engine, 'packages', 'engine-render', 'pkg/fixture.wasm'),
+      Buffer.from([0, 97, 115, 109]),
+    ),
+    writeFile(
+      resolve(engine, 'packages', 'engine-render', 'assets/runtime.json'),
+      '{"version":1}\n',
+    ),
+    writeFile(
+      resolve(engine, 'packages', 'engine-render', 'dist/engine-inputs/point-ssao/imports.json'),
+      '{}\n',
+    ),
+    writeFile(
+      resolve(engine, 'packages', 'engine-render', 'dist/engine-inputs/point-ssao/manifest.json'),
+      '{}\n',
+    ),
+  ]);
+  await writeJson(resolve(engine, 'packages', 'net-websocket', 'package.json'), {
+    name: '@forgeax/engine-net-websocket',
+    version: '0.1.7',
+    type: 'module',
+    exports: {
+      './browser': { types: './dist/browser.d.ts', import: './dist/browser.mjs' },
+      './node': { types: './dist/node.d.ts', node: './dist/node.mjs', default: null },
+      './package.json': './package.json',
+    },
+  });
+  await Promise.all([
+    writeFile(resolve(engine, 'packages', 'net-websocket', 'dist/browser.mjs'), 'export {};\n'),
+    writeFile(resolve(engine, 'packages', 'net-websocket', 'dist/node.mjs'), 'export {};\n'),
+  ]);
   return { game, engine };
 }
 
@@ -67,15 +116,48 @@ describe('engine binding commands', () => {
         binding: { path: expect.stringContaining('/engine') },
         resolved: { source: 'local', version: '0.1.7', built: true },
         workspace: {
+          packageCount: 3,
+          builtPackages: 3,
+          missingBuilds: [],
           digest: expect.stringMatching(/^sha256:/),
           builtAt: expect.any(String),
           packages: [
             expect.objectContaining({
               entryDigest: expect.stringMatching(/^sha256:/),
+              manifestDigest: expect.stringMatching(/^sha256:/),
+              runtimeDigest: expect.stringMatching(/^sha256:/),
+              runtimeFiles: expect.any(Array),
               builtAt: expect.any(String),
             }),
             expect.objectContaining({
               entryDigest: expect.stringMatching(/^sha256:/),
+              manifestDigest: expect.stringMatching(/^sha256:/),
+              runtimeDigest: expect.stringMatching(/^sha256:/),
+              runtimeFiles: expect.arrayContaining([
+                expect.objectContaining({ path: 'dist/browser.mjs' }),
+                expect.objectContaining({ path: 'dist/node.mjs' }),
+              ]),
+              builtAt: expect.any(String),
+            }),
+            expect.objectContaining({
+              name: '@forgeax/engine-render',
+              entryDigest: expect.stringMatching(/^sha256:/),
+              manifestDigest: expect.stringMatching(/^sha256:/),
+              runtimeDigest: expect.stringMatching(/^sha256:/),
+              runtimeFiles: expect.arrayContaining([
+                expect.objectContaining({
+                  path: 'assets/runtime.json',
+                  digest: expect.stringMatching(/^sha256:/),
+                }),
+                expect.objectContaining({
+                  path: 'dist/chunk-render.mjs',
+                  digest: expect.stringMatching(/^sha256:/),
+                }),
+                expect.objectContaining({
+                  path: 'pkg/fixture.wasm',
+                  digest: expect.stringMatching(/^sha256:/),
+                }),
+              ]),
               builtAt: expect.any(String),
             }),
           ],
@@ -114,6 +196,64 @@ describe('engine binding commands', () => {
     expect(updated.value.workspace.digest).not.toBe(before);
   });
 
+  it('excludes optional packaged shader input caches from runtime identity', async () => {
+    const { game, engine } = await fixture();
+    const selected = await engineUseLocalCommand({ root: game, path: engine });
+    if (!selected.ok || selected.value.workspace === null) throw new Error('fixture-status-failed');
+    const render = selected.value.workspace.packages.find(
+      (item) => item.name === '@forgeax/engine-render',
+    );
+    if (render === undefined) throw new Error('fixture-render-package-missing');
+    const before = { workspace: selected.value.workspace.digest, runtime: render.runtimeDigest };
+    expect(render.runtimeFiles.some((file) => file.path.startsWith('dist/engine-inputs/'))).toBe(
+      false,
+    );
+
+    await rm(resolve(engine, 'packages', 'engine-render', 'dist/engine-inputs'), {
+      recursive: true,
+    });
+    const withoutCache = await engineStatusCommand({ root: game });
+    if (!withoutCache.ok || withoutCache.value.workspace === null)
+      throw new Error('fixture-status-failed');
+    const updated = withoutCache.value.workspace.packages.find(
+      (item) => item.name === '@forgeax/engine-render',
+    );
+    if (updated === undefined) throw new Error('fixture-render-package-missing');
+    expect(withoutCache.value.workspace.digest).toBe(before.workspace);
+    expect(updated.runtimeDigest).toBe(before.runtime);
+  });
+
+  it('changes identity when a consumed chunk or resolution manifest changes', async () => {
+    const { game, engine } = await fixture();
+    const selected = await engineUseLocalCommand({ root: game, path: engine });
+    if (!selected.ok || selected.value.workspace === null) throw new Error('fixture-status-failed');
+    const before = selected.value.workspace.digest;
+    await writeFile(
+      resolve(engine, 'packages', 'engine-render', 'dist/chunk-render.mjs'),
+      'export const value = 2;\n',
+    );
+    const chunkChanged = await engineStatusCommand({ root: game });
+    if (!chunkChanged.ok || chunkChanged.value.workspace === null)
+      throw new Error('fixture-status-failed');
+    expect(chunkChanged.value.workspace.digest).not.toBe(before);
+
+    const chunkPath = resolve(engine, 'packages', 'engine-render', 'dist/chunk-render.mjs');
+    await rm(chunkPath);
+    const chunkDeleted = await engineStatusCommand({ root: game });
+    if (!chunkDeleted.ok || chunkDeleted.value.workspace === null)
+      throw new Error('fixture-status-failed');
+    expect(chunkDeleted.value.workspace.digest).not.toBe(chunkChanged.value.workspace.digest);
+
+    const manifestPath = resolve(engine, 'packages', 'engine-render', 'package.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.description = 'identity-change';
+    await writeJson(manifestPath, manifest);
+    const manifestChanged = await engineStatusCommand({ root: game });
+    if (!manifestChanged.ok || manifestChanged.value.workspace === null)
+      throw new Error('fixture-status-failed');
+    expect(manifestChanged.value.workspace.digest).not.toBe(chunkChanged.value.workspace.digest);
+  });
+
   it('fails npm doctor for a workspace dependency with a structured hint', async () => {
     const { game, engine } = await fixture(true);
     await expect(engineUseLocalCommand({ root: game, path: engine })).resolves.toMatchObject({
@@ -128,4 +268,46 @@ describe('engine binding commands', () => {
       },
     });
   });
+});
+
+it('uses the explicitly bound Engine for Vite program identity and imports', async () => {
+  const { game, engine } = await fixture();
+  const installed = resolve(game, 'node_modules/@forgeax/engine');
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  try {
+    await mkdir(resolve(installed, 'dist'), { recursive: true });
+    await writeJson(resolve(installed, 'package.json'), {
+      name: '@forgeax/engine',
+      version: '9.0.0',
+      type: 'module',
+      exports: { '.': './dist/index.mjs', './package.json': './package.json' },
+    });
+    await writeFile(resolve(installed, 'dist/index.mjs'), 'export const installed = true;\n');
+    expect(
+      createRequire(resolve(game, 'package.json')).resolve('@forgeax/engine/package.json'),
+    ).toBe(resolve(installed, 'package.json'));
+    expect((await engineUseLocalCommand({ root: game, path: engine })).ok).toBe(true);
+    const resolver = await createEngineWorkspaceResolverForProject(game);
+    expect(resolver).toBeDefined();
+    const bound = resolve(engine, 'packages/engine');
+    const boundIdentity = await runtimeProgramIdentity(resolve(bound, 'package.json'));
+    const installedIdentity = await runtimeProgramIdentity(resolve(installed, 'package.json'));
+    expect(boundIdentity).not.toBe(installedIdentity);
+    server = await createServer({
+      root: game,
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [resolver, executionWorkerEntries(['@forgeax/engine'])],
+      optimizeDeps: { noDiscovery: true, include: [] },
+      server: { middlewareMode: true, fs: { allow: [resolve(game, '..')] } },
+    });
+    const output = await server.transformRequest('virtual:forgeax/pack-program-imports');
+    expect(output?.code).toContain(boundIdentity);
+    expect(output?.code).not.toContain(installedIdentity);
+    expect(output?.code).toContain(resolve(bound, 'dist/index.mjs'));
+    expect(output?.code).not.toContain(resolve(installed, 'dist/index.mjs'));
+  } finally {
+    await server?.close();
+    await rm(resolve(game, '..'), { recursive: true, force: true });
+  }
 });

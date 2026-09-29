@@ -19,6 +19,7 @@ import type {
   PreparedGraphicsKind,
   PreparedGraphicsNormalizedDescriptor,
 } from '../features/prepared-graphics-store';
+import { type TranslucentFogComposition, translucentFogComposition } from '../record/view-ubo';
 
 type PreparedBufferKind = Exclude<PreparedGraphicsKind, 'pipeline' | 'bindings'>;
 
@@ -44,6 +45,10 @@ export type PreparedGraphicsResolvedResource =
       readonly kind: 'pipeline';
       readonly reference: RenderFeaturePreparedRef;
       readonly handle: RenderPipeline;
+      /** Renderer-selected context; never authored by a RenderFeature. */
+      readonly standardLighting?: boolean;
+      /** Derived from the pipeline blend; selects the translucent View copy. */
+      readonly fogComposition?: TranslucentFogComposition;
     }
   | {
       readonly kind: 'bindings';
@@ -52,6 +57,8 @@ export type PreparedGraphicsResolvedResource =
       readonly pipeline?: RenderPipeline;
       readonly descriptor?: RenderFeatureBindingsDescriptor;
       readonly dynamicOffsets?: readonly number[];
+      /** The bound pipeline's translucent fog composition, when it blends. */
+      readonly fogComposition?: TranslucentFogComposition;
     }
   | {
       readonly kind: PreparedBufferKind;
@@ -70,7 +77,10 @@ export interface PreparedGraphicsResolverInput {
   readonly lookup: (reference: RenderFeaturePreparedRef) => PreparedGraphicsItem | undefined;
   readonly resolvePipeline: (
     descriptor: PreparedGraphicsNormalizedDescriptor & { readonly kind: 'pipeline' },
-  ) => Result<RenderPipeline, unknown>;
+  ) => Result<
+    RenderPipeline | { readonly handle: RenderPipeline; readonly standardLighting: boolean },
+    unknown
+  >;
   readonly resolveBindings: (
     descriptor: RenderFeatureBindingsDescriptor,
     pipeline: RenderPipeline,
@@ -95,6 +105,8 @@ export interface PreparedGraphicsResolver {
     reference: PreparedGraphicsReference,
   ): Result<PreparedGraphicsResolvedResource, RenderError>;
   readonly leases: readonly PreparedGraphicsResourceLease[];
+  /** True when a leased physical buffer is imported by the compiled graph. */
+  readonly requiresGraphRebuild: boolean;
   readonly resolveGpuBuffer?: PreparedGraphicsResolverInput['resolveGpuBuffer'];
   release(): Result<void, RenderError>;
 }
@@ -110,6 +122,8 @@ export interface PreparedGraphicsResolvedSnapshot {
   readonly resolveGpuBuffer?: (
     reference: import('../features/prepared-gpu-work').RenderFeatureGpuBufferRef,
   ) => RenderFeatureResolvedGpuBuffer | undefined;
+  /** Resolve a feature-owned prepared buffer by its declarative resource name. */
+  readonly resolveGpuResource?: (name: string) => RenderFeatureResolvedGpuBuffer | undefined;
 }
 
 function preparationFailure(
@@ -226,6 +240,7 @@ export function createPreparedGraphicsResolver(
 ): PreparedGraphicsResolver {
   const resolved = new WeakMap<object, PreparedGraphicsResolvedResource>();
   const leases: PreparedGraphicsResourceLease[] = [];
+  let requiresGraphRebuild = false;
 
   const resolve = (
     reference: PreparedGraphicsReference,
@@ -301,10 +316,14 @@ export function createPreparedGraphicsResolver(
         ),
       );
     }
+    const fogComposition = translucentFogComposition(descriptor.renderState?.blend);
     const resource: PreparedGraphicsResolvedResource = {
       kind: 'pipeline',
       reference,
-      handle: created.value,
+      ...('handle' in created.value
+        ? { handle: created.value.handle, standardLighting: created.value.standardLighting }
+        : { handle: created.value }),
+      ...(fogComposition === undefined ? {} : { fogComposition }),
     };
     resolved.set(reference, resource);
     return ok(resource);
@@ -331,7 +350,13 @@ export function createPreparedGraphicsResolver(
     const created = input.resolveBindings(descriptor, pipeline.value.handle);
     if (!created.ok) {
       return err(
-        preparationFailure(item, input, reference.kind, item.name, 'bindings resolution failed'),
+        preparationFailure(
+          item,
+          input,
+          reference.kind,
+          item.name,
+          `bindings resolution failed: ${created.error instanceof Error ? created.error.message : String(created.error)}`,
+        ),
       );
     }
     const binding =
@@ -349,6 +374,9 @@ export function createPreparedGraphicsResolver(
       pipeline: pipeline.value.handle,
       descriptor,
       ...(binding?.dynamicOffsets === undefined ? {} : { dynamicOffsets: binding.dynamicOffsets }),
+      ...(pipeline.value.fogComposition === undefined
+        ? {}
+        : { fogComposition: pipeline.value.fogComposition }),
     };
     if (binding !== undefined) {
       let released = false;
@@ -409,6 +437,7 @@ export function createPreparedGraphicsResolver(
     }
     const buffer = uploadBuffer(input, item, reference.kind);
     if (!buffer.ok) return buffer;
+    requiresGraphRebuild = true;
     const resource: PreparedGraphicsResolvedResource = {
       kind: reference.kind,
       reference,
@@ -443,6 +472,9 @@ export function createPreparedGraphicsResolver(
   return {
     resolve,
     leases,
+    get requiresGraphRebuild() {
+      return requiresGraphRebuild;
+    },
     ...(input.resolveGpuBuffer === undefined ? {} : { resolveGpuBuffer: input.resolveGpuBuffer }),
     release: () => {
       let firstError: RenderError | undefined;

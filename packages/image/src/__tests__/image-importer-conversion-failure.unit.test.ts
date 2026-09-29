@@ -61,6 +61,8 @@ function expectConversionFailure(
         code: diagnosticCode,
         rule: expect.stringMatching(/^image-conversion-/),
         severity: 'error',
+        expected: expect.any(String),
+        hint: expect.any(String),
       }),
     ],
   });
@@ -206,6 +208,25 @@ describe('image importer conversion failure through the public runner', () => {
     expect(state.reads).toBe(6);
   });
 
+  it.each([
+    { colorSpace: 'srgb' as const, format: 'rgba8unorm-srgb' },
+    { colorSpace: 'linear' as const, format: 'rgba8unorm' },
+  ])('publishes a format matching the authored $colorSpace color space', async (input) => {
+    const result = await runImport(
+      meta('valid.png', { colorSpace: input.colorSpace, mipmap: 'none' }),
+      registry(),
+      { readSource: source({ bytes: makePng(1, 1, [1, 2, 3, 255]), reads: 0 }) },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || 'skipped' in result.value) return;
+    expect(result.value.pack.assets[0]?.payload).toMatchObject({
+      colorSpace: input.colorSpace,
+      format: input.format,
+      mips: { kind: 'none' },
+    });
+  });
+
   it.skipIf(!pkgBuilt)('repairs raw Basis color-space settings in the same registry', async () => {
     const state = { bytes: await makeRawBasis(), reads: 0 };
     const importerRegistry = registry();
@@ -226,7 +247,11 @@ describe('image importer conversion failure through the public runner', () => {
     if (!repaired.ok || 'skipped' in repaired.value) return;
     expect(repaired.value.pack.assets[0]).toMatchObject({
       guid: GUID,
-      payload: { colorSpace: 'linear', width: 4, height: 4 },
+      payload: {
+        colorSpace: 'linear',
+        shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+        mips: { kind: 'none' },
+      },
       artifacts: {
         body: {
           mediaType: 'application/x-forgeax-basis',
@@ -270,7 +295,11 @@ describe('image importer conversion failure through the public runner', () => {
     if (!repaired.ok || 'skipped' in repaired.value) return;
     expect(repaired.value.pack.assets[0]).toMatchObject({
       guid: GUID,
-      payload: { colorSpace: 'linear', width: 4, height: 4, mipmap: false },
+      payload: {
+        colorSpace: 'linear',
+        shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+        mips: { kind: 'none' },
+      },
       artifacts: {
         body: {
           mediaType: 'image/ktx2',

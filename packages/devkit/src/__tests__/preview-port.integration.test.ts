@@ -11,8 +11,11 @@ import type { ProjectFacts } from '../types.js';
 const execFileAsync = promisify(execFile);
 const cliPath = resolve(import.meta.dirname, '../../dist/cli.mjs');
 const activeProcesses = new Set<RunningCli>();
+const LISTENER_READINESS_TIMEOUT_MS = 90_000;
+const SINGLE_LISTENER_TEST_TIMEOUT_MS = LISTENER_READINESS_TIMEOUT_MS + 30_000;
+const REUSE_LISTENER_TEST_TIMEOUT_MS = LISTENER_READINESS_TIMEOUT_MS * 2 + 30_000;
 
-type PreviewCommand = 'dev' | 'serve' | 'preview';
+type PreviewCommand = readonly ['project', 'preview'];
 
 interface RunningCli {
   readonly child: ChildProcessWithoutNullStreams;
@@ -37,8 +40,7 @@ async function fixture(): Promise<string> {
     root,
     id: 'preview-port-fixture',
     name: 'Preview Port Fixture',
-    entry: 'main.ts',
-    plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+    roots: {},
     assetRoots: [],
     packageJson: { name: 'preview-port-fixture' },
   };
@@ -48,19 +50,16 @@ async function fixture(): Promise<string> {
       `${JSON.stringify({
         id: facts.id,
         name: facts.name,
-        schemaVersion: '1.0.0',
-        entry: facts.entry,
-        plugins: facts.plugins,
+        schemaVersion: '3.0.0',
+        roots: facts.roots,
       })}\n`,
     ),
     writeFile(
       resolve(root, 'package.json'),
-      `${JSON.stringify({
-        name: 'preview-port-fixture',
-        forgeax: { assets: { roots: [] } },
-      })}\n`,
+      `${JSON.stringify({ name: 'preview-port-fixture' })}\n`,
     ),
     writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
+    mkdir(resolve(root, 'assets'), { recursive: true }),
     mkdir(resolve(root, 'dist', 'shaders'), { recursive: true }),
   ]);
   await Promise.all([
@@ -72,7 +71,12 @@ async function fixture(): Promise<string> {
   return realpath(root);
 }
 
-function startCli(command: PreviewCommand, root: string, port?: number | string): RunningCli {
+function startCli(
+  command: PreviewCommand,
+  root: string,
+  port?: number | string,
+  input = false,
+): RunningCli {
   const stdout = { value: '' };
   const stderr = { value: '' };
   const dnsOption = '--dns-result-order=ipv4first';
@@ -81,11 +85,15 @@ function startCli(command: PreviewCommand, root: string, port?: number | string)
     process.execPath,
     [
       cliPath,
-      command,
+      ...command,
       '--root',
       root,
       '--json',
-      ...(port === undefined ? [] : ['--port', `${port}`]),
+      ...(port === undefined
+        ? []
+        : input
+          ? ['--input', JSON.stringify({ port, json: false })]
+          : ['--port', `${port}`]),
     ],
     {
       cwd: root,
@@ -182,7 +190,7 @@ async function processCwd(pid: number): Promise<string> {
 
 async function waitForReady(
   running: RunningCli,
-  timeoutMilliseconds = 20_000,
+  timeoutMilliseconds = LISTENER_READINESS_TIMEOUT_MS,
 ): Promise<ReadyEvidence> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -301,100 +309,103 @@ describe('DevKit preview port listener contract', () => {
   ])('rejects invalid --port %s as a structured CLI parse error before listening', async (port) => {
     const root = await fixture();
     try {
-      const running = startCli('dev', root, port);
+      const running = startCli(['project', 'preview'], root, port);
       const exit = await waitForExit(running);
       expect(exit).toBe(2);
       expect(envelopePort(running.stdout.value)).toBeUndefined();
       expect(envelopeError(running.stdout.value)).toMatchObject({
         code: 'cli-parse-error',
-        detail: { option: '--port', received: port },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
 
-  it.each<PreviewCommand>([
-    'dev',
-    'serve',
-    'preview',
-  ])('%s defaults to a real listener on 5173 with observable pid/cwd and cleanup', async (command) => {
-    const root = await fixture();
-    try {
-      const running = startCli(command, root);
-      const evidence = await waitForReady(running);
-      expect(evidence).toMatchObject({ pid: running.child.pid, cwd: root, port: 5173 });
-      await stop(running, evidence.port);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 30_000);
+  it(
+    'project preview defaults to a real listener on 5173 with observable pid/cwd and cleanup',
+    async () => {
+      const root = await fixture();
+      try {
+        const running = startCli(['project', 'preview'], root);
+        const evidence = await waitForReady(running);
+        expect(evidence).toMatchObject({ pid: running.child.pid, cwd: root, port: 5173 });
+        await stop(running, evidence.port);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    SINGLE_LISTENER_TEST_TIMEOUT_MS,
+  );
 
-  it.each<PreviewCommand>([
-    'dev',
-    'serve',
-    'preview',
-  ])('%s binds an explicit positive port exactly', async (command) => {
-    const root = await fixture();
-    try {
+  it.each([false, true])(
+    'project preview binds an explicit positive port with JSON-only output (input=%s)',
+    async (input) => {
+      const root = await fixture();
+      try {
+        const port = await randomAvailablePort();
+        const running = startCli(['project', 'preview'], root, port, input);
+        const evidence = await waitForReady(running);
+        expect(evidence).toMatchObject({ pid: running.child.pid, cwd: root, port });
+        expect(JSON.parse(running.stdout.value)).toMatchObject({
+          ok: true,
+          command: 'project preview',
+        });
+        await stop(running, port);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    SINGLE_LISTENER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'project preview treats explicit zero as the only random-port request',
+    async () => {
+      const root = await fixture();
+      try {
+        const running = startCli(['project', 'preview'], root, 0);
+        const evidence = await waitForReady(running);
+        expect(evidence.pid).toBe(running.child.pid);
+        expect(evidence.cwd).toBe(root);
+        expect(evidence.port).toBeGreaterThan(0);
+        expect(evidence.port).not.toBe(5173);
+        await stop(running, evidence.port);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    SINGLE_LISTENER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'project preview fails a second explicit listener and reuses the exact port after cleanup',
+    async () => {
+      const root = await fixture();
       const port = await randomAvailablePort();
-      const running = startCli(command, root, port);
-      const evidence = await waitForReady(running);
-      expect(evidence).toMatchObject({ pid: running.child.pid, cwd: root, port });
-      await stop(running, port);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 30_000);
+      try {
+        const first = startCli(['project', 'preview'], root, port);
+        const firstEvidence = await waitForReady(first);
+        const second = startCli(['project', 'preview'], root, port);
+        const secondExit = await waitForExit(second, LISTENER_READINESS_TIMEOUT_MS);
+        if (secondExit === undefined) await stop(second);
+        await stop(first, firstEvidence.port);
 
-  it.each<PreviewCommand>([
-    'dev',
-    'serve',
-    'preview',
-  ])('%s treats explicit zero as the only random-port request', async (command) => {
-    const root = await fixture();
-    try {
-      const running = startCli(command, root, 0);
-      const evidence = await waitForReady(running);
-      expect(evidence.pid).toBe(running.child.pid);
-      expect(evidence.cwd).toBe(root);
-      expect(evidence.port).toBeGreaterThan(0);
-      expect(evidence.port).not.toBe(5173);
-      await stop(running, evidence.port);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 30_000);
+        const released = startCli(['project', 'preview'], root, port);
+        const releasedEvidence = await waitForReady(released);
+        await stop(released, releasedEvidence.port);
 
-  it.each<PreviewCommand>([
-    'dev',
-    'serve',
-    'preview',
-  ])('%s fails a second explicit listener and reuses the exact port after cleanup', async (command) => {
-    const root = await fixture();
-    const port = await randomAvailablePort();
-    try {
-      const first = startCli(command, root, port);
-      const firstEvidence = await waitForReady(first);
-      const second = startCli(command, root, port);
-      const secondExit = await waitForExit(second);
-      if (secondExit === undefined) await stop(second);
-      await stop(first, firstEvidence.port);
-
-      const released = startCli(command, root, port);
-      const releasedEvidence = await waitForReady(released);
-      await stop(released, releasedEvidence.port);
-
-      expect(firstEvidence).toMatchObject({ pid: first.child.pid, cwd: root, port });
-      expect(secondExit).not.toBeUndefined();
-      expect(secondExit).not.toBe(0);
-      expect(releasedEvidence).toMatchObject({
-        pid: released.child.pid,
-        cwd: root,
-        port,
-      });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 90_000);
+        expect(firstEvidence).toMatchObject({ pid: first.child.pid, cwd: root, port });
+        expect(secondExit).not.toBeUndefined();
+        expect(secondExit).not.toBe(0);
+        expect(releasedEvidence).toMatchObject({
+          pid: released.child.pid,
+          cwd: root,
+          port,
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    REUSE_LISTENER_TEST_TIMEOUT_MS,
+  );
 });

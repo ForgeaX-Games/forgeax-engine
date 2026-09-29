@@ -6,10 +6,10 @@ import { ParticleEffectPlayer, type ParticleEffectPlayerData } from '../index.js
 
 const asset: ParticleEffectAsset = {
   kind: 'particle-effect',
-  schemaVersion: 2,
+  schemaVersion: 3,
   programFingerprint: 'sha256:test',
   emitters: [],
-  program: { format: 'forgeax-vfx-program-2', fingerprint: 'sha256:test', emitters: [] },
+  program: { format: 'forgeax-vfx-program-4', fingerprint: 'sha256:test', emitters: [] },
 };
 
 describe('ParticleEffectPlayer ECS contract', () => {

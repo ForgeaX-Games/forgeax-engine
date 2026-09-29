@@ -1,4 +1,4 @@
-#define_import_path boss_lightning_vfx::arc_nova_sigil
+#define_import_path hello_boss_lightning::arc_nova_sigil
 
 @group(0) @binding(0) var scene_depth: texture_depth_2d;
 
@@ -50,13 +50,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let radius = length(input.local);
   let hex = hex_radius(input.local);
   let angle = atan2(input.local.y, input.local.x);
-  let outer_hex = smoothstep(1.02, 0.9, hex) * smoothstep(0.72, 0.82, hex);
-  let inner_hex = smoothstep(0.57, 0.48, hex) * smoothstep(0.29, 0.38, hex);
-  let six_spokes = pow(abs(cos(angle * 3.0)), 18.0) * smoothstep(0.72, 0.24, radius);
-  let triangular_runes = pow(max(cos(angle * 3.0 + radius * 15.0), 0.0), 10.0)
-    * smoothstep(0.82, 0.5, radius) * smoothstep(0.2, 0.42, radius);
-  let core = smoothstep(0.22, 0.03, radius);
-  let mask = clamp(outer_hex + inner_hex + six_spokes * 0.65 + triangular_runes * 0.75 + core, 0.0, 1.0);
+  let ring = 1.0 - smoothstep(0.012, 0.035, abs(radius - 0.8));
+  let breaks = smoothstep(-0.85, -0.65, cos(angle * 6.0));
+  let runes = (1.0 - smoothstep(0.018, 0.04, abs(hex - 0.74)))
+    * pow(max(cos(angle * 6.0), 0.0), 24.0);
+  let mask = clamp(ring * breaks + runes * 0.6, 0.0, 1.0);
   if (mask < 0.025 || hex > 1.03) {
     discard;
   }

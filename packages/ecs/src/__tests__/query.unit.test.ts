@@ -138,7 +138,7 @@ describe('executable Query', () => {
     expect(spans[0]?.get(Position).x[0]).toBe(1);
   });
 
-  it('returns structured span capability failures', () => {
+  it('returns structured span capability failures and coalesces changed rows', () => {
     const world = new World();
     const optional = world
       .query({ read: [Position], optional: [Velocity] })
@@ -146,11 +146,15 @@ describe('executable Query', () => {
       .spans();
     expect(!optional.ok && optional.error.detail.reason).toBe('optional-data');
 
-    const changed = world
-      .query({ read: [Position], changed: [Position] })
-      .unwrap()
-      .spans();
-    expect(!changed.ok && changed.error.detail.reason).toBe('row-change-filter');
+    const { world: changedWorld, first, second } = createWorld();
+    const changedQuery = changedWorld.query({ read: [Position], changed: [Position] }).unwrap();
+    expect([...changedQuery.spans().unwrap()].flatMap((span) => Array.from(span.entities))).toEqual(
+      [first, second],
+    );
+    changedWorld.set(second, Position, { x: 9 }).unwrap();
+    const changedSpans = [...changedQuery.spans().unwrap()];
+    expect(changedSpans).toHaveLength(1);
+    expect(Array.from(changedSpans[0]?.entities ?? [])).toEqual([second]);
   });
 
   it('does not commit observation after partial iteration', () => {

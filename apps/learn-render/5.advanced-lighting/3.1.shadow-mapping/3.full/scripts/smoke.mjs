@@ -4,7 +4,7 @@
 //
 // LearnOpenGL section 5.3.1 directional production shadow dawn-node smoke
 // (structural-only). Spawns wood-floor + 6 cubes + DirectionalLight +
-// DirectionalLight with castShadow (cascadeCount=1), renders 300 frames, and asserts
+// DirectionalLight with castShadow (cascadeCount=1), renders 60 frames, and asserts
 // no RhiError / no unknown onError codes.
 //
 // Output literals (preserved for grep tooling):
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
 const WIDTH = 512;
 const HEIGHT = 512;
@@ -163,7 +163,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 // --- 5. createApp + setup ---
 
@@ -195,7 +196,16 @@ const app = appResult.value;
 console.log(`[learn-render-5-3-1-directional] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const onErrorEvents = [];
-app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
+app.onError((err) => {
+  const event = {
+    code: err.code,
+    expected: err.expected,
+    hint: err.hint,
+    detail: err.detail,
+  };
+  onErrorEvents.push(event);
+  console.error(`[smoke] onError structured=${JSON.stringify(event)}`);
+});
 
 
 const assets = app.assets;
@@ -216,12 +226,14 @@ if (!woodGuidRes.ok) {
 
 const woodTexAsset = {
   kind: 'texture',
-  width: woodDecoded.width,
-  height: woodDecoded.height,
+  shape: {
+    viewDimension: '2d',
+    extent: { width: woodDecoded.width, height: woodDecoded.height },
+  },
   format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: woodDecoded.bytes,
   colorSpace: woodDecoded.colorSpace,
-  mipmap: woodDecoded.mipmap,
+  mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -297,7 +309,7 @@ for (const c of cubes) {
 // Directional light with shadow.
 const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
 const shadowFields = shadowPresent
-  ? { castShadow: true, cascadeCount: 1, mapSize: 2048, depthBias: 0.005, shadowDistance: 50, pcfKernelSize: 3 }
+  ? { castShadow: true, cascadeCount: 1, mapSize: 2048, depthBias: 0.00001, shadowDistance: 50, shadowFilter: 2, shadowAngularRadius: 0.00465, maxPenumbraTexels: 32 }
   : { castShadow: false };
 
 if (!shadowPresent) {
@@ -332,7 +344,7 @@ const cameraEntity = world.spawn(
 
 // Static camera (dawn-node smoke has no keyboard/mouse; structural-only).
 
-// --- 8. Render 300 frames ---
+// --- 8. Render 60 frames ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;

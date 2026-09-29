@@ -7,6 +7,7 @@ import {
 } from '@forgeax/engine-net';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
+import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { gridToWorldPosition, registerReplicaDerivation } from '../client';
 import clientSource from '../client.ts?raw';
@@ -43,6 +44,36 @@ describe('Snake replica write contract', () => {
     expect(gridToWorldPosition(12, 8)).toEqual([0, 0, 0]);
     expect(gridToWorldPosition(12, 7)).toEqual([0, 1, 0]);
     expect(gridToWorldPosition(12, 9)).toEqual([0, -1, 0]);
+  });
+
+  it('retries the initial join after an empty active baseline', () => {
+    const world = new World();
+    const replica = createReplicaCoordinator(world, snakeProfile);
+    const stateTarget = { dataset: {}, textContent: '' } as unknown as HTMLElement;
+    let joinCount = 0;
+    const session = {
+      getRecoverySnapshot: () =>
+        ({
+          sessionId: 7,
+          state: { kind: 'active', sessionId: 7, epoch: 0, sequence: 1 },
+          pendingPackets: 0,
+          maxPendingPackets: 32,
+          acknowledgedSequence: 1,
+          reconnectAttempts: 0,
+          epoch: 0,
+          sequence: 1,
+          ownedResources: { pendingConnects: 0, timers: 0, ledgers: 0, callbacks: 0 },
+        }) as never,
+      sendToAuthority: () => {
+        joinCount += 1;
+        return ok(undefined);
+      },
+    } as Pick<NetSession, 'getRecoverySnapshot' | 'sendToAuthority'>;
+
+    registerReplicaDerivation(world, replica, { stateTarget }, session);
+    expect(world.update(1).ok).toBe(true);
+    expect(joinCount).toBe(1);
+    expect(stateTarget.dataset.joinSent).toBe('true');
   });
 
   it('applies a real batch then derives only local render components', async () => {

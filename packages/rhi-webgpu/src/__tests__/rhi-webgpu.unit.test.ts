@@ -22,7 +22,13 @@ import type {
 import { type Result, RhiError, type RhiErrorCode } from '@forgeax/engine-rhi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeRhiDevice } from '../device';
-import { acquireCanvasContext, createShaderModule, requestAdapter, requestDevice } from '../index';
+import {
+  acquireCanvasContext,
+  createShaderModule,
+  createShaderModuleImmediate,
+  requestAdapter,
+  requestDevice,
+} from '../index';
 import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gpu-device';
 
 {
@@ -213,6 +219,74 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
     });
   });
 
+  describe('encodeEmptyComputePass', () => {
+    it('forwards one mirrored descriptor to one raw pass and ends that pass once', async () => {
+      const gpu = createMockGpu();
+      const adapter = await gpu.requestAdapter();
+      if (adapter === null) throw new Error('mock adapter should exist');
+      const raw = await adapter.requestDevice();
+      (raw.features as unknown as Set<GPUFeatureName>).add('timestamp-query');
+      const rawDescriptors: GPUComputePassDescriptor[] = [];
+      let beginCalls = 0;
+      let endCalls = 0;
+      const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+      raw.createCommandEncoder = (descriptor) => {
+        const encoder = originalCreateCommandEncoder(descriptor);
+        const originalBeginComputePass = encoder.beginComputePass.bind(encoder);
+        encoder.beginComputePass = (passDescriptor) => {
+          beginCalls += 1;
+          if (passDescriptor !== undefined) rawDescriptors.push(passDescriptor);
+          const pass = originalBeginComputePass(passDescriptor);
+          const originalEnd = pass.end.bind(pass);
+          pass.end = () => {
+            endCalls += 1;
+            originalEnd();
+          };
+          return pass;
+        };
+        return encoder;
+      };
+
+      const device = makeRhiDevice(raw as unknown as GPUDevice).device;
+      const querySetResult = device.createQuerySet({ type: 'timestamp', count: 2 });
+      if (!querySetResult.ok) throw new Error('mock createQuerySet failed');
+      const descriptor = {
+        timestampWrites: {
+          querySet: querySetResult.value,
+          beginningOfPassWriteIndex: 0,
+        },
+      };
+      const encoderResult = device.createCommandEncoder();
+      if (!encoderResult.ok) throw new Error('mock createCommandEncoder failed');
+
+      encoderResult.value.encodeEmptyComputePass(descriptor);
+
+      expect(beginCalls).toBe(1);
+      expect(endCalls).toBe(1);
+      expect(rawDescriptors).toHaveLength(1);
+      expect(rawDescriptors[0]?.timestampWrites?.querySet).toBe(querySetResult.value);
+      expect(rawDescriptors[0]?.timestampWrites?.beginningOfPassWriteIndex).toBe(0);
+    });
+
+    it('keeps the finished-encoder failure channel', async () => {
+      const gpu = createMockGpu();
+      const r = await requestDevice({ gpu });
+      if (!r.ok) throw new Error('mock requestDevice should not fail');
+      const encoderResult = r.value.createCommandEncoder();
+      if (!encoderResult.ok) throw new Error('mock createCommandEncoder failed');
+      expect(encoderResult.value.finish().ok).toBe(true);
+
+      expect(() =>
+        encoderResult.value.encodeEmptyComputePass({
+          timestampWrites: {
+            querySet: {} as never,
+            endOfPassWriteIndex: 1,
+          },
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'command-encoder-finished' }));
+    });
+  });
+
   // w24 - resolveQuerySet placeholder retirement red phase. Asserts:
   //   (a) destinationOffset % 256 != 0 -> webgpu-runtime-error with .expected
   //       literal 'destinationOffset % 256 == 0 (spec normative)'.
@@ -378,42 +452,13 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(device.destroyBuffer(readbackResult.value).ok).toBe(true);
     });
   });
-
   // ---------------------------------------------------------------------------
-  // w38 (M5 / K-3) - RhiCommandEncoder.writeTimestamp gating + happy path.
+  // w38 (M5) - pass descriptor timestampWrites forwarding.
   // ---------------------------------------------------------------------------
-  //
-  // research §2.4: dawn TimestampOnCommandEncoder calls
-  // encoder.WriteTimestamp(querySet, queryIndex) directly on the command
-  // encoder; the entry is gated on the 'timestamp-query' device feature.
-  // The forgeax form is RhiCommandEncoder.writeTimestamp(querySet, queryIndex)
-  // with `void` return (spec literal alignment); when caps.timestampQuery is
-  // false the shim fans out 'feature-not-enabled' through the engine onError
-  // channel (no Result wrapper because the spec method returns void).
-
-  describe('w38 (M5 / K-3) - RhiCommandEncoder.writeTimestamp', () => {
-    it('writeTimestamp(querySet, queryIndex) is callable on a CommandEncoder when caps.timestampQuery is true', async () => {
-      const gpu = createMockGpu();
-      const r = await requestDevice({ gpu });
-      if (!r.ok) throw new Error('mock requestDevice should not fail');
-      const device = r.value as unknown as {
-        caps: { timestampQuery: boolean };
-        createQuerySet: (desc: { type: string; count: number; label?: string }) => {
-          ok: boolean;
-          value: unknown;
-        };
-        createCommandEncoder: (desc?: unknown) => {
-          ok: boolean;
-          value: { writeTimestamp?: (qs: unknown, idx: number) => void };
-        };
-      };
-      // Mock device defaults to timestampQuery=false; the gate test below
-      // covers that path. Here we assert the surface exists at the very least.
-      const encResult = device.createCommandEncoder({ label: 'w38-encoder' });
-      expect(encResult.ok).toBe(true);
-      expect(typeof encResult.value.writeTimestamp).toBe('function');
-    });
-
+  // Current Dawn rejects the obsolete command-encoder writeTimestamp method.
+  // Timestamp ownership therefore enters through the real render/compute pass
+  // descriptor, where the shim maps the opaque QuerySet to its raw handle.
+  describe('w38 (M5) - pass descriptor timestampWrites', () => {
     it('maps an opaque QuerySet in compute-pass timestampWrites to the raw descriptor', async () => {
       const gpu = createMockGpu();
       const adapter = await gpu.requestAdapter();
@@ -470,73 +515,6 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(rawQuerySet).toBeDefined();
       expect(captured?.timestampWrites?.querySet).toBe(rawQuerySet);
     });
-
-    async function timestampEncoder(
-      writeTimestamp: ((querySet: unknown, queryIndex: number) => void) | undefined,
-    ) {
-      const gpu = createMockGpu();
-      const adapter = await gpu.requestAdapter();
-      if (adapter === null) throw new Error('mock adapter should exist');
-      const raw = await adapter.requestDevice();
-      const features = raw.features as unknown as Set<GPUFeatureName>;
-      features.add('timestamp-query');
-      const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
-      raw.createCommandEncoder = (descriptor) => {
-        const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<
-          string,
-          unknown
-        >;
-        if (writeTimestamp !== undefined) encoder.writeTimestamp = writeTimestamp;
-        return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
-      };
-      const { device } = makeRhiDevice(raw as unknown as GPUDevice);
-      const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
-      if (!querySet.ok) throw new Error('timestamp query set should be created');
-      const encoder = device.createCommandEncoder();
-      if (!encoder.ok) throw new Error('command encoder should be created');
-      return { encoder: encoder.value, querySet: querySet.value };
-    }
-
-    it('forwards a callable raw writeTimestamp exactly once with the raw query set and index', async () => {
-      const calls: Array<{ querySet: unknown; queryIndex: number }> = [];
-      const { encoder, querySet } = await timestampEncoder((rawQuerySet, queryIndex) => {
-        calls.push({ querySet: rawQuerySet, queryIndex });
-      });
-      encoder.writeTimestamp(querySet, 1);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.queryIndex).toBe(1);
-      expect(calls[0]?.querySet).toBe(querySet);
-    });
-
-    it('throws structured webgpu-runtime-error when a timestamp-capable raw encoder omits writeTimestamp', async () => {
-      const { encoder, querySet } = await timestampEncoder(undefined);
-      expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
-      try {
-        encoder.writeTimestamp(querySet, 0);
-      } catch (error) {
-        expect(error).toMatchObject({
-          code: 'webgpu-runtime-error',
-          expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
-        });
-        expect((error as RhiError).hint).toContain('timestamp-query');
-      }
-    });
-
-    it('throws structured webgpu-runtime-error when the raw timestamp write throws', async () => {
-      const { encoder, querySet } = await timestampEncoder(() => {
-        throw new Error('raw timestamp failure');
-      });
-      expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
-      try {
-        encoder.writeTimestamp(querySet, 0);
-      } catch (error) {
-        expect(error).toMatchObject({
-          code: 'webgpu-runtime-error',
-          expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
-        });
-        expect((error as RhiError).hint).toContain('raw timestamp failure');
-      }
-    });
   });
 }
 
@@ -585,6 +563,77 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
   }
 
   describe('MVP-1.1 runtime — verbatim pass-through of the 5 descriptors', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('normalizes omitted dynamic Dawn limits from the adapter without mutating the descriptor', async () => {
+      const gpu = createMockGpu();
+      const descriptor: GPUDeviceDescriptor = { label: 'dynamic-limit-probe' };
+      const r = await requestDevice({ gpu, deviceDescriptor: descriptor });
+      expect(r.ok).toBe(true);
+      expect(descriptor).toEqual({ label: 'dynamic-limit-probe' });
+
+      const ev = lastOf(gpu.__captured, 'requestDevice');
+      expect(ev.options).toMatchObject({
+        label: 'dynamic-limit-probe',
+        requiredLimits: {
+          maxDynamicUniformBuffersPerPipelineLayout: 8,
+          maxDynamicStorageBuffersPerPipelineLayout: 4,
+        },
+      });
+    });
+
+    it('preserves explicit dynamic limits while filling only the omitted adapter-backed limit', async () => {
+      const gpu = createMockGpu();
+      const requiredLimits = { maxDynamicUniformBuffersPerPipelineLayout: 2 };
+      const r = await requestDevice({ gpu, deviceDescriptor: { requiredLimits } });
+      expect(r.ok).toBe(true);
+
+      const ev = lastOf(gpu.__captured, 'requestDevice');
+      expect(ev.options?.requiredLimits).toEqual({
+        maxDynamicUniformBuffersPerPipelineLayout: 2,
+        maxDynamicStorageBuffersPerPipelineLayout: 4,
+      });
+      expect(requiredLimits).toEqual({ maxDynamicUniformBuffersPerPipelineLayout: 2 });
+    });
+
+    it('clamps oversized dynamic limits to the adapter without mutating the descriptor', async () => {
+      const gpu = createMockGpu();
+      const requiredLimits = {
+        maxDynamicUniformBuffersPerPipelineLayout: 1_000_000,
+        maxDynamicStorageBuffersPerPipelineLayout: 1_000_000,
+      };
+      const r = await requestDevice({ gpu, deviceDescriptor: { requiredLimits } });
+      expect(r.ok).toBe(true);
+
+      const ev = lastOf(gpu.__captured, 'requestDevice');
+      expect(ev.options?.requiredLimits).toEqual({
+        maxDynamicUniformBuffersPerPipelineLayout: 8,
+        maxDynamicStorageBuffersPerPipelineLayout: 4,
+      });
+      expect(requiredLimits).toEqual({
+        maxDynamicUniformBuffersPerPipelineLayout: 1_000_000,
+        maxDynamicStorageBuffersPerPipelineLayout: 1_000_000,
+      });
+    });
+
+    it('applies the same normalization on the public adapter two-step path', async () => {
+      const gpu = createMockGpu();
+      vi.stubGlobal('navigator', { gpu });
+      const adapterResult = await requestAdapter();
+      expect(adapterResult.ok).toBe(true);
+      if (!adapterResult.ok) return;
+
+      const deviceResult = await adapterResult.value.requestDevice({
+        requiredLimits: { maxDynamicStorageBuffersPerPipelineLayout: 1 },
+      });
+      expect(deviceResult.ok).toBe(true);
+      const ev = lastOf(gpu.__captured, 'requestDevice');
+      expect(ev.options?.requiredLimits).toEqual({
+        maxDynamicUniformBuffersPerPipelineLayout: 8,
+        maxDynamicStorageBuffersPerPipelineLayout: 1,
+      });
+    });
+
     it('BufferDescriptor passes through size / usage / label / mappedAtCreation', async () => {
       const gpu = createMockGpu();
       const r = await requestDevice({ gpu });
@@ -1535,6 +1584,24 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       const sr = await createShaderModule(r.value, { code: 'fn main() {}' });
       expect(sr.ok).toBe(true);
     });
+
+    it('immediate render-path entry returns the module without awaiting compilation info', async () => {
+      const gpu = createMockGpu({ getCompilationInfoRejects: true });
+      const r = await requestDevice({ gpu });
+      if (!r.ok) throw new Error('mock requestDevice should not fail');
+
+      const sr = createShaderModuleImmediate(r.value, {
+        label: 'render-fast-path',
+        code: 'fn main() {}',
+      });
+      expect(sr.ok).toBe(true);
+      expect(
+        gpu.__captured.some(
+          (entry) =>
+            entry.kind === 'createShaderModule' && entry.descriptor.label === 'render-fast-path',
+        ),
+      ).toBe(true);
+    });
   });
 }
 
@@ -1951,23 +2018,8 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
 
 {
   // --- from render-pass-encoder.test.ts ---
-  // w4 unit - RhiRenderPassEncoder shim placeholder + lifecycle behaviour.
-  //
-  // RED at w4 commit; GREEN after w5 lands the impl + 3 placeholders.
-  //
-  // Asserts:
-  //   1) executeBundles / beginOcclusionQuery / endOcclusionQuery return
-  //      Result.err({ code: 'rhi-not-available', expected, hint }) per D-S4.
-  //   2) Calling beginRenderPass twice without ending the first pass returns
-  //      Result.err({ code: 'render-pass-not-ended' }) on the second call (or
-  //      finish() while pass is active returns the same error per D-S3 template 2).
-  //
-  // Charter mapping: proposition 4 (explicit failure: placeholders signal "not
-  // implemented" via .code instead of throwing or silently no-op-ing).
-  //
-  // Note: the mock GPU device's GPURenderPassEncoder is a plain stub; this test
-  // relies on the shim wiring those entry points to the placeholder factories.
-  // dawn.node real-GPU coverage of the same scenarios is in w17 (M5).
+  // Native bundle forwarding, query errors and render-pass lifecycle guards.
+  // Real backend validation is covered by the Browser/Dawn bundle fixture.
 
   interface OkLike<T> {
     ok: true;
@@ -1990,8 +2042,8 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
     endOcclusionQuery: () => ResultLike<void>;
   }
 
-  describe('w4 - RhiRenderPassEncoder placeholders + lifecycle (red until w5)', () => {
-    it('executeBundles placeholder returns Result.err({ code: rhi-not-available })', async () => {
+  describe('RhiRenderPassEncoder bundle execution and lifecycle', () => {
+    it('executeBundles forwards the empty state-reset operation', async () => {
       const gpu = createMockGpu();
       const r = await requestDevice({ gpu });
       if (!r.ok) throw new Error('mock requestDevice should not fail');
@@ -2004,12 +2056,7 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       const pass = encoder.beginRenderPass({ colorAttachments: [] });
 
       const out = pass.executeBundles([]);
-      expect(out.ok).toBe(false);
-      if (!out.ok) {
-        expect(out.error.code).toBe('rhi-not-available');
-        expect(out.error.expected.length).toBeGreaterThan(0);
-        expect(out.error.hint.length).toBeGreaterThan(0);
-      }
+      expect(out.ok).toBe(true);
     });
 
     it('beginOcclusionQuery without occlusionQuerySet now returns webgpu-runtime-error (w23 retired the rhi-not-available placeholder)', async () => {

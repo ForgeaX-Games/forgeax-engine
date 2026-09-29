@@ -1,6 +1,6 @@
 // metrics-schema.test.ts (M1 w2) — schema fixture + ajv self-validate.
 //
-// Covers four error paths against `<repo-root>/forgeax-metrics.schema.json`:
+// Covers four error paths against `<repo-root>/schemas/forgeax-metrics.schema.json`:
 //   (a) valid fixture instance => ajv compiled validator returns true
 //   (b) JSON syntax error in schema file => surfaced as
 //       'metric-schema-malformed' (drift detector error code per K-2 / AC-12)
@@ -20,7 +20,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(__dirname, '..', '..');
-const schemaPath = resolve(repoRoot, 'forgeax-metrics.schema.json');
+const schemaPath = resolve(repoRoot, 'schemas/forgeax-metrics.schema.json');
 const fixturesDir = resolve(__dirname, 'fixtures');
 const validInstancePath = resolve(fixturesDir, 'metrics-schema-valid.json');
 const invalidEnumInstancePath = resolve(fixturesDir, 'metrics-schema-invalid-enum.json');
@@ -50,7 +50,7 @@ function makeAjv(): Ajv2020 {
   return new Ajv2020({ strict: false, allErrors: true });
 }
 
-describe('forgeax-metrics.schema.json self-validate (w2)', () => {
+describe('schemas/forgeax-metrics.schema.json self-validate (w2)', () => {
   it('(a) valid instance fixture passes ajv compiled validator', () => {
     const loaded = loadSchema(schemaPath);
     expect(loaded.errorCode).toBeUndefined();

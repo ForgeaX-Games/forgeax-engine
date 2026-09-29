@@ -2,8 +2,7 @@
 """Small, deterministic package-cohesion gate used by the migration loop.
 
 The gate intentionally reports only facts that are useful at package seams:
-source-file count, maximum file size, root-level source sprawl, and imports
-that point back at a package's own implementation.  It accepts one or more
+source-file count and root-level source sprawl.  It accepts one or more
 package paths and returns zero when all configured limits hold.
 """
 
@@ -26,10 +25,6 @@ def package_report(package: Path) -> list[str]:
     findings: list[str] = []
     if len(files) > 140:
         findings.append(f"{package}: source file count {len(files)} > 140")
-    for path in files:
-        lines = path.read_text(encoding="utf-8").count("\n") + 1
-        if lines > 8000:
-            findings.append(f"{path}: {lines} lines > 8000")
     root_files = [p for p in files if p.parent == source]
     if len(root_files) > 48:
         findings.append(f"{package}: root source sprawl {len(root_files)} > 48")

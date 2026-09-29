@@ -1,12 +1,22 @@
 import type { WorldExecutionHealth } from '@forgeax/engine-ecs/shared';
+import type { GpuPassTimingOptions } from '@forgeax/engine-render';
 import type { Result, RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { AppError } from '../errors';
 
-export const EXECUTION_TIERS = ['main-serial', 'engine-worker', 'shared'] as const;
-export type ExecutionTier = (typeof EXECUTION_TIERS)[number];
-
-export const EXECUTION_REQUESTED_TIERS = ['auto', ...EXECUTION_TIERS] as const;
-export type ExecutionRequestedTier = (typeof EXECUTION_REQUESTED_TIERS)[number];
+export const EXECUTION_WORKERS = ['engine', 'render', 'kernels'] as const;
+export type ExecutionWorker = (typeof EXECUTION_WORKERS)[number];
+/** Auto enables each supported worker; true requires it; false disables it. */
+export type ExecutionWorkerPolicy = 'auto' | boolean;
+export type ExecutionWorkersOptions = Readonly<
+  Partial<Record<ExecutionWorker, ExecutionWorkerPolicy>>
+>;
+export type ExecutionWorkerDecision = {
+  readonly requested: ExecutionWorkerPolicy;
+  readonly enabled: boolean;
+  readonly reason: 'enabled' | 'disabled' | 'engine-disabled' | 'capability-unavailable';
+  readonly missingCapabilities: readonly ExecutionCapabilityName[];
+};
+export type ExecutionSelection = Readonly<Record<ExecutionWorker, ExecutionWorkerDecision>>;
 
 export const EXECUTION_CAPABILITY_NAMES = [
   'worker',
@@ -27,20 +37,6 @@ export interface ExecutionCapabilityFact {
 export type ExecutionCapabilities = Readonly<
   Record<ExecutionCapabilityName, ExecutionCapabilityFact>
 >;
-
-export type ExecutionSelectionReason =
-  | 'explicit-request'
-  | 'auto-shared'
-  | 'auto-engine-worker'
-  | 'auto-main-serial';
-
-export interface ExecutionSelection {
-  readonly requestedTier: ExecutionRequestedTier;
-  readonly actualTier: ExecutionTier;
-  readonly selectionReason: ExecutionSelectionReason;
-  readonly missingCapabilities: readonly ExecutionCapabilityName[];
-  readonly sharedEvidencePassed: boolean;
-}
 
 export type ExecutionEngineHealth = 'idle' | 'starting' | 'running' | 'stopped' | 'faulted';
 export type ExecutionWorldHealth = WorldExecutionHealth;
@@ -84,6 +80,20 @@ export interface ExecutionAudioReport {
 }
 
 /**
+ * Renderer-independent frame pacing facts owned by the active host loop.
+ * `inFlight` is always `submitted - completed`; `highWater` records the
+ * greatest observed in-flight depth and `throttledTicks` counts frame-loop
+ * ticks that were intentionally skipped at the two-receipt credit limit.
+ */
+export interface ExecutionFrameInspection {
+  readonly submitted: number;
+  readonly completed: number;
+  readonly inFlight: number;
+  readonly highWater: number;
+  readonly throttledTicks: number;
+}
+
+/**
  * Serializable asset-catalog configuration copied into the selected Engine
  * realm. The URL is resolved by that realm, so a Worker never closes over a
  * Host-side CatalogSource or Registry instance.
@@ -91,14 +101,13 @@ export interface ExecutionAudioReport {
 export interface ExecutionAssetCatalog {
   readonly url: string;
   readonly expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
+  /** Optional dev binding used by the Worker to lazy-import a missing pack. */
+  readonly runtimeBinding?: RuntimeAssetBinding;
 }
 
 export interface ExecutionReport {
-  readonly schemaVersion: 1;
-  readonly requestedTier: ExecutionRequestedTier;
-  readonly actualTier: ExecutionTier | null;
-  readonly selectionReason: ExecutionSelectionReason | null;
-  readonly sharedEvidencePassed: boolean;
+  readonly schemaVersion: 2;
+  readonly workers: ExecutionSelection;
   readonly capabilities: ExecutionCapabilities;
   readonly engine: {
     readonly realm: 'host' | 'worker';
@@ -117,6 +126,7 @@ export interface ExecutionReport {
     readonly dispatched: number;
     readonly completed: number;
   };
+  readonly frame: ExecutionFrameInspection;
   readonly performance: {
     readonly hostFrameMs: ExecutionMeasurement | null;
     readonly engineUpdateMs: ExecutionMeasurement | null;
@@ -124,11 +134,19 @@ export interface ExecutionReport {
     readonly hostAudioMs: ExecutionMeasurement | null;
   };
   readonly audio: ExecutionAudioReport;
+  /** Present only for the independently paced Render Worker. Frame IDs are source simulation IDs. */
+  readonly render?: {
+    readonly epoch: number;
+    readonly state: 'alive' | 'rebuilding' | 'failed' | 'stopped';
+    readonly submittedFrame: number;
+    readonly completedFrame: number;
+  };
   readonly fault: ExecutionFault | null;
 }
 
 export interface ExecutionOptions {
-  readonly tier?: ExecutionRequestedTier;
+  /** Each omitted worker policy defaults to auto, including render plus kernels. */
+  readonly workers?: ExecutionWorkersOptions;
   /** Absolute or import.meta.url-relative URL of an ExecutionBootstrapEntry module. */
   readonly bootstrap: string | URL;
   /** Structured-cloneable input supplied identically to main and Worker realms. */
@@ -145,8 +163,20 @@ export interface ExecutionOptions {
    * execution is requested.
    */
   readonly assetCatalog?: ExecutionAssetCatalog;
+  /** Opt-in diagnostics created inside the selected execution realm. */
+  readonly diagnostics?: ExecutionDiagnosticsOptions;
   readonly startupTimeoutMs?: number;
   readonly frameTimeoutMs?: number;
+}
+
+/** Structured-cloneable diagnostics switches shared by main and Worker hosts. */
+export interface ExecutionDiagnosticsOptions {
+  /** Create the existing Profiler in the selected realm. */
+  readonly profiler?: boolean;
+  /** Attach the existing RHI recorder in the selected realm. */
+  readonly rhiCapture?: boolean;
+  /** Construct bounded GPU pass timing inside the Renderer-owning realm. */
+  readonly gpuPassTiming?: GpuPassTimingOptions;
 }
 
 export type ExecutionBootstrapValue =

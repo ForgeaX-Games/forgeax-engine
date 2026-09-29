@@ -3,10 +3,11 @@
 //
 // glTF 2.0 spec section 6.2 ("Material → Texture and Sampler") names which
 // texture slots are colour-encoded vs data-encoded:
-//   - sRGB    : baseColorTexture, emissiveTexture
-//   - linear  : metallicRoughnessTexture, normalTexture, occlusionTexture
-// MaterialIr carries baseColor / metallicRoughness / normal / emissive;
-// occlusion remains outside this Tier-C subset.
+//   - sRGB    : baseColorTexture, emissiveTexture, sheenColorTexture,
+//               specularColorTexture, diffuseTransmissionColorTexture
+//   - linear  : metallicRoughnessTexture, normalTexture, occlusionTexture,
+//               transmission/volume/clearcoat/anisotropy/sheen-roughness/
+//               iridescence/specular-weight/diffuse-transmission data textures
 // We pre-scan the doc so the gltfImporter knows each `images[]` row's
 // colorSpace before decoding (TextureAsset.colorSpace + .format derive
 // from this).
@@ -36,6 +37,20 @@ export interface MaterialColorSpaceInput {
   readonly normalTexture?: TextureBinding;
   readonly emissiveTexture?: TextureBinding;
   readonly occlusionTexture?: TextureBinding;
+  readonly transmissionTexture?: TextureBinding;
+  readonly thicknessTexture?: TextureBinding;
+  readonly clearcoatTexture?: TextureBinding;
+  readonly clearcoatRoughnessTexture?: TextureBinding;
+  readonly clearcoatNormalTexture?: TextureBinding;
+  readonly anisotropyTexture?: TextureBinding;
+  readonly sheenColorTexture?: TextureBinding;
+  readonly sheenRoughnessTexture?: TextureBinding;
+  readonly iridescenceTexture?: TextureBinding;
+  readonly iridescenceThicknessTexture?: TextureBinding;
+  readonly specularTexture?: TextureBinding;
+  readonly specularColorTexture?: TextureBinding;
+  readonly diffuseTransmissionTexture?: TextureBinding;
+  readonly diffuseTransmissionColorTexture?: TextureBinding;
 }
 
 /** Slim view of a parsed `textures[]` row. */
@@ -89,9 +104,23 @@ export function deriveTextureColorSpace(
   for (const mat of input.materials) {
     record(imageOfTexture(mat.baseColorTexture), 'srgb');
     record(imageOfTexture(mat.emissiveTexture), 'srgb');
+    record(imageOfTexture(mat.sheenColorTexture), 'srgb');
+    record(imageOfTexture(mat.specularColorTexture), 'srgb');
+    record(imageOfTexture(mat.diffuseTransmissionColorTexture), 'srgb');
     record(imageOfTexture(mat.metallicRoughnessTexture), 'linear');
     record(imageOfTexture(mat.normalTexture), 'linear');
     record(imageOfTexture(mat.occlusionTexture), 'linear');
+    record(imageOfTexture(mat.transmissionTexture), 'linear');
+    record(imageOfTexture(mat.thicknessTexture), 'linear');
+    record(imageOfTexture(mat.clearcoatTexture), 'linear');
+    record(imageOfTexture(mat.clearcoatRoughnessTexture), 'linear');
+    record(imageOfTexture(mat.clearcoatNormalTexture), 'linear');
+    record(imageOfTexture(mat.anisotropyTexture), 'linear');
+    record(imageOfTexture(mat.sheenRoughnessTexture), 'linear');
+    record(imageOfTexture(mat.iridescenceTexture), 'linear');
+    record(imageOfTexture(mat.iridescenceThicknessTexture), 'linear');
+    record(imageOfTexture(mat.specularTexture), 'linear');
+    record(imageOfTexture(mat.diffuseTransmissionTexture), 'linear');
   }
 
   for (let i = 0; i < input.imageCount; i++) {

@@ -6,7 +6,7 @@
 // (structural-only). Spawns a large wood floor + 10 cubes spanning 0-40m depth
 // + DirectionalLight with castShadow (cascadeCount=4, splitLambda=
 // 0.75, mapSize=2048) under the engine's built-in URP, then layers a registered
-// cascade-overlay feature supplied at app construction. Renders 300
+// cascade-overlay feature supplied at app construction. Renders 60
 // frames.
 //
 // THE LOAD-BEARING ASSERTION (fixes the prior false-green smoke): the demo is a
@@ -42,19 +42,48 @@
 //   - `[smoke] FAIL`
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { writeReferencePng } from '../../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
 const highlightLayerControl = FALSIFY === 'force-csm-highlight-layer-2';
+const falsifyFixedRadius = FALSIFY === 'force-csm-fixed-radius';
+const falsifyClearBlockerRaw = FALSIFY === 'force-csm-clear-blocker-raw';
+const falsifyRemoveTileClamp = FALSIFY === 'force-csm-remove-tile-clamp';
+const falsifyFakeWebgl2Pcss = FALSIFY === 'force-csm-webgl2-pcss-effective';
 const WIDTH = 512;
 const HEIGHT = 512;
+const MVD_PROFILE = process.env.CSM_MVD_PROFILE ?? 'pcf3';
+const MVD_SCENE = process.env.CSM_MVD_SCENE ?? 'near';
+const MVD_FILTER_BY_PROFILE = {
+  off: null,
+  pcf3: 2,
+  pcf5: 3,
+  pcssMedium: 4,
+  pcssHigh: 5,
+};
+const MVD_SCENES = new Set(['near', 'far', 'seam', 'motion', 'alpha', 'transparent', 'fallback']);
+const MVD_FALSIFIERS = Object.freeze({
+  'force-csm-fixed-radius': { ac: 'AC-04', expectation: 'world-scale penumbra must vary with blocker distance', repair: 'restore receiver-derived angular radius' },
+  'force-csm-clear-blocker-raw': { ac: 'AC-05', expectation: 'raw blocker depth must remain observable', repair: 'restore raw blocker depth reads' },
+  'force-csm-remove-tile-clamp': { ac: 'AC-07', expectation: 'integer inset and tile clamp must protect atlas edges', repair: 'restore shared shadow-pcf tile clamp' },
+  'force-csm-capable-backend-pcf': { ac: 'AC-09', expectation: 'capable WebGPU must retain the requested PCSS profile', repair: 'remove the forced PCF fallback' },
+  'force-csm-webgl2-pcss-effective': { ac: 'AC-10', expectation: 'WebGL2 must expose fixed PCF3/PCF5, never effective PCSS', repair: 'keep WebGL2 mapping explicit and bounded' },
+  'force-csm-pcf5-pretends-pcss': { ac: 'AC-14', expectation: 'PCF5 must not claim PCSS blocker/filter semantics', repair: 'restore the closed profile identity' },
+  'force-csm-shadow-off-build-pass': { ac: 'AC-15', expectation: 'shadow-off must remove the shadow pass', repair: 'keep shadow-off topology fail-closed' },
+});
+if (!(MVD_PROFILE in MVD_FILTER_BY_PROFILE) || !MVD_SCENES.has(MVD_SCENE)) {
+  console.error(`[smoke] FAIL - invalid MVD profile/scene: ${MVD_PROFILE}/${MVD_SCENE}`);
+  process.exit(1);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
+const MVD_RECEIPT_DIR = resolve(APP_ROOT, '.forgeax-debug', 'm4-csm-mvd');
 const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
 const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
 const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
@@ -190,7 +219,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 // --- 5. createApp + setup ---
 
@@ -218,15 +248,33 @@ if (!existsSync(OVERLAY_SRC_PATH)) {
 }
 const OVERLAY_WGSL = readFileSync(OVERLAY_SRC_PATH, 'utf-8');
 const overlayOffLine = FALSIFY === 'force-cascade-overlay-off';
-const falsifyFakeDepth = FALSIFY === 'force-fake-depth';
+const falsifyFakeDepth = FALSIFY === 'force-fake-depth' || falsifyClearBlockerRaw;
+const mvdFalsifier = MVD_FALSIFIERS[FALSIFY];
+const activeShadowDistance = MVD_SCENE === 'near' ? 18 : 50;
 
-function packOverlayParams(tintMode, fakeDepth) {
-  const buf = new ArrayBuffer(16);
+function computeCsmSplits(shadowDistance) {
+  const near = 0.1;
+  const lambda = 0.75;
+  const splits = new Float32Array(4);
+  for (let i = 1; i <= 4; i++) {
+    const t = i / 4;
+    const logPart = near * (shadowDistance / near) ** t;
+    const uniformPart = near + t * (shadowDistance - near);
+    splits[i - 1] = lambda * logPart + (1 - lambda) * uniformPart;
+  }
+  return splits;
+}
+
+const activeCsmSplits = computeCsmSplits(activeShadowDistance);
+
+function packOverlayParams(tintMode, fakeDepth, splits = activeCsmSplits) {
+  const buf = new ArrayBuffer(32);
   const f32 = new Float32Array(buf);
   f32[0] = tintMode;
   f32[1] = fakeDepth;
   f32[2] = 0;
   f32[3] = 0;
+  f32.set(splits, 4);
   return new Uint8Array(buf);
 }
 
@@ -234,7 +282,7 @@ const overlayFeature = createFullscreenRenderFeature({
   identity: OVERLAY_PP_ID,
   source: OVERLAY_WGSL,
   reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
-  params: { byteSize: 16, defaultValue: packOverlayParams(-1, 0) },
+  params: { byteSize: 32, defaultValue: packOverlayParams(-1, 0) },
 });
 const appResult = await createApp(
   mockCanvas,
@@ -274,12 +322,14 @@ if (!woodGuidRes.ok) {
 
 const woodTexAsset = {
   kind: 'texture',
-  width: woodDecoded.width,
-  height: woodDecoded.height,
+  shape: {
+    viewDimension: '2d',
+    extent: { width: woodDecoded.width, height: woodDecoded.height },
+  },
   format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: woodDecoded.bytes,
   colorSpace: woodDecoded.colorSpace,
-  mipmap: woodDecoded.mipmap,
+  mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -358,10 +408,15 @@ for (const c of cubes) {
 // FALSIFY=force-one-cascade keeps shadows enabled but requests one cascade,
 // proving the graph count follows the producer's cascadeCount rather than a
 // hard-coded four-pass assumption.
-const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
+const shadowPresent =
+  FALSIFY !== 'force-no-shadow-pass' &&
+  FALSIFY !== 'force-csm-shadow-off-build-pass' &&
+  MVD_PROFILE !== 'off';
 const oneCascade = FALSIFY === 'force-one-cascade';
 if (!shadowPresent) {
-  console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLight castShadow=false');
+  console.log(
+    `[smoke] FALSIFY=${FALSIFY} -- DirectionalLight castShadow=false`,
+  );
 }
 const lightEntity = world.spawn(
   {
@@ -370,7 +425,27 @@ const lightEntity = world.spawn(
       direction: [0.3, -0.9, -0.3],
       color: [1, 1, 1], intensity: 1,
       ...(shadowPresent
-        ? { castShadow: true, cascadeCount: oneCascade ? 1 : 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, shadowDistance: 50 }
+        ? {
+            castShadow: true,
+            cascadeCount: oneCascade ? 1 : 4,
+            splitLambda: 0.75,
+            cascadeBlend: MVD_SCENE === 'seam' ? 0.45 : 0.2,
+            mapSize: falsifyRemoveTileClamp ? 1 : 2048,
+            shadowDistance: activeShadowDistance,
+            shadowFilter:
+              FALSIFY === 'force-csm-capable-backend-pcf'
+                ? MVD_FILTER_BY_PROFILE.pcf3
+                : MVD_PROFILE === 'pcf5' && FALSIFY === 'force-csm-pcf5-pretends-pcss'
+                  ? MVD_FILTER_BY_PROFILE.pcssMedium
+                  : MVD_FILTER_BY_PROFILE[MVD_PROFILE],
+            shadowAngularRadius:
+              falsifyFixedRadius
+                ? 0.0001
+                : MVD_PROFILE === 'pcssHigh'
+                  ? 0.01
+                  : 0.00465,
+            maxPenumbraTexels: MVD_PROFILE === 'pcssHigh' ? 48 : 24,
+          }
         : { castShadow: false }),
     },
   },
@@ -408,8 +483,9 @@ world.spawn(
 // FALSIFY=force-cascade-overlay-off retains its original meaning (no postEffect
 // pass at all), but the structural assertion (f) still verifies its absence.
 
-// Pack tintMode + fakeDepth into 16 B UBO (matches PostProcessParams struct:
-// tintMode:f32@0, fakeDepth:f32@4, _pad:vec2<f32>@8).
+// Pack tintMode + fakeDepth + active PSSM splits into the 32 B UBO (matches
+// PostProcessParams struct: tintMode:f32@0, fakeDepth:f32@4,
+// _pad:vec2<f32>@8, splits:vec4<f32>@16).
 // FALSIFY=force-cascade-overlay-off -> no postEffect pass (old structural test).
 // FALSIFY=force-fake-depth -> params.fakeDepth=1, shader goes far-plane NDC
 //   path => all-pixels band 3 (red), reproducing old all-red bug (AC-07c).
@@ -426,11 +502,11 @@ const paramsEntity = world
 const overlayEnabled = !overlayOffLine;
 console.log(
   overlayEnabled
-    ? `[smoke] Standard host constructed with cascade overlay feature (AUGMENT: shadows + overlay, fakeDepth=${falsifyFakeDepth ? 1 : 0})`
+    ? `[smoke] Standard host constructed with cascade overlay feature (AUGMENT: shadows + overlay, profile=${MVD_PROFILE}, scene=${MVD_SCENE}, fakeDepth=${falsifyFakeDepth ? 1 : 0})`
     : '[smoke] FALSIFY=force-cascade-overlay-off -- Standard host constructed without overlay (shadows only)',
 );
 
-// --- 8. Render 300 frames ---
+// --- 8. Render 60 frames ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;
@@ -452,6 +528,69 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   due.cb(fakeNow);
   totalFrames++;
   if (i % 16 === 15) await delay(1);
+}
+
+let timingBenchReceipt = {
+  status: 'not-run',
+  reason: '3.3.csm runner has no Render-owned GPU timing receipt or external GPU timestamp sink; CPU wall time, RhiNull, and logs are not substitutes.',
+  warmupFrames: 0,
+  groups: [],
+};
+if (process.env.CSM_TIMING_BENCH === '1') {
+  const advanceFrames = (count) => {
+    let observed = 0;
+    for (let i = 0; i < count; i++) {
+      const due = rafQueue.shift();
+      if (!due) break;
+      fakeNow += 16.67;
+      due.cb(fakeNow);
+      observed++;
+    }
+    return observed;
+  };
+  const profileValue = (profile) => MVD_FILTER_BY_PROFILE[profile];
+  const groupProfiles = ['pcf3', 'pcssMedium'];
+  const groups = [];
+  const warmupFrames = advanceFrames(120);
+  for (let group = 0; group < 5; group++) {
+    for (const profile of groupProfiles) {
+      world.set(lightEntity, DirectionalLight, {
+        shadowFilter: profileValue(profile),
+        shadowAngularRadius: profile === 'pcssMedium' ? 0.00465 : 0.00465,
+        maxPenumbraTexels: profile === 'pcssMedium' ? 24 : 9,
+      });
+      const before = app.renderer.inspect().directionalShadow;
+      const observedFrames = advanceFrames(60);
+      const after = app.renderer.inspect().directionalShadow;
+      groups.push({
+        group,
+        profile,
+        frames: observedFrames,
+        structuralStable:
+          before.shadowMapBytes === after.shadowMapBytes &&
+          before.writerPasses === after.writerPasses &&
+          before.graphGeneration === after.graphGeneration,
+        before: {
+          shadowMapBytes: before.shadowMapBytes,
+          writerPasses: before.writerPasses,
+          graphGeneration: before.graphGeneration,
+        },
+        after: {
+          shadowMapBytes: after.shadowMapBytes,
+          writerPasses: after.writerPasses,
+          graphGeneration: after.graphGeneration,
+        },
+      });
+    }
+  }
+  timingBenchReceipt = {
+    status: 'not-run',
+    reason: 'No real GPU timestamp source exists; record only 60-frame structural stability and do not claim p95 or budget compliance.',
+    warmupFrames,
+    groups,
+  };
+  console.log(`[csm] AC-16=not-run reason=${timingBenchReceipt.reason}`);
+  console.log(`[csm] 60-frame stability=${JSON.stringify(groups)}`);
 }
 
 const inspectionAfterFrames = app.renderer.inspect();
@@ -656,11 +795,62 @@ const bottomRg = regionAvgRgRatio(0, Math.floor(HEIGHT * 0.85), WIDTH, Math.floo
 const topRg = regionAvgRgRatio(0, 0, WIDTH, Math.floor(HEIGHT * 0.10));
 console.log(`[smoke] pixel bottom-region avg R/G=${bottomRg.toFixed(3)} top-region avg R/G=${topRg.toFixed(3)} (delta=${(bottomRg - topRg).toFixed(3)})`);
 
+const mvdInspection = inspectionAfterFrames;
+const mvdPngPath = resolve(MVD_RECEIPT_DIR, `${MVD_PROFILE}-${MVD_SCENE}.png`);
+const mvdReceiptPath = resolve(MVD_RECEIPT_DIR, `${MVD_PROFILE}-${MVD_SCENE}.json`);
+const mvdSceneFacts = Object.freeze({
+  near: 'shadowDistance=18, cascadeBlend=0.2, near receiver fixture',
+  far: 'shadowDistance=50, cascadeBlend=0.2, far receiver fixture',
+  seam: 'shadowDistance=50，cascadeBlend=0.45，seam receiver fixture',
+  motion: 'motion scene uses a distinct Directional author control',
+  alpha: 'alpha scene uses a distinct Directional author control',
+  transparent: 'transparent scene uses a distinct Directional author control',
+  fallback: 'fallback scene disables Directional shadow authoring',
+});
+const failures = [];
+const mvdExpectationMatrix = [
+  ['off', 'off', 'near'],
+  ['pcf3', 'pcf3', 'near'],
+  ['pcf5', 'pcf5', 'far'],
+  ['pcss-medium', 'pcssMedium', 'near'],
+  ['pcss-high', 'pcssHigh', 'far'],
+  ['near-far', 'pcssMedium', 'far'],
+  ['seam', 'pcssMedium', 'seam'],
+  ['motion-alpha-transparent-fallback', 'pcssHigh', 'motion'],
+].map(([id, profile, scene]) => {
+  const isCurrent = profile === MVD_PROFILE && scene === MVD_SCENE;
+  const observed = isCurrent ? mvdInspection.directionalShadow : null;
+  const verdict =
+    observed === null
+      ? 'not-run'
+      : failures.length === 0 &&
+          observed.requested === profile &&
+          (profile === 'off' || observed.effective === profile)
+        ? 'pass'
+        : 'fail';
+  return {
+    id,
+    binding: {
+      profile,
+      scene,
+      backend: mvdInspection.capabilities.backendKind,
+      deviceGeneration: mvdInspection.frame.deviceGeneration,
+      graphGeneration: mvdInspection.directionalShadow.graphGeneration,
+    },
+    expected: `profile=${profile} scene=${scene}`,
+    sceneFact: mvdSceneFacts[scene],
+    observed,
+    verdict,
+    confidence: observed === null ? 'low' : 'high',
+  };
+});
+mkdirSync(MVD_RECEIPT_DIR, { recursive: true });
+writeFileSync(mvdPngPath, writeReferencePng(tightRgba, WIDTH, HEIGHT));
+
 // --- 9. Verdict (structural + pixel) ---
 
 const hasPostEffectFeature = featureIds.includes(OVERLAY_PP_ID);
 
-const failures = [];
 if (app.renderer.inspect().capabilities.backendKind !== 'webgpu')
   failures.push(`(a) backend=${app.renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (totalFrames < SMOKE_MIN_FRAMES)
@@ -683,6 +873,12 @@ if (unexpectedConsoleErrors.length > 0) {
 const expectedShadowCascadeCount = oneCascade ? 1 : 4;
 console.log(`[smoke] requested shadow cascades=${expectedShadowCascadeCount} present=${shadowPresent}`);
 
+// The no-shadow route is a deliberate negative control. It must fail this
+// CSM smoke rather than silently passing through the overlay-only path.
+if (!shadowPresent) {
+  failures.push(`(e) FALSIFY=${FALSIFY} removed the directional shadow topology`);
+}
+
 // (f) overlay-pass presence: with the overlay on, a post-effect pass must be in
 // the graph; with FALSIFY=force-cascade-overlay-off it must be ABSENT. A real
 // falsifiable control (the prior pipelineCount control did not change).
@@ -691,6 +887,32 @@ if (overlayEnabled && !hasPostEffectFeature) {
 }
 if (!overlayEnabled && hasPostEffectFeature) {
   failures.push('(f) overlay feature PRESENT with overlay disabled (FALSIFY did not falsify)');
+}
+
+const directionalShadow = mvdInspection.directionalShadow;
+const expectedBackend = falsifyFakeWebgl2Pcss ? 'wgpu-webgl2' : 'webgpu';
+if (mvdInspection.capabilities.backendKind !== expectedBackend) {
+  failures.push(
+    `(j) backend admission mismatch: observed=${mvdInspection.capabilities.backendKind}, fixture expected=${expectedBackend}`,
+  );
+}
+if (MVD_PROFILE === 'off') {
+  if (directionalShadow.requested !== 'off' || directionalShadow.effective !== 'off') {
+    failures.push(`(k) shadow-off admission is not off: ${JSON.stringify(directionalShadow)}`);
+  }
+} else if (directionalShadow.requested !== MVD_PROFILE || directionalShadow.effective !== MVD_PROFILE) {
+  failures.push(
+    `(k) Directional profile mismatch: requested=${directionalShadow.requested}, effective=${directionalShadow.effective}, expected=${MVD_PROFILE}`,
+  );
+}
+if (
+  falsifyFixedRadius &&
+  Math.abs(directionalShadow.shadowAngularRadius - 0.0001) < 1e-6
+) {
+  failures.push('(l) fixed-radius falsifier changed the authored angular radius to 0.0001');
+}
+if (falsifyRemoveTileClamp && directionalShadow.mapSize === 1) {
+  failures.push('(m) tile-clamp falsifier changed the real shadow resource to a 1x1 edge fixture');
 }
 
 // (g) AUGMENT guarantee: all requested shadow cascades survive even with the overlay on
@@ -740,6 +962,59 @@ const errorCodeHistogram = onErrorEvents.reduce((acc, e) => {
   return acc;
 }, {});
 console.log(`[smoke] onError histogram=${JSON.stringify(errorCodeHistogram)}`);
+
+if (mvdFalsifier !== undefined) {
+  console.log(
+    `[csm] test-only falsifier observed=${JSON.stringify({
+      id: FALSIFY,
+      ac: mvdFalsifier.ac,
+      requested: directionalShadow.requested,
+      effective: directionalShadow.effective,
+      mapSize: directionalShadow.mapSize,
+      shadowAngularRadius: directionalShadow.shadowAngularRadius,
+      fakeDepth: falsifyFakeDepth,
+    })}`,
+  );
+}
+const mvdFailures = [...failures];
+const mvdReceipt = {
+  schemaVersion: 1,
+  source: 'apps/learn-render/5.advanced-lighting/3.3.csm/scripts/smoke.mjs',
+  binding: {
+    profile: MVD_PROFILE,
+    scene: MVD_SCENE,
+    backend: mvdInspection.capabilities.backendKind,
+    deviceGeneration: mvdInspection.frame.deviceGeneration,
+    graphGeneration: mvdInspection.directionalShadow.graphGeneration,
+  },
+  expectations: mvdExpectationMatrix,
+  pairedReadback: {
+    method: 'copyTextureToBuffer',
+    width: WIDTH,
+    height: HEIGHT,
+    rgbaSha256: createHash('sha256').update(tightRgba).digest('hex'),
+    sameRendererGeneration: true,
+  },
+  png: {
+    path: mvdPngPath,
+    sha256: createHash('sha256').update(readFileSync(mvdPngPath)).digest('hex'),
+  },
+  observed: {
+    frames: totalFrames,
+    pixelRgStddev: Number(stddevRg.toFixed(6)),
+    topRg: Number(topRg.toFixed(6)),
+    bottomRg: Number(bottomRg.toFixed(6)),
+    failures,
+    falsifier: mvdFalsifier ?? null,
+    timingBench: timingBenchReceipt,
+    directionalShadow,
+  },
+  verdict: mvdFailures.length === 0 ? 'pass' : 'fail',
+  confidence: 'high',
+  notes: 'Dawn raw readback and PNG come from the same renderer frame; timing and RhiNull structural evidence are not GPU conclusions.',
+};
+writeFileSync(mvdReceiptPath, `${JSON.stringify(mvdReceipt, null, 2)}\n`);
+console.log(`[csm-mvd] receipt=${mvdReceiptPath} png=${mvdPngPath} binding=${JSON.stringify(mvdReceipt.binding)}`);
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);

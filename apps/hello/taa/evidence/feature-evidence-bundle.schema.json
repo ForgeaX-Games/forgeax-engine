@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/hello-taa-feature-evidence-bundle/1",
+  "title": "hello-taa workload-local feature evidence bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "featureId", "backend", "testedRevision", "workloads"],
+  "properties": {
+    "schemaVersion": { "const": "hello-taa-auto-exposure-evidence-bundle/1" },
+    "featureId": { "const": "feat-20260827-auto-exposure-hdr-color-grading" },
+    "backend": { "enum": ["browser-webgpu", "dawn-node"] },
+    "testedRevision": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40}$" },
+    "workloads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manual", "auto", "positive-lut"],
+      "properties": {
+        "manual": { "$ref": "#/$defs/workloadArtifact" },
+        "auto": { "$ref": "#/$defs/workloadArtifact" },
+        "positive-lut": { "$ref": "#/$defs/workloadArtifact" }
+      }
+    }
+  },
+  "$defs": {
+    "workloadArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "testedRevision", "report"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "testedRevision": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40}$" },
+        "report": { "type": "object" }
+      }
+    }
+  }
+}

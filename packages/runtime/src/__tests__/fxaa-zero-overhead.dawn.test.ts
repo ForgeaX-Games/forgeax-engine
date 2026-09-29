@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // fxaa-zero-overhead.dawn.test.ts - feat-20260528-fxaa-post-processing / M3 / w14.
 // Dawn integration test: render hello-cube scene with antialias='none' (default),
 // capture pixel readback, verify the frame is non-empty and consistent across
@@ -39,9 +40,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 describe('feat-20260528-fxaa-post-processing M3 w14: AC-02 zero-overhead pixel test (dawn)', () => {
   it('antialias=none renders non-empty frame with consistent pixel output across frames', async () => {

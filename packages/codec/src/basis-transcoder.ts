@@ -26,14 +26,38 @@ type TranscoderImporter = () => Promise<BasisTranscoderModule>;
 const TRANSCODER_GLUE = new URL('../pkg/basis_transcoder.mjs', import.meta.url);
 const TRANSCODER_WASM = new URL('../pkg/basis_transcoder.wasm', import.meta.url);
 
+function traceBasisPhase(phase: string, detail?: Readonly<Record<string, unknown>>): void {
+  const sink = (
+    globalThis as typeof globalThis & {
+      __forgeaxAssetLoadTrace?: (event: {
+        readonly phase: string;
+        readonly at: number;
+        readonly detail?: Readonly<Record<string, unknown>>;
+      }) => void;
+    }
+  ).__forgeaxAssetLoadTrace;
+  if (sink === undefined) return;
+  try {
+    sink({ phase: `codec.${phase}`, at: Date.now(), ...(detail === undefined ? {} : { detail }) });
+  } catch {
+    // Diagnostics must never change codec behavior.
+  }
+}
+
 const defaultImporter: TranscoderImporter = async () => {
+  traceBasisPhase('basis.glue.import.start', { url: TRANSCODER_GLUE.href });
   const factory = (
     (await import(/* @vite-ignore */ TRANSCODER_GLUE.href)) as {
       default: BasisModuleFactory<BasisTranscoderModule>;
     }
   ).default;
+  traceBasisPhase('basis.glue.import.complete');
+  traceBasisPhase('basis.wasm.factory.start', { url: TRANSCODER_WASM.href });
   const mod = await factory({ locateFile: () => TRANSCODER_WASM.href });
+  traceBasisPhase('basis.wasm.factory.complete');
+  traceBasisPhase('basis.initialize.start');
   mod.initializeBasis();
+  traceBasisPhase('basis.initialize.complete');
   return mod;
 };
 
@@ -56,6 +80,7 @@ let initCount = 0;
 export function initBasisTranscoder(): Promise<BasisTranscoderModule> {
   if (_initPromise !== null) return _initPromise;
   initCount++;
+  traceBasisPhase('basis.init.start');
   _initPromise = importer().catch((cause: unknown) => {
     _initPromise = null;
     throw new Error('codec-init-failed', { cause });
@@ -197,6 +222,7 @@ export async function transcodeKtx2(
   parsed: Ktx2Parsed,
   targetFormat: GPUTextureFormat,
 ): Promise<CodecResult<TranscodedTexture>> {
+  traceBasisPhase('ktx2.transcode.start', { targetFormat });
   let mod: BasisTranscoderModule;
   try {
     mod = await initBasisTranscoder();
@@ -214,6 +240,7 @@ export async function transcodeKtx2(
 
   const file = new mod.KTX2File(parsed.rawBytes);
   try {
+    traceBasisPhase('ktx2.file.start');
     if (!file.isValid()) {
       return codecError('transcode-failed', {
         sourceFormat: 'invalid-ktx2-file',
@@ -228,6 +255,7 @@ export async function transcodeKtx2(
     }
 
     const levels = file.getLevels();
+    traceBasisPhase('ktx2.file.ready', { levels });
     const mips: TranscodedMip[] = [];
     for (let level = 0; level < levels; level++) {
       const info = file.getImageLevelInfo(level, 0, 0);
@@ -240,6 +268,7 @@ export async function transcodeKtx2(
           targetFormat,
         });
       }
+      traceBasisPhase('ktx2.mip.complete', { level });
       mips.push({ level, width: info.origWidth, height: info.origHeight, data: dst });
     }
 

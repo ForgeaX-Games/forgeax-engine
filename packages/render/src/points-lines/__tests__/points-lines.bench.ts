@@ -1,6 +1,12 @@
 import { World } from '@forgeax/engine-ecs';
 import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
 import { buildProfileModel, createProfiler } from '@forgeax/engine-profiler';
+import type { RhiRenderPassEncoder } from '@forgeax/engine-rhi';
+import { rhi } from '@forgeax/engine-rhi-null';
+import { Transform } from '@forgeax/engine-scene';
+import { err, type MeshAsset, ok } from '@forgeax/engine-types';
+import { bench, describe } from 'vitest';
+import { createRenderer as constructRenderer } from '../../assembly/factory';
 import {
   Camera,
   Lines,
@@ -10,13 +16,7 @@ import {
   PointShapeValue,
   Points,
   perspective,
-} from '@forgeax/engine-render';
-import type { RhiRenderPassEncoder } from '@forgeax/engine-rhi';
-import { rhi } from '@forgeax/engine-rhi-null';
-import { Transform } from '@forgeax/engine-scene';
-import { err, type MeshAsset, ok } from '@forgeax/engine-types';
-import { bench, describe } from 'vitest';
-import { createRenderer as constructRenderer } from '../../assembly/factory';
+} from '../../index';
 import { recordPointsLinesDraw } from '../../record/main-pass-geometry';
 import { admitPointsLines } from '../admission';
 import { PointsLinesExpansionCache } from '../expansion-cache';
@@ -83,7 +83,7 @@ function snapshot(component: 'Points' | 'Lines') {
   });
 }
 
-const MATERIAL = Materials.unlit([0.1, 0.9, 1, 1], { castShadow: false });
+const MATERIAL = Materials.unlit([0.1, 0.9, 1, 1]);
 
 function manifestUrl(): string {
   return `data:application/json,${encodeURIComponent(JSON.stringify({ schemaVersion: '1.0.0', entries: [] }))}`;
@@ -186,7 +186,7 @@ function makeRealScene(
 async function createRealRoute(): Promise<RealRoute> {
   const profiler = createProfiler();
   const renderer = await constructRenderer(
-    { getContext: () => null },
+    { width: 1280, height: 720, getContext: () => null },
     { rhi, profiler },
     { shaderManifestUrl: manifestUrl() },
   );
@@ -328,6 +328,15 @@ const LINE_MESH = buildMesh('line-list');
 validateWorkload(POINT_MESH, LINE_MESH);
 const REAL_ROUTE = await createRealRoute();
 const REAL_PROFILE = await captureProfile(REAL_ROUTE, REAL_ROUTE.pointsLines);
+const recordedPointsLines = REAL_ROUTE.renderer.inspect().renderScene.pointsLines;
+if (
+  recordedPointsLines.length !== 2 ||
+  recordedPointsLines.some((entry) => entry.drawCount === 0 || entry.refusal !== undefined) ||
+  !recordedPointsLines.some((entry) => entry.pointCount === POINT_COUNT) ||
+  !recordedPointsLines.some((entry) => entry.segmentCount === SEGMENT_COUNT)
+) {
+  throw new Error('Points/Lines benchmark must draw its complete authored workload');
+}
 const DIRECT_PROFILE = await captureProfile(REAL_ROUTE, REAL_ROUTE.direct);
 
 function phaseDeltas(): Readonly<Record<string, number>> {

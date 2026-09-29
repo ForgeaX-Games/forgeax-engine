@@ -9,12 +9,13 @@ import {
 const expectedCodes = [
   'fbx-mesh-type-unsupported',
   'fbx-animation-target-invalid',
+  'fbx-lod-display-mode-unsupported',
 ] as const satisfies readonly FbxErrorCode[];
 
 describe('FBX error policy owner', () => {
   it('derives the exact public hint record without changing its own keys', () => {
-    expect(expectedCodes).toHaveLength(2);
-    expect(new Set(expectedCodes)).toHaveLength(2);
+    expect(expectedCodes).toHaveLength(3);
+    expect(new Set(expectedCodes)).toHaveLength(3);
     expect(Object.keys(FBX_ERROR_HINTS)).toEqual([...expectedCodes]);
     expect(Object.getOwnPropertyNames(FBX_ERROR_HINTS)).toEqual([...expectedCodes]);
     expect(Object.getOwnPropertySymbols(FBX_ERROR_HINTS)).toEqual([]);

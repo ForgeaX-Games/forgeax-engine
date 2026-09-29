@@ -15,7 +15,7 @@
 //       arrow dump and the [reason] / [rerun] / [hint] 3-section footer
 //       (D-P7).
 //   (c) file-pair allow-list match drop: clone listed in
-//       .jscpd.json#filePairIgnore -> drop -> exit 0.
+//       config/jscpd.json#filePairIgnore -> drop -> exit 0.
 //   (d) F-2 boundary trio:
 //       (i)  self-clone {a, a}: kept by default; allow-list {a, a} drops.
 //       (ii) trio mutual A<->B / A<->C / B<->C: 3 distinct clones; allow
@@ -31,7 +31,7 @@
 //   --report-path <path>         (already in M1) override report file.
 //   --allow-pair <pathA::pathB>  (T-009+) repeated, in-test injection
 //                                point for filePairIgnore so fixtures do
-//                                not have to mutate the real .jscpd.json.
+//                                not have to mutate the real config/jscpd.json.
 //
 // AC anchors:
 //   AC-05 / AC-06 / AC-16 / AC-20 / AC-21 / AC-22

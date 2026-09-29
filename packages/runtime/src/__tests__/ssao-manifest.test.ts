@@ -3,7 +3,7 @@
 //
 // plan-strategy D-E: hdrp-ssao.wgsl must be registered in the manifest with
 // two entry points (fs_ssao_calc + fs_ssao_blur). The content-marker triage
-// in createRenderer uses 'fs_ssao_calc' (same pattern as bloomBrightExtract).
+// in createRenderer uses 'fs_ssao_calc' (same pattern as BloomDownsampleParams).
 //
 // RED phase: the manifest entry does not exist yet (hdrp-ssao.wgsl is not
 // registered in the vite-plugin-shader engine entries). This test asserts
@@ -82,8 +82,8 @@ describe('SSAO manifest entry assertions (w25 — RED)', () => {
     expect(count).toBe(1);
   });
 
-  it('(f) fs_ssao_calc marker triage pattern matches bloomBrightExtract pattern', () => {
-    // Same triage pattern as: if (entry.wgsl.includes('bloomBrightExtract'))
+  it('(f) fs_ssao_calc marker triage pattern matches the Bloom marker pattern', () => {
+    // Same triage pattern as: if (entry.wgsl.includes('BloomDownsampleParams'))
     // For SSAO: if (entry.wgsl.includes('fs_ssao_calc'))
     const ssaoEntry = manifest.entries.find((e) => e.wgsl.includes('fs_ssao_calc'));
     expect(ssaoEntry).toBeDefined();

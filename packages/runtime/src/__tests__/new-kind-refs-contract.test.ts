@@ -62,12 +62,11 @@ describe('AC-07 — a new reference appears in the load graph via envelope.refs'
     // new reference field whose GUID it dropped into refs[]".
     reg.catalog(parseGuid(EXTRA_REF_GUID), {
       kind: 'texture',
-      width: 1,
-      height: 1,
+      shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
       format: 'rgba8unorm',
       data: new Uint8Array(4),
       colorSpace: 'srgb',
-      mipmap: false,
+      mips: { kind: 'none' },
     });
 
     const packIndex = [

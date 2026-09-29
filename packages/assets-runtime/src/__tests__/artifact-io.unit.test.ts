@@ -1,6 +1,6 @@
-import type { ArtifactDescriptor } from '@forgeax/engine-types';
+import { type ArtifactDescriptor, ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { readArtifact } from '../registry/artifact-io';
+import { ArtifactReadCache, readArtifact } from '../registry/artifact-io';
 
 const GUID = '11111111-1111-4111-8111-111111111111';
 
@@ -15,6 +15,33 @@ function response(bytes: Uint8Array, ok = true): Response {
 }
 
 describe('artifact I/O', () => {
+  it('does not evict a replacement read when a cleared request fails late', async () => {
+    const cache = new ArtifactReadCache();
+    type ReadResult = Awaited<ReturnType<typeof readArtifact>>;
+    let finish!: (value: ReadResult) => void;
+    const old = cache.read(
+      'a\0body',
+      () =>
+        new Promise<ReadResult>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    cache.clearPrefix('a\0');
+    const replacement: ReadResult = ok(Uint8Array.of(2));
+    const reader = vi.fn(async () => replacement);
+    await cache.read('a\0body', reader);
+    const failed = await readArtifact({
+      packageUrl: '/a.pack.json',
+      guid: GUID,
+      artifactKey: 'body',
+      descriptor: descriptor('../invalid'),
+    });
+    expect(failed.ok).toBe(false);
+    finish(failed);
+    await old;
+    expect(await cache.read('a\0body', reader)).toBe(replacement);
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
   it('rejects an empty media type before fetching artifact bytes', async () => {
     const fetcher = vi.fn();
     const result = await readArtifact(

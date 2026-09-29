@@ -19,7 +19,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 describe('w4 -- Transform vec schema (AC-05)', () => {
@@ -46,7 +46,7 @@ describe('w4 -- Transform vec schema (AC-05)', () => {
   });
 
   it('(b) world column keeps array<f32, 16> (outside the M2 migration surface)', () => {
-    const schema = componentSchema(Transform) as Record<string, string>;
+    const schema = componentSchema(GlobalTransform) as Record<string, string>;
     expect(schema.world).toBe('array<f32, 16>');
   });
 });

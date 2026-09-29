@@ -17,6 +17,7 @@ import { attachBrowserInputBackend } from '../browser-backend';
 function buildEnvForClickTest(opts?: {
   hostPredicate?: (() => boolean) | undefined;
   lockProvider?: { requestLock: () => void; exitLock: () => void } | undefined;
+  focus?: boolean | undefined;
 }): {
   backend: ReturnType<typeof attachBrowserInputBackend>['backend'];
   fireClick(): void;
@@ -68,7 +69,7 @@ function buildEnvForClickTest(opts?: {
   const doc = {
     ...makeTarget('document'),
     hasFocus() {
-      return true;
+      return opts?.focus ?? true;
     },
     visibilityState: 'visible',
     get pointerLockElement() {
@@ -142,6 +143,12 @@ describe('browser-backend-lock-gate.test.ts (w2)', () => {
       env.fireClick();
       expect(env.requestPointerLockCalls.count).toBe(1);
       expect(env.backend.sample().pointerLocked).toBe(false); // pointerlockchange not fired yet
+    });
+
+    it('does not add a silent focus gate to a trusted click', () => {
+      const env = buildEnvForClickTest({ focus: false, hostPredicate: () => true });
+      env.fireClick();
+      expect(env.requestPointerLockCalls.count).toBe(1);
     });
 
     it('gameGate=true (default), hostPredicate=false -> no lock', () => {

@@ -1,18 +1,71 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { chmod, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { chmod, cp, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
-export const SDK_MANIFEST_VERSION = '1.6.0';
+export const SDK_MANIFEST_VERSION = '1.8.0';
 export const SDK_SOURCE_ROOT = 'source/engine';
 export const SDK_SOURCE_FORMAT = 'git-archive-public-snapshot';
-export const SDK_TEMPLATES = Object.freeze([
-  Object.freeze({ id: 'empty', sourceRoot: 'templates/game-empty', default: true }),
-  Object.freeze({ id: 'game-3d', sourceRoot: 'templates/game-3d', default: false }),
-]);
+
+const SDK_REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+/** Discover distributable templates from their required template.json files. */
+export function discoverSdkTemplates(templatesRoot = resolve(SDK_REPOSITORY_ROOT, 'templates')) {
+  const templates = [];
+  for (const entry of readdirSync(templatesRoot, { withFileTypes: true }).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    if (!entry.isDirectory()) continue;
+    // Workspace dependency materialization is not a template declaration.
+    if (entry.name === 'node_modules') continue;
+    const descriptorPath = resolve(templatesRoot, entry.name, 'template.json');
+    if (!existsSync(descriptorPath)) {
+      throw new Error(`sdk-template-descriptor-missing: ${entry.name}`);
+    }
+    let descriptor;
+    try {
+      descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8'));
+    } catch (cause) {
+      throw new Error(
+        `sdk-template-descriptor-invalid: ${entry.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+    if (
+      descriptor === null ||
+      typeof descriptor !== 'object' ||
+      typeof descriptor.id !== 'string' ||
+      descriptor.id !== entry.name ||
+      descriptor.id.length === 0 ||
+      descriptor.id.includes('/') ||
+      descriptor.id.includes('\\') ||
+      typeof descriptor.purpose !== 'string' ||
+      descriptor.purpose.trim().length === 0 ||
+      descriptor.defaultIdentity === null ||
+      typeof descriptor.defaultIdentity !== 'object' ||
+      typeof descriptor.defaultIdentity.name !== 'string' ||
+      descriptor.defaultIdentity.name.trim().length === 0 ||
+      typeof descriptor.defaultIdentity.packageName !== 'string' ||
+      descriptor.defaultIdentity.packageName.trim().length === 0 ||
+      !Array.isArray(descriptor.journeys) ||
+      descriptor.journeys.length === 0 ||
+      descriptor.journeys.some(
+        (journey) => typeof journey !== 'string' || journey.trim().length === 0,
+      )
+    ) {
+      throw new Error(`sdk-template-descriptor-invalid: ${entry.name}`);
+    }
+    templates.push(Object.freeze({ id: descriptor.id, sourceRoot: `templates/${entry.name}` }));
+  }
+  if (templates.length === 0) throw new Error(`sdk-template-descriptor-empty: ${templatesRoot}`);
+  return Object.freeze(templates);
+}
+
+export const SDK_TEMPLATES = discoverSdkTemplates();
 export const SDK_SOURCE_EXCLUDED_PATHS = Object.freeze(['.gitmodules', 'forgeax-engine-assets']);
+export const SDK_SOURCE_GIT_DEPENDENCIES = Object.freeze(['third_party/wgpu']);
 export const SDK_RETIRED_PACKAGE_FILES = Object.freeze({
   '@forgeax/engine-vite-plugin-pack': Object.freeze([
     'dist/runtime.d.ts',
@@ -33,8 +86,9 @@ export const SDK_RESOURCE_ALLOWLIST = Object.freeze([
     files: Object.freeze(['cook-receipt.json', 'sky.hdr', 'sky.hdr.meta.json']),
   }),
 ]);
-// SDK templates are source-complete. game-3d generates every asset from
-// ScriptablePack authoring sources, so no contributor-only template resource
+// SDK templates are source-complete. game-3d generates procedural assets from
+// ScriptablePack authoring sources and cooks its readable UI source pair through
+// the project-owned UI importer, so no contributor-only template resource
 // closure is copied into either the ZIP or public source snapshot.
 export const SDK_TEMPLATE_RESOURCE_ALLOWLIST = Object.freeze([]);
 export const SDK_SOURCE_WASM = Object.freeze([
@@ -125,6 +179,72 @@ export async function filesUnder(root, directory = root) {
   return files;
 }
 
+export async function prepareWasmPackageForPack({
+  packageRoot,
+  helperSource,
+  postinstallScripts,
+  wasmFiles,
+}) {
+  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-wasm-stage-'));
+  const stagedPackageRoot = resolve(root, 'package');
+  await cp(packageRoot, stagedPackageRoot, { recursive: true });
+  for (const controlFile of ['.gitignore', '.npmignore']) {
+    await rm(resolve(stagedPackageRoot, controlFile), { force: true });
+  }
+  const helperPath = resolve(stagedPackageRoot, 'scripts', 'ensure-wasm-lib.mjs');
+  await cp(helperSource, helperPath);
+  for (const script of postinstallScripts) {
+    const scriptPath = resolve(stagedPackageRoot, script);
+    const source = await readFile(scriptPath, 'utf8');
+    const rewritten = source.replace(
+      '../../../scripts/lib/ensure-wasm-lib.mjs',
+      './ensure-wasm-lib.mjs',
+    );
+    if (rewritten === source) {
+      throw new Error(`sdk-postinstall-helper-import-missing: ${script}`);
+    }
+    await writeFile(scriptPath, rewritten);
+  }
+  for (const file of wasmFiles) {
+    try {
+      await readFile(resolve(stagedPackageRoot, file));
+    } catch (error) {
+      throw new Error(`sdk-source-wasm-path: ${file}`, { cause: error });
+    }
+  }
+  return { root, packageRoot: stagedPackageRoot };
+}
+
+// SDK manifests can contain tens of thousands of source files. Keep digest
+// and metadata reads below the host's file-descriptor limit while preserving
+// input order for deterministic manifests.
+export async function mapConcurrent(items, mapper, concurrency = 32) {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new Error(`sdk-concurrency-invalid: ${concurrency}`);
+  }
+  const results = new Array(items.length);
+  let next = 0;
+  let failure;
+  // After the first failure no new item starts, and in-flight work settles
+  // before the failure is rethrown so no child process outlives the caller.
+  async function worker() {
+    while (failure === undefined) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (cause) {
+        failure ??= { cause };
+      }
+    }
+  }
+  const workers = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  if (failure !== undefined) throw failure.cause;
+  return results;
+}
+
 export async function artifact(root, path) {
   const bytes = await readFile(path);
   return {
@@ -153,6 +273,92 @@ export async function fetchWithRetry(input, init, attempts = 4) {
   throw lastError;
 }
 
+async function probeNpmPublication(item, tag, fetchImpl) {
+  const encodedName = encodeURIComponent(item.name);
+  const headers = { accept: 'application/json', 'cache-control': 'no-cache' };
+  try {
+    const metadataResponse = await fetchImpl(
+      `https://registry.npmjs.org/${encodedName}/${encodeURIComponent(item.version)}`,
+      { headers },
+    );
+    if (!metadataResponse.ok) {
+      return { ready: false, reason: `metadata-http-${metadataResponse.status}` };
+    }
+    const metadata = await metadataResponse.json();
+    if (metadata.dist?.integrity !== item.integrity) {
+      throw new Error(`npm-published-integrity-mismatch: ${item.name}`);
+    }
+    if (typeof metadata.dist.tarball !== 'string') {
+      return { ready: false, reason: 'tarball-url-missing' };
+    }
+    const [tagsResponse, tarballResponse] = await Promise.all([
+      fetchImpl(`https://registry.npmjs.org/-/package/${encodedName}/dist-tags`, { headers }),
+      fetchImpl(metadata.dist.tarball, {
+        method: 'HEAD',
+        headers: { 'cache-control': 'no-cache' },
+      }),
+    ]);
+    if (!tagsResponse.ok) {
+      return { ready: false, reason: `dist-tags-http-${tagsResponse.status}` };
+    }
+    const tags = await tagsResponse.json();
+    if (tags[tag] !== item.version) {
+      return { ready: false, reason: `dist-tag-${tag}-${tags[tag] ?? 'missing'}` };
+    }
+    if (!tarballResponse.ok) {
+      return { ready: false, reason: `tarball-http-${tarballResponse.status}` };
+    }
+    return { ready: true };
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.startsWith('npm-published-integrity-mismatch:')) {
+      throw cause;
+    }
+    return { ready: false, reason: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+export async function waitForNpmPublications(
+  items,
+  {
+    tag,
+    fetchImpl = fetch,
+    timeoutMs = 20 * 60_000,
+    intervalMs = 10_000,
+    now = Date.now,
+    sleep = (duration) => new Promise((accept) => setTimeout(accept, duration)),
+  },
+) {
+  const startedAt = now();
+  const pending = new Map(items.map((item) => [item.name, item]));
+  const reasons = new Map();
+  while (pending.size > 0) {
+    const probes = await Promise.all(
+      [...pending.values()].map(async (item) => ({
+        item,
+        result: await probeNpmPublication(item, tag, fetchImpl),
+      })),
+    );
+    for (const { item, result } of probes) {
+      if (result.ready) {
+        pending.delete(item.name);
+        reasons.delete(item.name);
+      } else {
+        reasons.set(item.name, result.reason);
+      }
+    }
+    if (pending.size === 0) return { verified: items.length, tag };
+    const elapsed = now() - startedAt;
+    if (elapsed >= timeoutMs) {
+      const detail = [...pending.keys()]
+        .map((name) => `${name}: ${reasons.get(name) ?? 'unknown'}`)
+        .join(', ');
+      throw new Error(`npm-publication-not-visible: ${detail}`);
+    }
+    await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+  }
+  return { verified: items.length, tag };
+}
+
 export function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (value === null || typeof value !== 'object') return value;
@@ -161,6 +367,31 @@ export function stable(value) {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => [key, stable(child)]),
   );
+}
+
+/**
+ * Remove runner-specific workspace prefixes from the pnpm license report.
+ * The report is shipped inside the SDK, so absolute checkout paths would make
+ * otherwise identical builds differ between self-hosted runners.
+ */
+export function normalizeLicenseReport(value, workspaceRoot) {
+  const root = resolve(workspaceRoot);
+  const visit = (entry, field) => {
+    if (Array.isArray(entry)) return entry.map((child) => visit(child, field));
+    if (entry === null || typeof entry !== 'object') {
+      if (field !== 'paths' || typeof entry !== 'string') return entry;
+      if (!isAbsolute(entry)) return entry.split(sep).join('/');
+      const path = relative(root, entry).split(sep).join('/');
+      if (path === '..' || path.startsWith('../')) {
+        throw new Error(`sdk-license-path-outside-workspace: ${entry}`);
+      }
+      return path || '.';
+    }
+    return Object.fromEntries(
+      Object.entries(entry).map(([key, child]) => [key, visit(child, key)]),
+    );
+  };
+  return visit(value, '');
 }
 
 function stablePackageManifest(manifest) {
@@ -226,6 +457,16 @@ function paxPathRecord(path) {
   }
 }
 
+// Hydrated binary payloads can arrive from a release archive or a local cache
+// with different filesystem execute bits.  Execute permission is not part of
+// the payload contract, and carrying it into the npm archive would make the
+// carrier digest depend on which runner hydrated the bytes.  Keep script and
+// CLI permissions intact while giving binary assets one canonical mode.
+function packageArchiveMode(archivePath, mode) {
+  if (archivePath.endsWith('.wasm')) return 0o644;
+  return (mode & 0o111) === 0 ? 0o644 : 0o755;
+}
+
 function appendTarEntry(blocks, header, bytes) {
   blocks.push(header, bytes);
   const padding = (512 - (bytes.byteLength % 512)) % 512;
@@ -236,59 +477,68 @@ export async function normalizePackageArchive(path, execFileAsync, options = {})
   const root = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-package-'));
   try {
     await execFileAsync('tar', ['-xzf', path, '-C', root]);
-    const manifestPath = resolve(root, 'package', 'package.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    if (options.releaseVersion !== undefined) {
-      manifest.version = options.releaseVersion;
-      for (const section of [
-        'dependencies',
-        'devDependencies',
-        'optionalDependencies',
-        'peerDependencies',
-      ]) {
-        const dependencies = manifest[section];
-        if (
-          dependencies === null ||
-          typeof dependencies !== 'object' ||
-          Array.isArray(dependencies)
-        )
-          continue;
-        for (const name of Object.keys(dependencies)) {
-          if (name === '@forgeax/engine-runtime' || name.startsWith('@forgeax/engine-')) {
-            dependencies[name] = options.releaseVersion;
-          }
-        }
-      }
-    }
-    stablePackageManifest(manifest);
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    const blocks = [];
-    let fileIndex = 0;
-    for (const file of await filesUnder(root)) {
-      const bytes = await readFile(file);
-      const info = await lstat(file);
-      const archivePath = relative(root, file).split(sep).join('/');
-      const mode = (info.mode & 0o111) === 0 ? 0o644 : 0o755;
-      try {
-        appendTarEntry(blocks, tarHeader(archivePath, bytes, mode), bytes);
-      } catch (cause) {
-        if (!(cause instanceof Error) || !cause.message.startsWith('sdk-package-path-too-long:')) {
-          throw cause;
-        }
-        const pax = paxPathRecord(archivePath);
-        appendTarEntry(blocks, tarHeader(`PaxHeaders/${fileIndex}`, pax, 0o644, 'x'), pax);
-        appendTarEntry(blocks, tarHeader(`package/.pax-${fileIndex}`, bytes, mode), bytes);
-      }
-      fileIndex += 1;
-    }
-    blocks.push(Buffer.alloc(1024));
-    const compressed = gzipSync(Buffer.concat(blocks), { level: 9, mtime: 0 });
-    compressed[9] = 0xff;
-    await writeFile(path, compressed);
-    await chmod(path, 0o644);
+    await writePackageArchive(root, path, options);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+}
+
+/** Write an already staged package with the same canonical tar/gzip format. */
+export async function writePackageArchive(root, path, options = {}) {
+  const manifestPath = resolve(root, 'package', 'package.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (options.releaseVersion !== undefined) {
+    manifest.version = options.releaseVersion;
+    for (const section of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+    ]) {
+      const dependencies = manifest[section];
+      if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies))
+        continue;
+      for (const name of Object.keys(dependencies)) {
+        if (name === '@forgeax/engine-runtime' || name.startsWith('@forgeax/engine-')) {
+          dependencies[name] = options.releaseVersion;
+        }
+      }
+    }
+  }
+  stablePackageManifest(manifest);
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const blocks = [];
+  let fileIndex = 0;
+  // TypeScript's incremental build cache is a producer-local implementation
+  // detail, not a publishable package surface.  It can encode resolver
+  // state that differs between clean runners (for example platform-specific
+  // optional dependency paths), which would make an otherwise identical SDK
+  // tarball fail the cross-runner reproducibility gate.
+  const files = (await filesUnder(resolve(root, 'package'))).filter(
+    (file) => !file.endsWith('.tsbuildinfo'),
+  );
+  for (const file of files) {
+    const bytes = await readFile(file);
+    const info = await lstat(file);
+    const archivePath = relative(root, file).split(sep).join('/');
+    const mode = packageArchiveMode(archivePath, info.mode);
+    try {
+      appendTarEntry(blocks, tarHeader(archivePath, bytes, mode), bytes);
+    } catch (cause) {
+      if (!(cause instanceof Error) || !cause.message.startsWith('sdk-package-path-too-long:')) {
+        throw cause;
+      }
+      const pax = paxPathRecord(archivePath);
+      appendTarEntry(blocks, tarHeader(`PaxHeaders/${fileIndex}`, pax, 0o644, 'x'), pax);
+      appendTarEntry(blocks, tarHeader(`package/.pax-${fileIndex}`, bytes, mode), bytes);
+    }
+    fileIndex += 1;
+  }
+  blocks.push(Buffer.alloc(1024));
+  const compressed = gzipSync(Buffer.concat(blocks), { level: 9, mtime: 0 });
+  compressed[9] = 0xff;
+  await writeFile(path, compressed);
+  await chmod(path, 0o644);
 }
 
 function withoutVolatileStoreTime(value) {

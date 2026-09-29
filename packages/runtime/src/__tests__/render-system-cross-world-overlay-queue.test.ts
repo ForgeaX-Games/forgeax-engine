@@ -33,7 +33,7 @@ import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { extractFrames } from '../../../render/src/render-system-extract';
+import { extractFrames } from '../../../render/src/render-system-extract-tail';
 
 // Two-index owner shape w4-w6 introduces (see w1 for rationale).
 interface OwnerSplit {

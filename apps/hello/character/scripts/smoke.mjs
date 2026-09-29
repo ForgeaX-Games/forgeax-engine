@@ -5,7 +5,7 @@
 // character + static ground, start the app, poll for PhysicsWorld (async WASM),
 // then DRIVE the character with PhysicsWorld.moveAndSlide for N frames and assert:
 //   1. createApp + app ready/start/stop succeed, app.onError == 0.
-//   2. >= 300 frames observed.
+//   2. >= 60 frames observed.
 //   3. PhysicsWorld resource is present after WASM init.
 //   4. moveAndSlide advanced the character horizontally (it did NOT fall through
 //      the ground): final pos x > initial pos x by a clear margin, and pos y stays
@@ -25,8 +25,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WASM_LOAD_TIMEOUT_MS = Number.parseInt(
   process.env.FORGEAX_SMOKE_PHYSICS_WASM_TIMEOUT_MS ?? '10000',
   10,
@@ -345,6 +346,7 @@ if (failures.length > 0) {
 console.log(
   `[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, pos x ${initialPosX} -> ${finalPosX}, grounded=${groundedFrames}/${drivenFrames}, app.onError=0`,
 );
+emitSmokeReceipt('hello-character/smoke', totalFrames);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

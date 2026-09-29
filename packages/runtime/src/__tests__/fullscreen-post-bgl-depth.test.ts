@@ -130,4 +130,22 @@ describe('buildBindGroupLayoutDescriptor — fullscreen-post-with-scene-depth-ms
     });
     expect(out.entries[4]?.sampler?.type).toBe('non-filtering');
   });
+
+  it('keeps multisampled color and depth in one five-slot paired ABI', () => {
+    const out = buildBindGroupLayoutDescriptor(makeSpec(), {
+      kind: 'fullscreen-post-with-paired-msaa',
+    });
+    expect(out.label).toBe('fullscreen-post-with-paired-msaa-bgl');
+    expect(out.entries).toHaveLength(5);
+    expect(out.entries[0]?.texture).toMatchObject({
+      sampleType: 'unfilterable-float',
+      viewDimension: '2d',
+      multisampled: true,
+    });
+    expect(out.entries[3]?.texture).toMatchObject({
+      sampleType: 'depth',
+      viewDimension: '2d',
+      multisampled: true,
+    });
+  });
 });

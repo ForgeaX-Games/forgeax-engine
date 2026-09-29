@@ -7,6 +7,7 @@
   "description": "Vite host that mounts an asset-resident Cordis gameplay plugin into createApp. Local smoke host for engine/templates.",
   "scripts": {
     "dev": "vite",
+    "dev:water": "FORGEAX_SURFACE_ONLY=1 FORGEAX_WATER_DEMO=1 vite --open /water.html",
     "test:preview-port": "pnpm build && node scripts/preview-port.integration.mjs",
     "test:catalog-refresh": "pnpm --dir ../.. build:app preview && node scripts/catalog-host-refresh.browser.mjs",
     "smoke:production-material-edit": "pnpm --dir ../.. build:app preview && node scripts/smoke-production-material-edit.mjs",
@@ -51,6 +52,7 @@
     "smoke:clean-copy-reentry": "node scripts/smoke-clean-copy-reentry.mjs",
     "smoke:clean-copy-production": "pnpm --dir ../.. build:app preview && FORGEAX_CLEAN_COPY_MODE=production node scripts/smoke-clean-copy-reentry.mjs",
     "smoke:cross-backend-replay": "node scripts/smoke-cross-backend-replay.mjs",
+    "smoke:planar-reflection": "node scripts/smoke-planar-reflection.mjs",
     "smoke:rhi-debug": "node scripts/smoke-cross-backend-replay.mjs",
     "smoke:webgl2-material": "node scripts/smoke-webgl2-material.mjs",
     "smoke:webgl2-production": "pnpm --dir ../.. build:app preview && FORGEAX_WEBGL2_MODE=production node scripts/smoke-webgl2-material.mjs"
@@ -83,7 +85,7 @@
     },
     "assetRoots": [
       "../../templates/game-3d/assets",
-      "../../templates/game-default/assets",
+      "../../apps/game-capability-lab/assets",
       "../../forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json",
       "../../forgeax-engine-assets/sfx",
       "../../forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json",
@@ -96,6 +98,7 @@
     ]
   },
   "dependencies": {
+    "@forgeax/engine": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-devkit": "workspace:*",
@@ -110,6 +113,7 @@
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-tool-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
@@ -126,6 +130,7 @@
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-rhi-null": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
@@ -133,7 +138,7 @@
     "@webgpu/types": "^0.1.71",
     "pixelmatch": "^7.0.0",
     "pngjs": "^7.0.0",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

@@ -24,6 +24,14 @@ export interface RelationshipOptions {
   readonly sourceField: string;
   readonly targetName: string;
   readonly targetField: string;
+  /**
+   * Components materialized with the writable source side.  This is the
+   * relationship equivalent of `defineComponent(..., { requires })`: the
+   * dependency is resolved once at the structural boundary, never by a frame
+   * system.  It applies only to the source; the reverse target remains an
+   * engine-owned projection.
+   */
+  readonly sourceRequires?: readonly Component[];
   readonly exclusive?: boolean;
   readonly linkedSpawn?: boolean;
   /** Allow a source to point at its own holder (e.g. self-animated entities). */
@@ -75,7 +83,11 @@ export function defineRelationship<
   };
   const target = defineComponent(options.targetName, targetFields);
   const sourceFields: FieldsInput = { [options.sourceField]: { type: 'entity' } };
-  const source = defineComponent(options.sourceName, sourceFields);
+  const source = defineComponent(
+    options.sourceName,
+    sourceFields,
+    options.sourceRequires === undefined ? undefined : { requires: options.sourceRequires },
+  );
 
   roles.set(source, {
     kind: 'source',

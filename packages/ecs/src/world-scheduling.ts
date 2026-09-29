@@ -1,6 +1,5 @@
 // @forgeax/engine-ecs -- World schedule and resource orchestration.
 
-import type { Handle } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { CommandBufferImpl } from './commands';
 import {
@@ -471,29 +470,4 @@ export function worldScheduleUsesComponent(world: World, component: object): boo
     }
   }
   return false;
-}
-
-export function worldAllocUniqueRef<Target extends string, T>(
-  world: World,
-  target: Target,
-  payload: T,
-  onRelease?: (payload: T) => void,
-): Handle<Target, 'unique'> {
-  return world[worldInternal].getUniqueRefs().alloc(target, payload, onRelease);
-}
-
-export function worldAllocSharedRef<Target extends string, T>(
-  world: World,
-  target: Target,
-  payload: T,
-): Handle<Target, 'shared'> {
-  return world[worldInternal].getSharedRefs().alloc(target, payload);
-}
-
-export function worldInternSharedRef<Target extends string, T extends object>(
-  world: World,
-  target: Target,
-  payload: T,
-): Handle<Target, 'shared'> {
-  return world[worldInternal].getSharedRefs().intern(target, payload);
 }

@@ -1,47 +1,8 @@
-// hdrp-ssao.wgsl — HDRP Screen-Space Ambient Occlusion.
-// feat-20260612-hdrp-ssao M2 / w8.
-//
-// Two fullscreen fragment passes following LO 5.9:
-//   fs_ssao_calc — 64-sample hemisphere SSAO with range check, writes R8 scalar.
-//   fs_ssao_blur — 4x4 box blur (16 tap), reads ssaoRaw, writes R8 scalar.
-//
-// plan-strategy D-1: SSAO owns its uniform group (@group(2)) with view +
-//   projection + inverseProjection (3 mat4, 192 B UBO). Does NOT read View UBO.
-// plan-strategy D-2: exactly 2 pass, no H/V split.
-// requirements OOS-3: 4x4 box blur only; no depth-aware/bilateral.
-// requirements OOS-4: no depth-reconstruction path for normals; reads normal from
-//   g-buffer RT0 (packed world-space normal, 0.5*n+0.5 in rgba16f).
-//
-// BGL layout (@group(0), SSAO-dedicated; w37 expansion for D-A/D-D + dawn fix):
-//   @binding(0) var<uniform> ssao_uniform : SsaoUniform   (256 B UBO)
-//   @binding(1) var<uniform> ssao_kernel : array<vec4<f32>,64>  (1024 B UBO)
-//   @binding(2) var ssao_noise_texture : texture_2d<f32>  (4x4 rgba32float)
-//   @binding(3) var ssao_noise_sampler : sampler          (filtering, for noise tile)
-//   @binding(4) var gbuffer_normal : texture_2d<f32>      (RT0, packed world normal)
-//   @binding(5) var hdr_depth : texture_depth_2d          (hardware depth)
-//   @binding(6) var ssao_depth_sampler : sampler          (non-filtering, for hdr_depth)
-//   @binding(7) var ssaoRaw : texture_2d<f32>             (half-res calc output, blur input)
-//   @binding(8) var ssaoSampler : sampler                 (filtering, for ssaoRaw)
-//
-// Sampler split (w37 dawn-blocker fix): WebGPU validation requires depth
-// textures (sampleType=depth) to be sampled with non-filtering or comparison
-// samplers, not filtering. Pre-w37 the BGL had a single `filtering` sampler at
-// binding 3 paired with hdr_depth at binding 5, which crashed every HDRP PSO
-// build on dawn. ssao_depth_sampler at binding 6 is the non-filtering sampler
-// dedicated to hdr_depth; ssao_noise_sampler at binding 3 stays filtering for
-// the float noise/normal textures.
-//
-// fs_ssao_calc: reads g-buffer normal + hdrDepth, writes half-res R8.
-// fs_ssao_blur: reads ssaoRaw (half-res R8), writes half-res R8 (D-D fix:
-//   pre-w37 blur erroneously read gbuffer_normal — copy-paste typo from
-//   fs_ssao_calc).
-//
-// Vertex stage: both passes use fullscreen_triangle from common.wgsl.
-//
-// Research F1-F6 (LO 5.9 GLSL -> WGSL translation), KB ref:
-//   .forgeax-harness/knowledge-base/references/repos/learnopengl/src/5.advanced_lighting/9.ssao/
+// Screen-space AO: view-space hemisphere sampling and bilateral filtering.
+// Both passes consume the same current-frame depth and world normals.
 
 #define_import_path forgeax_hdrp::ssao
+#import forgeax_pbr::gbuffer::{loadStandardNormalRoughness}
 
 #import forgeax_view::common::{fullscreen_triangle, FullscreenOutput}
 
@@ -57,7 +18,8 @@ struct SsaoUniform {
   view              : mat4x4<f32>,  // world -> view
   projection        : mat4x4<f32>,  // view -> clip
   inverseProjection : mat4x4<f32>,  // NDC -> view
-  intensityPad      : vec4<f32>,    // x = intensity, y = radius, z = bias
+  intensityPad      : vec4<f32>,    // intensity, radius, bias, sample budget
+  algorithmPad      : vec4<f32>,    // x: 0 = hemisphere SSAO, 1 = GTAO
 };
 
 // ── SSAO binding declarations (@group(2)) ───────────────────────────────────
@@ -66,11 +28,17 @@ struct SsaoUniform {
 @group(0) @binding(1) var<uniform> ssao_kernel  : array<vec4<f32>, 64>;
 @group(0) @binding(2) var ssao_noise_texture          : texture_2d<f32>;
 @group(0) @binding(3) var ssao_noise_sampler          : sampler;
-@group(0) @binding(4) var gbuffer_normal              : texture_2d<f32>;
+@group(0) @binding(4) var gbuffer_normal              : texture_2d<u32>;
 @group(0) @binding(5) var hdr_depth                   : texture_depth_2d;
 @group(0) @binding(6) var ssao_depth_sampler          : sampler;
 @group(0) @binding(7) var ssaoRaw                     : texture_2d<f32>;
 @group(0) @binding(8) var ssaoSampler                 : sampler;
+
+fn ssaoNormal(uv : vec2<f32>) -> vec3<f32> {
+  let size = vec2<i32>(textureDimensions(gbuffer_normal));
+  let pixel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - 1);
+  return loadStandardNormalRoughness(gbuffer_normal, pixel).xyz;
+}
 
 // ── vertex: fullscreen triangle (SSOT in common.wgsl) ───────────────────────
 
@@ -88,33 +56,116 @@ fn vs_ssao(@builtin(vertex_index) vertex_index : u32) -> SsaoVsOut {
   return out;
 }
 
+// GTAO: cosine-weighted slice integral (Jimenez et al., Algorithm 1).
+// Sources and deliberate differences: packages/render/README.md, GTAO references.
+// hNegative <= 0 <= hPositive are visibility horizons measured from viewDir.
+fn gtaoSliceIntegral(n: f32, hNegative: f32, hPositive: f32) -> f32 {
+  return 0.25 * (2.0 * cos(n) + 2.0 * (hNegative + hPositive) * sin(n)
+    - cos(2.0 * hNegative - n) - cos(2.0 * hPositive - n));
+}
+
+fn aoViewPosition(uv: vec2<f32>, depth: f32) -> vec3<f32> {
+  let p = ssao_uniform.inverseProjection * vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), depth, 1.0);
+  return p.xyz / p.w;
+}
+
+fn gtaoVisibility(uv: vec2<f32>) -> f32 {
+  let dimensions = vec2<i32>(textureDimensions(hdr_depth));
+  // Depth and reconstructed position must refer to the SAME full-res texel.
+  // Half-res fragment UVs lie between texel centers, particularly at odd extents.
+  let pixel = clamp(vec2<i32>(uv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - 1);
+  let centerUv = (vec2<f32>(pixel) + 0.5) / vec2<f32>(dimensions);
+  let depth = textureLoad(hdr_depth, pixel, 0);
+  if (depth <= 0.0) { return 1.0; }
+  let position = aoViewPosition(centerUv, depth);
+  let normal = normalize((ssao_uniform.view * vec4<f32>(ssaoNormal(centerUv), 0.0)).xyz);
+  // Orthographic view rays are parallel. normalize(-position) is wrong here.
+  let perspective = abs(ssao_uniform.projection[3][3]) < 0.5;
+  let viewDir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(-position), perspective);
+  let radius = ssao_uniform.intensityPad.y;
+  let bias = ssao_uniform.intensityPad.z;
+  let budget = u32(ssao_uniform.intensityPad.w);
+  let slices = select(select(2u, 4u, budget >= 32u), 8u, budget >= 64u);
+  // Four radial samples per side: low/medium/high = 16/32/64 depth taps.
+  let noise = fract(52.9829189 * fract(dot(vec2<f32>(pixel), vec2<f32>(0.06711056, 0.00583715))));
+  // Integrate blocked arcs: the unoccluded hemisphere is analytically 1.
+  // Subtracting the same slice's open integral avoids finite-angle baseline
+  // darkening on sloped surfaces, without changing the occluded arc equation.
+  var occlusion = 0.0;
+  let basisX = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), viewDir));
+  let basisY = cross(viewDir, basisX);
+  for (var slice = 0u; slice < slices; slice++) {
+    let angle = (f32(slice) + noise) * 3.14159265359 / f32(slices);
+    // Uniform azimuth about the view ray, not about screen Z. Project this
+    // slice onto the constant-Z sampling plane for perspective-correct UVs.
+    let tangent = basisX * cos(angle) + basisY * sin(angle);
+    let axis = cross(tangent, viewDir);
+    let direction = normalize(tangent - viewDir * (tangent.z / max(viewDir.z, 0.00001)));
+    let projected = normal - axis * dot(normal, axis);
+    let projectedLength = length(projected);
+    if (projectedLength < 0.00001) { continue; }
+    let n = atan2(dot(projected, tangent), dot(projected, viewDir));
+    let low = vec2<f32>(cos(n + 1.57079632679), cos(n - 1.57079632679));
+    var horizons = low;
+    for (var step = 0u; step < 4u; step++) {
+      let t = (f32(step) + 0.5 + 0.5 * noise) / 4.0;
+      for (var side = 0u; side < 2u; side++) {
+        let sign = select(1.0, -1.0, side == 1u);
+        let probe = position + sign * direction * radius * t * t;
+        let clip = ssao_uniform.projection * vec4<f32>(probe, 1.0);
+        if (clip.w <= 0.0) { continue; }
+        let sampleUv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + 0.5;
+        if (any(sampleUv < vec2<f32>(0.0)) || any(sampleUv >= vec2<f32>(1.0))) { continue; }
+        let samplePixel = vec2<i32>(sampleUv * vec2<f32>(dimensions));
+        if (all(samplePixel == pixel)) { continue; }
+        let sampleDepth = textureLoad(hdr_depth, samplePixel, 0);
+        if (sampleDepth <= 0.0) { continue; }
+        let snappedUv = (vec2<f32>(samplePixel) + 0.5) / vec2<f32>(dimensions);
+        let delta = aoViewPosition(snappedUv, sampleDepth) - position;
+        let distance = length(delta);
+        // Ignore surface self-intersection and geometry outside the local sphere.
+        if (distance <= 0.00001 || dot(delta, normal) <= bias || distance >= radius) { continue; }
+        // Radius falloff starts at 50%, matching UE's documented default ratio.
+        let falloff = clamp(2.0 - 2.0 * distance / radius, 0.0, 1.0);
+        let cosine = dot(delta / distance, viewDir);
+        horizons[side] = max(horizons[side], mix(low[side], cosine, falloff));
+      }
+    }
+    let hNegative = n + clamp(-acos(clamp(horizons.y, -1.0, 1.0)) - n, -1.57079632679, 1.57079632679);
+    let hPositive = n + clamp(acos(clamp(horizons.x, -1.0, 1.0)) - n, -1.57079632679, 1.57079632679);
+    let openIntegral = gtaoSliceIntegral(n, n - 1.57079632679, n + 1.57079632679);
+    occlusion += projectedLength * max(0.0, openIntegral - gtaoSliceIntegral(n, hNegative, hPositive));
+  }
+  return clamp(1.0 - occlusion / f32(slices), 0.0, 1.0);
+}
+
 // ── fs_ssao_calc: 64-sample hemisphere SSAO (LO 5.9) ────────────────────────
 
 @fragment
 fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
+  if (ssao_uniform.algorithmPad.x > 0.5) { return gtaoVisibility(in.uv); }
   // Reconstruct view-space position from depth + NDC.
   let depth = textureSampleLevel(hdr_depth, ssao_depth_sampler, in.uv, 0);
   // NDC reconstruction: screen-space xy in [-1,1], depth in [0,1].
-  let ndc = vec4<f32>(in.uv * 2.0 - 1.0, depth, 1.0);
+  if (depth <= 0.0) { return 1.0; }
+  let ndc = vec4<f32>(in.uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), depth, 1.0);
   // Transform NDC -> view via inverse projection.
   var viewPosH = ssao_uniform.inverseProjection * ndc;
   viewPosH = viewPosH / viewPosH.w;
   let viewPos = viewPosH.xyz;
 
-  // Read and unpack world-space normal from g-buffer RT0.
-  let packedNormal = textureSample(gbuffer_normal, ssao_noise_sampler, in.uv).rgb;
-  let worldNormal = normalize(packedNormal * 2.0 - 1.0);
+  // Read and decode the packed world-space normal.
+  let worldNormal = ssaoNormal(in.uv);
 
   // Rotate world normal to view-space.
   let viewNormal = normalize((ssao_uniform.view * vec4<f32>(worldNormal, 0.0)).xyz);
 
   // Read noise for per-pixel TBN rotation.
-  let noiseScale = vec2<f32>(textureDimensions(ssao_noise_texture, 0)) / 4.0;
   // Actually: scale factor is screenDim / noiseDim. Use a fixed factor for half-res.
   // The noise texture is 4x4 and tiled via REPEAT sampling.
   let screenDim = vec2<f32>(textureDimensions(gbuffer_normal, 0));
-  let noiseUV = in.uv * screenDim / 4.0;
-  let randomVec = normalize(textureSample(ssao_noise_texture, ssao_noise_sampler, noiseUV).xyz);
+  let noiseUV = in.uv * screenDim / 8.0;
+  let randomVec = normalize(textureSampleLevel(ssao_noise_texture, ssao_noise_sampler, noiseUV, 0).xyz);
 
   // TBN: Gram-Schmidt orthonormalization (tangent-space -> view-space).
   let tangent = normalize(randomVec - viewNormal * dot(randomVec, viewNormal));
@@ -125,50 +176,66 @@ fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
   let radius = ssao_uniform.intensityPad.y;
   let bias = ssao_uniform.intensityPad.z;
 
+  let sampleCount = u32(clamp(ssao_uniform.intensityPad.w, 16.0, 64.0));
   var occlusion = 0.0;
-  for (var i = 0u; i < 64u; i = i + 1u) {
+  for (var i = 0u; i < sampleCount; i = i + 1u) {
     // Tangent-space sample -> view-space via TBN.
-    let sampleTangent = ssao_kernel[i].xyz;
+    let sampleTangent = ssao_kernel[i * 64u / sampleCount].xyz;
     var sampleView = TBN * sampleTangent;
     sampleView = viewPos + sampleView * radius;
 
     // Project sample to screen.
     var offset = ssao_uniform.projection * vec4<f32>(sampleView, 1.0);
+    if (offset.w <= 0.0) { continue; }
     offset = offset / offset.w;
-    offset = offset * 0.5 + 0.5;
+    let sampleUv = offset.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    if (any(sampleUv < vec2<f32>(0.0)) || any(sampleUv > vec2<f32>(1.0))) { continue; }
 
     // Sample depth at the projected screen location.
-    let sampleDepth = textureSampleLevel(hdr_depth, ssao_depth_sampler, offset.xy, 0);
+    let sampleDepth = textureSampleLevel(hdr_depth, ssao_depth_sampler, sampleUv, 0);
     // Reconstruct view-space z of the sampled fragment (at offset.xy).
-    var sampledViewPosH = ssao_uniform.inverseProjection * vec4<f32>(offset.xy * 2.0 - 1.0, sampleDepth, 1.0);
+    var sampledViewPosH = ssao_uniform.inverseProjection * vec4<f32>(offset.xy, sampleDepth, 1.0);
     sampledViewPosH = sampledViewPosH / sampledViewPosH.w;
     let sampledViewZ = sampledViewPosH.z;
 
     // Range check: smoothstep based on distance along view-z axis.
-    let rangeCheck = smoothstep(0.0, 1.0, radius / abs(viewPos.z - sampledViewZ));
+    let rangeCheck = smoothstep(0.0, 1.0, radius / max(abs(viewPos.z - sampledViewZ), 0.0001));
     let sampleContrib = select(0.0, 1.0, sampledViewZ >= sampleView.z + bias);
     occlusion += sampleContrib * rangeCheck;
   }
 
-  occlusion = 1.0 - (occlusion / 64.0);
+  occlusion = 1.0 - (occlusion / f32(sampleCount));
   return occlusion;
 }
 
-// ── fs_ssao_blur: 4x4 box blur (LO 5.9, OOS-3) ─────────────────────────────
+// Symmetric depth/normal-aware filter. Never spread a foreground contact
+// shadow across a background edge or wrap the opposite screen border.
+fn ssaoViewZ(uv: vec2<f32>, depth: f32) -> f32 {
+  let p = ssao_uniform.inverseProjection * vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), depth, 1.0);
+  return p.z / p.w;
+}
 
 @fragment
-fn fs_ssao_blur(in : SsaoVsOut) -> @location(0) f32 {
-  // D-D fix: blur reads ssaoRaw (half-res calc output), not gbuffer_normal.
-  // Pre-w37 the dimensions + sample texture both incorrectly named
-  // gbuffer_normal — copy-paste typo from fs_ssao_calc that produced no
-  // occlusion at all (the blur ran a 4x4 average over packed world normals).
-  let texelSize = 1.0 / vec2<f32>(textureDimensions(ssaoRaw, 0));
-  var result = 0.0;
-  for (var x = -2; x < 2; x = x + 1) {
-    for (var y = -2; y < 2; y = y + 1) {
-      let offset = vec2<f32>(f32(x), f32(y)) * texelSize;
-      result += textureSample(ssaoRaw, ssaoSampler, in.uv + offset).r;
+fn fs_ssao_blur(in: SsaoVsOut) -> @location(0) f32 {
+  let depth = textureSampleLevel(hdr_depth, ssao_depth_sampler, in.uv, 0);
+  if (depth <= 0.0) { return 1.0; }
+  let z = ssaoViewZ(in.uv, depth);
+  let normal = ssaoNormal(in.uv);
+  let texel = 1.0 / vec2<f32>(textureDimensions(ssaoRaw));
+  var total = 0.0;
+  var weight = 0.0;
+  for (var y = -2; y <= 2; y++) {
+    for (var x = -2; x <= 2; x++) {
+      let uv = in.uv + vec2<f32>(f32(x), f32(y)) * texel;
+      if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { continue; }
+      let d = textureSampleLevel(hdr_depth, ssao_depth_sampler, uv, 0);
+      if (d <= 0.0) { continue; }
+      let n = ssaoNormal(uv);
+      let dz = abs(ssaoViewZ(uv, d) - z);
+      let w = exp(-f32(x*x + y*y) / 4.0) * exp(-dz / max(0.01, ssao_uniform.intensityPad.y * 0.1)) * pow(max(dot(n, normal), 0.0), 8.0);
+      total += textureSampleLevel(ssaoRaw, ssao_depth_sampler, uv, 0).r * w;
+      weight += w;
     }
   }
-  return result / 16.0;
+  return total / max(weight, 0.00001);
 }

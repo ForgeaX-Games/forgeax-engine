@@ -63,14 +63,14 @@ export function registerStatesPlugin(world: World): () => void {
   if (ACTIVE_STATE_RUNTIMES.has(world)) return () => {};
 
   const resourceKeys = new Set<string>();
-  const componentLeases = new Map<string, { dispose(): unknown }>();
+  const componentLeases = new Map<string, () => void>();
   const registerToken = (token: StateToken): void => {
     registerScopedComponents();
     const scopedComponent = getScopedComponent(token);
     if (!componentLeases.has(token.name)) {
       const lease = world.components.register(scopedComponent);
       if (!lease.ok) throw lease.error;
-      componentLeases.set(token.name, lease.value);
+      componentLeases.set(token.name, () => lease.value.dispose().unwrap());
     }
     const defaultValueIdx = token.nameToIdx.get(token.defaultValue);
     if (defaultValueIdx === undefined) return;
@@ -97,18 +97,23 @@ export function registerStatesPlugin(world: World): () => void {
   }
   const unsubscribe = onStateDefined(registerToken);
   ACTIVE_STATE_RUNTIMES.add(world);
+  let retiring = false;
   let disposed = false;
   return () => {
     if (disposed) return;
+    if (!retiring) {
+      retiring = true;
+      unsubscribe();
+      world.removeSystem(Update, TRANSITION_STATES_SYSTEM_NAME);
+      for (const key of resourceKeys) world.removeResource(key);
+    }
+    // Keep rejected leases and the runtime ownership until a retry succeeds.
+    // The World supplies the structured component-in-use recovery error.
+    for (const [name, lease] of componentLeases) {
+      lease();
+      componentLeases.delete(name);
+    }
     disposed = true;
-    unsubscribe();
     ACTIVE_STATE_RUNTIMES.delete(world);
-    world.removeSystem(Update, TRANSITION_STATES_SYSTEM_NAME);
-    for (const key of resourceKeys) {
-      world.removeResource(key);
-    }
-    for (const lease of componentLeases.values()) {
-      lease.dispose();
-    }
   };
 }

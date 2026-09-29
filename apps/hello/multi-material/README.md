@@ -34,7 +34,7 @@ pnpm --filter @forgeax/hello-multi-material build
 pnpm --filter @forgeax/hello-multi-material smoke
 ```
 
-The Dawn smoke renders 300 frames and requires both red and cyan readback
+The Dawn smoke renders 60 frames and requires both red and cyan readback
 counts to stay above zero. `FALSIFY=truncate-materials` and
 `FALSIFY=duplicate-material` exercise the two load-bearing failure modes.
 

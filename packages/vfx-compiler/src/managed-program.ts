@@ -286,14 +286,6 @@ fn ${stage.entryPoint}(@builtin(global_invocation_id) invocation: vec3<u32>) {
 
 /** Managed GPU event ABI appended to every cooked code-first VFX program. */
 export const PARTICLE_EVENT_MANAGED_RUNTIME = `
-struct ForgeaxVfxChannelInput {
-  position: vec4<f32>,
-  strength: f32,
-  sequence: u32,
-  channel: u32,
-  reserved: u32,
-}
-
 struct ForgeaxVfxEvent {
   position: vec4<f32>,
   strength: f32,
@@ -302,44 +294,69 @@ struct ForgeaxVfxEvent {
   reserved: u32,
 }
 
-@group(0) @binding(8) var<storage, read> forgeax_vfx_channel_inputs: array<ForgeaxVfxChannelInput>;
-@group(0) @binding(9) var<storage, read_write> forgeax_vfx_events: array<ForgeaxVfxEvent>;
+// Channel inputs and emitted events share one storage allocation. The
+// simulation runtime stores the input count in topology.y, so a Custom-enabled
+// emitter with channels stays within the WebGPU storage-buffer budget without
+// adding a second event transport or CPU mirror.
+@group(0) @binding(8) var<storage, read_write> forgeax_vfx_event_buffer: array<ForgeaxVfxEvent>;
 
-@compute @workgroup_size(64)
+// Channel inputs are bounded and ordered. One GPU invocation reserves each
+// complete fan-out in that order, so drop-newest is deterministic and a failed
+// reservation never publishes counts or consumes a live physical particle slot.
+@compute @workgroup_size(1)
 fn forgeax_vfx_event_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  let inputIndex = invocation.x;
-  if (inputIndex >= arrayLength(&forgeax_vfx_channel_inputs)) { return; }
-  let input = forgeax_vfx_channel_inputs[inputIndex];
-  if (input.sequence == 0xffffffffu) { return; }
+  if (invocation.x != 0u) { return; }
+  let inputCapacity = forgeax_vfx_runtime.topology.y;
+  let outputCapacity = arrayLength(&forgeax_vfx_event_buffer) - inputCapacity;
+  var particleCount = atomicLoad(&forgeax_vfx_counters.aliveCount);
+  // The output allocation belongs to this tick; diagnostic counts persist
+  // across ticks and must never be used as offsets into a fresh allocation.
+  var eventCount = 0u;
+  var freeSlot = 0u;
+  for (var inputIndex = 0u; inputIndex < inputCapacity; inputIndex += 1u) {
+  let input = forgeax_vfx_event_buffer[inputIndex];
+  if (input.sequence == 0xffffffffu) { continue; }
   let fanOut = max(input.reserved, 1u);
-  let particleIndex = atomicAdd(&forgeax_vfx_counters.aliveCount, fanOut);
-  let eventIndex = atomicAdd(&forgeax_vfx_counters.eventProduced, fanOut);
   if (
-    particleIndex + fanOut > forgeax_vfx_runtime.capacity ||
-    eventIndex + fanOut > arrayLength(&forgeax_vfx_events)
+    fanOut > forgeax_vfx_runtime.capacity - particleCount ||
+    fanOut > outputCapacity - eventCount
   ) {
     atomicAdd(&forgeax_vfx_counters.eventDropped, 1u);
     atomicAdd(&forgeax_vfx_counters.eventOverflow, 1u);
-    return;
+    continue;
   }
+  let eventBase = inputCapacity + eventCount;
   var childIndex = 0u;
   loop {
     if (childIndex >= fanOut) { break; }
-    let childParticleIndex = particleIndex + childIndex;
-    let childEventIndex = eventIndex + childIndex;
+    // Compaction provides the exact live count; this cursor visits each physical
+    // slot at most once across all accepted fan-outs in the dispatch.
+    while (forgeax_vfx_scratch[freeSlot] != 0u) { freeSlot += 1u; }
+    let childParticleIndex = freeSlot;
+    freeSlot += 1u;
     let child = VfxParticle(
-      input.position,
-      vec4<f32>(0.0, 0.35 + input.strength, 0.0, 0.0),
-      vec4<f32>(1.0, 0.45, 0.1, 1.0),
-      vec4<f32>(0.1 + input.strength * 0.15, 0.1 + input.strength * 0.15, 0.0, 0.0),
+      input.position.xyz,
       0.0,
+      vec3<f32>(0.0, 0.35 + input.strength, 0.0),
       0.35,
-      1u,
+      vec4<f32>(1.0, 0.45, 0.1, 1.0),
+      vec2<f32>(0.1 + input.strength * 0.15),
+      0.0,
+      0.0,
+      vec4<f32>(0.0, 0.0, 0.0, 1.0),
+      // Event children are authored debris/embers, not a unit-sized mesh.
+      // Keep the default bounded so a generic event routed to a mesh emitter
+      // cannot turn one channel input into a screen-filling sphere. Authors
+      // can still override the child in a dedicated sub-emitter program.
+      vec3<f32>(0.06 + clamp(input.strength, 0.0, 1.0) * 0.04),
+      0.0,
       input.sequence + childIndex,
+      1u,
     );
     forgeax_vfx_particles[childParticleIndex] = child;
-    forgeax_vfx_alive_indices[childParticleIndex] = childParticleIndex;
-    forgeax_vfx_events[childEventIndex] = ForgeaxVfxEvent(
+    forgeax_vfx_scratch[childParticleIndex] = 1u;
+    forgeax_vfx_alive_indices[particleCount + childIndex] = childParticleIndex;
+    forgeax_vfx_event_buffer[eventBase + childIndex] = ForgeaxVfxEvent(
       input.position,
       input.strength,
       input.sequence + childIndex,
@@ -348,11 +365,16 @@ fn forgeax_vfx_event_main(@builtin(global_invocation_id) invocation: vec3<u32>) 
     );
     childIndex += 1u;
   }
+  particleCount += fanOut;
+  eventCount += fanOut;
   atomicAdd(&forgeax_vfx_counters.eventConsumed, fanOut);
+  }
+  atomicStore(&forgeax_vfx_counters.aliveCount, particleCount);
+  atomicAdd(&forgeax_vfx_counters.eventProduced, eventCount);
   var renderer = 0u;
   loop {
     if (renderer >= forgeax_vfx_runtime.rendererCount) { break; }
-    forgeax_vfx_indirect[renderer].instanceCount = particleIndex + 1u;
+    forgeax_vfx_indirect[renderer].instanceCount = particleCount;
     renderer += 1u;
   }
 }

@@ -1,13 +1,16 @@
+import type { App } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import type { NetRecoverySnapshot, NetSession } from '@forgeax/engine-net';
 import { isEndpointError } from '@forgeax/engine-net';
 import type { Renderer } from '@forgeax/engine-render';
+import { recordSnakeBrowserError } from './browser-diagnostics';
 import { createClient } from './client';
 
 type SnakeBrowserProbe = {
   readonly recover: () => ReturnType<NetSession['recover']>;
   readonly recoverRenderer: () => ReturnType<Renderer['recover']>;
   readonly rendererInspection: () => ReturnType<Renderer['inspect']>;
+  readonly appLastError: () => App['lastError'];
   readonly advanceRecovery: () => void;
   readonly snapshot: () => NetRecoverySnapshot;
   readonly directionCommandSendCount: () => number;
@@ -27,6 +30,13 @@ function endpointUrl(): string {
   return `${protocol}//${window.location.hostname}:8787`;
 }
 
+function hostEndpointUrl(): string {
+  const requested = new URLSearchParams(window.location.search).get('host');
+  if (requested !== null) return requested;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.hostname}:8788`;
+}
+
 async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#app');
   const state = document.querySelector<HTMLOutputElement>('[data-testid="snake-state"]');
@@ -34,13 +44,14 @@ async function main(): Promise<void> {
 
   let disposeClient: (() => void) | undefined;
   try {
-    const client = await createClient(canvas, endpointUrl());
+    const client = await createClient(canvas, endpointUrl(), hostEndpointUrl());
     const browserProbeEnabled =
       new URLSearchParams(window.location.search).get('m16-reconnect') === '1';
     const browserProbe: SnakeBrowserProbe = {
       recover: () => client.session.recover(),
       recoverRenderer: () => client.renderer.recover(),
       rendererInspection: () => client.renderer.inspect(),
+      appLastError: () => client.app.lastError,
       advanceRecovery: () => client.session.advanceRecovery(),
       snapshot: client.getRecoverySnapshot,
       directionCommandSendCount: () => client.directionCommandEvidence.directionCommandSendCount,
@@ -97,14 +108,14 @@ async function main(): Promise<void> {
       .unwrap();
 
     const appErrors: string[] = [];
+    const status = document.querySelector<HTMLElement>('#round-status') ?? undefined;
     client.app.onError((error) => {
-      appErrors.push(error.message);
-      state.dataset.appErrorTail = JSON.stringify(appErrors.slice(-8));
-      state.textContent = error.message;
+      recordSnakeBrowserError(state, status, appErrors, error);
     });
     const started = client.app.start();
     if (!started.ok) throw started.error;
   } catch (error) {
+    state.dataset.lifecycle = 'failed';
     disposeClient?.();
     if (isEndpointError(error)) {
       state.textContent = `${error.code}: ${error.hint} (${JSON.stringify(error.detail)})`;

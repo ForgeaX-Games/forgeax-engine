@@ -14,6 +14,23 @@ render owner。缺失或 stale 时 inspect、修复 producer 并 recook；不会
 
 ## Authoring and recovery index
 
+## 灯光资产 runtime 入口
+
+三条最短入口：
+
+1. 场景 payload 通过 `refs` 往返 `SpotLight.iesProfile` 与 `SpotLight.cookie`；零 handle 表示字段缺席。
+2. `IesProfileAsset` 由默认 loader 读取 cooked bytes；runtime 只消费 payload，不读取 `.ies` 源文本。
+3. Cookie 通过普通 `TextureAsset` loader/load 状态进入 render；Catalog 不创建旁路 registry。
+
+runtime 只读 producer 已发布并验证的 projection。失败读取 `code`、`detail`、`expected`、`hint`；修复 source/producer 后以同一 authored GUID 重建并重试。`current`、`stale`、`lastKnownGood`、`verified` 各自保留证据边界。
+
+For extended lighting, runtime consumes the same GUID-addressed published
+projection for IES and Cookie and passes Probe `irradiance`/`radius` facts to
+the renderer owner. It does not own a probe grid, capture, bake, visibility
+kernel, Sky contributor, or specular path. `accepted`, `lastKnownGood`,
+`recovered`, and `verified` remain separate receipt states; unavailable GPU
+resources stay explicitly unavailable.
+
 ## Material contract index
 
 The runtime loader reads the Pack publication by GUID and exposes a read-only
@@ -27,7 +44,7 @@ divergence back through cold-cook and receipt/artifact verification.
 
 The shortest static consumer path is `configurePackIndex(url)` followed by
 `loadByGuid<ConcreteAsset>(guid)`. The public barrel exposes the concrete
-16-kind types and returns durable payloads, dependency `refs`, and local
+17-kind types and returns durable payloads, dependency `refs`, and local
 `artifacts`; it does not mint a generic GUID-to-handle materializer. Animation,
 tileset, render, audio, and VFX owners perform their own World or Host
 projection after load.
@@ -40,16 +57,24 @@ They are alternatives, not a sequence. App demos can use the shared
 selection as one SSOT and avoid overwriting a scoped development URL with
 `/pack-index.json`.
 
+When an existing host supplies both surfaces for the same explicit URL, the
+registry accepts one `CatalogReplica` baseline and shares it with GUID loads.
+Different URLs remain separate per-registry authorities; no process-wide URL
+cache is introduced. A source carrying `expectedRevision` or `expectedScope`
+is a stricter admission boundary: the registry re-runs that source's
+enumeration instead of seeding it from an unscoped URL cache, so a rejected
+revision or scope can never appear as an accepted catalog row.
+
 Read structured errors by `code` and use `hint`/`detail` to inspect, rebuild or
 cold-cook, refresh LKG, or attach a capability. Host capability loss affects
 install/play/execute only; descriptor loading stays available.
 
-The runtime matrix is the same 16 durable kinds as `SCRIPTABLE_PACK_ASSET_KINDS`:
+The runtime matrix is the same 17 durable kinds as `SCRIPTABLE_PACK_ASSET_KINDS`:
 `mesh`, `material`, `scene`, `texture`, `equirect`, `sampler`, `font`,
 `render-pipeline`, `tileset`, `video`, `skeleton`, `skin`, `animation-clip`,
-`animation-graph`, `audio`, and `particle-effect`.
+`animation-graph`, `audio`, `particle-effect`, and `ies-profile`.
 
-The authority map is [`asset-authority.schema.json`](../../asset-authority.schema.json). Runtime reads Catalog decisions and validated Pack/DDC projections by GUID; it never writes Pack, Meta, DDC, or authoring state.
+The authority map is [`schemas/asset-authority.schema.json`](../../schemas/asset-authority.schema.json). Runtime reads Catalog decisions and validated Pack/DDC projections by GUID; it never writes Pack, Meta, DDC, or authoring state.
 
 ## Material publication inspection
 
@@ -61,13 +86,55 @@ projection after the `MaterialReady` gate. Its first-level identity is
 them. The returned `status: 'Ready'` is retained for compatibility with the
 runtime result; `readiness: 'ready'` is the machine-readable state field.
 
+For a built-in Standard material the same snapshot also exposes
+`standard.mode`, `standard.layers`, `standard.passFamily`,
+`standard.passNames`, and `standard.layerPlanIdentity`. A declared layer stays
+in `standard.layers` even when its factor is `0`; an absent layer is missing
+from that list. Read `parameterContract.values` for the authored factor and
+`receipt.derivedInterface`/`receipt.identity` for the derived interface and
+artifact identity. This keeps the physical admission and `forward` versus
+`forward + deferred + shadow` decision inspectable without a second registry.
+
+```ts
+const info = inspectMaterialRuntime(ready);
+const physical = info.standard;
+if (physical?.mode === 'physical') {
+  console.log(physical.layers, physical.passFamily, info.parameterContract.values);
+}
+```
+
 Material failure consumers branch on stable kebab-case codes:
 `shader-module-not-found`, `material-reflection-binding-mismatch`,
 `material-specialization-not-cooked`, `asset-artifact-missing`,
 `asset-artifact-integrity-mismatch`, and `material-cook-record-invalid`.
+
+Ray-hit programs use the same complete publication, byte-integrity gate and
+ShaderRegistry installation. Select the authored pass with the closed
+`pipeline: ray` context to obtain its `cs_surface` entry; it has no raster
+submission ABI. Missing, corrupt or stale ray bytes reject the publication,
+and a missing ray context never resolves to a raster program. Installing this
+projection does not create a GPU module or enable GI.
+`programs[]` exposes each published program's `specializationKey`, `artifactDigest`,
+`byteLength` and `selections[]` (authored pass, exact context, entry and raster
+address when applicable). Use it to distinguish an absent ray derivative from
+a present program that does not match the requested context. It contains no
+shader source or GPU objects. In a last-known-good result the list belongs to
+`lastKnownGood` and its generation; the failed replacement remains explicit.
+
 Read `expected`, `actual`, `hint`, `retryable`, and `recoveryActions` when
 present. Do not infer readiness from a transport URL, a shader manifest, a
 natural-language message, or a fallback material.
+
+The same inspection seam accepts producer lifecycle observations for a
+material that is pending, failed, or being held as last-known-good. These
+projections preserve the material GUID, generation, structured failure and
+recovery hint without copying producer state into the renderer. A pending
+observation means the cook/resident work has not completed; a failed
+observation points back to the producer error; a last-known-good observation
+is explicit and still carries the failed current generation. Follow
+`inspect -> rebuild/recook or refresh LKG -> loadByGuid` through the producer
+owner. Runtime never guesses from URLs, silently repairs a stale artifact, or
+creates a parallel readiness ledger.
 
 ## Plugin-owned loader registrations
 
@@ -95,12 +162,57 @@ the plugin helpers so registration and teardown share one Cordis lifecycle.
 
 Use [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs) to inspect the owner and runtime-source conclusion before changing a producer.
 
+## External provider cold-load (custom kinds)
+
+Custom provider kinds stay outside the built-in `Asset` union, but they still
+use the same producer and runtime authorities. The smallest executable example
+is [`voxel-provider-cold-load.integration.test.ts`](src/__tests__/voxel-provider-cold-load.integration.test.ts).
+
+> [!IMPORTANT]
+> The provider owns source discovery and `NativeCookerRegistry`; the runtime
+> only consumes the verified Pack/Catalog projection. It never invents a typed
+> Pack or Preview kind, mints a GUID, or treats a transport URL as identity.
+
+```mermaid
+flowchart LR
+    provider["provider source + GUID"] --> cook["NativeCookerRegistry.run"]
+    cook --> artifact["payload + refs + artifact bytes"]
+    artifact --> pack["Pack v2 publication tuple"]
+    pack --> catalog["Catalog GUID row"]
+    catalog --> load["AssetRegistry.load + integrity + decoder"]
+```
+
+| Boundary | Owner fact | Fixture proof |
+|:--|:--|:--|
+| Provider/Cook | source key, GUID, payload, refs, artifact bytes | `NativeCookerRegistry.runDraft/run` |
+| Publication | one scope/generation/digest/output-set tuple | `createRuntimePackPublication` + `projectRuntimePack` |
+| Catalog | producer projection and dependency relation | `projectExternalCatalogEntries` |
+| Runtime | GUID lookup, byte length/SHA-256, decoder result | `AssetRegistry` + `AssetArtifactReader.read` |
+| Recovery | decoder lease revocation and uncached reload | dispose lease, observe `asset-decoder-missing`, reinstall and reload |
+
+Run the complete provider-to-runtime path with:
+
+```bash
+pnpm exec vitest run --project='@forgeax/engine-assets-runtime' \
+  packages/assets-runtime/src/__tests__/voxel-provider-cold-load.integration.test.ts \
+  --maxWorkers=1 --no-file-parallelism
+```
+
+The fixture deliberately uses a custom `voxel-shape` decoder only; it is an
+asset-runtime/provider contract probe, not the Wave 2 Voxel product or a
+replacement for the standard 17 built-in asset kinds.
+
 > [!IMPORTANT]
 > Runtime material consumption is `configurePackIndex` -> `loadByGuid<MaterialAsset>` -> cooked readiness -> `world.internSharedRef`. The registry returns the loaded payload and follows its dependency graph; it does not create an app-owned shader artifact or a parallel material authoring surface. Interning preserves one handle per catalogued payload identity inside a World; explicit `world.allocSharedRef` calls remain independent resources.
 
 ## MaterialAsset runtime recovery
 
 Load a root and any inherited child through the same GUID catalog. A ready material must have its effective `passes`, `values`, `parent` chain, per-slot `coordinates`, references, artifact, and receipt. For a failure, switch on the structured code, read `detail` and `hint`, repair the package or cook output, and retry the same GUID. A missing cook is not a valid fallback to runtime compilation.
+
+A values-only child reuses the cooked program projection of its parent-chain
+owner. Program lookup follows the same catalogued parent payloads as contract
+resolution; it does not substitute the authored module name for the installed
+specialization identity. Child values remain governed by the root contract.
 
 The runtime asset layer: catalogue an asset by GUID, load its payload + all
 transitively-referenced sub-assets, resolve a `Handle` back to its payload, and
@@ -121,7 +233,9 @@ Cook states are not interchangeable: `notCooked`, `ready/current`, `ready/stale`
   `loadByGuid` / `lookup` / `parseGuid` / `inspect` / `resolveName` / `packageOf` /
   `rename` / `invalidate` / `invalidateAll` / `instantiate`. Post-D-17 it stores
   the PAYLOAD and mints no handles (scene GUID resolution interns column handles
-  on the World via `world.internSharedRef('Kind', payload)`). `Renderer.assets` is an `AssetRegistry`
+  through `world.sharedRefs.acquire('Kind', payload)`). Each Scene resolution
+  releases its temporary grants after instantiation or rollback; repeated
+  instances still share the same payload handle. `Renderer.assets` is an `AssetRegistry`
   assembled by `createRenderer` (which injects the post-spawn hook and concrete
   Web Audio loader; video is a default loader — see D-1 / D-2).
 - **`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE` /
@@ -134,7 +248,7 @@ Cook states are not interchangeable: `notCooked`, `ready/current`, `ready/stale`
   distinguish "re-acquire handle" from "re-load asset" from "check GUID".
 - **`LoaderRegistry` + `wireDefaultLoaders(registry, extraLoaders?)` +
   `createDefaultLoaderRegistry(extraLoaders?)`** — the default set covers the
-  complete 16-kind durable `Asset` union, including both inline and artifact
+  complete 17-kind durable `Asset` union, including both inline and artifact
   forms. `createRenderer` may replace the durable audio descriptor loader with
   its concrete Web Audio catalog-entry loader; the registry still has one
   owner per kind.
@@ -175,10 +289,10 @@ const res = await assets.loadByGuid(guid); // -> Result<payload> (D-17: payload,
 | `BuiltinAssetRegistry` / `BUILTIN_*` / `BUILTIN_BASE` | const | process-static builtin payloads and reserved slot boundary; the shared vertex-layout SSOT is `PROCEDURAL_FLOATS_PER_VERTEX` from `@forgeax/engine-geometry` |
 | `resolveAssetHandle` / `walkMaterialPassesOverSharedRefs` | fn | two-tier handle -> payload resolution |
 | `LoaderRegistry` | class | kind -> loader dispatch table |
-| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire all 16 durable Asset loaders + caller `extraLoaders` |
+| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire all 17 durable Asset loaders + caller `extraLoaders` |
 | `assetsPlugin` / `assetLoaderPlugin` / `packLoaderPlugin` | fn | Provide a registry and bind loader registrations to a Cordis Fiber lifetime |
 | `DynamicTextureStore` / `DynamicTextureDevice` | class/type | per-frame dynamic texture upload store; replacement devices invalidate stale transient textures before the next upload |
-| `unpackMeshBin` / `UnpackedMeshBin` | fn/type | strict mesh-binary v4 sidecar decode with geometry projection verification |
+| `unpackMeshBin` / `UnpackedMeshBin` | fn/type | strict mesh-binary v4/v5 sidecar decode with geometry projection verification |
 | `validateTilesetPayload` / `TilesetValidateOptions` | fn/type | register-time tileset payload gate |
 | `PostSpawnHook` / `SkinJointResolver` | type | post-spawn hook contract (D-1; runtime injects `postSpawnResolveJoints`) |
 | `Asset` / `MeshAsset` | type | re-exported asset union shapes (SSOT `@forgeax/engine-types`) |
@@ -227,10 +341,15 @@ mesh and metadata as one result. Inline-pack loading uses the same loader.
 > reload or an editor update policy.
 
 `CatalogSource` is the runtime boundary between `AssetRegistry` and a concrete
-catalog transport. Its two operations are `enumerate()` and `subscribe()`;
+catalog transport. Navigation uses `enumerate()` and `subscribe()`;
 the public row and delta shapes are `CatalogEntry` and `CatalogDelta` from
 `@forgeax/engine-types`. Read those exported types for their complete fields
 instead of copying a second schema into a consumer.
+
+A source without a URL that provides `openPackage()` also owns payload delivery. Its rows remain the
+load authority when a Registry already has a development runtime binding; the
+old catalog URL must not redirect admitted publications to the disk importer.
+An explicitly different URL catalog retains its separate navigation authority.
 
 ### Producer fact parity
 
@@ -272,6 +391,24 @@ if (!snapshot.ok) {
 unsubscribe();
 unsubscribe();
 ```
+
+For a same-GUID authored Surface recook, subscribe before the first
+`enumerateCatalog()` call. Treat only an authoritative `changed` row as a
+cutover request: call `assets.invalidate(row.guid)`, await
+`assets.loadByGuid(row.guid)`, and replace the live `MeshRenderer` material
+handle only after that complete load succeeds. A degraded or incomplete
+publication keeps the previous handle and its cooked programs alive.
+
+The material cook receipt carries the same Pack publication generation as the
+Catalog row. After a Surface `dynamicInput` schema change, create a new
+`ReadonlyDynamicInputPage` from the freshly loaded declaration and revalidate
+its records before drawing. A page derived from the previous declaration is
+not compatible merely because its byte stride happens to match. Completed
+frame observations remain bound to their original frame, device, graph,
+texture, readback, program, and publication identities; a late observation is
+evidence for that old submission, never permission to overwrite the live
+material. Dispose the Catalog subscription and clear the source when the host
+stops.
 
 ### Delta and refresh ownership
 
@@ -489,3 +626,144 @@ The runtime consumer follows a read-only handoff:
 errors. It does not register importers, run `runImport`, own DDC lifecycle, or
 expand the runtime transport surface. `unknown` means that required evidence
 was unavailable; it is never a successful verification result.
+
+## Surface load and recovery
+
+Runtime treats a Standard Surface as published data: `moduleSlots.surface`,
+parameters, values, closure identity, and generation are read from the Pack
+record. It does not parse WGSL, infer a layer plan, or create a fallback pass.
+
+```text
+inspect -> producer rebuild or cold-cook -> atomic publication
+        -> verify artifact/receipt/generation -> loadByGuid -> render
+```
+
+`programIdentity` and `cookIdentity` describe the compiled program and cook;
+`materialPublicationIdentity` describes the published Pack generation; device
+generation describes GPU resources only. Device loss therefore rebuilds GPU
+state without pretending that a stale source artifact is valid.
+
+## Plugin definitions
+
+The built-in plugin decoder returns a `PluginAsset` without evaluating its program or installing a Fiber. Its reference-consumption policy is deferred; references remain catalog/closure evidence until a plugin explicitly loads them. `readPluginDefinition(guid)` reads definition and publication evidence atomically for the compiled-program fence. Native activation belongs to `@forgeax/engine/plugin`.
+
+`captureAssetPublication` fixes a Catalog row, its complete sibling set and the
+source's `openPackage` transport before reading bytes. It preserves raw artifact
+bodies, including zstd encoding, while `readArtifact` verifies decoded length and
+integrity. Pack's shared `validateFixedPackPublication` checks the portable
+envelope and program closure; capture never executes plugins. Domain readiness
+still requires `validateAssetPublication` and the normal loaders. URL-backed
+Catalog sources and capture share the ordinary Catalog locator resolution.
+For plugin siblings, capture freezes each supplied target projection's program
+export functions, pure tool contracts and definition evidence before awaiting
+transport. After verifying the Pack it invokes only the required `exportSource()`
+functions, once per program and target, and immediately clones each result.
+Unrelated program exporters are not called.
+Source or publication evidence must match the saved Pack. Every plugin requires
+explicit execution coverage in at least one target, including an empty contract
+when it has no tools; each declared executor needs an artifact in that same group.
+The same GUID and program key may have different artifacts across targets.
+Neither plugins nor executors are evaluated to fill missing archive content.
+
+## Runtime content
+
+Shared references identify immutable base assets. Managed ECS content entities
+publish dynamic values through normal World mutation and block revisions.
+
+| Component | One entity owns | Write |
+|:--|:--|:--|
+| `RuntimeMaterialValue` | One parameter of one shared material | `asset`, `parameter`, `kind` (number=0, boolean=1, vector=2), numeric `value` array |
+| `RuntimeMeshVertices` | One shared mesh's numeric buffers | `asset`, `vertices`, optional `indices`; empty indices retain the base topology |
+
+```ts
+const content = world.spawn({ component: RuntimeMaterialValue, data: {
+  asset: materialHandle, parameter: 'roughness', value: [0.5],
+} }).unwrap();
+world.set(content, RuntimeMaterialValue, { value: [0.25] }).unwrap();
+world.despawn(content).unwrap(); // Restores the base parameter.
+```
+
+Keep the content entity handle for updates. Input arrays are copied by managed
+storage; resolved asset payloads are read-only consumer data. Mesh projection
+rebuilds canonical attributes and bounds from the base vertex layout. Duplicate
+material parameters or duplicate mesh content return `asset-invalid-value`;
+invalid vertex stride returns `mesh-vertex-stride-mismatch`. Repair the same
+content entity and resolve again. Removing or rebinding content invalidates the
+old asset as well as the new one. Multiple Renderers observe writes independently.
+
+Mesh registration preserves a finite producer-authored deformation envelope by
+unioning it with the position-derived AABB. Smaller authored bounds cannot hide
+actual vertices; missing geometry keeps the existing conservative bounds policy.
+
+### Asset readers across realms
+
+`AssetReader` exposes stable `identity` and typed `resolveAsset(handle)` without
+a World. `AssetReadSource` accepts a World or reader; `resolveAssetHandle` uses
+the same Result contract for both. Render publication owns the receiver's
+accepted asset namespace; this seam does not replicate an AssetRegistry or ECS.
+
+## Concurrent load and cleanup contract
+
+| Boundary | Ownership rule |
+|:--|:--|
+| `AssetRegistry.loadByGuid` | The renderer's catalog, provisional closure and Ready publication share one owner. `invalidate` and `invalidateAll` revoke old publication work before any later write, promotion or rollback. |
+| `createAssetRegistry(...).load` | A realm owns its CatalogSession, AssetGraph, Pack reader and decoder leases. Each call observes its own AbortSignal; cancelling it ends only that wait. |
+| Shared reads | The realm continues an admitted read even if all current waits cancel, retaining the result for reuse. `dispose` aborts owner I/O, settles queued waits and revokes cache writes. |
+| HTTP Pack admission | Malformed JSON/envelopes return a structured parse/package error with a field and locator; they never enter the verified cache. Network failures retain their separate fetch error. |
+| Package reads | Catalog, Pack, artifact and loader-binary GETs share one bounded recovery: an interrupted transfer (including a body reset mid-stream) or HTTP 408/429/500/502/503/504 is retried twice, after 250 ms and 750 ms, with `cache: 'reload'`. Aborts and permanent statuses fail on the first request. `asset-fetch-failed.hint` names the last observation and request count; a shipped registry without an import transport still reports `asset-not-imported` for a cooked-package miss, carrying that read evidence in its hint and detail. |
+| Cache clearing | Clearing a key or owner prevents pending old reads from filling it again or replacing a newer result. |
+
+The two Registry APIs serve the renderer and the standalone decoder realm
+respectively. Choose the owner already supplied by the host; do not create a second
+Registry to load the same assets. Their cancellation and invalidation behavior is
+covered by `registry-http-contracts.integration.test.ts` and
+`asset-request-lifecycle.unit.test.ts`; real-socket read recovery by
+`package-read.integration.test.ts`.
+
+With no subscribers, ready-cache hits invalidate only the cached observation.
+The sorted ready list is rebuilt when `snapshot()` or a subscriber actually needs it.
+
+### Asset identity lookup
+
+The registry derives object-to-GUID identity once per catalog epoch. Current
+catalog identity wins over retained provenance; replacement, invalidation,
+and failed-load removal invalidate the projection. Repeated rendering and
+scene collection queries reuse the derived index. Mutate catalog content
+through the registry's publication operations so identity and catalog epoch
+advance together.
+
+### Dynamic image uploads
+
+`DynamicTextureStore` owns GPU residency for video frames and versioned Canvas
+material sources. Video keeps per-frame uploads; Canvas supplies a source key,
+version, lifetime signal and immutable UV orientation. Uploads default to vertical
+flipping; Canvas sources can explicitly preserve top-left UVs. A successful upload publishes its view, while a
+failed initial upload publishes nothing and a failed resize retains the previous
+view. Source disposal, renderer teardown and device replacement invalidate the
+corresponding GPU entries and remove their lifetime listeners. This transient
+store remains separate from static TextureAsset residency. Public Canvas authoring
+is [`CanvasTexture` in Render](../render/README.md#canvas-textures).
+
+## Runtime publication preparation
+
+The consuming Registry prepares candidate Pack payloads privately with its actual
+loaders and services. Candidate rows and bytes are isolated before asynchronous
+work; shared mutable buffers and accessor-bearing payloads are rejected. Preparation
+does not expose a Ready asset or change the live Catalog. Returned retained readers
+clone on demand, and first GUID consumption copies the private prepared payload,
+so runtime edits cannot change a fixed version.
+
+Commit consumes an owner-specific candidate once, checks source identity and global
+and per-GUID generations, and repeats those checks after provider notification.
+App restores its previous plugin provider if that notification invalidates the
+candidate. Prepared CPU payloads enter the existing load state; normal GUID loading
+still handles dependency readiness and World binding. Public `catalog` never gains
+a validation bypass based on a caller-visible object's identity.
+
+Normal Catalog deltas parse only changed rows. Existing load records derive reverse
+reference edges for invalidating the affected loaded closure; unrelated records
+and accepted Catalog rows survive. Full reconciliation remains the recovery path
+for missing revisions. `retainAssetPublications` fixes original transport bytes
+and publication/program evidence before decoding requested domain inputs. Retaining
+a definition never activates a PluginAsset. World handles and GPU resources remain
+owned by their respective consumers.

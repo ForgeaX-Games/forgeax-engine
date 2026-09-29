@@ -4,16 +4,18 @@ import type {
   CreateShaderModuleFn,
   RecordableBackend,
   RecorderAttachment,
+  V7Tape,
 } from '@forgeax/engine-rhi-debug';
-import { attachRecorder } from '@forgeax/engine-rhi-debug';
+import { attachRecorder, replayDeviceRequest } from '@forgeax/engine-rhi-debug';
+import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
 import { createRhiInstrumentation } from './rhi-capture';
 
 export interface BrowserRhiDebugRuntime {
   readonly rhi: RhiInstance;
   readonly attachment: RecorderAttachment;
-  readonly createReplayDevice: () => Promise<
-    import('@forgeax/engine-types').Result<RhiDevice, unknown>
-  >;
+  readonly createReplayDevice: (
+    tape: V7Tape,
+  ) => Promise<import('@forgeax/engine-types').Result<RhiDevice, unknown>>;
   readonly createShaderModule: CreateShaderModuleFn;
   readonly rhiInstrumentation: import('@forgeax/engine-render/internal/construct-renderer').RhiBackendInstrumentation;
   attachRenderer(renderer: Renderer): () => void;
@@ -30,7 +32,7 @@ function hasWebGpu(): boolean {
 
 async function loadBackend(): Promise<BackendModule> {
   const backend = (hasWebGpu()
-    ? await import('@forgeax/engine-rhi-webgpu')
+    ? rhiWebgpu
     : await import('@forgeax/engine-rhi-wgpu')) as unknown as BackendModule;
   if (!hasWebGpu()) await backend.ensureReady?.();
   return backend;
@@ -51,10 +53,12 @@ export async function createBrowserRhiDebugRuntime(): Promise<BrowserRhiDebugRun
     attachment,
     createShaderModule: backend.createShaderModule,
     rhiInstrumentation: createRhiInstrumentation(attachment),
-    createReplayDevice: async () => {
+    createReplayDevice: async (tape) => {
       const adapter = await backend.rhi.requestAdapter();
       if (!adapter.ok) return adapter;
-      return adapter.value.requestDevice();
+      return adapter.value.requestDevice(
+        replayDeviceRequest(tape, adapter.value.features, adapter.value.limits),
+      );
     },
     attachRenderer(_renderer: Renderer): () => void {
       // Frame boundaries and device loss are connected by the typed

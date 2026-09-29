@@ -1,11 +1,17 @@
+import { transmissionBackdropAvailable } from '../assembly/device-feature-admission';
+import { getOrCreateIblCache } from '../ibl/IblPipelineCache';
+import type { RenderResourceScope } from '../publication/resource-scope';
+import type { _InternalRenderPipelineContext } from './render-context';
+import { PLANAR_REFLECTION_UNIFORM_OFFSET } from './view-ubo';
 // @forgeax/engine-runtime - RenderSystem record stage: main-pass-material.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
-  VIDEO_ELEMENT_PROVIDER_KEY,
-  type VideoElementProvider,
+  VIDEO_SOURCE_PROVIDER_KEY,
+  type VideoSourceProvider,
+  videoSourceExtent,
 } from '@forgeax/engine-graphics-extras';
 import {
   type BindGroup,
@@ -17,10 +23,13 @@ import {
   type Sampler,
   type TextureView,
 } from '@forgeax/engine-rhi';
+import type { PipelineGroup2Contract } from '@forgeax/engine-shader';
 import {
   DEFAULT_MSDF_TEXT_PARAM_SCHEMA,
   DEFAULT_SPRITE_PARAM_SCHEMA,
   DEFAULT_UNLIT_PARAM_SCHEMA,
+  STANDARD_PHYSICAL_TEXTURE_FIELDS,
+  STANDARD_PIPELINE_PARAM_SCHEMA,
 } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -36,19 +45,56 @@ import type { GpuResidencyCache } from '../device/gpu-residency';
 import { VideoUploadUnsupportedError } from '../errors/render';
 import {
   assembleMaterialWithSkylightEntries,
-  type EmissiveAoBindGroupResources,
   type SkylightBindGroupResources,
+  type SurfaceMediumBindGroupResources,
+  type TextureInjectionResource,
+  type TransmissionBindGroupResources,
 } from '../ibl/skylight-bind-group';
-import { isStandardPbrMaterialShader } from '../pbr-pipeline';
+import type { IblBindingEntryInspection } from '../mesh-material-bindings';
+import {
+  isCanonicalStandardPbrMaterialShader,
+  isStandardPbrMaterialShader,
+  omittedStandardMaterialBindings,
+  physicalTextureFields,
+  standardNormalInputField,
+} from '../pbr-pipeline';
 import { deriveTextureExtent } from '../render-data';
-import type { MaterialSnapshot } from '../render-system-extract';
-import type { BindGroupCounts, MaterialBgAssemblyCacheEntry } from './frame-snapshot';
+import type { MaterialSnapshot, SkylightSnapshot } from '../render-system-extract';
+import {
+  type RenderTargetMaterialSourceBinding,
+  resolveRenderTargetMaterialSource,
+} from '../targets/material-source';
+import { canvasTextureState, isCanvasTextureSource } from '../textures/canvas-texture';
+import type { StandardReflectionProbeBinding } from './frame-lighting';
+import type {
+  BindGroupCounts,
+  MaterialBgAssemblyCacheEntry,
+  RenderFrameState,
+} from './frame-snapshot';
+import { getOpaqueResourceIdentity } from './frame-snapshot';
 import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
 import {
   type PipelineState,
   type RenderSystemRuntime,
   STANDARD_PBR_UBO_SIZE,
 } from './render-context';
+
+/**
+ * Resolve the group(2) resource layout from the material shader contract.
+ * Standard clustered PBR consumes the unified cluster bind group; every other
+ * material consumes the ordinary mesh bind group. Missing ordinary resources
+ * remain missing so the caller can skip the draw rather than violate layout
+ * compatibility by binding a cluster group.
+ */
+export function selectMaterialGroup2(
+  clusterGroup: BindGroup | null,
+  meshGroup: BindGroup | null,
+  group2Contract: PipelineGroup2Contract,
+): BindGroup | null {
+  if (group2Contract === 'cluster') return clusterGroup;
+  if (group2Contract === 'mesh') return meshGroup;
+  return null;
+}
 
 // Param schemas are immutable runtime contracts: the shader registry installs
 // them once and material snapshots only retain the same array reference. Keep
@@ -207,15 +253,35 @@ function isImageError(error: unknown): error is ImageError {
   return typeof code === 'string' && code.startsWith('image-');
 }
 
+function materialDiagnosticsEnabled(): boolean {
+  if (typeof globalThis !== 'object' || globalThis === null || !('process' in globalThis)) {
+    return false;
+  }
+  const processValue = (
+    globalThis as {
+      readonly process?: { readonly env?: Record<string, string | undefined> };
+    }
+  ).process;
+  return processValue?.env?.FORGEAX_MATERIAL_DIAGNOSTICS === '1';
+}
+
 export function residentTextureView(
-  world: World,
+  world: RenderResourceScope,
   store: GpuResidencyCache,
   runtime: RenderSystemRuntime,
   handle: Handle<'TextureAsset', 'shared'>,
-  worldId: World | number = world,
+  worldId: RenderResourceScope | number = world,
 ): TextureView | undefined {
   const podRes = resolveAssetHandle<TextureAsset>(world, handle);
-  if (!podRes.ok) return undefined;
+  const diagnosticsEnabled = materialDiagnosticsEnabled();
+  if (!podRes.ok) {
+    if (diagnosticsEnabled) {
+      console.error(
+        `[render-material] texture resolve failed: ${JSON.stringify({ handle: handleSlot(handle), error: podRes.error })}`,
+      );
+    }
+    return undefined;
+  }
   const residentRes = store.ensureResident(handle, podRes.value, worldId);
   if (!residentRes.ok) {
     // Preserve the concrete asset-capability boundary on the renderer error
@@ -224,17 +290,49 @@ export function residentTextureView(
     if (residentRes.error instanceof RhiError || isImageError(residentRes.error)) {
       runtime.errorRegistry.fire(residentRes.error);
     }
+    if (diagnosticsEnabled) {
+      console.error(
+        `[render-material] texture residency failed: ${JSON.stringify({
+          handle: handleSlot(handle),
+          pod: {
+            kind: podRes.value.kind,
+            shape: podRes.value.shape,
+            format: podRes.value.format,
+            dataByteLength: podRes.value.data.byteLength,
+            mips: podRes.value.mips,
+          },
+          error: residentRes.error,
+        })}`,
+      );
+    }
     return undefined;
   }
-  return store.getTextureGpuView(handle, worldId);
+  const view = store.getTextureGpuView(handle, worldId);
+  if (diagnosticsEnabled) {
+    console.error(
+      `[render-material] texture residency ready: ${JSON.stringify({
+        handle: handleSlot(handle),
+        pod: {
+          kind: podRes.value.kind,
+          shape: podRes.value.shape,
+          format: podRes.value.format,
+          dataByteLength: podRes.value.data.byteLength,
+          mips: podRes.value.mips,
+        },
+        receipt: 'receipt' in residentRes.value ? residentRes.value.receipt : undefined,
+        viewReady: view !== undefined,
+      })}`,
+    );
+  }
+  return view;
 }
 
 function residentSampler(
-  world: World,
+  world: RenderResourceScope,
   store: GpuResidencyCache,
   runtime: RenderSystemRuntime,
   handle: Handle<'SamplerAsset', 'shared'>,
-  worldId: World | number = world,
+  worldId: RenderResourceScope | number = world,
 ): Sampler | undefined {
   const podRes = resolveAssetHandle<SamplerAsset>(world, handle);
   if (!podRes.ok) return undefined;
@@ -251,7 +349,7 @@ function residentSampler(
 // transient DynamicTextureStore, NOT the static `residentTextureView` /
 // `ensureResident` cache (video never enters that switch; AC-08).
 //
-// Per frame: ask the host-registered VideoElementProvider (World Resource,
+// Per frame: ask the host-registered VideoSourceProvider (RenderResourceScope Resource,
 // D-1) for this entity's HTMLVideoElement, upload its current frame via
 // `store.uploadFrame` (copyExternalImageToTexture), and return the resulting
 // view. When the provider is absent / returns no element / the element has no
@@ -311,7 +409,7 @@ function clearVideoUploadFailureEpisode(
 }
 
 export function videoTextureView(
-  world: World,
+  world: RenderResourceScope,
   store: DynamicTextureStore | undefined,
   runtime: RenderSystemRuntime,
   entityKey: number,
@@ -319,10 +417,14 @@ export function videoTextureView(
   highPerfAvailable: boolean,
 ): TextureView | undefined {
   if (store === undefined) return undefined;
-  const provider = world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY)
-    ? world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY)
-    : undefined;
-  const element = provider?.getElement(entityKey as EntityHandle, clip);
+  const provider =
+    !('resolveAsset' in world) && world.hasResource(VIDEO_SOURCE_PROVIDER_KEY)
+      ? world.getResource<VideoSourceProvider>(VIDEO_SOURCE_PROVIDER_KEY)
+      : undefined;
+  const element =
+    'resolveAsset' in world
+      ? world.videoFrame(entityKey, clip)
+      : provider?.getSource(entityKey as EntityHandle, clip);
   // AC-10 double-miss: a VideoPlayer entity can reach NEITHER upload path this
   // frame — no host HTMLVideoElement (general copyExternalImageToTexture path)
   // AND no high-perf GPUExternalTexture path. This is the genuine "this backend
@@ -348,13 +450,9 @@ export function videoTextureView(
     clearVideoUploadFailureEpisode(store, entityKey, clip);
     return store.getView(clip);
   }
-  const width = element.videoWidth;
-  const height = element.videoHeight;
-  // Metadata dimensions can be non-zero before the decoder has produced a
-  // current frame. WebGPU rejects copyExternalImageToTexture in that window
-  // because the video element has no back resource yet; keep the previous
-  // frame/default view until HAVE_CURRENT_DATA (2) is reached.
-  if (width <= 0 || height <= 0 || element.readyState < 2) return store.getView(clip);
+  const extent = videoSourceExtent(element);
+  if (extent === undefined) return store.getView(clip);
+  const { width, height } = extent;
   const uploaded = store.uploadFrame(clip, element, width, height);
   if (uploaded === undefined) return store.getView(clip);
   if (!uploaded.ok) {
@@ -365,29 +463,13 @@ export function videoTextureView(
   return uploaded.value;
 }
 
-// feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): the built-in
-// standard-PBR user-region texture field order, used when the shader is not
-// resolvable through getParamSchema (cross-worktree late-register). Mirrors
-// derive(default-standard-pbr).textureFieldNames.
+// The canonical schema owns the runtime fallback's binding order as well as
+// its shader and BGL. A second slot list makes later engine injections drift.
 export const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
-  'baseColorTexture',
-  'metallicRoughnessTexture',
-  'normalTexture',
-  'specularTintTexture',
-  'emissiveTexture',
-  'occlusionTexture',
+  ...derive(STANDARD_PIPELINE_PARAM_SCHEMA).textureFieldNames,
 ];
 
 const LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET = 80;
-const STANDARD_PBR_TEXTURE_SCALE_OFFSET = 96;
-const MATERIAL_TEXTURE_SCALE_FIELDS = [
-  'baseColorTexture',
-  'metallicRoughnessTexture',
-  'normalTexture',
-  'specularTintTexture',
-  'emissiveTexture',
-  'occlusionTexture',
-] as const;
 const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
   'baseColorTexture',
   'metallicRoughnessTexture',
@@ -395,20 +477,40 @@ const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
   'emissiveTexture',
   'occlusionTexture',
 ] as const;
-const STANDARD_PBR_TEXTURE_COORDINATE_OFFSET = 96;
-const STANDARD_PBR_TEXTURE_COORDINATE_STRIDE = 8;
 const DEFAULT_LEGACY_TEXTURE_SCALES = new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-const DEFAULT_STANDARD_TEXTURE_COORDINATES = new Float32Array([
-  0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0,
-  0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
-]);
+
+export interface StandardReflectionProbeMaterialProjection {
+  readonly probeIndex: number | undefined;
+  readonly fallbackToSkylight: boolean;
+}
+
+/** Keeps the fallback output as a same-pass, linear-HDR material projection. */
+export function standardPbrFallbackDemand(
+  projection: StandardReflectionProbeMaterialProjection,
+): boolean {
+  return projection.probeIndex !== undefined || projection.fallbackToSkylight;
+}
+
+/** Projects the selected scene row into the Standard material lane. */
+export function projectReflectionProbeMaterialBinding(
+  binding: StandardReflectionProbeBinding,
+): StandardReflectionProbeMaterialProjection {
+  return {
+    probeIndex: binding.probeIndex,
+    fallbackToSkylight: binding.useSkylight,
+  };
+}
 
 /** Derives the logical-content UV scale for an uploaded material texture. */
 export function materialTextureUvScale(
-  texture: Pick<TextureAsset, 'width' | 'height' | 'format'> | undefined,
+  texture: Pick<TextureAsset, 'shape' | 'format'> | undefined,
 ): readonly [number, number] {
   if (texture === undefined) return [1, 1];
-  return deriveTextureExtent(texture.format, texture.width, texture.height).uvScale;
+  return deriveTextureExtent(
+    texture.format,
+    texture.shape.extent.width,
+    texture.shape.extent.height,
+  ).uvScale;
 }
 
 function materialTextureForField(
@@ -418,6 +520,46 @@ function materialTextureForField(
   if (field === 'emissiveTexture') return material.emissiveTexture;
   if (field === 'occlusionTexture') return material.occlusionTexture;
   return material.textureHandles?.get(field);
+}
+
+/** Resolve a renderer-local target source without entering AssetRegistry. */
+export function materialRenderTargetSourceForField(
+  material: MaterialSnapshot,
+  field: string,
+  resolveSource?: RenderSystemRuntime['resolveRenderTargetTextureSource'],
+): RenderTargetMaterialSourceBinding | undefined {
+  const source = material.textureSources?.get(field);
+  return source === undefined || isCanvasTextureSource(source)
+    ? undefined
+    : (resolveSource?.(source) ?? resolveRenderTargetMaterialSource(source));
+}
+
+/** Upload the current Canvas version through the same store as video frames. */
+export function materialCanvasTextureView(
+  material: MaterialSnapshot,
+  field: string,
+  world: RenderResourceScope,
+  runtime: RenderSystemRuntime,
+): TextureView | undefined {
+  const source = material.textureSources?.get(field);
+  const store = runtime.dynamicTextureStore;
+  if (!isCanvasTextureSource(source) || store === undefined) return undefined;
+  const local = canvasTextureState(source);
+  const published =
+    'resolveAsset' in world ? world.canvasFrame?.(source.canvasTextureId) : undefined;
+  const image = local?.canvas ?? published?.frame;
+  const key = local === undefined ? published?.key : source;
+  if (key === undefined) return undefined;
+  if (image === undefined) return store.getView(key);
+  const width = 'displayWidth' in image ? image.displayWidth : image.width;
+  const height = 'displayHeight' in image ? image.displayHeight : image.height;
+  const uploaded = store.uploadFrame(key, image, width, height, {
+    version: local?.version ?? published?.version,
+    flipY: source.flipY,
+    signal: local?.lifetime.signal ?? published?.signal,
+  });
+  if (uploaded !== undefined && !uploaded.ok) runtime.errorRegistry.fire(uploaded.error);
+  return uploaded?.ok ? uploaded.value : store.getView(key);
 }
 
 /**
@@ -434,10 +576,48 @@ function materialUboFloatView(payload: MaterialUboPayload): Float32Array {
     : new Float32Array(payload);
 }
 
+function materialUboDataView(payload: MaterialUboPayload): DataView {
+  if (payload instanceof Float32Array || payload instanceof Uint8Array) {
+    return new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  }
+  return new DataView(payload);
+}
+
+/** Write one schema value with the scalar type's actual WGSL bit encoding. */
+function writeNumericParamValue(
+  view: DataView,
+  entry: { readonly offset: number; readonly size: number; readonly type: string },
+  value: number | readonly number[],
+): void {
+  const values = typeof value === 'number' ? [value] : value;
+  const width = entry.size / 4;
+  const writeCount = Math.min(values.length, width);
+  for (let index = 0; index < writeCount; index += 1) {
+    const component = values[index];
+    if (typeof component !== 'number') continue;
+    const byteOffset = entry.offset + index * 4;
+    switch (entry.type) {
+      case 'i32':
+        view.setInt32(byteOffset, component, true);
+        break;
+      case 'u32':
+        view.setUint32(byteOffset, component, true);
+        break;
+      case 'f32':
+      case 'vec2':
+      case 'vec3':
+      case 'vec4':
+      case 'color':
+        view.setFloat32(byteOffset, component, true);
+        break;
+    }
+  }
+}
+
 export function applyMaterialTextureUvScales(
   payload: MaterialUboPayload,
   material: MaterialSnapshot,
-  world: World,
+  world: RenderResourceScope,
 ): void {
   const f32 = materialUboFloatView(payload);
   const coordinateSchema = materialCoordinateSchema(material);
@@ -465,13 +645,10 @@ export function applyMaterialTextureUvScales(
     }
     return;
   }
-  // Standard PBR grew two authored coat fields before the engine-owned UV
-  // tail. Sprite, sprite-lit, unlit, and text keep their own 80-byte tail
-  // position because their WGSL layouts do not carry clearcoat.
-  const textureScaleOffset = isStandardPbrMaterialShader(material.materialShaderId)
-    ? STANDARD_PBR_TEXTURE_SCALE_OFFSET
-    : LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
-  const isStandardPbr = textureScaleOffset === STANDARD_PBR_TEXTURE_SCALE_OFFSET;
+  // Unknown legacy material paths retain their historical packed scale tail.
+  // Every registered Standard/material-schema path returns above and is
+  // therefore fully schema-driven (including physical texture coordinates).
+  const textureScaleOffset = LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
   const hasTextureMetadata =
     material.textureCoordinates !== undefined ||
     material.textureHandles !== undefined ||
@@ -482,15 +659,10 @@ export function applyMaterialTextureUvScales(
     material.emissiveTexture !== undefined ||
     material.occlusionTexture !== undefined;
   if (!hasTextureMetadata) {
-    f32.set(
-      isStandardPbr ? DEFAULT_STANDARD_TEXTURE_COORDINATES : DEFAULT_LEGACY_TEXTURE_SCALES,
-      textureScaleOffset / 4,
-    );
+    f32.set(DEFAULT_LEGACY_TEXTURE_SCALES, textureScaleOffset / 4);
     return;
   }
-  const fields = isStandardPbr
-    ? MATERIAL_TEXTURE_SCALE_FIELDS
-    : LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS;
+  const fields = LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS;
   for (let index = 0; index < fields.length; index++) {
     const field = fields[index];
     if (field === undefined) continue;
@@ -499,24 +671,9 @@ export function applyMaterialTextureUvScales(
       handle === undefined ? undefined : resolveAssetHandle<TextureAsset>(world, handle);
     const texture = resolved?.ok === true ? resolved.value : undefined;
     const [u, v] = materialTextureUvScale(texture);
-    if (isStandardPbr) {
-      const coordinates = material.textureCoordinates?.get(field);
-      const transform = coordinates?.transform;
-      const offset =
-        STANDARD_PBR_TEXTURE_COORDINATE_OFFSET / 4 + index * STANDARD_PBR_TEXTURE_COORDINATE_STRIDE;
-      f32[offset] = transform?.offset?.[0] ?? 0;
-      f32[offset + 1] = transform?.offset?.[1] ?? 0;
-      f32[offset + 2] = transform?.scale?.[0] ?? 1;
-      f32[offset + 3] = transform?.scale?.[1] ?? 1;
-      f32[offset + 4] = coordinates?.set ?? 0;
-      f32[offset + 5] = transform?.rotation ?? 0;
-      f32[offset + 6] = u;
-      f32[offset + 7] = v;
-    } else {
-      const offset = textureScaleOffset / 4 + index * 2;
-      f32[offset] = u;
-      f32[offset + 1] = v;
-    }
+    const offset = textureScaleOffset / 4 + index * 2;
+    f32[offset] = u;
+    f32[offset + 1] = v;
   }
 }
 
@@ -526,6 +683,7 @@ function materialCoordinateSchema(
   if (material.materialParamSchema !== undefined && material.materialParamSchema.length > 0) {
     return material.materialParamSchema;
   }
+  if (isStandardPbrMaterialShader(material.materialShaderId)) return STANDARD_PIPELINE_PARAM_SCHEMA;
   switch (material.materialShaderId) {
     case 'forgeax::default-unlit':
       return DEFAULT_UNLIT_PARAM_SCHEMA;
@@ -543,15 +701,16 @@ function materialCoordinateSchema(
  * feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): ordered user-region
  * texture field names for a material's bind-group assembly, derived from the
  * shader's paramSchema via the `derive()` SSOT (insertion order = sampler/
- * texture pair order in derive().bglEntries). Falls back to the built-in 4
- * fields when the schema is unavailable.
+ * texture pair order in derive().bglEntries). Falls back to the built-in
+ * fields only when the schema is unavailable; an explicit empty schema means
+ * the authored material has no user-region textures.
  */
 export function userRegionTextureFieldOrder(
   schema: Parameters<typeof derive>[0] | undefined,
 ): readonly string[] {
-  if (schema === undefined || schema.length === 0) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
+  if (schema === undefined) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
   const fields = [...derivedParamSchema(schema).textureFieldNames];
-  return fields.length === 0 ? BUILTIN_USER_REGION_TEXTURE_FIELDS : fields;
+  return fields;
 }
 
 /**
@@ -563,9 +722,24 @@ export function userRegionTextureFieldOrder(
 export function defaultViewForUserRegionField(
   field: string,
   pipelineState: PipelineState,
+  schema?: readonly ParamSchemaEntry[],
 ): TextureView {
+  const parameter = schema?.find((entry) => entry.name === field);
+  if (parameter?.type === 'texture_cube') {
+    // The renderer already owns a valid white cube for the Skylight fallback.
+    // Use it until a receipt-promoted RenderTarget source becomes available;
+    // binding a 2D view here would invalidate the custom cube material BGL.
+    return pipelineState.skylightFallback?.prefilterView ?? pipelineState.defaultWhiteTextureView;
+  }
   if (field === 'normalTexture') return pipelineState.defaultNormalTextureView;
   if (field === 'baseColorTexture') return pipelineState.fallbackTextureView;
+  if (field === 'anisotropyTexture') {
+    // The flat-normal fallback encodes a zero tangent direction and unit B
+    // strength; the shader's zero-vector guard selects its neutral (1, 0)
+    // axis. This keeps an absent anisotropy map neutral even on hosts that do
+    // not allocate the optional dedicated identity texture.
+    return pipelineState.defaultAnisotropyTextureView ?? pipelineState.defaultNormalTextureView;
+  }
   return pipelineState.defaultWhiteTextureView;
 }
 
@@ -583,7 +757,7 @@ export function defaultViewForUserRegionField(
  * `renderableIndex` per RenderSystem lifetime via the `seenIndices` Set
  * (the same warn-once anchor pattern used for missing-texture sprites).
  *
- * @param transformWorld The entity's resolved Transform.world mat4 (16 floats column-major).
+ * @param transformWorld The entity's resolved GlobalTransform.world mat4 (16 floats column-major).
  * @param slices         The four anchor distances `[left, top, right, bottom]`
  *                       (sentinel `bottom < 0` for tile mode is consumed via abs()).
  * @param renderableIndex The entity index into the validated renderables list.
@@ -612,19 +786,13 @@ export function detectNineSliceScaleTooSmall(
   }
 }
 
-/**
- * Build the 128-byte Material UBO payload for a PBR / unlit material entry
- * (feat-20260527-sprite-nineslice M2 / w11; D-7 regression-net helper).
- *
- * Byte-for-byte equivalent to the legacy hard-coded PBR write path; each
- * deviation is caught by `render-system-record-pbr-ubo-stable.test.ts`.
- * The schema-driven paramSnapshot overlay (feat-20260523 M9-T05; AC-14)
- * positions vec4 / f32 slots onto std140 [slot0 vec4, slot1 f32 metallic,
- * slot1 f32 roughness] mirroring the engine-shipped default-standard-pbr
- * Material struct.
- */
+/** Build one max-sized, schema-driven Standard material UBO payload. */
 export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Array {
-  const buf = new Uint8Array(STANDARD_PBR_UBO_SIZE);
+  const bytes = Math.max(
+    STANDARD_PBR_UBO_SIZE,
+    derive(material.materialParamSchema ?? []).uboLayout.totalBytes,
+  );
+  const buf = new Uint8Array(bytes);
   writePbrMaterialUboPayload(buf, material);
   return buf;
 }
@@ -632,11 +800,10 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
 /**
  * Write the standard material payload into caller-owned storage.
  *
- * The allocating wrapper above remains the byte-stable test/helper surface,
- * while the frame recorder reuses one scratch slot for all materials. A
- * scene with thousands of submeshes otherwise allocates one 304-byte
- * Uint8Array per material per frame, creating avoidable GC pressure without
- * changing GPU-visible bytes.
+ * The allocating wrapper above remains the helper/test surface, while the
+ * frame recorder reuses one scratch slot for all materials.  Field offsets are
+ * read from the material's admitted schema; no Standard field offset table is
+ * maintained in the record stage.
  */
 export function writePbrMaterialUboPayload(
   buf: Uint8Array | Float32Array,
@@ -648,90 +815,48 @@ export function writePbrMaterialUboPayload(
     );
   }
   buf.fill(0);
-  const f32 = materialUboFloatView(buf);
-  // Layout (issue-1: channelMap split per D-8) -- byte-equivalent to the
-  // post-split sidecar paramSchema for default-standard-pbr (12 numeric
-  // entries packed std140 into one merged UBO at binding(0)).
-  //   f32[0..3]   baseColor          (offset 0,  vec4)
-  //   f32[4]      metallic           (offset 16)
-  //   f32[5]      roughness          (offset 20)
-  //   f32[6]      metallicChannel    (offset 24)  -- glTF 2.0 default = B = 2
-  //   f32[7]      roughnessChannel   (offset 28)  -- glTF 2.0 default = G = 1
-  //   f32[8]      aoChannel          (offset 32)  -- glTF 2.0 default = R = 0
-  //   f32[9]      extraChannel       (offset 36)  -- reserved = 0
-  //                                  (offset 40..47 implicit pad: vec3 align=16)
-  //   f32[12..14] emissive           (offset 48,  vec3)
-  //   f32[15]     emissiveIntensity  (offset 60)
-  //   f32[16]     occlusionStrength  (offset 64)
-  //   f32[17]     alphaCutoff        (offset 68)
-  //   f32[18]     clearcoat          (offset 72)
-  //   f32[19]     clearcoatRoughness (offset 76)
-  //   f32[20..22] specularTint       (offset 80, vec3)
-  //                                  (offset 92..95 alignment pad)
-  //   f32[24..71] engine-owned texture coordinate records (offset 96)
-  //   f32[72]     normalScale        (offset 288)
-  f32[0] = material.baseColor[0] ?? 0;
-  f32[1] = material.baseColor[1] ?? 0;
-  f32[2] = material.baseColor[2] ?? 0;
-  f32[3] = 1;
-  f32[4] = material.metallic;
-  f32[5] = material.roughness;
-  // channelMap default = (B, G, R, _) per AGENTS.md + glTF 2.0
-  // KHR_materials_pbrSpecularGlossiness ARM packing -- now 4 independent
-  // f32 selectors; fragment casts each to u32 at the pick site.
-  f32[6] = 2; // metallicChannel  <- B
-  f32[7] = 1; // roughnessChannel <- G
-  f32[8] = 0; // aoChannel        <- R
-  f32[9] = 0; // extraChannel     <- reserved
-  // emissive vec3 + emissiveIntensity (offset 48..63)
-  const em = material.emissive;
-  f32[12] = em?.[0] ?? 0;
-  f32[13] = em?.[1] ?? 0;
-  f32[14] = em?.[2] ?? 0;
-  f32[15] = material.emissiveIntensity ?? 0;
-  // occlusionStrength (offset 64)
-  f32[16] = material.occlusionStrength ?? 1;
-  // alphaCutoff (offset 68).
-  const alphaCutoff = material.paramSnapshot?.alphaCutoff;
-  f32[17] = typeof alphaCutoff === 'number' ? alphaCutoff : 0;
-  f32[18] = material.clearcoat ?? 0;
-  f32[19] = material.clearcoatRoughness ?? 0.5;
-  const specularTint = material.specularTint;
-  f32[20] = specularTint?.[0] ?? 1;
-  f32[21] = specularTint?.[1] ?? 1;
-  f32[22] = specularTint?.[2] ?? 1;
-  f32[72] = material.normalScale ?? 1;
-  // Schema-driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14):
-  // for user-shaders with a paramSnapshot, project the first vec4/color
-  // entry onto slot 0 and the first two f32 entries onto slot 1's first
-  // two floats. The default-standard-pbr path lands on the same offsets
-  // via the explicit fields above, so the overlay is a no-op for the
-  // engine's stock PBR shader (charter P4 + R-H regression fence).
-  const paramSnap = material.paramSnapshot;
-  if (paramSnap !== undefined) {
-    const f32Snap = (name: string): number | undefined => {
-      const v = paramSnap[name];
-      return typeof v === 'number' ? v : undefined;
-    };
-    const colorSnap = (name: string): readonly number[] | undefined => {
-      const v = paramSnap[name];
-      return Array.isArray(v) && v.every((x) => typeof x === 'number')
-        ? (v as readonly number[])
-        : undefined;
-    };
-    // Walk schema in declared order, fill positional UBO slots.
-    const materialShaderId = material.materialShaderId;
-    // Note: schema lookup is the caller's job (it owns the runtime ref);
-    // when the helper has no access to runtime, paramSnap is consumed
-    // positionally without a schema walk. The inline caller (recordFrame)
-    // still performs the schema-driven walk and writes the overlay before
-    // queueing this payload, so this helper is only the byte-stable
-    // baseline. To preserve byte-for-byte equivalence in the helper-only
-    // unit-test path, the overlay pass is skipped when the helper is
-    // called without an external schema reference.
-    void materialShaderId;
-    void f32Snap;
-    void colorSnap;
+  const dataView = materialUboDataView(buf);
+  const schema =
+    material.materialParamSchema === undefined || material.materialParamSchema.length === 0
+      ? STANDARD_PIPELINE_PARAM_SCHEMA
+      : material.materialParamSchema;
+  const snapshot = material.paramSnapshot;
+  const fallback = (name: string, entry: (typeof schema)[number]): unknown => {
+    switch (name) {
+      case 'baseColor':
+        return [
+          material.baseColor[0] ?? 1,
+          material.baseColor[1] ?? 1,
+          material.baseColor[2] ?? 1,
+          1,
+        ];
+      case 'metallic':
+        return material.metallic;
+      case 'roughness':
+        return material.roughness;
+      case 'specularColor':
+        return material.specularColor ?? [1, 1, 1];
+      case 'normalScale':
+        return material.normalScale ?? [1, 1];
+      case 'emissive':
+        return material.emissive ?? [0, 0, 0];
+      case 'emissiveIntensity':
+        return material.emissiveIntensity ?? 0;
+      case 'occlusionStrength':
+        return material.occlusionStrength ?? 1;
+      default:
+        return entry.default;
+    }
+  };
+  for (const entry of derivedParamSchema(schema).uboLayout.entries) {
+    const value =
+      snapshot?.[entry.name] ??
+      fallback(entry.name, schema.find((item) => item.name === entry.name) ?? entry);
+    if (typeof value === 'number') {
+      writeNumericParamValue(dataView, entry, value);
+    } else if (Array.isArray(value)) {
+      writeNumericParamValue(dataView, entry, value);
+    }
   }
 }
 
@@ -779,34 +904,49 @@ export function applyParamSnapshotToUbo(
 ): void {
   if (paramSchema === undefined) return;
   if (paramSnapshot === undefined) return;
-  const f32 = materialUboFloatView(payload);
+  const dataView = materialUboDataView(payload);
   const { uboLayout } = derivedParamSchema(paramSchema);
   for (const entry of uboLayout.entries) {
     const value = paramSnapshot[entry.name];
     if (value === undefined) continue;
-    const f32Offset = entry.offset / 4;
-    const f32Width = entry.size / 4;
     if (typeof value === 'number') {
-      // Scalar f32 / i32 / u32 -- single-slot write. (i32 / u32 still arrive
-      // as a JS number; the GPU side reads the four bytes as the declared
-      // type, so an f32 write is the correct bit pattern when the caller
-      // already produced an integer value.)
-      if (f32Width >= 1) f32[f32Offset] = value;
+      writeNumericParamValue(dataView, entry, value);
       continue;
     }
     if (Array.isArray(value)) {
       const arr = value as readonly number[];
-      const writeCount = Math.min(arr.length, f32Width);
-      for (let i = 0; i < writeCount; i++) {
-        const v = arr[i];
-        if (typeof v === 'number') f32[f32Offset + i] = v;
-      }
+      writeNumericParamValue(dataView, entry, arr);
     }
     // string values (texture GUIDs) belong to texture bindings, not the
     // UBO; derive's uboLayout.entries already strips non-numeric schema
     // entries, so we will not see a uboLayout entry whose snapshot value
     // is a string under normal flow. Skip defensively if we do.
   }
+}
+
+/**
+ * Seed a schema-driven UBO with the defaults declared by its numeric contract.
+ *
+ * Prepared graphics (VFX and other feature-owned materials) do not pass
+ * through the extracted `MaterialSnapshot` writer, so their payload starts as
+ * zeroed storage. Applying the schema defaults first keeps that path
+ * byte-compatible with the ordinary material writer while preserving the
+ * snapshot writer's intentional overlay semantics.
+ */
+export function applyParamSchemaDefaultsToUbo(
+  payload: MaterialUboPayload,
+  paramSchema: readonly ParamSchemaEntry[] | undefined,
+): void {
+  if (paramSchema === undefined) return;
+  const defaults: Record<string, number | readonly number[]> = {};
+  for (const entry of derivedParamSchema(paramSchema).uboLayout.entries) {
+    const schemaEntry = paramSchema.find((candidate) => candidate.name === entry.name);
+    const value = schemaEntry?.default;
+    if (typeof value === 'number' || Array.isArray(value)) {
+      defaults[entry.name] = value as number | readonly number[];
+    }
+  }
+  applyParamSnapshotToUbo(payload, paramSchema, defaults);
 }
 
 /**
@@ -827,17 +967,73 @@ export function applyParamSnapshotToUbo(
  * @internal
  */
 export interface PerSubmeshMaterialBgDeps {
+  readonly planarReflectionView?: TextureView;
   readonly runtime: RenderSystemRuntime;
   readonly pipelineState: PipelineState;
-  readonly world: World;
+  readonly world: RenderResourceScope;
   readonly store: GpuResidencyCache;
   readonly materialSlice: number;
   readonly videoHighPerfAvailable: boolean;
   readonly skylightResources: SkylightBindGroupResources;
+  readonly resolveRenderTargetTextureSource?: RenderSystemRuntime['resolveRenderTargetTextureSource'];
+  readonly resolveReflectionProbeResources?: (
+    materialWorld: RenderResourceScope,
+    entityKey: number,
+  ) => { readonly resources: SkylightBindGroupResources; readonly probeIndex: number } | undefined;
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
   /** Cross-frame final BG reuse keyed by the stable source material handle. */
   readonly materialBgAssemblyCache: Map<string, MaterialBgAssemblyCacheEntry>;
+  /** Producer-owned numeric scene rows consumed by scene-index PBR draws. */
+  readonly sceneMaterialBuffer?: Buffer;
+  /** Active transmission backdrop; undefined/null means layout placeholder. */
+  readonly transmissionBackdropView?: TextureView | null;
+  /** Independent sampled raw depth for the active medium graph pass. */
+  readonly surfaceRawDepthView?: TextureView | null;
+  /** Nearest-layer color from the preceding medium graph pass. */
+  readonly surfaceNearestLayerView?: TextureView | null;
+  /** Nearest-layer depth from the preceding medium graph pass. */
+  readonly surfaceNearestDepthView?: TextureView | null;
   readonly bindGroupCounts: BindGroupCounts;
+  readonly frameState: RenderFrameState;
+}
+
+function recordIblMaterialBinding(
+  frameState: RenderFrameState,
+  materialBgl: BindGroupLayout,
+  bindGroup: BindGroup,
+  entries: readonly BindGroupEntry[],
+  iblStart: number,
+  cache: 'hit' | 'miss',
+): void {
+  const receipt = frameState.iblBindingInspection;
+  if (receipt === undefined) return;
+  const skylightBindingStart = entries.findIndex((entry) => entry.binding === iblStart);
+  if (skylightBindingStart < 0) return;
+  const iblEntries = entries.slice(skylightBindingStart, skylightBindingStart + 6);
+  const projected: IblBindingEntryInspection[] = [];
+  for (const entry of iblEntries) {
+    if (entry.resource.kind === 'externalTexture') continue;
+    const value =
+      entry.resource.kind === 'buffer' ? entry.resource.value.buffer : entry.resource.value;
+    if (typeof value !== 'object' || value === null) continue;
+    projected.push({
+      binding: entry.binding,
+      kind: entry.resource.kind,
+      resourceIdentity: getOpaqueResourceIdentity(value as object),
+    });
+  }
+  frameState.iblBindingInspection = {
+    ...receipt,
+    material: {
+      bindGroupIdentity: getOpaqueResourceIdentity(bindGroup as object),
+      materialBglIdentity: getOpaqueResourceIdentity(materialBgl as object),
+      cache,
+      skylightBindingStart: iblEntries[0]?.binding ?? 0,
+      entries: projected,
+      reflectionBindings: projected.map((entry) => entry.binding),
+    },
+    errors: [],
+  };
 }
 
 /** @internal Exported only so buffer-generation invalidation stays regression-tested. */
@@ -848,18 +1044,31 @@ export function isMaterialBgAssemblyCacheHit(
   materialBuffer: Buffer,
   skylightResources: SkylightBindGroupResources,
   materialResourceEpoch: number,
+  transmissionBackdropView?: TextureView | null,
+  sceneMaterialBuffer?: Buffer,
+  surfaceRawDepthView?: TextureView | null,
 ): cached is MaterialBgAssemblyCacheEntry {
+  // Logical target sources keep their identity when a resize promotes a new
+  // physical view. Resolve those views each frame; the lower binding cache is
+  // keyed by the actual GPU resources and still reuses unchanged bindings.
+  if (
+    transmissionBackdropView != null ||
+    surfaceRawDepthView != null ||
+    (material.textureSources?.size ?? 0) > 0
+  )
+    return false;
   return (
     cached?.material === material &&
     cached.materialResourceEpoch === materialResourceEpoch &&
     cached.materialBgl === materialBgl &&
     cached.materialBuffer === materialBuffer &&
+    cached.sceneMaterialBuffer === sceneMaterialBuffer &&
     cached.skylightResources.irradianceView === skylightResources.irradianceView &&
     cached.skylightResources.irradianceSampler === skylightResources.irradianceSampler &&
     cached.skylightResources.prefilterView === skylightResources.prefilterView &&
+    cached.skylightResources.skylightPrefilterView === skylightResources.skylightPrefilterView &&
     cached.skylightResources.prefilterSampler === skylightResources.prefilterSampler &&
     cached.skylightResources.brdfLutView === skylightResources.brdfLutView &&
-    cached.skylightResources.brdfLutSampler === skylightResources.brdfLutSampler &&
     cached.skylightResources.intensityBuffer === skylightResources.intensityBuffer
   );
 }
@@ -868,7 +1077,8 @@ export function buildPerSubmeshMaterialBg(
   deps: PerSubmeshMaterialBgDeps,
   submeshMaterial: MaterialSnapshot,
   entityKey: number,
-  materialWorld: World = deps.world,
+  materialWorld: RenderResourceScope = deps.world,
+  materialShaderId: string | undefined = submeshMaterial.materialShaderId,
 ): BindGroup {
   const {
     runtime,
@@ -877,19 +1087,91 @@ export function buildPerSubmeshMaterialBg(
     materialSlice,
     videoHighPerfAvailable,
     skylightResources,
+    resolveRenderTargetTextureSource,
+    resolveReflectionProbeResources,
     materialBgShared,
     materialBgAssemblyCache,
+    transmissionBackdropView,
+    surfaceRawDepthView,
+    surfaceNearestLayerView,
+    surfaceNearestDepthView,
     bindGroupCounts,
+    frameState,
   } = deps;
+  const selectedProbe = resolveReflectionProbeResources?.(materialWorld, entityKey);
+  const effectiveSkylightResources = selectedProbe?.resources ?? skylightResources;
   const smMaterialHandle = submeshMaterial.materialHandle;
   const materialCacheKey =
-    smMaterialHandle === undefined ? undefined : `${materialWorld.identity}:${smMaterialHandle}`;
+    smMaterialHandle === undefined
+      ? undefined
+      : `${materialWorld.identity}:${smMaterialHandle}:${materialShaderId ?? ''}:${selectedProbe?.probeIndex ?? 'sky'}`;
   const smHasVideoFields = (submeshMaterial.videoTextureFields?.size ?? 0) > 0;
-  const smShaderId = submeshMaterial.materialShaderId;
+  const smShaderId = materialShaderId;
+  const selectedMaterialShaderArtifact =
+    smShaderId === undefined ? undefined : runtime.getMaterialShaderArtifact?.(smShaderId);
+  const selectedMediumShader =
+    smShaderId === 'forgeax::single-layer-medium' ||
+    selectedMaterialShaderArtifact?.receipt?.surface?.model === 'single-layer-medium';
+  let surfaceMediumResources: SurfaceMediumBindGroupResources | undefined;
+  if (selectedMediumShader) {
+    if (surfaceRawDepthView == null) {
+      throw new RhiError({
+        code: 'rhi-descriptor-invalid',
+        expected: 'single-layer medium material bind group has producer-owned raw depth',
+        hint: 'admit the Surface material only from a graph pass with an available raw-depth pair',
+      });
+    }
+    const nearestLayerView = surfaceNearestLayerView ?? transmissionBackdropView;
+    const nearestDepthView = surfaceNearestDepthView ?? pipelineState.shadowFallbackTextureView;
+    if (nearestLayerView == null || pipelineState.surfaceMediumDepthSampler === undefined) {
+      throw new RhiError({
+        code: 'rhi-descriptor-invalid',
+        expected:
+          'single-layer medium material bind group has paired nearest resources and depth sampler',
+        hint: 'publish the nearest-layer target and the non-filtering raw-depth sampler before recording the Surface pass',
+      });
+    }
+    surfaceMediumResources = {
+      planarView: deps.planarReflectionView ?? effectiveSkylightResources.brdfLutView,
+      planarUniform: pipelineState.viewUniformBuffer,
+      planarUniformOffset: PLANAR_REFLECTION_UNIFORM_OFFSET,
+      rawDepthSampler: pipelineState.surfaceMediumDepthSampler,
+      rawDepthView: surfaceRawDepthView,
+      nearestLayerSampler: effectiveSkylightResources.prefilterSampler,
+      nearestLayerView,
+      nearestDepthSampler: pipelineState.surfaceMediumDepthSampler,
+      nearestDepthView,
+    };
+  }
+  // The cooked shader schema owns the resource ABI. A material snapshot may
+  // carry only the authored values (for example a clearcoat-only root omits
+  // the standard emissive/occlusion maps), while the Standard template still
+  // declares those slots and expects neutral fallbacks to be bound.
+  const smSchema =
+    (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined) ??
+    submeshMaterial.materialParamSchema;
   const smPerShaderBgl =
-    smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
+    smShaderId !== undefined
+      ? runtime.getMaterialBindGroupLayout?.(smShaderId, smSchema)
+      : undefined;
   const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
-  if (smMaterialHandle !== undefined && !smHasVideoFields) {
+  const standardMaterial = isStandardPbrMaterialShader(smShaderId);
+  const physicalFields =
+    standardMaterial && smSchema !== undefined ? physicalTextureFields(smSchema) : [];
+  // Standard's built-in shader owns the canonical user region even
+  // when the authored root only declares a subset.  Physical maps are appended
+  // after the reserved IBL/transmission tail, so compacting this list would
+  // shift the shader's IBL bindings and invalidate the render pipeline.
+  const smUserRegionFields =
+    smPerShaderBgl === undefined || isCanonicalStandardPbrMaterialShader(smShaderId)
+      ? BUILTIN_USER_REGION_TEXTURE_FIELDS
+      : userRegionTextureFieldOrder(smSchema).filter((field) => !physicalFields.includes(field));
+  const hasActiveTransmissionBackdrop = transmissionBackdropView != null;
+  const sceneMaterialBuffer = runtime.device.caps.storageBuffer
+    ? (deps.sceneMaterialBuffer ?? pipelineState.meshStorageBuffer.buffer)
+    : undefined;
+  const diagnosticsEnabled = materialDiagnosticsEnabled();
+  if (smMaterialHandle !== undefined && !smHasVideoFields && !hasActiveTransmissionBackdrop) {
     const cached =
       materialCacheKey === undefined ? undefined : materialBgAssemblyCache.get(materialCacheKey);
     if (
@@ -898,26 +1180,54 @@ export function buildPerSubmeshMaterialBg(
         submeshMaterial,
         smMaterialBgl,
         pipelineState.materialUniformBuffer.buffer,
-        skylightResources,
+        effectiveSkylightResources,
         store.materialResourceEpoch,
+        transmissionBackdropView,
+        sceneMaterialBuffer,
+        surfaceRawDepthView,
       )
     ) {
+      if (diagnosticsEnabled) {
+        recordIblMaterialBinding(
+          frameState,
+          smMaterialBgl,
+          cached.bindGroup,
+          [
+            {
+              binding: 1 + smUserRegionFields.length * 2,
+              resource: { kind: 'textureView', value: effectiveSkylightResources.irradianceView },
+            },
+            {
+              binding: 2 + smUserRegionFields.length * 2,
+              resource: { kind: 'sampler', value: effectiveSkylightResources.irradianceSampler },
+            },
+            {
+              binding: 3 + smUserRegionFields.length * 2,
+              resource: { kind: 'textureView', value: effectiveSkylightResources.prefilterView },
+            },
+            {
+              binding: 4 + smUserRegionFields.length * 2,
+              resource: { kind: 'sampler', value: effectiveSkylightResources.prefilterSampler },
+            },
+            {
+              binding: 5 + smUserRegionFields.length * 2,
+              resource: { kind: 'textureView', value: effectiveSkylightResources.brdfLutView },
+            },
+            {
+              binding: 6 + smUserRegionFields.length * 2,
+              resource: {
+                kind: 'buffer',
+                value: { buffer: effectiveSkylightResources.intensityBuffer },
+              },
+            },
+          ],
+          1 + smUserRegionFields.length * 2,
+          'hit',
+        );
+      }
       return cached.bindGroup;
     }
   }
-  const smSchema =
-    submeshMaterial.materialParamSchema ??
-    (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined);
-  // The shipped PBR shaders always own the six texture pairs declared by the
-  // standard shader artifact. Authored material snapshots may intentionally
-  // carry a compact four-field schema because emissive/occlusion are engine
-  // injected values, but the runtime PBR BGL still exposes bindings 9..12 for
-  // those pairs. Keep the record projection on the shader-owned layout so IBL
-  // starts at binding 13 rather than colliding with emissiveSampler.
-  const smUserRegionFields =
-    smPerShaderBgl === undefined || isStandardPbrMaterialShader(smShaderId)
-      ? BUILTIN_USER_REGION_TEXTURE_FIELDS
-      : userRegionTextureFieldOrder(smSchema);
   let materialResourcesResident = true;
   const smSamplerForField = (field: string | undefined): Sampler => {
     const handle = field === undefined ? undefined : submeshMaterial.samplerHandles?.get(field);
@@ -939,18 +1249,71 @@ export function buildPerSubmeshMaterialBg(
       },
     },
   ];
+  // The medium shader keeps the transmission backdrop pair in its fixed
+  // group(1) ABI even on a device that cannot admit the ordinary Standard
+  // transmission topology. Its Surface resources start at binding 10, so
+  // retain a real backdrop pair here whenever the medium resources exist;
+  // otherwise the raw-depth view would slide into binding 9 and Dawn would
+  // reject the unfilterable r32float view as a filtering float texture.
+  const keepMediumBackdropSlots = surfaceMediumResources !== undefined;
+  const transmissionAvailable =
+    transmissionBackdropAvailable(runtime.device.limits.maxSampledTexturesPerShaderStage) ||
+    keepMediumBackdropSlots;
+  const omittedTransmissionBindings = omittedStandardMaterialBindings(
+    smUserRegionFields,
+    transmissionAvailable,
+    standardMaterial || smPerShaderBgl === undefined,
+    isCanonicalStandardPbrMaterialShader(smShaderId) || smPerShaderBgl === undefined,
+  );
   const smBglPairCount = smUserRegionFields.length;
   for (let fi = 0; fi < smBglPairCount; fi++) {
-    const field = smUserRegionFields[fi];
+    const slot = smUserRegionFields[fi];
+    const field =
+      slot !== undefined && isCanonicalStandardPbrMaterialShader(smShaderId)
+        ? standardNormalInputField(slot, submeshMaterial.standardTextureMask)
+        : slot;
     const samplerBinding = 1 + fi * 2;
     const textureBinding = samplerBinding + 1;
+    if (omittedTransmissionBindings.has(textureBinding)) {
+      // Keep the logical region length until the shared IBL merger computes
+      // its offsets. Omitted slots must not trigger residency requirements.
+      smBaseEntries.push(
+        {
+          binding: samplerBinding,
+          resource: { kind: 'sampler', value: pipelineState.defaultSampler },
+        },
+        {
+          binding: textureBinding,
+          resource: { kind: 'textureView', value: pipelineState.defaultWhiteTextureView },
+        },
+      );
+      continue;
+    }
     let smView: TextureView =
       field !== undefined
-        ? defaultViewForUserRegionField(field, pipelineState)
+        ? defaultViewForUserRegionField(field, pipelineState, smSchema)
         : pipelineState.defaultWhiteTextureView;
     const smVideoClip =
       field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
-    if (smVideoClip !== undefined) {
+    const smTargetSource =
+      field === undefined
+        ? undefined
+        : materialRenderTargetSourceForField(
+            submeshMaterial,
+            field,
+            resolveRenderTargetTextureSource,
+          );
+    if (field !== undefined && isCanvasTextureSource(submeshMaterial.textureSources?.get(field))) {
+      const view = materialCanvasTextureView(submeshMaterial, field, materialWorld, runtime);
+      if (view !== undefined) smView = view;
+      else materialResourcesResident = false;
+    } else if (smTargetSource !== undefined) {
+      // The Renderer host resolves the generation-checked physical view. A
+      // candidate is never exposed here; until its matching FrameReceipt
+      // completes, the material remains on the neutral fallback.
+      if (smTargetSource.textureView !== undefined) smView = smTargetSource.textureView;
+      else materialResourcesResident = false;
+    } else if (smVideoClip !== undefined) {
       const view = videoTextureView(
         materialWorld,
         runtime.dynamicTextureStore,
@@ -986,58 +1349,281 @@ export function buildPerSubmeshMaterialBg(
       },
     );
   }
-  let smEmissiveView: TextureView = pipelineState.defaultWhiteTextureView;
-  const smEmissiveHandle = submeshMaterial.emissiveTexture;
-  if (smEmissiveHandle !== undefined) {
-    const view = residentTextureView(materialWorld, store, runtime, smEmissiveHandle);
-    if (view !== undefined) smEmissiveView = view;
-    else materialResourcesResident = false;
+  // Physical Standard maps are deliberately appended after the stable IBL /
+  // transmission tail.  Keep their resource projection separate from the
+  // user-region loop so the slot order is the same as
+  // `appendTextureInjection(effectiveSchema)` in the
+  // layout owner.
+  const physicalTextureInjections: TextureInjectionResource[] = [];
+  for (let slot = 0; slot < physicalFields.length; slot += 1) {
+    const field = physicalFields[slot];
+    if (field === undefined) continue;
+    let view = defaultViewForUserRegionField(field, pipelineState, smSchema);
+    const targetSource = materialRenderTargetSourceForField(
+      submeshMaterial,
+      field,
+      resolveRenderTargetTextureSource,
+    );
+    if (isCanvasTextureSource(submeshMaterial.textureSources?.get(field))) {
+      const canvasView = materialCanvasTextureView(submeshMaterial, field, materialWorld, runtime);
+      if (canvasView !== undefined) view = canvasView;
+      else materialResourcesResident = false;
+    } else if (targetSource !== undefined) {
+      if (targetSource.textureView !== undefined) view = targetSource.textureView;
+      else materialResourcesResident = false;
+    } else {
+      const handle = submeshMaterial.textureHandles?.get(field);
+      if (handle !== undefined) {
+        const resident = residentTextureView(materialWorld, store, runtime, handle);
+        if (resident !== undefined) view = resident;
+        else materialResourcesResident = false;
+      }
+    }
+    physicalTextureInjections.push({
+      slot: STANDARD_PHYSICAL_TEXTURE_FIELDS.indexOf(
+        field as (typeof STANDARD_PHYSICAL_TEXTURE_FIELDS)[number],
+      ),
+      sampler: smSamplerForField(field),
+      view,
+    });
   }
-  let smOcclusionView: TextureView = pipelineState.defaultWhiteTextureView;
-  const smOcclusionHandle = submeshMaterial.occlusionTexture;
-  if (smOcclusionHandle !== undefined) {
-    const view = residentTextureView(materialWorld, store, runtime, smOcclusionHandle);
-    if (view !== undefined) smOcclusionView = view;
-    else materialResourcesResident = false;
-  }
-  const smEmissiveAo: EmissiveAoBindGroupResources = {
-    emissiveSampler: smSamplerForField('emissiveTexture'),
-    emissiveView: smEmissiveView,
-    occlusionSampler: smSamplerForField('occlusionTexture'),
-    occlusionView: smOcclusionView,
-  };
+  // The backdrop is a full mip-chain view owned by the pipeline. Reuse the
+  // pipeline's existing filtering/clamp sampler for screen-space sampling;
+  // the material default sampler intentionally keeps repeat addressing for
+  // authored UV textures and is not a backdrop sampler.
+  const transmissionSampler =
+    transmissionBackdropView != null
+      ? effectiveSkylightResources.prefilterSampler
+      : pipelineState.defaultSampler;
   const smMergedEntries = assembleMaterialWithSkylightEntries(
     smBaseEntries,
-    skylightResources,
-    smEmissiveAo,
-  );
-  const smBindGroup = getOrCreatePerEntity(
-    materialBgShared,
-    smShaderId ?? '',
-    smMergedEntries.map((e) => extractEntryResourceHandle(e)),
-    'material-shared',
-    () => {
-      const result = runtime.device.createBindGroup({
-        label: 'pbr-material-skylight-bg',
-        layout: smMaterialBgl,
-        entries: smMergedEntries,
-      });
-      if (!result.ok) throw result.error;
-      return result.value;
-    },
-    bindGroupCounts,
-  );
-  if (smMaterialHandle !== undefined && !smHasVideoFields && materialResourcesResident) {
+    effectiveSkylightResources,
+    transmissionAvailable
+      ? ({
+          sampler: transmissionSampler,
+          ...(transmissionBackdropView === undefined
+            ? { backdropView: pipelineState.defaultWhiteTextureView }
+            : { backdropView: transmissionBackdropView }),
+        } satisfies TransmissionBindGroupResources)
+      : null,
+    physicalTextureInjections,
+    surfaceMediumResources,
+  ).filter((entry) => !omittedTransmissionBindings.has(entry.binding));
+  // Storage-capable devices share one Standard material BGL with the
+  // scene-index GPU lane. Even direct draws need a complete entry for
+  // binding(46), although their shader does not read the scene table. Reuse
+  // the storage-backed mesh table as a neutral placeholder until a
+  // producer-owned GPU scene table is available; GPU-driven draws replace it
+  // with `deps.sceneMaterialBuffer`.
+  if (runtime.device.caps.storageBuffer) {
+    smMergedEntries.push({
+      binding: 46,
+      resource: {
+        kind: 'buffer' as const,
+        value: {
+          buffer: deps.sceneMaterialBuffer ?? pipelineState.meshStorageBuffer.buffer,
+        },
+      },
+    });
+  }
+  const createBindGroup = (): BindGroup => {
+    const result = runtime.device.createBindGroup({
+      label: 'pbr-material-skylight-bg',
+      layout: smMaterialBgl,
+      entries: smMergedEntries,
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  };
+  const materialCacheHandles = smMergedEntries.map((entry) => extractEntryResourceHandle(entry));
+  if (
+    diagnosticsEnabled &&
+    submeshMaterial.textureHandles === undefined &&
+    smMaterialHandle !== undefined
+  ) {
+    console.error(
+      `[render-material] scalar material cache handles: ${JSON.stringify({
+        entityKey,
+        materialHandle: smMaterialHandle,
+        shader: smShaderId,
+        surfaceModel: submeshMaterial.surfaceModel,
+        layoutIdentity: getOpaqueResourceIdentity(smMaterialBgl as object),
+        bindings: smMergedEntries.map((entry) => entry.binding),
+        graphResources: {
+          rawDepth: surfaceRawDepthView != null,
+          nearestLayer: surfaceNearestLayerView != null,
+          nearestDepth: surfaceNearestDepthView != null,
+        },
+        paramSnapshot: submeshMaterial.paramSnapshot,
+        handleTypes: materialCacheHandles.map((handle) => typeof handle),
+      })}`,
+    );
+  }
+  if (
+    diagnosticsEnabled &&
+    materialCacheHandles.some((handle) => typeof handle !== 'object' || handle === null)
+  ) {
+    console.error(
+      `[render-material] invalid material cache handle: ${JSON.stringify({
+        entityKey,
+        materialHandle: smMaterialHandle,
+        shader: smShaderId,
+        entries: smMergedEntries.map((entry, index) => ({
+          index,
+          binding: entry.binding,
+          kind: entry.resource.kind,
+          handleType: typeof materialCacheHandles[index],
+        })),
+      })}`,
+    );
+  }
+  const smBindGroup = hasActiveTransmissionBackdrop
+    ? createBindGroup()
+    : getOrCreatePerEntity(
+        materialBgShared,
+        smShaderId ?? '',
+        materialCacheHandles,
+        'material-shared',
+        createBindGroup,
+        bindGroupCounts,
+      );
+  if (diagnosticsEnabled) {
+    recordIblMaterialBinding(
+      frameState,
+      smMaterialBgl,
+      smBindGroup,
+      smMergedEntries,
+      smBaseEntries.length,
+      'miss',
+    );
+  }
+  if (
+    smMaterialHandle !== undefined &&
+    !smHasVideoFields &&
+    (submeshMaterial.textureSources?.size ?? 0) === 0 &&
+    materialResourcesResident &&
+    !hasActiveTransmissionBackdrop
+  ) {
     if (materialCacheKey !== undefined) {
       materialBgAssemblyCache.set(materialCacheKey, {
         material: submeshMaterial,
         materialResourceEpoch: store.materialResourceEpoch,
         materialBgl: smMaterialBgl,
         materialBuffer: pipelineState.materialUniformBuffer.buffer,
-        skylightResources,
+        ...(sceneMaterialBuffer === undefined ? {} : { sceneMaterialBuffer }),
+        skylightResources: effectiveSkylightResources,
         bindGroup: smBindGroup,
       });
     }
   }
   return smBindGroup;
+}
+
+const ZERO_SKYLIGHT_PAYLOAD = new Float32Array([0, 0, 0, 0, 0, 0, 0, 1]);
+
+/** The same scene resources back material bindings in depth and color passes. */
+/**
+ * Resolve the renderer-owned Skylight bundle for both ordinary geometry and
+ * prepared RenderFeature materials.  Feature preparation runs before the
+ * main pass is encoded, so it cannot rely on the geometry pass to initialize
+ * the intensity buffer or to select the current IBL views.  Keeping this
+ * small argument-based helper as the single resolver makes the two paths use
+ * identical resources while retaining the existing frame-local write.
+ */
+export function resolveMaterialSkylight(
+  runtime: Pick<RenderSystemRuntime, 'device' | 'deviceScope'>,
+  pipelineState: Pick<PipelineState, 'skylightFallback'>,
+  skylight: SkylightSnapshot | undefined,
+  skylightCount: number,
+  environmentIbl?: _InternalRenderPipelineContext['environmentIbl'],
+) {
+  const skylightFallback = pipelineState.skylightFallback;
+  if (skylightFallback === null) {
+    throw new RhiError({
+      code: 'webgpu-runtime-error',
+      expected: 'pipelineState.skylightFallback != null when PBR pipeline is active',
+      hint: 'createRenderer must allocate skylightFallback alongside the PBR pipeline (D-5 round-4)',
+    });
+  }
+  // feat-20260520-skylight-ibl-cubemap M4 round-4 / t60 (D-5 round-4):
+  // select active vs fallback Skylight resources by `skylightCount` from
+  // the extract stage. Active path reaches into the per-device
+  // `IblPipelineCache` slots (irradianceView / prefilterView / brdfLutView)
+  // populated by the internal equirect-to-cubemap projection; fallback uses the
+  // 1x1-zero identity bundle that converges ambient to 0 (D-4 physical
+  // convergence -- no `if (hasSkylight)` shader branch).
+  // The samplers are reused from `skylightFallback.sampler` for both
+  // paths (linear / clamp-to-edge is correct for IBL cube + 2D LUT
+  // sampling either way). The intensity uniform is rewritten per-frame
+  // when active so `sampleIblSpecular * intensity` carries the user's
+  // Skylight.intensity value; fallback keeps intensity=0 (createSkylightFallback
+  // seed) so ambient = 0 even when the same buffer is shared.
+  let activeViews: { irr: TextureView; pref: TextureView; brdf: TextureView } | undefined;
+  // Per-frame Skylight uniform: std140 32 B = [intensity, colorR, colorG,
+  // colorB, rotation quaternion]. Default to all-zero so a transition from "has Skylight" ->
+  // "no Skylight" does not leak the prior frame's ambient (intensity 0
+  // muzzles everything, including the white fallback irradiance cube).
+  runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, ZERO_SKYLIGHT_PAYLOAD);
+  if (skylight !== undefined && skylightCount >= 1) {
+    // A Skylight exists. Write its intensity + color regardless of whether
+    // a cubemap is bound: with a cubemap the IBL views below light the
+    // ambient; WITHOUT one, the white fallback irradiance cube + this color
+    // give an instant solid-color ambient (downstream integration #4) with
+    // no async precompute. The white fallback only contributes when a
+    // Skylight is present because the zero-payload above sets intensity 0
+    // when no Skylight exists.
+    const [cr, cg, cb] = skylight.color;
+    const [qx, qy, qz, qw] = skylight.rotation;
+    const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb, qx, qy, qz, qw]);
+    runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, uniformPayload);
+    const cache = getOrCreateIblCache(runtime.deviceScope);
+    if (
+      cache.irradianceView !== undefined &&
+      cache.prefilterView !== undefined &&
+      cache.brdfLutView !== undefined
+    ) {
+      activeViews = {
+        irr: cache.irradianceView,
+        pref: cache.prefilterView,
+        brdf: cache.brdfLutView,
+      };
+    }
+  }
+  if (environmentIbl !== undefined && skylight !== undefined && skylight.equirectHandle === 0) {
+    activeViews = {
+      irr: environmentIbl.irradiance,
+      pref: environmentIbl.prefilter,
+      brdf: activeViews?.brdf ?? skylightFallback.brdfLutView,
+    };
+  }
+  const skylightResources =
+    activeViews !== undefined
+      ? {
+          irradianceView: activeViews.irr,
+          irradianceSampler: skylightFallback.sampler,
+          prefilterView: activeViews.pref,
+          prefilterSampler: skylightFallback.sampler,
+          brdfLutView: activeViews.brdf,
+          intensityBuffer: skylightFallback.intensityBuffer,
+        }
+      : {
+          irradianceView: skylightFallback.irradianceView,
+          irradianceSampler: skylightFallback.sampler,
+          prefilterView: skylightFallback.prefilterView,
+          prefilterSampler: skylightFallback.sampler,
+          brdfLutView: skylightFallback.brdfLutView,
+          intensityBuffer: skylightFallback.intensityBuffer,
+        };
+  return { skylightResources, activeViews };
+}
+
+/** The same scene resources back material bindings in depth and color passes. */
+export function prepareMaterialSkylight(c: _InternalRenderPipelineContext) {
+  return resolveMaterialSkylight(
+    c.runtime,
+    c.pipelineState,
+    c.skylight,
+    c.skylightCount,
+    c.environmentIbl,
+  );
 }

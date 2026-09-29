@@ -1,9 +1,3 @@
-import {
-  createMaterialPreviewContribution,
-  createMeshPreviewContribution,
-  createTexturePreviewContribution,
-  createVfxPreviewContribution,
-} from '@forgeax/engine-preview';
 import { defineTool, type ToolContribution } from '@forgeax/engine-tool-runtime';
 import { previewOfflineAnalysisDescriptor, previewRunDescriptor } from './catalog.js';
 import {
@@ -40,18 +34,5 @@ export function createPreviewContributions(): readonly ToolContribution<unknown,
   return [
     createPreviewContribution() as ToolContribution<unknown, unknown>,
     createOfflineAnalysisContribution() as ToolContribution<unknown, unknown>,
-  ];
-}
-
-/**
- * The discoverable preview surface is domain-specific. The generic recipe
- * contribution remains available only as an explicit migration error.
- */
-export function createDomainPreviewContributions(): readonly ToolContribution<unknown, unknown>[] {
-  return [
-    createMaterialPreviewContribution() as ToolContribution<unknown, unknown>,
-    createMeshPreviewContribution() as ToolContribution<unknown, unknown>,
-    createVfxPreviewContribution() as ToolContribution<unknown, unknown>,
-    createTexturePreviewContribution() as ToolContribution<unknown, unknown>,
   ];
 }

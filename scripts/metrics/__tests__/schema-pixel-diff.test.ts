@@ -1,7 +1,7 @@
 // schema-pixel-diff.test.ts (M3 T-012) - ajv schema validation tests for
 // the bench.pixelDiff sub-schema landing at T-013 (minor add).
 //
-// Drives the implementation of `forgeax-metrics.schema.json` `$defs.bench`
+// Drives the implementation of `schemas/forgeax-metrics.schema.json` `$defs.bench`
 // pixelDiff sub-field extension (T-013, M3) via TDD. Four scenarios exercise
 // the JSON Schema 2020-12 contract for the new optional `pixelDiff` object:
 //
@@ -26,7 +26,7 @@
 //   - plan-strategy §4.2 testing-layers row "schema validation"
 //   - plan-strategy §2 D-P2 (two-layer threshold schema)
 //   - plan-tasks.json#T-012 (TDD red phase precedes T-013 schema impl)
-//   - requirements §7 AC-07 (forgeax-metrics.schema.json minor add)
+//   - requirements §7 AC-07 (schemas/forgeax-metrics.schema.json minor add)
 //   - research Finding 7 (schema minor add path + 15-workspace zero
 //     modification proof + additionalProperties:false explicit failure)
 
@@ -36,7 +36,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(__dirname, '..', '..', '..');
-const schemaPath = resolve(repoRoot, 'forgeax-metrics.schema.json');
+const schemaPath = resolve(repoRoot, 'schemas/forgeax-metrics.schema.json');
 
 function loadSchema(): Record<string, unknown> {
   const raw = readFileSync(schemaPath, 'utf8');
@@ -60,7 +60,7 @@ function wrapBench(benchBody: Record<string, unknown>): Record<string, unknown> 
   };
 }
 
-describe('forgeax-metrics.schema.json $defs.bench.pixelDiff sub-schema (T-012/T-013)', () => {
+describe('schemas/forgeax-metrics.schema.json $defs.bench.pixelDiff sub-schema (T-012/T-013)', () => {
   it('(a) bench with pixelDiff { threshold:int, perPixelThreshold:float } validates OK', () => {
     const ajv = makeAjv();
     const validate = ajv.compile(loadSchema());

@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { captureAssetPublication, createCatalogSource } from '@forgeax/engine-assets-runtime';
+import type { CatalogEntry } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../dev/watcher.js', async (importOriginal) => {
@@ -104,7 +106,7 @@ describe('authored development pack serving', () => {
     const catalogResponse = await request(middlewares, binding.catalogUrl);
     expect(catalogResponse.statusCode).toBe(200);
     const catalog = JSON.parse(catalogResponse.body) as {
-      entries: Array<{ guid: string; packageUrl: string }>;
+      entries: CatalogEntry[];
     };
     const entry = catalog.entries.find((candidate) => candidate.guid === GUID);
     expect(entry).toBeDefined();
@@ -113,6 +115,16 @@ describe('authored development pack serving', () => {
     const firstResponse = await request(middlewares, entry.packageUrl);
     expect(firstResponse.statusCode).toBe(200);
     expect(JSON.parse(firstResponse.body).assets[0].payload.marker).toBe('initial');
+    const capture = await captureAssetPublication(
+      entry,
+      catalog.entries,
+      createCatalogSource({ entries: catalog.entries }),
+      async (url) => {
+        const response = await request(middlewares, String(url));
+        return new globalThis.Response(response.body, { status: response.statusCode });
+      },
+    );
+    expect(capture.ok, JSON.stringify(capture)).toBe(true);
 
     const updatedBody = `${source('updated')}\n`;
     await writeFile(sourcePath, updatedBody);
@@ -167,7 +179,7 @@ describe('authored development pack serving', () => {
     const catalogResponse = await request(middlewares, binding.catalogUrl);
     expect(catalogResponse.statusCode).toBe(200);
     const catalog = JSON.parse(catalogResponse.body) as {
-      entries: Array<{ guid: string; packageUrl: string }>;
+      entries: CatalogEntry[];
     };
     const entry = catalog.entries.find((candidate) => candidate.guid === GUID);
     expect(entry).toBeDefined();

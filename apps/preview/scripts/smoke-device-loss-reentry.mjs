@@ -124,7 +124,7 @@ try {
   const chargeBeforeLoss = await readSnapshot();
   const charge = chargeBeforeLoss?.value?.vfxHit;
   const chargeKinds = charge?.batchKinds ?? [];
-  if (!chargeAction?.ok || !chargeBeforeLoss?.ok || charge?.mode !== 'charge' || charge?.guid !== '019e9c00-0000-7000-8000-000000000020' || charge?.playing !== true || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.alive <= 0 || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
+  if (!chargeAction?.ok || !chargeBeforeLoss?.ok || charge?.mode !== 'charge' || charge?.guid !== 'e696463c-b254-5efb-95df-5a44ebe3b508' || charge?.playing !== true || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.alive <= 0 || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
     throw new Error(`charge VFX before loss failed: ${JSON.stringify({ chargeAction, chargeBeforeLoss })}`);
   }
   const beforePath = resolve(ARTIFACT_DIR, 'before-loss.png');
@@ -160,7 +160,7 @@ try {
   }
   const recoveredVfx = after.value.vfxHit;
   const recoveredKinds = recoveredVfx?.batchKinds ?? [];
-  if (recoveredVfx?.mode !== 'charge' || recoveredVfx.guid !== '019e9c00-0000-7000-8000-000000000020' || recoveredVfx.playing !== true || recoveredVfx.emitterCount !== 2 || recoveredVfx.emitterStatuses.some((status) => status !== 'ready') || !recoveredKinds.includes('billboard') || !recoveredKinds.includes('mesh') || recoveredVfx.alive <= 0 || recoveredVfx.bucketCount !== 2 || recoveredVfx.readiness !== 'ready' || recoveredVfx.errorCode !== null) {
+  if (recoveredVfx?.mode !== 'charge' || recoveredVfx.guid !== 'e696463c-b254-5efb-95df-5a44ebe3b508' || recoveredVfx.playing !== true || recoveredVfx.emitterCount !== 2 || recoveredVfx.emitterStatuses.some((status) => status !== 'ready') || !recoveredKinds.includes('billboard') || !recoveredKinds.includes('mesh') || recoveredVfx.alive <= 0 || recoveredVfx.bucketCount !== 2 || recoveredVfx.readiness !== 'ready' || recoveredVfx.errorCode !== null) {
     throw new Error(`charge VFX did not recover: ${JSON.stringify({ chargeBeforeLoss, after })}`);
   }
   const afterPath = resolve(ARTIFACT_DIR, 'after-recover.png');

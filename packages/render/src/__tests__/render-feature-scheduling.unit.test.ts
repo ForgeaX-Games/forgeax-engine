@@ -2,8 +2,9 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = {
   backendKind: 'null',
@@ -41,7 +42,7 @@ function feature(identity: string, events: string[], failStage?: 'extract' | 'pl
       events.push(`${identity}:plan`);
       return failStage === 'plan'
         ? err(new RenderFeatureStageFailedError(identity, 0, 'plan', 'next-frame'))
-        : ok({ resources: [], passes: [] });
+        : ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
     },
   } satisfies RenderFeature<typeof value>;
 }
@@ -54,7 +55,7 @@ describe('render feature stage scheduling', () => {
       feature('synthetic.second', events),
     ]).unwrap();
 
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 7,
@@ -81,7 +82,7 @@ describe('render feature stage scheduling', () => {
       feature('synthetic.healthy', events),
     ]).unwrap();
 
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 8,

@@ -2,6 +2,18 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createReceipt } from './dataflow-receipt.mjs';
+
+if (process.argv.includes('--receipt')) {
+  console.log(JSON.stringify(createReceipt({
+    workloadId: 'structural-churn',
+    backend: 'unavailable',
+    reasonCode: 'gauntlet-not-run',
+    detail: 'Receipt-only mode does not start the Dawn and Browser legs.',
+    retryHint: 'Run this script without --receipt on a dual-backend runner.',
+  }), null, 2));
+  process.exit(0);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');

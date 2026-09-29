@@ -46,6 +46,8 @@
 //   plan-strategy.md D-P8 row 1
 //   apps/hello/triangle/scripts/smoke-coverage-gate.mjs (delta layer literal token list)
 
+import { normalizeDawnDeviceDescriptor } from '../../../../scripts/ci/normalize-dawn-device-limits.mjs';
+
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 export const SMOKE_HELPERS_DEFAULTS = {
   WIDTH: 200,
@@ -58,6 +60,9 @@ export const SMOKE_HELPERS_DEFAULTS = {
 //
 // Returns:
 //   {
+//     adapterInfo (enumerable projection of adapter.info for performance admission provenance),
+//     requestedBackend (backend explicitly requested from dawn-node, or null),
+//     isFallbackAdapter (adapter.isFallbackAdapter, or null when unavailable),
 //     sharedDevice (getter; updates lazily after engine calls requestDevice),
 //     renderTarget (getter; updates lazily after engine calls context.configure),
 //     mockCanvas,
@@ -65,7 +70,29 @@ export const SMOKE_HELPERS_DEFAULTS = {
 //
 // Exits the process with code 1 on dawn-node import / create / requestAdapter failure;
 // each path prints a structured FAIL line + rerun + hint per charter proposition 4.
-export async function setupGpuShim({ width, height, rerunCmd }) {
+export function projectAdapterInfo(adapterInfo) {
+  if (adapterInfo === null || adapterInfo === undefined) return null;
+  const read = (key) => {
+    try {
+      const value = adapterInfo[key];
+      return typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+    } catch {
+      return '';
+    }
+  };
+  const runtimeService = [read('runtimeService'), read('description')].find((value) =>
+    value === 'AppleParavirtGPU' || value === 'AppleParavirtGPUMetalIOGPUFamily',
+  ) ?? '';
+  return {
+    vendor: read('vendor'),
+    architecture: read('architecture'),
+    device: read('device'),
+    description: read('description'),
+    runtimeService,
+  };
+}
+
+export async function setupGpuShim({ width, height, rerunCmd, backendArgs = [] }) {
   let create;
   let globals;
   try {
@@ -81,10 +108,15 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
     Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
   }
   let gpu;
+  const createOptions = Array.isArray(backendArgs) && backendArgs.every((option) => typeof option === 'string')
+    ? backendArgs
+    : [];
   try {
-    gpu = create([]);
+    // An empty create([]) keeps the existing default backend for ordinary smokes;
+    // admission can explicitly request a native backend through backendArgs.
+    gpu = create(createOptions);
   } catch (err) {
-    console.error(`[smoke] FAIL - dawn-node create([]) failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[smoke] FAIL - dawn-node create(${JSON.stringify(createOptions)}) failed: ${err instanceof Error ? err.message : String(err)}`);
     console.error(`  rerun: ${rerunCmd}`);
     console.error('  hint:  on linux ensure libvulkan1 + mesa-vulkan-drivers installed');
     process.exit(1);
@@ -104,7 +136,7 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
     if (!adapter) return adapter;
     const original = adapter.requestDevice.bind(adapter);
     adapter.requestDevice = async (...args) => {
-      const dev = await original(...args);
+      const dev = await original(normalizeDawnDeviceDescriptor(adapter, args[0]));
       if (!sharedDevice) sharedDevice = dev;
       return dev;
     };
@@ -162,6 +194,14 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
   };
 
   return {
+    requestedBackend: createOptions.find((option) => option.startsWith('backend='))?.slice('backend='.length) ?? null,
+    isFallbackAdapter:
+      typeof adapter.isFallbackAdapter === 'boolean'
+        ? adapter.isFallbackAdapter
+        : typeof adapter.info?.isFallbackAdapter === 'boolean'
+          ? adapter.info.isFallbackAdapter
+          : null,
+    adapterInfo: projectAdapterInfo(adapter.info),
     get sharedDevice() {
       return sharedDevice;
     },
@@ -180,7 +220,7 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
 // apps/hello/triangle/src/main.ts M0 SSOT lock (charter proposition 5 co-source
 // binding exemplar).
 export function populateSmokeWorld(world, components, assets) {
-  const { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } = components;
+  const { Camera, DirectionalLight,MeshFilter, MeshRenderer, Transform } = components;
   const { HANDLE_TRIANGLE } = assets;
   world.spawn(
     {
@@ -244,8 +284,18 @@ export async function bootRenderer({ createRenderer, mockCanvas, shaderManifestU
 //
 // Returns { framesObserved, pixelSamples, device } so the smoke script can run
 // evaluateSmokeCriteria + cleanup.
-export async function runFrameLoopAndReadback({ draw, shim, width, height, smokeMinFrames, smokeDurationMs, rerunCmd }) {
-  const TARGET_FRAMES = Math.max(smokeMinFrames, Math.ceil(smokeDurationMs / 16.67));
+export async function runFrameLoopAndReadback({
+  draw,
+  shim,
+  width,
+  height,
+  smokeMinFrames,
+  smokeDurationMs,
+  rerunCmd,
+  includeRgba = false,
+  samplePoints,
+}) {
+  const TARGET_FRAMES = smokeMinFrames;
   const frameStart = Date.now();
   let framesObserved = 0;
   for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -295,8 +345,6 @@ export async function runFrameLoopAndReadback({ draw, shim, width, height, smoke
   readbackBuffer.unmap();
   readbackBuffer.destroy();
 
-  const cx = Math.floor(width / 2);
-  const cy = Math.floor(height / 2);
   const readRgba = (px, py) => {
     const off = py * bytesPerRow + px * bytesPerPixel;
     const r = (bytes[off + 0] ?? 0) / 255;
@@ -304,12 +352,33 @@ export async function runFrameLoopAndReadback({ draw, shim, width, height, smoke
     const b = (bytes[off + 2] ?? 0) / 255;
     return [r, g, b];
   };
-  const ndcCenter = readRgba(cx, cy);
-  const corner = readRgba(Math.floor(width * 0.05), Math.floor(height * 0.05));
-  const pixelSamples = { ndcCenter, corner };
+  const requestedSamples = samplePoints ?? [
+    { name: 'ndcCenter', x: 0.5, y: 0.5 },
+    { name: 'corner', x: 0.05, y: 0.05 },
+  ];
+  const pixelSamples = {};
+  for (const point of requestedSamples) {
+    if (
+      point === null ||
+      typeof point !== 'object' ||
+      typeof point.name !== 'string' ||
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y)
+    ) {
+      throw new TypeError('samplePoints entries require a name and finite normalized x/y');
+    }
+    const px = Math.min(width - 1, Math.max(0, Math.floor(point.x * width)));
+    const py = Math.min(height - 1, Math.max(0, Math.floor(point.y * height)));
+    pixelSamples[point.name] = readRgba(px, py);
+  }
+  // Keep the long-standing center/corner fields available even when a caller
+  // supplies a focused ROI. Existing smoke consumers use these as the compact
+  // headline samples; named points add the bounded falsifier coverage.
+  pixelSamples.ndcCenter ??= readRgba(Math.floor(width / 2), Math.floor(height / 2));
+  pixelSamples.corner ??= readRgba(Math.floor(width * 0.05), Math.floor(height * 0.05));
   console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
-  return { framesObserved, pixelSamples, device };
+  return { framesObserved, pixelSamples, device, rgba: includeRgba ? bytes : undefined, bytesPerRow, bytesPerPixel };
 }
 
 // Verdict tail: branch on verdict.pass + onError listener accumulator. Centralises the

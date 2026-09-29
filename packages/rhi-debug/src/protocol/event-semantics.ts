@@ -14,11 +14,14 @@ export const eventKinds = [
   'frameMark',
   'createBuffer',
   'createTexture',
+  'createQuerySet',
   'destroyBuffer',
   'destroyTexture',
+  'destroyQuerySet',
   'createTextureView',
   'createSampler',
   'createBindGroupLayout',
+  'getBindGroupLayout',
   'createBindGroup',
   'createPipelineLayout',
   'createRenderPipeline',
@@ -30,12 +33,15 @@ export const eventKinds = [
   'copyExternalImageToTexture',
   'submit',
   'beginRenderPass',
+  'beginOcclusionQuery',
+  'endOcclusionQuery',
   'beginComputePass',
   'copyBufferToBuffer',
   'copyBufferToTexture',
   'copyTextureToBuffer',
   'copyTextureToTexture',
   'clearBuffer',
+  'resolveQuerySet',
   'pushDebugGroup',
   'popDebugGroup',
   'insertDebugMarker',
@@ -50,6 +56,7 @@ export const eventKinds = [
   'setScissorRect',
   'setStencilReference',
   'endRenderPass',
+  'resetRenderState',
   'setBlendConstant',
   'drawIndirect',
   'drawIndexedIndirect',
@@ -86,6 +93,8 @@ export function resourceKindForEvent(kind: EventKind): ResourceKind | undefined 
       return 'buffer';
     case 'createTexture':
       return 'texture';
+    case 'createQuerySet':
+      return 'query-set';
     case 'createTextureView':
       return 'texture-view';
     case 'createSampler':
@@ -97,6 +106,7 @@ export function resourceKindForEvent(kind: EventKind): ResourceKind | undefined 
       return 'pipeline';
     case 'createBindGroup':
     case 'createBindGroupLayout':
+    case 'getBindGroupLayout':
     case 'createPipelineLayout':
       return 'binding';
     case 'createCommandEncoder':
@@ -114,7 +124,9 @@ function semanticsFor(kind: EventKind): EventSemantics {
     read: (event) => referencedHandles(event),
     written: (event) => writtenHandles(event),
     destroyed: (event) =>
-      event.kind === 'destroyBuffer' || event.kind === 'destroyTexture'
+      event.kind === 'destroyBuffer' ||
+      event.kind === 'destroyTexture' ||
+      event.kind === 'destroyQuerySet'
         ? stringField(event, 'handleId')
         : [],
   };
@@ -122,7 +134,12 @@ function semanticsFor(kind: EventKind): EventSemantics {
 
 function categoryFor(kind: EventKind): EventCategory {
   if (isWorkEvent(kind)) return 'work';
-  if (kind.startsWith('create') || kind.startsWith('destroy') || kind === 'initialData')
+  if (
+    kind.startsWith('create') ||
+    kind.startsWith('destroy') ||
+    kind === 'initialData' ||
+    kind === 'getBindGroupLayout'
+  )
     return 'resource';
   if (kind.includes('Pass')) return 'pass';
   if (kind.startsWith('copy') || kind === 'clearBuffer' || kind.startsWith('write')) return 'copy';
@@ -153,6 +170,9 @@ function referencedHandles(event: RhiCallEvent): readonly string[] {
     'resourceHandleIds',
     'bindGroupHandleId',
     'pipelineHandleId',
+    'querySetHandleId',
+    'occlusionQuerySetHandleId',
+    'timestampQuerySetHandleId',
     'indexBufferHandleId',
     'vertexBufferHandleId',
   ];

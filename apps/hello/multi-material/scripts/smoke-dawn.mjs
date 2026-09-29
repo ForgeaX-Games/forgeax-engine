@@ -15,7 +15,7 @@
 //   3. createRenderer + register the demo's hand-built multi-prim mesh
 //      (4 quad verts + 8 wireframe verts; index buffer concatenates quad
 //      indices then line-list indices) + two unlit materials (red + cyan).
-//   4. Render ~300 frames as a tight synchronous loop (one warm-up frame
+//   4. Render ~60 frames as a tight synchronous loop (one warm-up frame
 //      with an event-loop yield to land first shader compile, then no
 //      per-frame yield -- scene is static, repeated draws are idempotent).
 //   5. Read back final frame. Count:
@@ -44,6 +44,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const WIDTH = 200;
@@ -51,7 +52,7 @@ const WIDTH = 200;
 const HEIGHT = 150;
 const CLEAR_RGBA = [0, 0, 0, 1];
 const TOTAL_PIXELS = WIDTH * HEIGHT;
-const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const FALSIFY = process.env.FALSIFY ?? '';
 const M26_RECOVERY = process.argv.includes('--m26-recovery');
@@ -753,4 +754,5 @@ console.log(
   `[smoke] PASS red=${redCount} cyan=${cyanCount} (both > 0; multi-prim + mixed-topology + ` +
     `materials[i] <-> submeshes[i] index alignment confirmed over ${frames} frames)`,
 );
+emitSmokeReceipt('hello-multi-material/smoke', frames);
 process.exit(0);

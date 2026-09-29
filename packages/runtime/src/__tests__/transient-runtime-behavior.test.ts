@@ -41,7 +41,7 @@ function makeWorld(): World {
   return world;
 }
 
-function localId(n: number): LocalEntityId {
+function _localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
@@ -74,7 +74,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
     // touches the manually-spawned entity
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     cat(reg, '00000000-0000-4000-8000-000000000000', asset);
     const inst = reg.instantiate(rs(world, asset), world);
@@ -112,7 +112,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
     // Collect an unrelated scene to exercise the collect code path
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     cat(reg, '11111111-1111-4111-8111-111111111111', asset);
     const inst = reg.instantiate(rs(world, asset), world);
@@ -134,7 +134,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
 
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     cat(reg, '22222222-2222-4222-8222-222222222222', child);
     const inst = reg.instantiate(rs(world, child), world);
@@ -171,7 +171,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
     // Collect an unrelated scene
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
     cat(reg, '33333333-3333-4333-8333-333333333333', asset);
     const inst = reg.instantiate(rs(world, asset), world);
@@ -195,10 +195,10 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
     // The mirror hook should populate Children on entity at localId 0.
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Transform: {} } },
-        { localId: localId(1), components: { Transform: {}, ChildOf: { parent: localId(0) } } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': { components: { Transform: {}, ChildOf: { parent: 'entity-0' } } },
+      },
     };
     cat(reg, '44444444-4444-4444-8444-444444444444', asset);
     const inst = reg.instantiate(rs(world, asset), world);

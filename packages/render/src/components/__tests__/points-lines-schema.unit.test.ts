@@ -41,16 +41,21 @@ describe('Points and Lines public schema', () => {
     });
     expect(Lines.fields).toEqual({
       widthPx: expect.objectContaining({ type: 'f32', default: 1 }),
+      dashSize: expect.objectContaining({ type: 'f32', default: 1 }),
+      gapSize: expect.objectContaining({ type: 'f32', default: 0 }),
+      dashOffset: expect.objectContaining({ type: 'f32', default: 0 }),
     });
     expect(pointShapeFromU32(PointShapeValue.square)).toBe('square');
     expect(pointShapeFromU32(PointShapeValue.circle)).toBe('circle');
     expect(pointShapeFromU32(99)).toBeUndefined();
   });
 
-  it('exposes only the three first-release style fields', () => {
+  it('exposes the bounded point and line style vocabulary', () => {
     type PublicPointShape = PointShape;
     expectTypeOf<PublicPointShape>().toEqualTypeOf<'square' | 'circle'>();
     expectTypeOf<keyof typeof Points.fields>().toEqualTypeOf<'sizePx' | 'shape'>();
-    expectTypeOf<keyof typeof Lines.fields>().toEqualTypeOf<'widthPx'>();
+    expectTypeOf<keyof typeof Lines.fields>().toEqualTypeOf<
+      'widthPx' | 'dashSize' | 'gapSize' | 'dashOffset'
+    >();
   });
 });

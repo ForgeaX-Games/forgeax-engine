@@ -30,6 +30,7 @@ function mockEntry(opts: {
   renderableIndex: number;
   materialHandle: number;
   layer: number;
+  materialShaderId?: string;
 }): DispatchEntry {
   return {
     entityIndex: opts.renderableIndex,
@@ -43,7 +44,7 @@ function mockEntry(opts: {
     defines: undefined,
     vertexEntry: undefined,
     fragmentEntry: undefined,
-    materialShaderId: undefined,
+    materialShaderId: opts.materialShaderId,
     paramSnapshot: undefined,
   };
 }
@@ -80,7 +81,14 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     const entries: DispatchEntry[] = [];
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
-      entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
+      entries.push(
+        mockEntry({
+          renderableIndex: i,
+          materialHandle: 1,
+          layer: 0,
+          materialShaderId: 'forgeax::sprite',
+        }),
+      );
       renderables.push(mockRenderable(0, 0));
     }
     return { entries, renderables };
@@ -113,7 +121,14 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     const entries: DispatchEntry[] = [];
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
-      entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
+      entries.push(
+        mockEntry({
+          renderableIndex: i,
+          materialHandle: 1,
+          layer: 0,
+          materialShaderId: 'forgeax::sprite',
+        }),
+      );
       renderables.push(mockRenderable(0, i * 16)); // posY = 0, 16, 32, 48
     }
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);
@@ -127,7 +142,14 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     const entries: DispatchEntry[] = [];
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
-      entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
+      entries.push(
+        mockEntry({
+          renderableIndex: i,
+          materialHandle: 1,
+          layer: 0,
+          materialShaderId: 'forgeax::sprite',
+        }),
+      );
       renderables.push(mockRenderable(0, 3.0));
     }
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);

@@ -33,6 +33,7 @@ import { Transform } from '@forgeax/engine-scene';
 import type { AssetErrorDetail, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockRenderBundles } from './mock-render-bundles';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: reconstitute the
 // eliminated top-level RuntimeError aggregate union (D-3) as a test-local alias
@@ -62,8 +63,10 @@ import {
   setMeshSsboDevModeProbeForTests,
 } from '../../../render/src/record/mesh-ssbo';
 import type { ExtractedFrame } from '../../../render/src/render-system-extract';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { drawWithOwners } from './renderer-test-utils';
 
 type RendererErrorObservation = {
@@ -379,7 +382,7 @@ function drawPublished(renderer: RendererType, world: WorldType) {
       kind: 'mesh',
       vertices,
       indices: new Uint16Array([0, 1, 2]),
-      attributes: { position: positions },
+      attributes: { ...buildMeshAttributeMapForUvSets(1), position: positions },
       aabb,
       materialSlots: [{ slotName: 'Default' }],
       submeshes: [
@@ -878,7 +881,6 @@ function drawPublished(renderer: RendererType, world: WorldType) {
         iboBytes: 0,
         indexCount: 0,
         indexFormat: 'uint16',
-        layout: '12F',
         vertexCount: 2,
         indexed: false,
         topology: 'line-list',
@@ -2115,7 +2117,7 @@ function drawPublished(renderer: RendererType, world: WorldType) {
       createSampler: () => ({}),
       destroy: () => undefined,
     };
-    return { device };
+    return { device: mockRenderBundles(device) };
   }
 
   function makeMockGPU(deviceObj: unknown): unknown {
@@ -2135,7 +2137,8 @@ function drawPublished(renderer: RendererType, world: WorldType) {
       sourcePath: `${identifier}.wgsl`,
       composedWgsl: '/* stub */',
       paramSchema: '[]',
-      variants: [],
+      variants:
+        identifier === 'forgeax::default-standard-pbr' ? standardMaterialShaderVariants() : [],
     });
     const manifest = {
       schemaVersion: '1.0.0',
@@ -2388,20 +2391,17 @@ function drawPublished(renderer: RendererType, world: WorldType) {
       spies.drawIndexed.mockClear();
       drawPublished(renderer, world as WorldType);
 
-      // All submesh draws share the same instanceCount (D-8).
-      // Verify drawIndexed calls carry instanceCount parameter at index 1.
+      // Mesh indexed draws carry the Instances cardinality. Fullscreen graph
+      // draws are a separate topology concern and intentionally use one
+      // instance; do not mix those two contracts in one equality assertion.
       const indexedCalls = spies.drawIndexed.mock.calls as Array<
         [number, number, number, number, number]
       >;
       const drawCalls = spies.draw.mock.calls as Array<[number, number, number, number]>;
-      const allInstanceCounts = [...indexedCalls.map((c) => c[1]), ...drawCalls.map((c) => c[1])];
-      // All instanceCounts should be identical (shared across submeshes, D-8).
-      if (allInstanceCounts.length >= 2) {
-        const first = allInstanceCounts[0];
-        for (const ic of allInstanceCounts) {
-          expect(ic).toBe(first);
-        }
-      }
+      expect(indexedCalls.length).toBeGreaterThan(0);
+      expect(indexedCalls.map((call) => call[1])).toEqual(expect.arrayContaining([4]));
+      expect(indexedCalls.every((call) => call[1] === 4)).toBe(true);
+      expect(drawCalls.every((call) => call[1] === 1)).toBe(true);
       expect(errors).toEqual([]);
     });
 
@@ -2519,6 +2519,7 @@ function drawPublished(renderer: RendererType, world: WorldType) {
       vertices: new Float32Array(4 * 12), // 4 verts x 12 floats
       indices,
       attributes: {
+        ...buildMeshAttributeMapForUvSets(1),
         position: new Float32Array(4 * 3),
       },
       materialSlots: [{ slotName: 'Default' }],

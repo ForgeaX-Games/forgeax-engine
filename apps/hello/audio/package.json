@@ -20,9 +20,6 @@
       "category": "Audio",
       "status": "implemented"
     },
-    "assets": {
-      "roots": []
-    },
     "gauntletScenario": {
       "id": "hello-audio-stale-decode-epoch-recovery",
       "script": "smoke:gauntlet",
@@ -87,7 +84,7 @@
     "@webgpu/types": "^0.1.71",
     "pngjs": "^7.0.0",
     "typescript": "~5.8.3",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

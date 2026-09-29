@@ -60,6 +60,32 @@ export interface GltfExtensionUnsupportedDetail {
   readonly source: 'extensionsRequired' | 'extensionsUsed';
 }
 
+export interface GltfLodInvalidDetail {
+  readonly rootNode: number;
+  readonly ids: readonly number[];
+  readonly reason: 'missing-node' | 'duplicate-node' | 'not-integer' | 'coverage';
+}
+
+export interface GltfMaterialTransmissionInvalidDetail {
+  readonly extension: 'KHR_materials_transmission' | 'KHR_materials_ior' | 'KHR_materials_volume';
+  readonly field: string;
+  readonly reason: 'type' | 'range' | 'non-finite' | 'blend';
+  readonly actual?: unknown;
+}
+
+export interface GltfMaterialPhysicalInvalidDetail {
+  readonly extension:
+    | 'KHR_materials_clearcoat'
+    | 'KHR_materials_anisotropy'
+    | 'KHR_materials_sheen'
+    | 'KHR_materials_iridescence'
+    | 'KHR_materials_specular'
+    | 'KHR_materials_diffuse_transmission';
+  readonly field: string;
+  readonly reason: 'type' | 'range' | 'non-finite';
+  readonly actual?: unknown;
+}
+
 /** `gltf-accessor-type-mismatch` payload: 4-member closed reason discriminator. */
 export interface GltfAccessorTypeMismatchDetail {
   readonly accessorIndex: number;
@@ -193,6 +219,11 @@ export interface GltfColorAccessorMalformedDetail {
 /** Bridge-side mesh merge failure after the parser has produced a GltfMeshIr. */
 export type GltfMeshBridgeInvalidDetail =
   | {
+      readonly reason: 'tangent-frame';
+      readonly meshIndex: number;
+      readonly primitiveIndex: number;
+    }
+  | {
       readonly reason: 'empty-input';
       readonly primitiveCount: 0;
     }
@@ -242,7 +273,7 @@ const gltfErrorPolicy = {
   'gltf-malformed-header': {
     expected:
       'GLB 12-byte header (magic 0x46546C67 + version=2 + length) plus mandatory JSON chunk',
-    hint: 'verify .glb is not truncated; rerun: forgeax-engine-remote-gltf import <path>',
+    hint: 'verify .glb is not truncated; rerun: forgeax asset import <path> --root <project> --json',
   },
   'gltf-version-unsupported': {
     expected: 'asset.version === "2.0"',
@@ -253,8 +284,22 @@ const gltfErrorPolicy = {
     hint: 'rebuild .gltf with valid bufferViews; check accessor index; ensure accessor.byteOffset + EFFECTIVE_STRIDE * (count - 1) + element_size <= bufferView.byteLength',
   },
   'gltf-extension-unsupported': {
-    expected: 'extension listed in v1 allowlist (see EXTENSION_ALLOWLIST in @forgeax/engine-gltf)',
-    hint: 'see feat-future-gltf-extensions-allowlist; remove this extension or wait for the allowlist to expand',
+    expected:
+      'extension listed in the supported allowlist (see EXTENSION_ALLOWLIST in @forgeax/engine-gltf)',
+    hint: 'remove the unsupported required extension or use a supported glTF extension; extensionsUsed-only entries remain diagnostic',
+  },
+  'gltf-lod-invalid': {
+    expected: 'MSFT_lod ids to reference unique existing node indices with valid coverage',
+    hint: 'repair the MSFT_lod node relation or remove it from extensionsRequired before re-importing',
+  },
+  'gltf-material-transmission-invalid': {
+    expected: 'KHR transmission, IOR, and volume values are finite and within their glTF ranges',
+    hint: 'repair the named glTF material extension value and re-import the source',
+  },
+  'gltf-material-physical-invalid': {
+    expected:
+      'KHR clearcoat, anisotropy, sheen, iridescence, and specular values are finite and within their glTF ranges',
+    hint: 'repair the named physical material extension value and re-import the source',
   },
   'gltf-accessor-type-mismatch': {
     expected: 'dense fixed-stride accessor with supported componentType',
@@ -266,7 +311,7 @@ const gltfErrorPolicy = {
   },
   'gltf-meta-missing': {
     expected: "sidecar <source>.meta.json (importer: 'gltf') present in same directory",
-    hint: 'run: forgeax-engine-remote-gltf import <path>',
+    hint: 'run: forgeax asset import <path> --root <project> --json',
   },
   'gltf-instancing-count-mismatch': {
     expected: 'all instance attribute accessors share the same count',
@@ -295,7 +340,7 @@ const gltfErrorPolicy = {
   'gltf-image-extract-failed': {
     expected:
       'image bytes extractable from bufferView / data-URI / external URI without corruption',
-    hint: 'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
+    hint: 'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax asset import <path> --root <project> --json',
   },
   'gltf-skin-attr-asymmetric': {
     expected:
@@ -330,7 +375,8 @@ const gltfErrorPolicy = {
     hint: 'repair the COLOR_0 accessor count, reference, range, or buffer bounds, then re-import the glTF source',
   },
   'gltf-mesh-bridge-invalid': {
-    expected: 'a non-empty merged mesh with consistent morph and COLOR_0 cardinality',
+    expected:
+      'a non-empty merged mesh with valid tangent frames and consistent morph and COLOR_0 cardinality',
     hint: 'repair the source primitive and re-import; inspect detail.reason and its typed facts',
   },
 } satisfies Record<GltfErrorCode, GltfErrorPolicy>;
@@ -346,6 +392,7 @@ interface DetailFor {
   readonly 'gltf-version-unsupported': GltfVersionUnsupportedDetail;
   readonly 'gltf-buffer-out-of-bounds': GltfBufferOutOfBoundsDetail;
   readonly 'gltf-extension-unsupported': GltfExtensionUnsupportedDetail;
+  readonly 'gltf-lod-invalid': GltfLodInvalidDetail;
   readonly 'gltf-accessor-type-mismatch': GltfAccessorTypeMismatchDetail;
   readonly 'gltf-texture-load-failed': GltfTextureLoadFailedDetail;
   readonly 'gltf-meta-missing': GltfMetaMissingDetail;
@@ -364,6 +411,8 @@ interface DetailFor {
   readonly 'gltf-color-accessor-unsupported': GltfColorAccessorUnsupportedDetail;
   readonly 'gltf-color-accessor-malformed': GltfColorAccessorMalformedDetail;
   readonly 'gltf-mesh-bridge-invalid': GltfMeshBridgeInvalidDetail;
+  readonly 'gltf-material-transmission-invalid': GltfMaterialTransmissionInvalidDetail;
+  readonly 'gltf-material-physical-invalid': GltfMaterialPhysicalInvalidDetail;
 }
 
 /**

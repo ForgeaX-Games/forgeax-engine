@@ -1,6 +1,6 @@
 import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, scenePlugin, Transform } from '../index';
+import { ChildOf, GlobalTransform, scenePlugin, Transform } from '../index';
 
 describe('scenePlugin', () => {
   it('installs propagation without render or animation capabilities', async () => {
@@ -14,7 +14,7 @@ describe('scenePlugin', () => {
       )
       .unwrap();
     world.update(1 / 60).unwrap();
-    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(5);
+    expect(world.get(child, GlobalTransform).unwrap().world[12]).toBeCloseTo(5);
     await ctx.fiber.dispose();
     expect(world.inspect().systems.some((system) => system.name === 'propagateTransforms')).toBe(
       false,

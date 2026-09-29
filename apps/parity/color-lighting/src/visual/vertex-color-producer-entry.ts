@@ -3,8 +3,10 @@ import { createVertexColorThreeProducer } from '../adapters/three-adapter';
 import type { VertexColorBackend, VertexColorSemanticFixture } from '../contracts/types';
 import {
   captureVertexColor,
+  createForgeaxVertexColorCaptureSession,
   type VertexColorFalsifierMode,
   type VertexColorForgeaxBundler,
+  type VertexColorCaptureSession,
 } from './vertex-color-capture';
 
 declare global {
@@ -37,6 +39,33 @@ function parseEnvironmentMap(value: string | undefined, name: string): Record<st
   }
 }
 
+function parseProducerEnvironmentMap(
+  value: string | undefined,
+  name: string,
+): Partial<Record<'forgeax' | 'three', Record<string, string>>> {
+  if (value === undefined) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object required');
+    const result: Partial<Record<'forgeax' | 'three', Record<string, string>>> = {};
+    for (const producer of ['forgeax', 'three'] as const) {
+      const producerValue = (parsed as Record<string, unknown>)[producer];
+      if (producerValue === undefined) continue;
+      if (producerValue === null || typeof producerValue !== 'object' || Array.isArray(producerValue)) {
+        throw new Error(`${producer} object required`);
+      }
+      result[producer] = Object.fromEntries(
+        Object.entries(producerValue).filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string',
+        ),
+      );
+    }
+    return result;
+  } catch {
+    throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: `${name} must be a producer map` }));
+  }
+}
+
 export function vertexColorProducerIsScheduled(): boolean {
   return dispatchEnvironment().VITE_FORGEAX_VERTEX_COLOR_SCHEDULED === '1'
     || dispatchEnvironment().FORGEAX_VERTEX_COLOR_SCHEDULED === '1';
@@ -59,10 +88,16 @@ export async function runVertexColorProducerEntry(
   }
   if (caseIds.length === 0 && singleCaseId !== undefined) caseIds = [singleCaseId];
   const outputPath = environment.FORGEAX_VERTEX_COLOR_OUTPUT ?? environment.VITE_FORGEAX_VERTEX_COLOR_OUTPUT;
-  const outputPaths = parseEnvironmentMap(
+  const defaultOutputPaths = parseEnvironmentMap(
     environment.FORGEAX_VERTEX_COLOR_OUTPUTS ?? environment.VITE_FORGEAX_VERTEX_COLOR_OUTPUTS,
     'output paths',
   );
+  const outputPathsByProducer = parseProducerEnvironmentMap(
+    environment.FORGEAX_VERTEX_COLOR_OUTPUTS_BY_PRODUCER
+      ?? environment.VITE_FORGEAX_VERTEX_COLOR_OUTPUTS_BY_PRODUCER,
+    'producer output paths',
+  );
+  const outputPaths = outputPathsByProducer[implementation] ?? defaultOutputPaths;
   const falsifierOutputPaths = parseEnvironmentMap(
     environment.FORGEAX_VERTEX_COLOR_FALSIFIER_OUTPUTS ?? environment.VITE_FORGEAX_VERTEX_COLOR_FALSIFIER_OUTPUTS,
     'falsifier output paths',
@@ -92,43 +127,70 @@ export async function runVertexColorProducerEntry(
   if (publish === undefined) {
     throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: 'producer output publisher is unavailable', backend, caseIds }));
   }
-  const run = async (candidateFixture: VertexColorSemanticFixture, candidateBackend: VertexColorBackend) =>
-    captureVertexColor(implementation, {
-      fixture: candidateFixture,
-      backend: candidateBackend,
-      sourceSha,
-      ...(forgeaxBundler === undefined ? {} : { forgeaxBundler }),
-      ...(vertexColorFalsifier === undefined ? {} : { vertexColorFalsifier }),
-    });
-  const producer = implementation === 'forgeax'
-    ? createVertexColorForgeaxProducer(run, sourceSha)
-    : createVertexColorThreeProducer(run);
-  for (const caseId of caseIds) {
-    const fixture = fixtureModules[`../../cases/vertex-color/${caseId}.json`];
-    if (fixture === undefined) {
-      throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: `fixture ${caseId} is unavailable` }));
+  let forgeaxSession: VertexColorCaptureSession | undefined;
+  try {
+    if (implementation === 'forgeax') {
+      if (forgeaxBundler === undefined) {
+        throw new Error(JSON.stringify({
+          code: 'producer-entry-missing',
+          detail: 'ForgeaX bundler options were not injected into the capture entry',
+          recovery: 'run a producer entry with an injected shader manifest (Browser adapter or Dawn data URL)',
+        }));
+      }
+      // Keep one renderer/device alive for the complete producer batch. Every
+      // fixture still gets a fresh World and 60-frame readback, but manifest
+      // fetch, device setup, and pipeline caches are paid once per backend.
+      forgeaxSession = await createForgeaxVertexColorCaptureSession(forgeaxBundler);
     }
-    const candidateOutputPath = outputPaths[caseId] ?? (caseIds.length === 1 ? outputPath : undefined);
-    if (candidateOutputPath === undefined) {
-      throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: `output path for ${caseId} is unavailable` }));
-    }
-    const output = await producer.capture(fixture, backend);
-    await publish(candidateOutputPath, output);
-    const candidateFalsifierOutputPath = falsifierOutputPaths[caseId];
-    const candidateFalsifierOutputUrl = falsifierOutputUrls[candidateFalsifierOutputPath ?? ''];
-    if (implementation === 'forgeax' && (candidateFalsifierOutputPath !== undefined || candidateFalsifierOutputUrl !== undefined)) {
-      const falsifierRun = async (candidateFixture: VertexColorSemanticFixture, candidateBackend: VertexColorBackend) =>
-        captureVertexColor(implementation, {
+    const run = async (candidateFixture: VertexColorSemanticFixture, candidateBackend: VertexColorBackend, falsifier?: VertexColorFalsifierMode) => {
+      if (forgeaxSession !== undefined) {
+        return forgeaxSession.capture({
           fixture: candidateFixture,
           backend: candidateBackend,
           sourceSha,
-          vertexColorFalsifier: candidateFixture.caseId === 'vertex-color-no-color-baseline' ? 'no-color-baseline' : 'white-color',
           ...(forgeaxBundler === undefined ? {} : { forgeaxBundler }),
+          ...(falsifier === undefined ? {} : { vertexColorFalsifier: falsifier }),
         });
-      const falsifierProducer = createVertexColorForgeaxProducer(falsifierRun, sourceSha);
-      const falsifierOutput = await falsifierProducer.capture(fixture, backend);
-      if (candidateFalsifierOutputPath !== undefined) await publish(candidateFalsifierOutputPath, falsifierOutput);
-      if (candidateFalsifierOutputUrl !== undefined && candidateFalsifierOutputPath === undefined) await publish('__falsifier__', falsifierOutput);
+      }
+      return captureVertexColor(implementation, {
+        fixture: candidateFixture,
+        backend: candidateBackend,
+        sourceSha,
+        ...(forgeaxBundler === undefined ? {} : { forgeaxBundler }),
+        ...(falsifier === undefined ? {} : { vertexColorFalsifier: falsifier }),
+      });
+    };
+    const producer = implementation === 'forgeax'
+      ? createVertexColorForgeaxProducer((fixture, candidateBackend) => run(fixture, candidateBackend, vertexColorFalsifier), sourceSha)
+      : createVertexColorThreeProducer((fixture, candidateBackend) => run(fixture, candidateBackend, vertexColorFalsifier));
+    for (const caseId of caseIds) {
+      const fixture = fixtureModules[`../../cases/vertex-color/${caseId}.json`];
+      if (fixture === undefined) {
+        throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: `fixture ${caseId} is unavailable` }));
+      }
+      const candidateOutputPath = outputPaths[caseId] ?? (caseIds.length === 1 ? outputPath : undefined);
+      if (candidateOutputPath === undefined) {
+        throw new Error(JSON.stringify({ code: 'producer-entry-missing', detail: `output path for ${caseId} is unavailable` }));
+      }
+      const output = await producer.capture(fixture, backend);
+      await publish(candidateOutputPath, output);
+      const candidateFalsifierOutputPath = falsifierOutputPaths[caseId];
+      const candidateFalsifierOutputUrl = falsifierOutputUrls[candidateFalsifierOutputPath ?? ''];
+      if (implementation === 'forgeax' && (candidateFalsifierOutputPath !== undefined || candidateFalsifierOutputUrl !== undefined)) {
+        const falsifierProducer = createVertexColorForgeaxProducer(
+          (falsifierFixture, falsifierBackend) => run(
+            falsifierFixture,
+            falsifierBackend,
+            falsifierFixture.caseId === 'vertex-color-no-color-baseline' ? 'no-color-baseline' : 'white-color',
+          ),
+          sourceSha,
+        );
+        const falsifierOutput = await falsifierProducer.capture(fixture, backend);
+        if (candidateFalsifierOutputPath !== undefined) await publish(candidateFalsifierOutputPath, falsifierOutput);
+        if (candidateFalsifierOutputUrl !== undefined && candidateFalsifierOutputPath === undefined) await publish('__falsifier__', falsifierOutput);
+      }
     }
+  } finally {
+    await forgeaxSession?.dispose();
   }
 }

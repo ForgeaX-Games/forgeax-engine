@@ -181,34 +181,47 @@ describe('sprite-lit shader (flat 2D lighting, tweak-20260701 M1)', () => {
       // At minimum: one consumer in each of fs_main and fs_main_hdr.
       expect(consumers.length).toBeGreaterThanOrEqual(2);
     });
+
+    it('VsOut carries vertex-produced ndc and viewZ for Standard cluster lookup', async () => {
+      const src = await readSpriteLitSource();
+      expect(src).toMatch(/@location\(\s*2\s*\)\s+ndc\s*:\s*vec3<f32>/);
+      expect(src).toMatch(/@location\(\s*3\s*\)\s+viewZ\s*:\s*f32/);
+      expect(src).toMatch(/out\.ndc\s*=\s*clipPos\.xyz\s*\/\s*clipPos\.w\s*;/);
+      expect(src).toMatch(/out\.viewZ\s*=\s*sceneViewZ\(/);
+      expect(src).toMatch(/evaluateStandardClusterLights\(\s*ndc,\s*viewZ,\s*worldPos/);
+    });
   });
 
-  describe('flat light functions drop normal parameter (D-P2)', () => {
+  describe('Standard local lights use the shared Cluster path (D-P2)', () => {
     it('spriteLitDirectional signature is `(albedo)` only', async () => {
       const src = await readSpriteLitSource();
       const re = /fn\s+spriteLitDirectional\s*\(\s*albedo\s*:\s*vec3<f32>\s*\)/;
       expect(re.test(src)).toBe(true);
     });
 
-    it('spriteLitPoint signature is `(p, worldPos, albedo)` — no normal', async () => {
+    it('does not retain a direct point-light branch', async () => {
       const src = await readSpriteLitSource();
-      const re =
-        /fn\s+spriteLitPoint\s*\(\s*p\s*:\s*PointLight\s*,\s*worldPos\s*:\s*vec3<f32>\s*,\s*albedo\s*:\s*vec3<f32>\s*\)/;
-      expect(re.test(src)).toBe(true);
+      expect(src).not.toContain('pointLightsBuffer');
+      expect(src).not.toContain('evalPointFlat(');
     });
 
-    it('spriteLitSpot signature is `(s, worldPos, albedo)` — no normal', async () => {
+    it('does not retain a direct spot-light branch', async () => {
       const src = await readSpriteLitSource();
-      const re =
-        /fn\s+spriteLitSpot\s*\(\s*s\s*:\s*SpotLight\s*,\s*worldPos\s*:\s*vec3<f32>\s*,\s*albedo\s*:\s*vec3<f32>\s*\)/;
-      expect(re.test(src)).toBe(true);
+      expect(src).not.toContain('spotLightsBuffer');
+      expect(src).not.toContain('evalSpotFlat(');
     });
 
-    it('spriteLitShadeAccum signature is `(albedo, worldPos)` — no normal', async () => {
+    it('spriteLitShadeAccum consumes vertex-produced ndc/viewZ without a normal', async () => {
       const src = await readSpriteLitSource();
       const re =
-        /fn\s+spriteLitShadeAccum\s*\(\s*albedo\s*:\s*vec3<f32>\s*,\s*worldPos\s*:\s*vec3<f32>\s*\)/;
+        /fn\s+spriteLitShadeAccum\s*\(\s*albedo\s*:\s*vec3<f32>\s*,\s*worldPos\s*:\s*vec3<f32>\s*,\s*ndc\s*:\s*vec3<f32>\s*,\s*viewZ\s*:\s*f32\s*,?\s*\)/;
       expect(re.test(src)).toBe(true);
+      const bodyStart = src.indexOf('fn spriteLitShadeAccum');
+      const bodyEnd = src.indexOf('fn fs_main(', bodyStart);
+      expect(bodyStart).toBeGreaterThanOrEqual(0);
+      expect(src.slice(bodyStart, bodyEnd > bodyStart ? bodyEnd : src.length)).not.toContain(
+        '@builtin(position)',
+      );
     });
   });
 

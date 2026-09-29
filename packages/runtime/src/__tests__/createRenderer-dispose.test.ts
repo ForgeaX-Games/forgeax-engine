@@ -1,7 +1,9 @@
+import { DynamicTextureStore } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { rhi } from '@forgeax/engine-rhi-null';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { constructRendererHost } from '../../../render/src/construct-renderer';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
 import { requireRenderer } from './renderer-test-utils';
 
 function canvas(): HTMLCanvasElement {
@@ -11,6 +13,41 @@ function canvas(): HTMLCanvasElement {
 const manifest = `data:application/json,${encodeURIComponent(JSON.stringify({ schemaVersion: '1.0.0', entries: [] }))}`;
 
 describe('createRenderer disposal contract', () => {
+  it('continues residency cleanup after dynamic texture cleanup reports a failure', async () => {
+    const renderer = await requireRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
+    const destroyDynamic = DynamicTextureStore.prototype.destroyAll;
+    const dynamic = vi
+      .spyOn(DynamicTextureStore.prototype, 'destroyAll')
+      .mockImplementation(function (this: DynamicTextureStore) {
+        destroyDynamic.call(this);
+        throw new Error('dynamic cleanup probe');
+      });
+    const residency = vi.spyOn(GpuResidencyCache.prototype, 'destroyAll');
+    try {
+      expect(await renderer.dispose()).toMatchObject({
+        ok: false,
+        error: {
+          code: 'cleanup-failed',
+          detail: {
+            causes: [
+              {
+                expected:
+                  'dynamicTextureStore.destroyAll completes during Renderer.dispose() without throwing',
+              },
+            ],
+          },
+        },
+      });
+      expect(residency).toHaveBeenCalledOnce();
+      expect(residency).toHaveBeenCalledAfter(dynamic);
+      expect((await renderer.dispose()).ok).toBe(true);
+    } finally {
+      dynamic.mockRestore();
+      residency.mockRestore();
+      await renderer.dispose();
+    }
+  });
+
   it('keeps assets on the host and not on Renderer', async () => {
     const host = await constructRendererHost(canvas(), { rhi }, { shaderManifestUrl: manifest });
     expect(host.ok).toBe(true);

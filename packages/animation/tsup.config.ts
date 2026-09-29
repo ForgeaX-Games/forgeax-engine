@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsup';
 export default defineConfig({
-  entry: ['src/index.ts', 'src/target-id.ts'],
+  entry: ['src/index.ts', 'src/target-id.ts', 'src/animated-bounds.ts'],
   format: ['esm'],
   dts: false,
   clean: false,

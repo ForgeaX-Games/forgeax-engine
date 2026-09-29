@@ -23,12 +23,6 @@ export interface CaptureFailureDetail {
   readonly cause: string;
   readonly handleId?: string;
   readonly resourceKind?: 'buffer' | 'texture';
-}
-
-export interface CaptureTimeoutDetail {
-  readonly stage: 'snapshot';
-  readonly cause: string;
-  readonly timeoutMs: number;
   readonly progress?: {
     readonly snapshotStage: 'queue-drain' | 'resource-readback';
     readonly totalResources: number;
@@ -39,6 +33,11 @@ export interface CaptureTimeoutDetail {
     readonly currentSizeBytes: number | null;
     readonly elapsedMs: number;
   };
+}
+
+export interface CaptureTimeoutDetail extends CaptureFailureDetail {
+  readonly stage: 'snapshot';
+  readonly timeoutMs: number;
 }
 
 export interface TapeFailureDetail {

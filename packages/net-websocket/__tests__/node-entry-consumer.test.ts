@@ -1,8 +1,9 @@
-import { createServer } from 'node:net';
+import { createServer, type Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EndpointEvent, NetEndpoint, PeerId } from '@forgeax/engine-net';
 import {
   connectWebSocketClientEndpoint,
+  createWebSocketConnector,
   listenWebSocketEndpoint,
 } from '../src/node';
 
@@ -173,6 +174,42 @@ describe('Node WebSocket endpoint entry', () => {
 
     expect(client.close().ok).toBe(true);
     expect((await eventOf(listener, 'peer-disconnected')).kind).toBe('peer-disconnected');
+  });
+
+  it('aborts a pending Node connection with a structured failure and closes its socket', async () => {
+    const server = createServer();
+    let acceptedSocket: Socket | undefined;
+    const accepted = new Promise<void>((resolve) => {
+      server.once('connection', (socket) => {
+        acceptedSocket = socket;
+        socket.on('error', () => undefined);
+        resolve();
+      });
+    });
+    await listen(server, 0);
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP address');
+    const url = `ws://127.0.0.1:${address.port}`;
+
+    try {
+      expect(createWebSocketConnector).toBeTypeOf('function');
+      const controller = new AbortController();
+      const pending = createWebSocketConnector(url).connect(controller.signal);
+      await accepted;
+      controller.abort();
+      controller.abort();
+
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('connection-failed');
+        expect(result.error.detail.address).toBe(url);
+        expect(result.error.detail.cause).toMatch(/abort/i);
+      }
+    } finally {
+      acceptedSocket?.destroy();
+      await closeServer(server);
+    }
   });
 });
 

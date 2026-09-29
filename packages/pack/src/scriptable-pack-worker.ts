@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parentPort, workerData } from 'node:worker_threads';
 import ts from 'typescript';
+import { validatePluginAssetSource } from './plugin-asset.js';
+import {
+  relativeScriptableImportCandidates,
+  SCRIPTABLE_SOURCE_EXTENSIONS,
+} from './scriptable-pack-relative-import.js';
 
 if (parentPort === null) throw new Error('ScriptablePack worker requires a parent port');
 
@@ -12,20 +17,46 @@ const workerMode = workerData as {
   readonly mode?: 'single' | 'reusable';
   readonly sourcePath?: string;
   readonly compileRoot?: string;
+  readonly sources?: Readonly<Record<string, string>>;
 };
 const reusable = workerMode.mode === 'reusable';
 let sourcePath = workerMode.sourcePath;
 let compileRoot = workerMode.compileRoot;
+let capturedSources = workerMode.sources;
 type LoadedDefinition = {
   readonly schemaVersion?: unknown;
   readonly packageId?: unknown;
   readonly name?: unknown;
-  readonly assets?: unknown;
-  readonly sceneComponents?: unknown;
-  readonly externalAssets?: unknown;
   readonly parameters?: unknown;
+  readonly sceneComponents?: unknown;
+  readonly runtime?: unknown;
   readonly build?: unknown;
 };
+const DECLARED_FIELDS = new Set([
+  'schemaVersion',
+  'packageId',
+  'name',
+  'parameters',
+  'sceneComponents',
+  'runtime',
+  'build',
+]);
+
+// Forward undeclared fields so the main-thread validator refuses them exactly
+// as it refuses the same module loaded in-process; a value that cannot cross
+// the port is replaced by its type name.
+function undeclaredFields(value: object): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (DECLARED_FIELDS.has(key)) continue;
+    try {
+      fields[key] = structuredClone(field);
+    } catch {
+      fields[key] = typeof field;
+    }
+  }
+  return fields;
+}
 let definition: LoadedDefinition | undefined;
 let nextReadId = 0;
 const reads = new Map<number, (value: unknown) => void>();
@@ -44,20 +75,31 @@ function failure(error: unknown): unknown {
   };
 }
 
-const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs'] as const;
+function serializableSceneComponents(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((component) => {
+    const candidate = component as { readonly name?: unknown; readonly fields?: unknown };
+    const fields =
+      candidate.fields !== null &&
+      typeof candidate.fields === 'object' &&
+      !Array.isArray(candidate.fields)
+        ? Object.fromEntries(
+            Object.entries(candidate.fields as Record<string, unknown>).map(([name, field]) => [
+              name,
+              typeof field === 'string' ? field : (field as { readonly type?: unknown })?.type,
+            ]),
+          )
+        : undefined;
+    return { name: candidate.name, fields };
+  });
+}
 
 function resolveRelativeImport(importer: string, specifier: string): string | undefined {
-  if (!specifier.startsWith('.')) return undefined;
-  const raw = resolve(dirname(importer), specifier);
-  const candidates =
-    extname(raw).length > 0
-      ? [raw]
-      : [
-          raw,
-          ...SOURCE_EXTENSIONS.map((extension) => `${raw}${extension}`),
-          resolve(raw, 'index.ts'),
-        ];
-  return candidates.find((candidate) => existsSync(candidate));
+  return relativeScriptableImportCandidates(importer, specifier).find((candidate) =>
+    capturedSources === undefined || !Object.hasOwn(capturedSources, importer)
+      ? existsSync(candidate) && statSync(candidate).isFile()
+      : Object.hasOwn(capturedSources, candidate),
+  );
 }
 
 function outputName(path: string): string {
@@ -71,32 +113,19 @@ function resolveBareImport(importer: string, specifier: string): string | undefi
       readonly resolve?: (specifier: string, parent?: string) => string;
     }
   ).resolve;
-  const bunResolver = (
-    globalThis as typeof globalThis & {
-      readonly Bun?: { readonly resolveSync?: (specifier: string, parent: string) => string };
-    }
-  ).Bun?.resolveSync;
-  for (const parentPath of [importer, fileURLToPath(import.meta.url)]) {
-    if (resolver !== undefined) {
-      try {
-        const resolved = resolver(specifier, pathToFileURL(parentPath).href);
-        if (resolved.startsWith('file:')) return fileURLToPath(resolved);
-      } catch {
-        // Bun's import.meta.resolve currently ignores the explicit parent.
-      }
-    }
-    if (bunResolver !== undefined) {
-      try {
-        const resolved = bunResolver(specifier, parentPath);
-        if (isAbsolute(resolved)) return resolved;
-      } catch {
-        // Prefer the next graph before preserving an unresolved import.
-      }
+  if (resolver === undefined) return undefined;
+  // Resolve consumer dependencies from the source file first, then resolve
+  // Engine self-references from this worker's package. A compiled source
+  // closure lives in /tmp, so using only its path makes
+  // @forgeax/engine-pack/source disappear from Node's lookup ancestry.
+  for (const parent of [pathToFileURL(importer).href, import.meta.url]) {
+    try {
+      const resolved = resolver(specifier, parent);
+      if (resolved.startsWith('file:')) return fileURLToPath(resolved);
+    } catch {
+      // Try the loader package before treating the import as unavailable.
     }
   }
-  // Type-only or optional imports may not be installed in either graph.
-  // Preserve them for TypeScript to erase or let Node report the real load
-  // failure instead of guessing a workspace root.
   return undefined;
 }
 
@@ -126,7 +155,7 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
   while (pending.length > 0) {
     const path = pending.pop();
     if (path === undefined || sources.has(path)) continue;
-    const source = readFileSync(path, 'utf8');
+    const source = capturedSources?.[path] ?? readFileSync(path, 'utf8');
     sources.set(path, source);
     const resolvedImports = new Map<string, string>();
     for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
@@ -211,7 +240,14 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
     if (errors.length > 0) {
       throw new Error(
         `ScriptablePack TypeScript transpile failed for ${path}: ${errors
-          .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+          .map((diagnostic) => {
+            const position = diagnostic.file?.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
+            const location =
+              position === undefined
+                ? path
+                : `${path}:${position.line + 1}:${position.character + 1}`;
+            return `${location}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`;
+          })
           .join('; ')}`,
       );
     }
@@ -224,13 +260,15 @@ async function loadDefinition(task: {
   readonly sourcePath: string;
   readonly compileRoot: string;
   readonly loadId?: number;
+  readonly sources?: Readonly<Record<string, string>>;
 }): Promise<void> {
   sourcePath = task.sourcePath;
   compileRoot = task.compileRoot;
+  capturedSources = task.sources;
   definition = undefined;
   reads.clear();
-  const executablePath = SOURCE_EXTENSIONS.includes(
-    extname(task.sourcePath) as (typeof SOURCE_EXTENSIONS)[number],
+  const executablePath = SCRIPTABLE_SOURCE_EXTENSIONS.includes(
+    extname(task.sourcePath) as (typeof SCRIPTABLE_SOURCE_EXTENSIONS)[number],
   )
     ? compileModuleClosure(task.sourcePath, task.compileRoot, task.loadId)
     : task.sourcePath;
@@ -249,11 +287,13 @@ async function loadDefinition(task: {
         : {
             schemaVersion: definition.schemaVersion,
             packageId: definition.packageId,
-            name: definition.name,
-            assets: definition.assets,
-            sceneComponents: definition.sceneComponents,
-            externalAssets: definition.externalAssets,
+            ...(definition.name === undefined ? {} : { name: definition.name }),
             ...(definition.parameters === undefined ? {} : { parameters: definition.parameters }),
+            ...(definition.runtime === undefined ? {} : { runtime: definition.runtime }),
+            ...(definition.sceneComponents === undefined
+              ? {}
+              : { sceneComponents: serializableSceneComponents(definition.sceneComponents) }),
+            ...undeclaredFields(definition),
           },
   });
 }
@@ -278,6 +318,9 @@ async function handleMessage(message: unknown): Promise<void> {
         sourcePath: value.sourcePath,
         compileRoot: value.compileRoot,
         loadId: value.loadId,
+        ...(value.sources === undefined
+          ? {}
+          : { sources: value.sources as Record<string, string> }),
       });
     } catch (error) {
       port.postMessage({ kind: 'load-threw', loadId: value.loadId, error: failure(error) });
@@ -294,14 +337,43 @@ async function handleMessage(message: unknown): Promise<void> {
     return;
   }
   try {
-    const result = await definition.build({
-      ...(definition.schemaVersion === '2.0.0' ? { packageId: definition.packageId } : {}),
+    const context =
+      value.context !== null && typeof value.context === 'object'
+        ? (value.context as { readonly packageId?: unknown; readonly values?: unknown })
+        : undefined;
+    const buildContext = {
+      ...(Array.isArray(context?.packageId)
+        ? { packageId: new Uint8Array(context.packageId as number[]) }
+        : {}),
+      ...(context?.values !== undefined ? { values: context.values } : {}),
       readByGuid(guid: Uint8Array): Promise<unknown> {
         const readId = nextReadId++;
         port.postMessage({ kind: 'asset-read', buildId: value.buildId, readId, guid });
         return new Promise((resolve) => reads.set(readId, resolve));
       },
-    });
+    };
+    const result = await definition.build(buildContext);
+    if (
+      result !== null &&
+      typeof result === 'object' &&
+      'ok' in result &&
+      result.ok &&
+      'value' in result &&
+      result.value !== null &&
+      typeof result.value === 'object'
+    ) {
+      for (const output of Object.values(result.value)) {
+        if (
+          output !== null &&
+          typeof output === 'object' &&
+          'kind' in output &&
+          output.kind === 'plugin'
+        ) {
+          const validated = validatePluginAssetSource(output);
+          if (!validated.ok) throw validated.error;
+        }
+      }
+    }
     port.postMessage({
       kind: 'build-result',
       buildId: value.buildId,
@@ -321,7 +393,11 @@ port.on('message', (message: unknown) => {
 
 if (!reusable && sourcePath !== undefined && compileRoot !== undefined) {
   try {
-    await loadDefinition({ sourcePath, compileRoot });
+    await loadDefinition({
+      sourcePath,
+      compileRoot,
+      ...(capturedSources === undefined ? {} : { sources: capturedSources }),
+    });
   } catch (error) {
     port.postMessage({ kind: 'load-threw', error: failure(error) });
   }

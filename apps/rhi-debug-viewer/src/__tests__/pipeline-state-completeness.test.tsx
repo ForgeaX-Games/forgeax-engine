@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ViewerPanels } from '../App';
 import type { ViewerModel } from '../viewer-model';
 import { makeEmptyResourceLifecycle } from './viewer-model-fixtures';
@@ -9,6 +9,7 @@ function model(): ViewerModel {
     commands: [],
     resources: [],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [
       {
         workIndex: 2,
@@ -46,11 +47,16 @@ function model(): ViewerModel {
             resourceKind: 'texture',
             bufferOffset: null,
             bufferSize: null,
+            dynamicOffset: null,
           },
         ],
         vertexBuffers: [{ slot: 0, bufferHandleId: 'buffer:vertex', offset: 8, size: 36 }],
         indexBuffer: { bufferHandleId: 'buffer:index', format: 'uint16', offset: 0, size: 12 },
-        attachments: { colorViewHandleIds: ['view:color'], depthStencilViewHandleId: 'view:depth' },
+        attachments: {
+          colorViewHandleIds: ['view:color'],
+          colorResolveViewHandleIds: [null],
+          depthStencilViewHandleId: 'view:depth',
+        },
       },
     ],
     passes: [
@@ -62,6 +68,7 @@ function model(): ViewerModel {
         workIndices: [2],
         commandIndices: [3],
         colorAttachmentViewHandleIds: ['view:color'],
+        colorAttachmentResolveViewHandleIds: [null],
         depthStencilViewHandleId: 'view:depth',
       },
     ],
@@ -70,6 +77,34 @@ function model(): ViewerModel {
 }
 
 describe('PipelineState completeness', () => {
+  afterEach(cleanup);
+  it('keeps both editor stages when one module supplies vertex and fragment entries', () => {
+    const original = model();
+    const shared: ViewerModel = {
+      ...original,
+      works: original.works.map((work) => ({
+        ...work,
+        pipeline: {
+          ...work.pipeline,
+          shaders: work.pipeline.shaders.map((shader) => ({
+            ...shader,
+            moduleHandleId: 'shader:shared',
+            source: 'one module with both entries',
+          })),
+        },
+      })),
+    };
+    const { container } = render(<ViewerPanels model={shared} />);
+    fireEvent.click(container.querySelector('[data-forgeax-work-index="2"]') as HTMLElement);
+    const keys = [...container.querySelectorAll('[data-forgeax-editor-key]')].map((editor) =>
+      editor.getAttribute('data-forgeax-editor-key'),
+    );
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(screen.getByText('vertex / vsMain')).toBeTruthy();
+    expect(screen.getByText('fragment / fsMain')).toBeTruthy();
+  });
+
   it('renders pipeline identity, shaders, bindings, and vertex/index ranges', () => {
     const { container } = render(<ViewerPanels model={model()} />);
     fireEvent.click(container.querySelector('[data-forgeax-work-index="2"]') as HTMLElement);

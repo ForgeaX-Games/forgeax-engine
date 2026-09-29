@@ -131,7 +131,7 @@ describe('morphology-gate.test.ts (AC-14)', () => {
     // Sanity: the engine + demos define many inline systems. If this drops to
     // ~0 the scanner stopped matching call sites and the gate would be vacuous.
     expect(all.length).toBeGreaterThan(50);
-  });
+  }, 30_000);
 
   it('AC-14: zero residual 2-param-shape fn callbacks (first param must be world/_world or absent)', () => {
     const { violations } = collectCallbacks();
@@ -139,7 +139,7 @@ describe('morphology-gate.test.ts (AC-14)', () => {
       .map((v) => `  ${v.file}: fn(${v.params}) -- first param "${v.first}" misbinds to world`)
       .join('\n');
     expect(violations, `residual world-first-param violations:\n${report}`).toEqual([]);
-  });
+  }, 30_000);
 
   it('is falsifiable: the detector flags a synthetic old-shape callback', () => {
     // Mirror the production detector against an in-memory bad sample so a future

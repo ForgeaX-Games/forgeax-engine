@@ -1,26 +1,4 @@
-// compare-param-schema.ts -- single-direction superset gate at build time.
-//
-// feat-20260613-material-paramschema-driven-binding M2 / w7.
-//
-// Decision anchors:
-//   - plan-strategy D-2  derive(schema) is the single source for BGL / UBO /
-//     loader lookup tables; vite-plugin-shader consumes the BGL slice here.
-//   - plan-strategy D-9  build-time gate is single-direction superset:
-//     the actually reflected BGL must contain every binding emitted by
-//     derive(schema). Extra bindings on the actual side are tolerated --
-//     they are reserved for engine-side appendInjection (shadow / IBL /
-//     lightmap) which lands at register time.
-//   - plan-strategy D-10 add-only error code: superset failures emit
-//     'material-shader-binding-mismatch' with .expected (the BGL entry
-//     derive emitted) + .actual (the entry the reflector found, or
-//     undefined) + .hint. The legacy 'material-schema-mismatch' code stays
-//     put for register-time / overflow concerns.
-//   - charter P3 explicit failure: build gate stops drift before runtime.
-//
-// The legacy two-way equality path (compareParamSchemaWithBgl) lived here
-// before w7; it was deleted because appendInjection makes that semantic
-// permanently red. The bg-overflow gate (checkBindGroupOverflow) stays
-// because BGL count is independent of schema content.
+// Validate the resources a material Pass consumes against the root binding numbers.
 
 import type {
   BindGroupLayoutDescriptor,
@@ -69,45 +47,42 @@ export function checkBindGroupOverflow(
 }
 
 /**
- * Compare derive(schema) BGL slice against the actually reflected BGL.
- *
- * Single-direction superset semantics (D-9):
- *   actual ⊇ derive(schema).bglEntries
- *
- * For each entry derive(schema) emits, look up the actual entry at the same
- * `binding` number across all groups. The match must:
- *   1. exist (else `binding-missing`); and
- *   2. share the same resource kind (uniform buffer / texture / sampler /
- *      storage buffer / etc.) and -- where applicable -- the texture
- *      `viewDimension` / `sampleType` and the sampler `type` (else
- *      `binding-type-mismatch`).
- *
- * Extra entries in `actualBgls` that do not appear in derive(schema) are
- * tolerated (engine-injection placeholders). The function returns Ok on the
- * first all-clear pass and Err on the first violating expected entry; later
- * violations are surfaced one PR at a time as the AI user re-runs the build.
+ * Check the root-owned material bindings that occur in this Pass. Missing
+ * resources are legal: a depth Pass may consume none, or a shading Pass may
+ * consume only a texture subset. Engine-owned additions are checked by their
+ * producer and renderer; this gate never reindexes the root resource slots.
  */
-export function compareParamSchemaSuperset(
+export function compareMaterialBindings(
   schema: readonly ParamSchemaEntry[],
   actualBgls: readonly BindGroupLayoutDescriptor[],
   materialShaderPath: string,
+  ignoredParameters: ReadonlySet<string> = new Set(),
 ): Result<void, ShaderError> {
-  const derived = derive(schema);
+  // Standard physical textures are appended after engine injections in the
+  // cooked ABI.  They must not shift the user-region bindings used by the
+  // comparison of ordinary material resources; derive the checked slice from
+  // the same filtered schema while keeping the physical declarations as
+  // tolerated extras.
+  const comparedSchema =
+    ignoredParameters.size === 0
+      ? schema
+      : schema.filter((entry) => !ignoredParameters.has(entry.name));
+  const derived = derive(comparedSchema);
   if (derived.bglEntries.length === 0) {
     return ok(undefined);
   }
 
   const actualByBinding = flattenByBinding(actualBgls);
   const expectedParamByBinding = paramNameByBinding(derived);
+  const expectedDisplayNameByBinding = displayNameByBinding(derived);
 
   for (const expected of derived.bglEntries) {
+    const expectedParameter = expectedParamByBinding.get(expected.binding);
+    if (expectedParameter !== undefined && ignoredParameters.has(expectedParameter)) continue;
     const actual = actualByBinding.get(expected.binding);
-    const paramName = expectedParamByBinding.get(expected.binding) ?? '<merged-ubo>';
-    if (actual === undefined) {
-      return err(
-        makeBindingMismatch('binding-missing', expected, undefined, paramName, materialShaderPath),
-      );
-    }
+    const paramName =
+      expectedDisplayNameByBinding.get(expected.binding) ?? expectedParameter ?? '<merged-ubo>';
+    if (actual === undefined) continue;
     if (!resourceKindCompatible(expected, actual)) {
       return err(
         makeBindingMismatch(
@@ -129,7 +104,17 @@ function flattenByBinding(
   bgls: readonly BindGroupLayoutDescriptor[],
 ): Map<number, BindGroupLayoutEntry> {
   const out = new Map<number, BindGroupLayoutEntry>();
-  for (const descriptor of bgls) {
+  // ParamSchema owns the material user region in group(1). Reflection also
+  // returns scene/storage groups whose binding numbers legitimately overlap
+  // the material slots (for example meshes at group(2)/binding(1)); flattening
+  // those groups by binding alone made a valid material sampler look like a
+  // storage-buffer mismatch. The compiler's reflection writer labels groups,
+  // so prefer the material descriptor and retain the single-descriptor
+  // fallback for older test/consumer payloads.
+  const materialDescriptors = bgls.filter((descriptor) => descriptor.label === '@group(1)');
+  const descriptors =
+    bgls.length === 1 && bgls[0]?.label === undefined ? bgls : materialDescriptors;
+  for (const descriptor of descriptors) {
     for (const entry of descriptor.entries) {
       if (!out.has(entry.binding)) out.set(entry.binding, entry);
     }
@@ -154,6 +139,18 @@ function paramNameByBinding(derived: ReturnType<typeof derive>): Map<number, str
     if (owner !== undefined) out.set(uniformEntry.binding, owner);
   }
   for (const resource of resourceBindings) {
+    // Auto-paired sampler resources carry the texture parameter in
+    // `resource.parameter`; use it for the ignore projection so a relocated
+    // physical texture skips both its sampler and view entries.
+    out.set(resource.binding, resource.parameter ?? resource.name);
+  }
+  return out;
+}
+
+/** Keep diagnostics pointed at the concrete reflected resource name. */
+function displayNameByBinding(derived: ReturnType<typeof derive>): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const resource of derived.resourceBindings ?? []) {
     out.set(resource.binding, resource.name);
   }
   return out;
@@ -258,7 +255,11 @@ function synthesiseWgslHint(expected: BindGroupLayoutEntry, expectedParam: strin
           ? 'texture_cube<f32>'
           : expected.texture.viewDimension === 'cube-array'
             ? 'texture_cube_array<f32>'
-            : 'texture_2d<f32>';
+            : expected.texture.viewDimension === '2d-array'
+              ? 'texture_2d_array<f32>'
+              : expected.texture.viewDimension === '3d'
+                ? 'texture_3d<f32>'
+                : 'texture_2d<f32>';
     return `add the missing WGSL declaration: ${at} var ${expectedParam}: ${wgslTexType};`;
   }
   if (expected.sampler !== undefined) {

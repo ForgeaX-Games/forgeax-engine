@@ -1,6 +1,6 @@
 import { type Component, Update, type World } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
-import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
 import { AUDIO_ENGINE_RESOURCE_KEY } from './audio-backend';
 import { audioTickSystem, listenerPoseFromWorldMatrix } from './audio-tick-system';
 import { AudioListener, AudioSource } from './components';
@@ -48,10 +48,10 @@ export function audioPlugin(): Plugin {
             after: [PROPAGATE_TRANSFORMS_SYSTEM],
             queries: [],
             fn: () => {
-              const listeners = world.query({ read: [Transform], with: [AudioListener] });
+              const listeners = world.query({ read: [GlobalTransform], with: [AudioListener] });
               if (!listeners.ok) return;
               for (const row of listeners.value) {
-                const transform = row.get(Transform);
+                const transform = row.get(GlobalTransform);
                 const pose = listenerPoseFromWorldMatrix(transform.world);
                 backend.setListenerPose(pose);
                 break;

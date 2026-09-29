@@ -75,8 +75,6 @@ export function attachRecorder(
       const signal = captureOptions.signal;
       if (signal?.aborted)
         return Promise.resolve(fail('capture-unavailable', 'capture request was aborted'));
-      const arm = proxy.recorder.arm(1);
-      if (!arm.ok) return Promise.resolve(fail('capture-busy', arm.error.hint));
       phase = 'armed';
       generation += 1;
       return new Promise<Result<EncodedTape, RhiDebugError>>((resolve) => {
@@ -102,12 +100,26 @@ export function attachRecorder(
       const request = active;
       if (request.generation !== generation) return ok(undefined);
       if (phase === 'armed') {
+        // Requests may arrive between frames. Start recording only at this
+        // snapshot boundary; work preceding it belongs to the previous frame.
+        const arm = proxy.recorder.arm(1);
+        if (!arm.ok) {
+          const error = createRhiDebugError('capture-busy', {
+            stage: 'capture',
+            cause: arm.error.hint,
+          });
+          settle(err(error));
+          return err(error);
+        }
         phase = 'snapshotting';
         const result = await snapshotFrame(proxy.recorder, registry, {
           snapshotTimeoutMs:
             request.options.snapshotTimeoutMs ?? options.snapshotTimeoutMs ?? 30_000,
           byteBudget: request.options.byteBudget ?? options.byteBudget ?? Number.MAX_SAFE_INTEGER,
         });
+        // Abort/disposal/device loss may have settled this request while GPU
+        // readback was pending. Its completion cannot alter a newer capture.
+        if (active !== request || request.generation !== generation) return ok(undefined);
         if (!result.ok) {
           proxy.recorder.transitionToError();
           settle(err(result.error));
@@ -147,6 +159,6 @@ export function attachRecorder(
   return ok(attachment);
 }
 
-export type { CreateShaderModuleFn } from '../recorder';
+export type { CreateShaderModuleFn, CreateShaderModuleImmediateFn } from '../recorder';
 export type { EncodedTape } from './assemble';
 export type { RecordableBackend, RecorderBackend } from './proxy';

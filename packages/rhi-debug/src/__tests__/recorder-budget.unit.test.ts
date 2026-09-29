@@ -1,6 +1,10 @@
 import type { RhiInstance } from '@forgeax/engine-rhi';
+import { rhi } from '@forgeax/engine-rhi-null';
 import { describe, expect, it, vi } from 'vitest';
+import { wrap } from '../recorder';
+import { ResourceRegistry } from '../recorder/resource-registry';
 import { attachRecorder, type RecordableBackend } from '../recorder/session';
+import { snapshotFrame } from '../recorder/snapshot';
 
 function backend(): RecordableBackend {
   return {
@@ -38,5 +42,58 @@ describe('RecorderSession bounded options', () => {
     expect((await attached.value.frameBoundary()).ok).toBe(true);
     await attached.value.frameBoundary();
     expect((await capture).ok).toBe(true);
+  });
+});
+
+describe('snapshot byte accounting', () => {
+  it('uses complete format, mip and layer bytes before any GPU readback', async () => {
+    const recorder = wrap(rhi);
+    const device = (await (await recorder.requestAdapter()).unwrap().requestDevice()).unwrap();
+    device
+      .createTexture({
+        size: { width: 8, height: 8, depthOrArrayLayers: 2 },
+        format: 'rgba16float',
+        mipLevelCount: 3,
+        usage: 4,
+      })
+      .unwrap();
+    const registry = new ResourceRegistry(recorder);
+    expect(registry.estimateSnapshotBytes()).toBe(1344);
+    recorder.arm(1).unwrap();
+    const readback = vi.spyOn(recorder, 'snapshotAllLiveResources');
+    const result = await snapshotFrame(recorder, registry, {
+      byteBudget: 1343,
+      snapshotTimeoutMs: 1000,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'capture-snapshot-failed' } });
+    expect(readback).not.toHaveBeenCalled();
+    recorder.transitionToError();
+    recorder.disposeError();
+  });
+
+  it('counts compressed blocks and excludes unseedable scratch and MSAA', async () => {
+    const recorder = wrap(rhi);
+    const device = (await (await recorder.requestAdapter()).unwrap().requestDevice()).unwrap();
+    device
+      .createTexture({
+        size: { width: 8, height: 8, depthOrArrayLayers: 2 },
+        format: 'bc1-rgba-unorm',
+        mipLevelCount: 2,
+        usage: 4,
+      })
+      .unwrap();
+    device
+      .createTexture({
+        size: { width: 8, height: 8 },
+        format: 'rgba8unorm',
+        sampleCount: 4,
+        usage: 16,
+      })
+      .unwrap();
+    device
+      .createTexture({ size: { width: 8, height: 8 }, format: 'depth24plus', usage: 16 })
+      .unwrap();
+    device.createBuffer({ size: 4096, usage: 9 }).unwrap();
+    expect(new ResourceRegistry(recorder).estimateSnapshotBytes()).toBe(80);
   });
 });

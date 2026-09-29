@@ -23,22 +23,8 @@ export async function createRenderer(
   if (options !== undefined && 'rhi' in options && options.rhi === undefined) {
     return err(new EngineEnvironmentError('no usable rendering backend'));
   }
-  const rendererOptions: RendererOptions | undefined =
-    options === undefined
-      ? undefined
-      : {
-          ...(options.rhi === undefined ? {} : { rhi: options.rhi }),
-          ...(options.features === undefined ? {} : { features: options.features }),
-          ...(options.profiler === undefined ? {} : { profiler: options.profiler }),
-          ...(options.rhiInstrumentation === undefined
-            ? {}
-            : { rhiInstrumentation: options.rhiInstrumentation }),
-          ...(options.standardProfile === undefined
-            ? {}
-            : { standardProfile: options.standardProfile }),
-        };
   try {
-    const constructed = await constructRuntimeRendererHost(canvas, rendererOptions, bundler);
+    const constructed = await constructRuntimeRendererHost(canvas, options, bundler);
     if (!constructed.ok) return err(constructed.error);
     return ok(constructed.value.renderer);
   } catch (cause) {

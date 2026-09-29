@@ -1,7 +1,7 @@
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { MaterialAsset } from '@forgeax/engine-types';
-import { BLOOM_DISABLED, Camera, Materials, MeshFilter, MeshRenderer, orthographic, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { BLOOM_DISABLED, Camera, Materials, MeshFilter, MeshRenderer, orthographic, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine-scene';
 
 const ORTHO = { left: -640, right: 640, bottom: -360, top: 360, near: 0.1, far: 2000 } as const;
@@ -39,7 +39,7 @@ export function buildBloom2dWorld(world: World): Bloom2dScene {
 
   const camera = world.spawn(
     { component: Transform, data: { pos: [0, 0, 100], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-    { component: Camera, data: { ...orthographic(ORTHO), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_DISABLED, bloomThreshold: 1, bloomIntensity: 1, bloomBlurRadius: 4 } },
+    { component: Camera, data: { ...orthographic(ORTHO), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_DISABLED, bloomThreshold: 1, bloomIntensity: 1, bloomSoftKnee: 0.5, bloomScatter: 0.7 } },
   ).unwrap();
 
   return { camera, quadCount: colors.length, brightCount };

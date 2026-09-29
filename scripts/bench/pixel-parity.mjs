@@ -2,7 +2,8 @@
 // scripts/bench/pixel-parity.mjs — pixel-parity bench runner (native dual-fixture).
 //
 // Orchestrates the full capture pipeline:
-//   1. spawn × 1 vite preview (port 4174, strictPort=true) for @forgeax/parity-forgeax.
+//   1. spawn × 1 vite preview for the selected target (port 4174 for
+//      @forgeax/parity-forgeax; 4175 for @forgeax/parity-urp-vs-hdrp).
 //   2. wait-on tcp 30s for the preview port.
 //   3. chromium.launch({ args: ['--enable-unsafe-webgpu', ...] }).
 //   4. browser.newContext + one page; two captures via window.__captureLeft
@@ -15,7 +16,8 @@
 //      apps/parity/forgeax/package.json#exports['./evaluate-parity']);
 //      this Node mirror exists only so the bench command does not need
 //      a TS runtime loader.
-//   6. Write report/pixel-parity.json (D-P12 Schema-as-Contract).
+//   6. Write the target report (report/pixel-parity.json or
+//      report/pixel-parity-standard-lanes.json; D-P12 Schema-as-Contract).
 //   7. CLI exhaustive switch (result.error.code) over MetricErrorCode
 //      6 members for exit code + stderr three-part output (D-P9 #2).
 //   8. try/finally cleanup: SIGTERM + 5s SIGKILL fallback for vite
@@ -39,9 +41,11 @@
 //                                        under Xvfb on Linux software-WebGPU
 //                                        runners; headless GPU-process teardown
 //                                        can destroy the device mid-capture.
+//   BENCH_TARGET                       — parity-forgeax (default),
+//                                        parity-standard-lanes, or all.
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -56,34 +60,38 @@ import pixelmatch from 'pixelmatch';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..');
 const REPORT_DIR = resolve(REPO_ROOT, 'report');
-const SCHEMA_PATH = resolve(REPO_ROOT, 'forgeax-metrics.schema.json');
+const SCHEMA_PATH = resolve(REPO_ROOT, 'schemas/forgeax-metrics.schema.json');
 
-// Bench targets: pick which
-// fixture pair the bench drives. Default is the historical
-// 'parity-forgeax' (D-1 / D-3 left/right both from the same forgeax preview);
-// 'parity-standard-lanes' drives the Standard direct-vs-clustered fixture so AC-22's
-// ε ≤ 0.001 ≤4-light parity becomes machine-checkable.
+// Bench targets: pick which fixture pair the bench drives. Default is the
+// historical 'parity-forgeax' (D-1 / D-3 left/right both from the same forgeax
+// preview); 'parity-standard-lanes' drives the Standard direct-vs-clustered
+// fixture so AC-22's ε ≤ 0.001 ≤4-light parity becomes machine-checkable. The
+// CI producer may select `all` to run both targets from one Node/Xvfb command
+// while retaining one report and one preview lifecycle per fixture.
 const BENCH_TARGETS = {
   'parity-forgeax': {
     filter: '@forgeax/parity-forgeax',
+    root: 'apps/parity/forgeax',
     port: 4174,
     reportFile: 'pixel-parity.json',
   },
   'parity-standard-lanes': {
     filter: '@forgeax/parity-urp-vs-hdrp',
+    root: 'apps/parity/urp-vs-hdrp',
     port: 4175,
     reportFile: 'pixel-parity-standard-lanes.json',
   },
 };
+const BENCH_TARGET_ALL = 'all';
 const BENCH_TARGET = process.env.BENCH_TARGET ?? 'parity-forgeax';
-const TARGET_CONFIG = BENCH_TARGETS[BENCH_TARGET];
-if (!TARGET_CONFIG) {
+const BENCH_TARGET_NAMES =
+  BENCH_TARGET === BENCH_TARGET_ALL ? Object.keys(BENCH_TARGETS) : [BENCH_TARGET];
+if (BENCH_TARGET_NAMES.some((targetName) => BENCH_TARGETS[targetName] === undefined)) {
   console.error(
-    `[bench:pixel-parity] unknown BENCH_TARGET=${BENCH_TARGET}; valid: ${Object.keys(BENCH_TARGETS).join(' | ')}`,
+    `[bench:pixel-parity] unknown BENCH_TARGET=${BENCH_TARGET}; valid: ${Object.keys(BENCH_TARGETS).join(' | ')} | ${BENCH_TARGET_ALL}`,
   );
   process.exit(78);
 }
-const FORGEAX_URL = `http://127.0.0.1:${TARGET_CONFIG.port}`;
 const CANVAS_W = 512;
 const CANVAS_H = 512;
 const PIXELMATCH_DEFAULT_PER_PIXEL_THRESHOLD = 0.1;
@@ -270,7 +278,7 @@ function expectedFor(arg) {
     case 'metric-status-not-ok':
       return 'dispatcher reports status=ok';
     case 'metric-schema-malformed':
-      return 'forgeax-metrics.schema.json compiles as JSON Schema 2020-12';
+      return 'schemas/forgeax-metrics.schema.json compiles as JSON Schema 2020-12';
     case 'pixel-parity-threshold-exceeded':
       return 'diffPixelCount <= threshold';
     case 'pixel-parity-capture-failed':
@@ -291,7 +299,7 @@ function hintFor(arg) {
     case 'metric-status-not-ok':
       return 'inspect the offending report/<package>/<kind>.json for the value-vs-threshold delta';
     case 'metric-schema-malformed':
-      return 'check forgeax-metrics.schema.json for unbalanced braces or missing $defs node';
+      return 'check schemas/forgeax-metrics.schema.json for unbalanced braces or missing $defs node';
     case 'pixel-parity-threshold-exceeded':
       return 'inspect git diff for shader / material / camera regressions; if driver noise, bump apps/parity/*/package.json#forgeax.metrics.bench.pixelDiff.threshold in a PR commit (append-only audit)';
     case 'pixel-parity-capture-failed':
@@ -302,17 +310,20 @@ function hintFor(arg) {
 
 // ─── runner orchestration ─────────────────────────────────────────────
 
-async function ensureBuild() {
-  const filter = TARGET_CONFIG.filter;
+async function ensureBuild(targetConfig) {
+  const appRoot = resolve(REPO_ROOT, targetConfig.root);
+  const viteBin = resolve(appRoot, 'node_modules/.bin/vite');
+  const command = existsSync(viteBin) ? viteBin : 'pnpm';
+  const args = existsSync(viteBin) ? ['build'] : ['--filter', targetConfig.filter, 'build'];
   await new Promise((resolveFn, rejectFn) => {
-    const child = spawn('pnpm', ['--filter', filter, 'build'], {
-      cwd: REPO_ROOT,
+    const child = spawn(command, args, {
+      cwd: existsSync(viteBin) ? appRoot : REPO_ROOT,
       stdio: 'inherit',
     });
     child.on('exit', (code) =>
       code === 0
         ? resolveFn(undefined)
-        : rejectFn(new Error(`build ${filter} exit ${code ?? 'null'}`)),
+        : rejectFn(new Error(`build ${targetConfig.filter} exit ${code ?? 'null'}`)),
     );
   });
 }
@@ -347,15 +358,16 @@ async function killChild(child) {
   });
 }
 
-function dispatchAndExit(result) {
+function dispatchAndExit(result, targetName = BENCH_TARGET) {
+  const logPrefix = `[bench:pixel-parity:${targetName}]`;
   if (result.ok) {
     console.warn(
-      `[bench:pixel-parity] PASS diffPixelCount=${result.value.diffPixelCount} <= threshold=${result.value.threshold}`,
+      `${logPrefix} PASS diffPixelCount=${result.value.diffPixelCount} <= threshold=${result.value.threshold}`,
     );
     return 0;
   }
   const e = result.error;
-  console.error(`[ERROR ${e.code}]`);
+  console.error(`${logPrefix} [ERROR ${e.code}]`);
   console.error(`expected: ${e.expected}`);
   console.error(`hint:     ${e.hint}`);
   if (e.detail !== undefined) console.error(`detail:   ${JSON.stringify(e.detail)}`);
@@ -381,7 +393,7 @@ function dispatchAndExit(result) {
 
 // Schema-as-Contract validator (D-P12 + T-020). Compiled lazily so importers
 // pay the ajv compile cost only when they actually validate. The report
-// shape is the SSOT defined under forgeax-metrics.schema.json
+// shape is the SSOT defined under schemas/forgeax-metrics.schema.json
 // $defs.benchReportPixelParity; runner entry/exit must validate against it
 // (Fail Fast + Schema as Contract architecture principles).
 let _reportValidator = null;
@@ -392,7 +404,7 @@ function getReportValidator() {
   const reportSchema = schema?.$defs?.benchReportPixelParity;
   if (!reportSchema) {
     throw new Error(
-      'forgeax-metrics.schema.json $defs.benchReportPixelParity missing (T-020 schema add)',
+      'schemas/forgeax-metrics.schema.json $defs.benchReportPixelParity missing (T-020 schema add)',
     );
   }
   _reportValidator = ajv.compile(reportSchema);
@@ -432,9 +444,9 @@ function buildReportPayload(result) {
       };
 }
 
-function writeReport(result) {
+function writeReport(result, targetConfig) {
   mkdirSync(REPORT_DIR, { recursive: true });
-  const REPORT_PATH = resolve(REPORT_DIR, TARGET_CONFIG.reportFile);
+  const REPORT_PATH = resolve(REPORT_DIR, targetConfig.reportFile);
   const payload = buildReportPayload(result);
   // Fail-fast exit-gate: refuse to write a payload that violates the
   // Schema as Contract ($defs.benchReportPixelParity). If this fires the
@@ -452,8 +464,9 @@ function writeReport(result) {
   console.warn(`[bench:pixel-parity] report -> ${REPORT_PATH}`);
 }
 
-async function captureBothFromSinglePage() {
+async function captureBothFromSinglePage(targetConfig) {
   const { chromium } = await import('playwright');
+  const forgeaxUrl = `http://127.0.0.1:${targetConfig.port}`;
   const browserHeadless = !['0', 'false'].includes(
     (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
   );
@@ -464,7 +477,7 @@ async function captureBothFromSinglePage() {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
     ],
@@ -478,7 +491,7 @@ async function captureBothFromSinglePage() {
     page.on('pageerror', (err) => {
       process.stderr.write(`[forgeax.pageerror] ${err.message}\n`);
     });
-    await page.goto(FORGEAX_URL, { waitUntil: 'load' });
+    await page.goto(forgeaxUrl, { waitUntil: 'load' });
     // D-1 / D-3: single ForgeaX preview provides both __captureLeft and
     // __captureRight hooks. Wait for both to be installed (they share the
     // same assignment in declare_capture_hook, so either probe works, but
@@ -514,39 +527,39 @@ function inferPreEvalStage(message) {
   return 'chromium-launch';
 }
 
-async function main() {
-  const { default: waitOn } = await import('wait-on');
+async function runTarget(targetName, waitOn, { build = true } = {}) {
+  const targetConfig = BENCH_TARGETS[targetName];
   let forgeaxPreview = null;
   try {
-    await ensureBuild();
-    forgeaxPreview = spawnPreview(TARGET_CONFIG.filter, TARGET_CONFIG.port);
+    if (build) await ensureBuild(targetConfig);
+    forgeaxPreview = spawnPreview(targetConfig.filter, targetConfig.port);
     await waitOn({
-      resources: [`tcp:127.0.0.1:${TARGET_CONFIG.port}`],
+      resources: [`tcp:127.0.0.1:${targetConfig.port}`],
       timeout: 30_000,
     });
-    const { left, right } = await captureBothFromSinglePage();
+    const { left, right } = await captureBothFromSinglePage(targetConfig);
     const result = evaluateParity(left, right, {
       threshold: THRESHOLD,
       perPixelThreshold: PER_PIXEL_THRESHOLD,
       width: CANVAS_W,
       height: CANVAS_H,
     });
-    writeReport(result);
-    process.exitCode = dispatchAndExit(result);
+    writeReport(result, targetConfig);
+    return dispatchAndExit(result, targetName);
   } catch (err) {
     // F1: route pre-evaluate throws (pnpm build / wait-on / chromium
     // launch) through the structured MetricError dispatchAndExit channel
     // — not a flattened "FATAL: <msg>" string + raw exit 74. This both
     // preserves the [ERROR code] / expected / hint / detail three-part
-    // stderr contract AND ensures report/pixel-parity.json is written
-    // (Schema as Contract entry/exit gate, architecture-principles §3+§5).
+    // stderr contract AND ensures the target report is written (Schema as
+    // Contract entry/exit gate, architecture-principles §3+§5).
     const message = err instanceof Error ? err.message : String(err);
     const result = errResult('pixel-parity-capture-failed', {
       stage: inferPreEvalStage(message),
       cause: message,
     });
     try {
-      writeReport(result);
+      writeReport(result, targetConfig);
     } catch (writeErr) {
       // If the schema-validate write itself fails we still want the
       // structured stderr; surface the secondary failure to stderr but
@@ -556,10 +569,30 @@ async function main() {
         writeErr instanceof Error ? writeErr.message : String(writeErr),
       );
     }
-    process.exitCode = dispatchAndExit(result);
+    return dispatchAndExit(result, targetName);
   } finally {
     if (forgeaxPreview) await killChild(forgeaxPreview);
   }
+}
+
+async function main() {
+  const { default: waitOn } = await import('wait-on');
+  const exitCodes = [];
+
+  // `all` is still one CI job and one Node process (never a GitHub matrix).
+  // Build the two independent fixture bundles together, then keep browser
+  // capture serialized so WebGPU contexts do not contend for the same runner.
+  // This removes duplicate build wall time without weakening either fixture's
+  // real browser/readback gate.
+  if (BENCH_TARGET_NAMES.length > 1) {
+    await Promise.all(
+      BENCH_TARGET_NAMES.map((targetName) => ensureBuild(BENCH_TARGETS[targetName])),
+    );
+  }
+  for (const targetName of BENCH_TARGET_NAMES) {
+    exitCodes.push(await runTarget(targetName, waitOn, { build: BENCH_TARGET_NAMES.length === 1 }));
+  }
+  process.exitCode = exitCodes.find((code) => code !== 0) ?? 0;
 }
 
 // Main-module guard: only run the bench orchestration when this file is

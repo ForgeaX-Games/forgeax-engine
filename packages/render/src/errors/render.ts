@@ -1,3 +1,5 @@
+import type { Antialias } from '../components/camera';
+import type { RenderPublicationError } from '../publication/contract';
 // @forgeax/engine-render -- render cluster error classes.
 //
 // feat-20260704-runtime-tier1-decomposition M2 / w8 (D-3): the monolithic
@@ -13,13 +15,51 @@
 // SpotLight / PointLightShadow component validators (forward cross-directory
 // import, no cycle -- research Finding C2).
 
+import type {
+  RenderSurfaceFailureDetail,
+  SurfaceFailureCode,
+  SurfaceFailureKind,
+} from '@forgeax/engine-render-graph';
 import type { DeviceResourceKind, DeviceScopeReceipt } from '../device/resource-types';
+import type { SunCardinalityError } from '../environment/frame';
+import type { MotionBlurValidationError } from '../features/motion-blur/motion-blur-params';
 import type {
   PreparedKind,
   RenderFeatureCapabilityKey,
   RenderFeatureRecovery,
   RenderFeatureStage,
 } from '../features/vocabulary';
+import type { AutoExposureError } from '../pipeline/standard-output/auto-exposure/inspection';
+import type { SceneDataLane, SceneDataSchemaId } from '../temporal/scene-data';
+import type { TransmissionCapabilityFact } from '../transmission/backdrop';
+import type { CloudLayerError } from './cloud';
+import type { RecoveryOutcome, RecoveryPhase } from './recover';
+
+// Public render errors keep one machine-readable order: closed `code`,
+// expected state, actionable `hint`, then typed `detail`. Consumers branch on
+// that shape and never use Error.message as a protocol.
+
+export type {
+  AutoExposureCapabilityUnavailableDetail,
+  AutoExposureError,
+  AutoExposureErrorCode,
+  AutoExposureErrorDetail,
+  AutoExposureErrorDetailByCode,
+  AutoExposureErrorRecord,
+  AutoExposureInspection,
+  AutoExposureInspectionInput,
+  AutoExposureInvalidParameterDetail,
+  AutoExposureReceipt,
+  AutoExposureResetReason,
+  AutoExposureStageFailedDetail,
+  AutoExposureStaleGenerationDetail,
+} from '../pipeline/standard-output/auto-exposure/inspection';
+export {
+  AutoExposureCapabilityUnavailableError,
+  AutoExposureInvalidParameterError,
+  AutoExposureStageFailedError,
+  AutoExposureStaleGenerationError,
+} from '../pipeline/standard-output/auto-exposure/inspection';
 
 export interface LifecycleConstructionFailureDetail {
   readonly owner: string;
@@ -47,54 +87,170 @@ export class LifecycleConstructionError extends Error {
   }
 }
 
+const SURFACE_FAILURE_POLICY: Readonly<
+  Record<SurfaceFailureCode, { readonly expected: string; readonly hint: string }>
+> = {
+  'surface-allocation-failed': {
+    expected: 'the required surface resource can be allocated with its declared format and usage',
+    hint: 'inspect the capability detail, release transient resources, and retry the candidate graph',
+  },
+  'surface-attachment-failed': {
+    expected: 'the float target is renderable as the declared attachment',
+    hint: 'verify float color attachment support and retry without hiding the failure',
+  },
+  'surface-sampled-read-failed': {
+    expected: 'the float target can be sampled by the next post-processing stage',
+    hint: 'verify sampled-read support for the declared format before rebuilding the graph',
+  },
+  'surface-view-domain-failed': {
+    expected: 'surface storage and display views preserve their declared color domains',
+    hint: 'repair the explicit format/domain pair and retry the candidate graph',
+  },
+  'surface-raw-endpoint-failed': {
+    expected: 'the surface presentation endpoint has descriptor, acquisition, and validation proof',
+    hint: 'run the concrete presentation probe; keep the last-known-good surface when proof is absent',
+  },
+};
+
+/** Render-surface failure with an exhaustive code and actionable detail. */
+export class RenderSurfaceError<
+  Code extends SurfaceFailureCode = SurfaceFailureCode,
+> extends Error {
+  readonly code: Code;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderSurfaceFailureDetail;
+
+  constructor(code: Code, detail: RenderSurfaceFailureDetail) {
+    const policy = SURFACE_FAILURE_POLICY[code];
+    if (policy === undefined) {
+      throw new Error(`unknown render surface failure code: ${code}`);
+    }
+    super(`[RenderSurfaceError ${code}] expected: ${policy.expected}; hint: ${policy.hint}`);
+    this.name = 'RenderSurfaceError';
+    this.code = code;
+    this.expected = policy.expected;
+    this.hint = policy.hint;
+    this.detail = detail;
+  }
+}
+
+export type { RenderSurfaceFailureDetail, SurfaceFailureCode, SurfaceFailureKind };
+
+export type RenderSurfaceExpectedError = {
+  readonly [Code in SurfaceFailureCode]: RenderSurfaceError<Code>;
+}[SurfaceFailureCode];
+
+/** Construct the closed surface error from its failure-stage discriminant. */
+export function createRenderSurfaceError(
+  kind: SurfaceFailureKind,
+  detail: RenderSurfaceFailureDetail,
+): RenderSurfaceExpectedError {
+  return new RenderSurfaceError(`surface-${kind}-failed` as SurfaceFailureCode, detail);
+}
+
+export type LightResourceFailureReason = 'asset' | 'format' | 'capability' | 'capacity';
+
+export interface LightResourceUnavailableDetail {
+  readonly entity: number;
+  readonly feature: 'ies' | 'cookie' | 'probe';
+  readonly generation: number;
+  readonly sourceKey: string;
+  readonly reason: LightResourceFailureReason;
+}
+
+export class LightResourceUnavailableError extends Error {
+  readonly code = 'light-resource-unavailable' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: LightResourceUnavailableDetail;
+
+  constructor(
+    detail: LightResourceUnavailableDetail,
+    expected: string,
+    actual: string,
+    hint: string,
+  ) {
+    super(`light-resource-unavailable: ${detail.feature} ${actual}`);
+    this.name = 'LightResourceUnavailableError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = detail;
+  }
+}
+
+export function createLightResourceUnavailable(input: {
+  readonly entity: number;
+  readonly feature: LightResourceUnavailableDetail['feature'];
+  readonly generation: number;
+  readonly sourceKey: string;
+  readonly reason: LightResourceFailureReason;
+  readonly expected: string;
+  readonly actual: string;
+  readonly hint: string;
+}): LightResourceUnavailableError {
+  return new LightResourceUnavailableError(
+    {
+      entity: input.entity,
+      feature: input.feature,
+      generation: input.generation,
+      sourceKey: input.sourceKey,
+      reason: input.reason,
+    },
+    input.expected,
+    input.actual,
+    input.hint,
+  );
+}
+
+export interface TemporalFrameSubmitDetail {
+  readonly reason: 'queue-submit-failed';
+}
+
+export class TemporalFrameSubmitError extends Error {
+  readonly code = 'temporal-frame-submit-rejected' as const;
+  readonly expected = 'the staged frame is accepted by queue.submit before temporal facts advance';
+  readonly hint = 'inspect the queue submission and retry the frame after the device is available';
+  readonly detail: TemporalFrameSubmitDetail;
+
+  constructor(reason: 'queue-submit-failed') {
+    super(`temporal-frame-submit-rejected: ${reason}`);
+    this.name = 'TemporalFrameSubmitError';
+    this.detail = { reason };
+  }
+}
 // ── ShadowInvalidConfigError ──────────────────────────────────────────────
 
 /**
  * Detail for `RuntimeErrorCode 'shadow-invalid-config'`.
  *
- * Emitted by `DirectionalLight.validate` shadow-field path when a field value violates
- * runtime constraints (e.g. mapSize < 1, cascadeCount not in {1..4}).
- * AI users access `.detail.field` / `.detail.value` / `.detail.min` /
- * `.detail.max` via property access — no string parsing.
- *
- * `max` is `undefined` for lower-bound-only validations (e.g. mapSize < 1).
- * feat-20260613-csm: max added for upper-bound cascade validations
- * (cascadeCount max=4, splitLambda max=1, cascadeBlend max=0.5).
+ * The four fields are the only recovery surface: AI users read the invalid
+ * field, actual value, structured bound, and reason without parsing prose.
  */
+export type ShadowInvalidConfigBound =
+  | { readonly kind: 'range'; readonly min: number; readonly max: number }
+  | { readonly kind: 'lower-bound'; readonly operator: '>' | '>='; readonly value: number }
+  | { readonly kind: 'allowed-values'; readonly values: readonly number[] };
+
 export interface ShadowInvalidConfigDetail {
   readonly field: string;
-  readonly value: number;
-  readonly min: number;
-  readonly max?: number;
+  readonly actual: number;
+  readonly bound: ShadowInvalidConfigBound;
+  readonly reason: string;
 }
 
 /**
  * Structured error for shadow component config validation failures.
  *
- * Emitted by `DirectionalLight.validate()` shadow-field path (mapSize / cascadeCount /
- * splitLambda / cascadeBlend / shadowDistance) and `PointLightShadow.validate()`
- * (mapSize / farPlane > nearPlane / pcfKernelSize); both shadow component
- * types share this single error class so `switch (err.code)` on
- * `RuntimeErrorCode` only needs one branch (charter P4 — closed-union SSOT).
- * Four-field surface per AGENTS.md error model:
+ * Emitted by Directional, Point, and Spot shadow validation. All three
+ * component owners share this error class so `switch (err.code)` on
+ * `RuntimeErrorCode` needs one branch (charter P4 — closed-union SSOT).
+ * Four-field surface:
  *   - `.code = 'shadow-invalid-config'` (closed RuntimeErrorCode)
  *   - `.expected` — expected-state description (programmatic predicate form)
  *   - `.hint` — actionable recovery guidance (imperative; AI users paste into
- *     spawn calls). Integer-typed fields (e.g. `cascadeCount`, `pcfKernelSize`)
- *     get an "integer in [min, max]" hint; otherwise "[min, max]" range or
- *     "<comparator> min".
- *   - `.detail = { field, value, min, max? }` — structured values (charter P4)
- *
- * 4th constructor parameter is a union over the two range shapes:
- *   - `number` — `max` for a closed `[min, max]` range (CSM cascadeCount /
- *     splitLambda / cascadeBlend). hint uses "in [min, max]"; integer-typed
- *     fields get "integer in [min, max]".
- *   - `'>' | '>='` — comparator for an open lower-bound predicate. `'>'` is
- *     used when `min` carries dynamic context (e.g. `farPlane > nearPlane` —
- *     the surfaced hint reads "must be > nearPlane" so AI users setting
- *     farPlane=nearPlane don't re-fail the spawn loop with the wrong cue).
- *   - `undefined` — defaults to `'>='`. Callsites for mapSize < 1 validation
- *     stay backward-compatible (3-arg form).
+ *     spawn calls).
+ *   - `.detail = { field, actual, bound, reason }` — structured values.
  */
 export class ShadowInvalidConfigError extends Error {
   readonly code = 'shadow-invalid-config' as const;
@@ -102,35 +258,53 @@ export class ShadowInvalidConfigError extends Error {
   readonly hint: string;
   readonly detail: ShadowInvalidConfigDetail;
 
-  constructor(field: string, value: number, min: number, maxOrComparator?: number | '>' | '>=') {
-    const isComparator = maxOrComparator === '>' || maxOrComparator === '>=';
-    const max = !isComparator && typeof maxOrComparator === 'number' ? maxOrComparator : undefined;
-    const comparator: '>' | '>=' = isComparator ? (maxOrComparator as '>' | '>=') : '>=';
-    // Integer-typed fields get an "integer in [min, max]" hint when a range
-    // is supplied. Expand this set as new integer-typed shadow fields land.
-    const isInteger = field === 'cascadeCount' || field === 'pcfKernelSize';
-    // pcfKernelSize must be odd (kernel is symmetric around the center tap).
-    // Naming "odd" in the hint stops an AI retry from looping min->min+1 (4->6).
-    const isOdd = field === 'pcfKernelSize';
-    const hint =
-      max !== undefined
-        ? isInteger
-          ? `set ${field} to an integer in [${min}, ${max}]; got ${value}`
-          : `set ${field} to a value in [${min}, ${max}]; got ${value}`
-        : isOdd
-          ? `set ${field} to an odd integer ${comparator} ${min}; got ${value}`
-          : `set ${field} to a value ${comparator} ${min}; got ${value}`;
-    const expected =
-      max !== undefined ? `${field} in [${min}, ${max}]` : `${field} ${comparator} ${min}`;
-    super(
-      max !== undefined
-        ? `shadow component .${field} must be in [${min}, ${max}], got ${value}`
-        : `shadow component .${field} must be ${comparator} ${min}, got ${value}`,
-    );
+  constructor(
+    field: string,
+    actual: number,
+    minOrBound: number | ShadowInvalidConfigBound,
+    maxOrComparator?: number | '>' | '>=',
+    reason?: string,
+  ) {
+    const bound: ShadowInvalidConfigBound =
+      typeof minOrBound === 'number'
+        ? typeof maxOrComparator === 'number'
+          ? { kind: 'range', min: minOrBound, max: maxOrComparator }
+          : {
+              kind: 'lower-bound',
+              operator: maxOrComparator === '>' ? '>' : '>=',
+              value: minOrBound,
+            }
+        : minOrBound;
+    const resolvedReason = reason ?? shadowBoundReason(bound);
+    const expected = shadowBoundExpected(field, bound);
+    const hint = `set ${field} to ${resolvedReason}; got ${actual}`;
+    super(`shadow component .${field} is invalid: ${resolvedReason}; got ${actual}`);
     this.name = 'ShadowInvalidConfigError';
     this.hint = hint;
     this.expected = expected;
-    this.detail = { field, value, min, ...(max !== undefined ? { max } : {}) };
+    this.detail = { field, actual, bound, reason: resolvedReason };
+  }
+}
+
+function shadowBoundExpected(field: string, bound: ShadowInvalidConfigBound): string {
+  switch (bound.kind) {
+    case 'range':
+      return `${field} in [${bound.min}, ${bound.max}]`;
+    case 'lower-bound':
+      return `${field} ${bound.operator} ${bound.value}`;
+    case 'allowed-values':
+      return `${field} in {${bound.values.join(', ')}}`;
+  }
+}
+
+function shadowBoundReason(bound: ShadowInvalidConfigBound): string {
+  switch (bound.kind) {
+    case 'range':
+      return `a value in [${bound.min}, ${bound.max}]`;
+    case 'lower-bound':
+      return `a value ${bound.operator} ${bound.value}`;
+    case 'allowed-values':
+      return `one of [${bound.values.join(', ')}]`;
   }
 }
 
@@ -184,133 +358,125 @@ export class EquirectProjectionFailedError extends Error {
   }
 }
 
-// ── HdrpLightBudgetExceededError ───────────────────────────────────────────
+// ── StandardLightBudgetExceededError ──────────────────────────────────────
 
-/**
- * Detail for `RuntimeErrorCode 'hdrp-light-budget-exceeded'`.
- *
- * Emitted per-frame (once-per-frame fire) when light count exceeds HDRP budget.
- */
-export interface HdrpLightBudgetExceededDetail {
+/** The finite local-light budget that a Standard frame agreed to admit. */
+export interface StandardLightBudgetExceededDetail {
   readonly actual: number;
   readonly budget: number;
 }
 
 /**
- * Structured error for HDRP light budget exceeded (AC-06/AC-07).
- *
- * Emitted per-frame in recordFrame when the total punctual light count
- * exceeds the HDRP budget (256). Fail-soft: fire once per frame, truncate to 256.
- *   - `.code = 'hdrp-light-budget-exceeded'` (closed RuntimeErrorCode)
- *   - `.expected` — 'light count <= 256'
- *   - `.hint` — 'reduce world light count or increase budget (OOS-hdrp-larger-budget)'
- *   - `.detail = { actual, budget }`
+ * Structured refusal for a Standard frame whose finite local-light set is
+ * outside the selected profile budget. The frame is rejected as a whole; the
+ * record owner must not slice the input or submit a partial membership set.
  */
-export class HdrpLightBudgetExceededError extends Error {
-  readonly code = 'hdrp-light-budget-exceeded' as const;
+export class StandardLightBudgetExceededError extends Error {
+  readonly code = 'standard-light-budget-exceeded' as const;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: HdrpLightBudgetExceededDetail;
+  readonly detail: StandardLightBudgetExceededDetail;
 
   constructor(actual: number, budget: number) {
     const expected = `light count <= ${budget}`;
     const hint =
-      `${actual} lights exceed HDRP budget ${budget}; ` +
-      'truncating to 256. Reduce light count or wait for OOS-hdrp-larger-budget';
-    super(`HDRP light budget exceeded: ${actual} > ${budget}`);
-    this.name = 'HdrpLightBudgetExceededError';
+      `${actual} finite local lights exceed Standard budget ${budget}; ` +
+      'reduce the local-light set or select a profile with a supported budget';
+    super(`Standard light budget exceeded: ${actual} > ${budget}`);
+    this.name = 'StandardLightBudgetExceededError';
     this.expected = expected;
     this.hint = hint;
     this.detail = { actual, budget };
   }
 }
 
-// ── HdrpIndexListOverflowError ─────────────────────────────────────────────
+// ── StandardClusterIndexOverflowError ──────────────────────────────────────
 
-/**
- * Detail for `RuntimeErrorCode 'hdrp-index-list-overflow'`.
- *
- * Emitted per-frame (once-per-frame fire) when the cluster binner overflows
- * the light index list capacity (65536). Upgraded from ClusterBinError.
- */
-export interface HdrpIndexListOverflowDetail {
+/** Cluster membership entries that could not fit the single shared index list. */
+export interface StandardClusterIndexOverflowDetail {
   readonly actual: number;
   readonly capacity: number;
 }
 
 /**
- * Structured error for HDRP cluster binner index list overflow (AC-24).
- *
- * Emitted per-frame in recordFrame when the CPU binner returns
- * `ClusterBinError('index-overflow')`. Fail-soft: fire once per frame,
- * continue rendering with what fit.
- *   - `.code = 'hdrp-index-list-overflow'` (closed RuntimeErrorCode)
- *   - `.expected` — 'light index list entries <= 65536'
- *   - `.hint` — 'reduce lights, shrink cluster grid, or increase capacity'
- *   - `.detail = { actual, capacity }`
+ * Structured refusal for a membership producer that exceeded the shared
+ * Cluster index-list capacity. No truncated list is uploaded and no graph is
+ * submitted for the rejected frame.
  */
-export class HdrpIndexListOverflowError extends Error {
-  readonly code = 'hdrp-index-list-overflow' as const;
+export class StandardClusterIndexOverflowError extends Error {
+  readonly code = 'standard-cluster-index-overflow' as const;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: HdrpIndexListOverflowDetail;
+  readonly detail: StandardClusterIndexOverflowDetail;
 
   constructor(actual: number, capacity: number) {
     const expected = `light index list entries <= ${capacity}`;
     const hint =
       `cluster binner overflow: writeCount ${actual} exceeds capacity ${capacity}; ` +
-      'reduce lights, shrink cluster grid, or increase LIGHT_INDEX_LIST_CAPACITY';
-    super(`HDRP index list overflow: ${actual} > ${capacity}`);
-    this.name = 'HdrpIndexListOverflowError';
+      'reduce finite local lights or choose a supported cluster layout';
+    super(`Standard cluster index list overflow: ${actual} > ${capacity}`);
+    this.name = 'StandardClusterIndexOverflowError';
     this.expected = expected;
     this.hint = hint;
     this.detail = { actual, capacity };
   }
 }
 
-// ── HdrpDeferredCapsInsufficientError ──────────────────────────────────────
+// ── StandardClusterTransportUnavailableError ───────────────────────────────
 
-/**
- * Detail for `RuntimeErrorCode 'hdrp-deferred-caps-insufficient'`.
- *
- * Emitted when the Standard clustered lane has fewer than 4 color attachments,
- * meaning the deferred path cannot allocate 3 g-buffer color targets + depth.
- */
-export interface HdrpDeferredCapsInsufficientDetail {
-  readonly actual: number;
-  readonly expected: number;
+export interface StandardClusterTransportUnavailableDetail {
+  readonly requested: number;
+  readonly admitted: 0;
 }
 
 /**
- * Structured error for deferred-path capability gate failure.
- *
- * Emitted during Standard clustered lane validation — synchronous throw.
- *   - `.code = 'hdrp-deferred-caps-insufficient'` (closed RuntimeErrorCode)
- *   - `.expected` — 'maxColorAttachments >= 4'
- *   - `.hint` — actionable guidance to upgrade browser or select URP
- *   - `.detail = { actual, expected }`
- *
- * @see plan-strategy D-5 (capability validation, no silent fallback)
+ * Structured capability refusal. Standard never turns an unproven transport
+ * into a smaller direct-light lane; the caller receives the exact requested
+ * local-light count and an admitted count of zero.
  */
-export class HdrpDeferredCapsInsufficientError extends Error {
-  readonly code = 'hdrp-deferred-caps-insufficient' as const;
+export class StandardClusterTransportUnavailableError extends Error {
+  readonly code = 'standard-cluster-transport-unavailable' as const;
+  readonly expected = 'all requested local lights have a proven Cluster transport';
+  readonly hint: string;
+  readonly detail: StandardClusterTransportUnavailableDetail;
+
+  constructor(
+    requested: number,
+    hint = 'enable a proven Cluster storage transport before drawing',
+  ) {
+    super(`Standard Cluster transport unavailable for ${requested} local lights`);
+    this.name = 'StandardClusterTransportUnavailableError';
+    this.hint = hint;
+    this.detail = { requested, admitted: 0 };
+  }
+}
+
+// ── StandardProfileInvalidError ───────────────────────────────────────────
+
+export interface StandardProfileInvalidDetail {
+  readonly field: string;
+  readonly actual: unknown;
+}
+
+/** Structured validation failure for the single Standard profile surface. */
+export class StandardProfileInvalidError extends Error {
+  readonly code = 'standard-profile-invalid' as const;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: HdrpDeferredCapsInsufficientDetail;
+  readonly detail: StandardProfileInvalidDetail;
 
-  constructor(actual: number) {
-    const _expected = 4;
-    const _expectedStr = `maxColorAttachments >= ${_expected}`;
-    const hint =
-      `WebGPU maxColorAttachments = ${actual} (need >= ${_expected}). ` +
-      'Upgrade browser to latest Chrome/Edge/Safari, or use URP (forgeax::urp) instead of HDRP.';
-    super(
-      `HDRP deferred caps insufficient: maxColorAttachments = ${actual} (need >= ${_expected})`,
-    );
-    this.name = 'HdrpDeferredCapsInsufficientError';
-    this.expected = _expectedStr;
-    this.hint = hint;
-    this.detail = { actual, expected: _expected };
+  constructor(message: string, detail?: StandardProfileInvalidDetail) {
+    super(message);
+    this.name = 'StandardProfileInvalidError';
+    this.detail = detail ?? { field: 'profile', actual: message };
+    if (this.detail.field === 'clusterGrid') {
+      this.expected = 'clusterGrid.{x,y,z} each positive integer in [1, 64]';
+      this.hint =
+        'set clusterGrid.x, clusterGrid.y, and clusterGrid.z to positive integers in [1, 64]';
+    } else {
+      this.expected = 'StandardProfile contains only supported fields and values';
+      this.hint = 'repair the Standard profile fields and retry setProfile';
+    }
   }
 }
 
@@ -366,7 +532,7 @@ export interface PointShadowAtlasBoundsViolationDetail {
  *   - `.code = 'point-shadow-atlas-bounds-violation'`
  *   - `.expected` — `0 <= layer < layers && 0 <= face < 6`
  *   - `.hint` — clamp `shadowAtlasLayer` or face index before calling
- *     `faceView`; the cap on layers is `PointLightShadow` cardinality (4)
+ *     `faceView`; the layer cap is the renderer-owned ShadowAtlas capacity
  *   - `.detail = { axis, value, max }` — discriminates layer vs face
  */
 export class PointShadowAtlasBoundsViolationError extends Error {
@@ -398,7 +564,7 @@ export class PointShadowAtlasBoundsViolationError extends Error {
  * Fired by the per-frame record stage (`videoTextureView`) when a VideoPlayer
  * entity can reach neither video upload path this frame: the general
  * `copyExternalImageToTexture` path (no host HTMLVideoElement resolved via
- * `VideoElementProvider`) AND the high-perf `GPUExternalTexture` path
+ * `VideoSourceProvider`) AND the high-perf `GPUExternalTexture` path
  * (capability absent). The engine surfaces this explicit failure rather than
  * silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
  *   - `.code = 'video-upload-unsupported'`
@@ -563,6 +729,36 @@ export class MaterialSkinAttrMissingError extends Error {
   }
 }
 
+export interface TransmissionCapabilityMissingDetail {
+  readonly material: string;
+  readonly capability: 'transmission';
+  readonly stage: 'prepare' | 'record';
+  readonly lane: 'standard-forward';
+  readonly format: string;
+  readonly missing: readonly TransmissionCapabilityFact[];
+}
+
+export class TransmissionCapabilityMissingError extends Error {
+  readonly code = 'transmission-capability-missing' as const;
+  readonly expected = 'the renderer exposes the transmission capability for this material';
+  readonly hint = 'disable transmission or provide the renderer capability before drawing';
+  readonly detail: TransmissionCapabilityMissingDetail;
+
+  constructor(
+    material: string,
+    stage: 'prepare' | 'record',
+    evidence: {
+      readonly lane: 'standard-forward';
+      readonly format: string;
+      readonly missing: readonly TransmissionCapabilityFact[];
+    },
+  ) {
+    super(`transmission capability is missing for material '${material}'`);
+    this.name = 'TransmissionCapabilityMissingError';
+    this.detail = { material, capability: 'transmission', stage, ...evidence };
+  }
+}
+
 // -- RenderFeature errors ---------------------------------------------------
 
 export type RenderFeatureErrorCode =
@@ -592,6 +788,8 @@ export interface RenderFeatureStageFailedDetail {
   readonly stage: RenderFeatureStage;
   readonly recovery: RenderFeatureRecovery;
   readonly cleanupFailures?: readonly RenderFeatureCleanupFailure[];
+  /** Original stage exception when the feature did not return a RenderError. */
+  readonly cause?: unknown;
 }
 
 export interface RenderFeatureCapabilityMissingDetail {
@@ -756,6 +954,7 @@ export class RenderFeatureStageFailedError extends Error {
     order: number,
     stage: RenderFeatureStage,
     recovery: RenderFeatureRecovery,
+    cause?: unknown,
   ) {
     const expected = `feature '${featureIdentity}' completes its ${stage} stage without an error`;
     const hint = renderFeatureRecoveryHintByRecovery[recovery](featureIdentity, stage);
@@ -763,7 +962,13 @@ export class RenderFeatureStageFailedError extends Error {
     this.name = 'RenderFeatureStageFailedError';
     this.expected = expected;
     this.hint = hint;
-    this.detail = { featureIdentity, order, stage, recovery };
+    this.detail = {
+      featureIdentity,
+      order,
+      stage,
+      recovery,
+      ...(cause === undefined ? {} : { cause }),
+    };
   }
 }
 
@@ -931,6 +1136,63 @@ export class ObservationUnavailableError extends Error {
   }
 }
 
+export type SceneDataUnavailableReason =
+  | 'capability-missing'
+  | 'producer-missing'
+  | 'coverage-incomplete'
+  | 'renderer-recovering';
+export interface SceneDataUnavailableDetail {
+  readonly featureIdentity: string;
+  readonly schema: SceneDataSchemaId;
+  readonly lane: SceneDataLane;
+  readonly reason: SceneDataUnavailableReason;
+  readonly missingContributorIds: readonly string[];
+  readonly omittedMissingContributorCount: number;
+  readonly recovery: 'enable-capability' | 'next-frame' | 'renderer-recover';
+}
+export class SceneDataUnavailableError extends Error {
+  readonly code = 'scene-data-unavailable' as const;
+  readonly expected = 'the requested semantic scene data is available for the active plan';
+  readonly hint: string;
+  readonly detail: SceneDataUnavailableDetail;
+  constructor(detail: SceneDataUnavailableDetail) {
+    const hint =
+      detail.recovery === 'enable-capability'
+        ? 'enable rgba16floatRenderable and retry the current frame'
+        : detail.recovery === 'renderer-recover'
+          ? 'wait for renderer recovery, then retry the frame'
+          : 'restore the producer coverage and retry on the next frame';
+    super(`scene data '${detail.schema}' unavailable for '${detail.featureIdentity}'`);
+    this.name = 'SceneDataUnavailableError';
+    this.hint = hint;
+    this.detail = Object.freeze({
+      ...detail,
+      missingContributorIds: Object.freeze([...detail.missingContributorIds].slice(0, 32)),
+      omittedMissingContributorCount: Math.max(
+        detail.omittedMissingContributorCount,
+        Math.max(0, detail.missingContributorIds.length - 32),
+      ),
+    });
+  }
+}
+
+export class TaaUnavailableError extends Error {
+  readonly code = 'taa-unavailable' as const;
+  readonly expected =
+    'Standard TAA has a renderable rgba16float target and a complete resolve path';
+  readonly hint =
+    'enable rgba16float rendering or select none/fxaa explicitly; do not treat TAA as no-AA';
+  readonly detail: {
+    readonly reason: 'capability' | 'topology' | 'history';
+    readonly observed?: string;
+  };
+  constructor(reason: 'capability' | 'topology' | 'history', observed?: string) {
+    super(`taa-unavailable: ${reason}`);
+    this.name = 'TaaUnavailableError';
+    this.detail = observed === undefined ? { reason } : { reason, observed };
+  }
+}
+
 export interface FrameReceiptStaleDetail {
   readonly frameId: number;
   readonly receiptGeneration: number;
@@ -952,7 +1214,7 @@ export class FrameReceiptStaleError extends Error {
 }
 
 export interface RendererContractFailureDetail {
-  readonly operation: 'construct' | 'attach' | 'draw' | 'observe';
+  readonly operation: 'construct' | 'attach' | 'draw' | 'request-observation' | 'observe';
   readonly cause: string;
 }
 
@@ -970,6 +1232,248 @@ export class RendererContractFailureError extends Error {
   }
 }
 
+export interface EnvironmentSourceConflictDetail {
+  readonly owners: readonly {
+    readonly kind: 'image' | 'atmosphere';
+    readonly entityKey: number;
+    readonly sourceKey: string;
+  }[];
+}
+
+export class EnvironmentSourceConflictError extends Error {
+  readonly code = 'environment-source-conflict' as const;
+  readonly expected = 'exactly one environment source owns the frame';
+  readonly hint = 'remove all but one image or atmosphere environment owner';
+  readonly detail: EnvironmentSourceConflictDetail;
+
+  constructor(owners: readonly EnvironmentSourceConflictDetail['owners'][number][]) {
+    super('environment source owners conflict');
+    this.name = 'EnvironmentSourceConflictError';
+    this.detail = { owners: owners.map((owner) => Object.freeze({ ...owner })) };
+  }
+}
+
+export interface FogCardinalityDetail {
+  readonly count: number;
+}
+
+export class FogCardinalityError extends Error {
+  readonly code = 'fog-cardinality' as const;
+  readonly expected = 'zero or one Fog owner contributes to a frame';
+  readonly hint = 'remove extra Fog owners so the resource owner has at most one';
+  readonly detail: FogCardinalityDetail;
+
+  constructor(count: number) {
+    super(`Fog owner cardinality is ${count}`);
+    this.name = 'FogCardinalityError';
+    this.detail = { count };
+  }
+}
+
+export interface TaaCapsInsufficientDetail {
+  readonly required: readonly string[];
+  readonly available: readonly string[];
+}
+
+export class TaaCapsInsufficientError extends Error {
+  readonly code = 'taa-caps-insufficient' as const;
+  readonly expected = 'the backend exposes the capabilities required by TAA';
+  readonly hint = 'select a backend with the required TAA capabilities or disable TAA on Camera';
+  readonly detail: TaaCapsInsufficientDetail;
+
+  constructor(required: readonly string[], available: readonly string[]) {
+    super('TAA capabilities are insufficient');
+    this.name = 'TaaCapsInsufficientError';
+    this.detail = { required: [...required], available: [...available] };
+  }
+}
+
+export interface EnvironmentGenerationFailedDetail {
+  readonly sourceKey: string;
+  readonly stage: 'prepare' | 'build' | 'execute' | 'finish' | 'submit';
+}
+
+export class EnvironmentGenerationFailedError extends Error {
+  readonly code = 'environment-generation-failed' as const;
+  readonly expected = 'the selected environment generation completes its owner stage';
+  readonly hint = 'inspect the stage and sourceKey, then retry after correcting the environment';
+  readonly detail: EnvironmentGenerationFailedDetail;
+
+  constructor(sourceKey: string, stage: EnvironmentGenerationFailedDetail['stage']) {
+    super(`environment generation failed during ${stage}`);
+    this.name = 'EnvironmentGenerationFailedError';
+    this.detail = { sourceKey, stage };
+  }
+}
+
+export interface AtmosphereInvalidParameterDetail {
+  readonly field: string;
+  readonly value: number;
+}
+
+export interface AtmosphereParameterRange {
+  readonly min: number;
+  readonly max: number;
+}
+
+export class AtmosphereInvalidParameterError extends Error {
+  readonly code = 'atmosphere-invalid-parameter' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: AtmosphereInvalidParameterDetail;
+
+  constructor(field: string, value: number, range: AtmosphereParameterRange) {
+    super(`Atmosphere.${field} is invalid`);
+    this.name = 'AtmosphereInvalidParameterError';
+    this.detail = { field, value };
+    const rangeText = Number.isFinite(range.max)
+      ? `[${range.min}, ${range.max}]`
+      : `>= ${range.min}`;
+    this.expected = `Atmosphere.${field} must be finite and ${rangeText}`;
+    this.hint = `set Atmosphere.${field} to a finite value ${rangeText}`;
+  }
+}
+
+export interface DynamicResolutionInvalidParameterDetail {
+  readonly field: 'targetGpuMs' | 'minScale' | 'maxScale';
+  readonly value: number;
+  readonly expected: string;
+}
+
+export class DynamicResolutionInvalidParameterError extends Error {
+  readonly code = 'dynamic-resolution-invalid-parameter' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: DynamicResolutionInvalidParameterDetail;
+
+  constructor(detail: DynamicResolutionInvalidParameterDetail) {
+    super(`DynamicResolution.${detail.field} is invalid`);
+    this.name = 'DynamicResolutionInvalidParameterError';
+    this.expected = `DynamicResolution.${detail.field} must be ${detail.expected}`;
+    this.hint = `set DynamicResolution.${detail.field} to a value that is ${detail.expected}`;
+    this.detail = detail;
+  }
+}
+
+export interface DynamicResolutionRequiresTaaDetail {
+  readonly antialias: Exclude<Antialias, 'taa'>;
+}
+
+export class DynamicResolutionRequiresTaaError extends Error {
+  readonly code = 'dynamic-resolution-requires-taa' as const;
+  readonly expected = "DynamicResolution requires Camera.antialias to be 'taa'";
+  readonly hint = "set Camera.antialias to 'taa' or remove DynamicResolution before retrying";
+  readonly detail: DynamicResolutionRequiresTaaDetail;
+
+  constructor(detail: DynamicResolutionRequiresTaaDetail) {
+    super('DynamicResolution requires TAA');
+    this.name = 'DynamicResolutionRequiresTaaError';
+    this.detail = detail;
+  }
+}
+
+export interface DynamicResolutionTimingUnavailableDetail {
+  readonly generation: number;
+  readonly operation: 'timestamp-query';
+}
+
+export class DynamicResolutionTimingUnavailableError extends Error {
+  readonly code = 'dynamic-resolution-timing-unavailable' as const;
+  readonly expected = 'adaptive resolution receives a completed GPU timing sample';
+  readonly hint = 'use fixed minScale=maxScale or retry after timestamp support is available';
+  readonly detail: DynamicResolutionTimingUnavailableDetail;
+
+  constructor(detail: DynamicResolutionTimingUnavailableDetail) {
+    super(`DynamicResolution timing is unavailable for generation ${detail.generation}`);
+    this.name = 'DynamicResolutionTimingUnavailableError';
+    this.detail = detail;
+  }
+}
+
+export type DynamicResolutionError =
+  | DynamicResolutionInvalidParameterError
+  | DynamicResolutionRequiresTaaError
+  | DynamicResolutionTimingUnavailableError;
+
+export class OutlineInvalidParameterError extends Error {
+  readonly code = 'outline-invalid-parameter' as const;
+  readonly hint: string;
+  readonly detail: { readonly field: string; readonly value: number };
+  constructor(
+    field: string,
+    value: number,
+    readonly expected: string,
+  ) {
+    super(`Outline.${field} must be ${expected}`);
+    this.name = 'OutlineInvalidParameterError';
+    this.hint = `repair Outline.${field} on the active camera`;
+    this.detail = { field, value };
+  }
+}
+
+export class LensEffectsInvalidParameterError extends Error {
+  readonly code = 'lens-effects-invalid-parameter' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly field: keyof import('../components/lens-effects').LensEffectsData;
+    readonly value: number;
+    readonly minimum: number;
+    readonly maximum: number;
+  };
+  constructor(
+    field: LensEffectsInvalidParameterError['detail']['field'],
+    value: number,
+    minimum: number,
+    maximum: number,
+  ) {
+    super(`LensEffects.${field} is invalid`);
+    this.name = 'LensEffectsInvalidParameterError';
+    this.expected = `finite LensEffects.${field} in [${minimum}, ${maximum}]`;
+    this.hint = `repair LensEffects.${field} on the camera and retry`;
+    this.detail = { field, value, minimum, maximum };
+  }
+}
+
+export interface BarrelDistortionInvalidParameterDetail {
+  readonly field: 'width' | 'height' | 'strength' | 'centerX' | 'centerY';
+  readonly value: number;
+  readonly expected: string;
+}
+
+export class BarrelDistortionInvalidParameterError extends Error {
+  readonly code = 'barrel-distortion-invalid-parameter' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: BarrelDistortionInvalidParameterDetail;
+
+  constructor(detail: BarrelDistortionInvalidParameterDetail) {
+    super(`BarrelDistortion.${detail.field} is invalid`);
+    this.name = 'BarrelDistortionInvalidParameterError';
+    this.expected = `BarrelDistortion.${detail.field} must be ${detail.expected}`;
+    this.hint = `set BarrelDistortion.${detail.field} to a value that is ${detail.expected}`;
+    this.detail = detail;
+  }
+}
+
+export interface OwnerStageFailedDetail {
+  readonly owner: 'environment' | 'temporal' | 'fog' | 'renderer';
+  readonly stage: 'extract' | 'prepare' | 'record' | 'finish' | 'submit';
+}
+
+export class OwnerStageFailedError extends Error {
+  readonly code = 'owner-stage-failed' as const;
+  readonly expected = 'the owner completes its current frame stage';
+  readonly hint = 'inspect the owner and stage, keep the last-known-good frame, and retry';
+  readonly detail: OwnerStageFailedDetail;
+
+  constructor(owner: OwnerStageFailedDetail['owner'], stage: OwnerStageFailedDetail['stage']) {
+    super(`${owner} owner failed during ${stage}`);
+    this.name = 'OwnerStageFailedError';
+    this.detail = { owner, stage };
+  }
+}
+
 export interface RendererOperationCause {
   readonly code: string;
   readonly expected: string;
@@ -983,7 +1487,7 @@ export interface RendererOperationDetailByCode {
     readonly cause: RendererOperationCause;
   };
   readonly 'frame-input-invalid': {
-    readonly operation: 'draw' | 'set-profile';
+    readonly operation: 'draw' | 'set-profile' | 'request-observation';
     readonly cause: RendererOperationCause;
   };
   readonly 'scene-projection-failed': {
@@ -1013,13 +1517,25 @@ export interface RendererOperationDetailByCode {
     readonly cause: RendererOperationCause;
   };
   readonly 'renderer-state-invalid': {
-    readonly operation: 'draw' | 'set-profile' | 'recover' | 'dispose';
+    readonly operation: 'draw' | 'set-profile' | 'request-observation' | 'recover' | 'dispose';
     readonly state: string;
     readonly cause?: RendererOperationCause;
   };
   readonly 'recovery-failed': {
     readonly operation: 'recover';
+    readonly phase: RecoveryPhase;
     readonly oldGeneration: number;
+    readonly candidateGeneration: number;
+    readonly attempt: number;
+    readonly elapsedMs: number;
+    readonly retryable: boolean;
+    readonly guidance: 'retry' | 'repair-owner' | 'rebuild-renderer';
+    readonly owner: string;
+    readonly resourceKind: string;
+    readonly lastOutcome: RecoveryOutcome;
+    readonly rehydratedRoots: number;
+    readonly staleLossEvents: number;
+    readonly cleanupFailures: readonly RendererOperationCause[];
     readonly cause: RendererOperationCause;
   };
   readonly 'cleanup-failed': {
@@ -1238,6 +1754,261 @@ export class PointsLinesPrepareFailedError extends Error {
   }
 }
 
+// -- RenderTarget errors ------------------------------------------------------
+
+export interface RenderTargetDescriptorInvalidDetail {
+  readonly field: string;
+  readonly value: unknown;
+  readonly expected: string;
+}
+
+export class RenderTargetDescriptorInvalidError extends Error {
+  readonly code = 'render-target-descriptor-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderTargetDescriptorInvalidDetail;
+
+  constructor(detail: RenderTargetDescriptorInvalidDetail) {
+    super(`render-target-descriptor-invalid: ${detail.field} does not satisfy ${detail.expected}`);
+    this.name = 'RenderTargetDescriptorInvalidError';
+    this.expected = detail.expected;
+    this.hint = `set RenderTargetDescriptor.${detail.field} to the expected value, then retry create or resize`;
+    this.detail = detail;
+  }
+}
+
+export interface RenderTargetCapabilityMissingDetail {
+  readonly operation: 'create' | 'resize' | 'source' | 'readback';
+  readonly requested: string;
+  readonly capability: string;
+  readonly actual: string;
+}
+
+export class RenderTargetCapabilityMissingError extends Error {
+  readonly code = 'render-target-capability-missing' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderTargetCapabilityMissingDetail;
+
+  constructor(detail: RenderTargetCapabilityMissingDetail) {
+    super(
+      `render-target-capability-missing: ${detail.capability} does not admit ${detail.requested}`,
+    );
+    this.name = 'RenderTargetCapabilityMissingError';
+    this.expected = `${detail.capability} admits ${detail.requested}`;
+    this.hint = `choose an admitted target descriptor or use a backend providing ${detail.capability}`;
+    this.detail = detail;
+  }
+}
+
+export type RenderTargetStateInvalidReason =
+  | 'foreign-renderer'
+  | 'destroyed'
+  | 'uninitialized'
+  | 'generation-mismatch'
+  | 'readback-without-intent';
+
+export interface RenderTargetStateInvalidDetail {
+  readonly operation: 'inspect' | 'resize' | 'source' | 'readback' | 'destroy';
+  readonly reason: RenderTargetStateInvalidReason;
+  readonly state: 'uninitialized' | 'candidate' | 'active' | 'rebuilding' | 'destroyed';
+  readonly generation: number;
+}
+
+export class RenderTargetStateInvalidError extends Error {
+  readonly code = 'render-target-state-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderTargetStateInvalidDetail;
+
+  constructor(detail: RenderTargetStateInvalidDetail) {
+    super(`render-target-state-invalid: ${detail.operation} cannot use ${detail.reason}`);
+    this.name = 'RenderTargetStateInvalidError';
+    this.expected = `target state permits ${detail.operation}`;
+    this.hint =
+      'use the Renderer that created the target, then initialize, recover, or stop using the destroyed token';
+    this.detail = detail;
+  }
+}
+
+export interface RenderTargetOperationFailedDetail {
+  readonly operation: 'create' | 'resize' | 'source' | 'readback' | 'destroy' | 'recover';
+  readonly stage: 'allocation' | 'compile' | 'write' | 'submit' | 'copy' | 'retire';
+  readonly generation: number;
+  readonly cause: unknown;
+  readonly recovery: 'retry' | 'recover' | 'retain-last-known-good';
+}
+
+export class RenderTargetOperationFailedError extends Error {
+  readonly code = 'render-target-operation-failed' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderTargetOperationFailedDetail;
+
+  constructor(detail: RenderTargetOperationFailedDetail) {
+    super(`render-target-operation-failed: ${detail.operation} failed during ${detail.stage}`);
+    this.name = 'RenderTargetOperationFailedError';
+    this.expected = `${detail.operation} completes ${detail.stage}`;
+    this.hint =
+      'inspect detail.cause, then retry, recover the Renderer, or retain the last-known-good generation';
+    this.detail = detail;
+  }
+}
+
+export interface ReflectionProbeBudgetExceededDetail {
+  readonly actual: number;
+  readonly budget: number;
+}
+
+export class ReflectionProbeBudgetExceededError extends Error {
+  readonly code = 'reflection-probe-budget-exceeded' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: ReflectionProbeBudgetExceededDetail;
+
+  constructor(actual: number, budget: number) {
+    super(`reflection-probe-budget-exceeded: ${actual} > ${budget}`);
+    this.name = 'ReflectionProbeBudgetExceededError';
+    this.expected = `reflection probe work <= ${budget}`;
+    this.hint = 'reduce probe updates for this frame or raise the RenderProfile probe budget';
+    this.detail = { actual, budget };
+  }
+}
+
+export interface RenderIntentInvalidDetail {
+  readonly component: 'CubeCamera' | 'ReflectionProbe';
+  readonly field: 'updateIntent';
+  readonly value: number;
+  readonly allowed: readonly [0, 1, 2];
+}
+
+export class RenderIntentInvalidError extends Error {
+  readonly code = 'render-intent-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderIntentInvalidDetail;
+
+  constructor(component: RenderIntentInvalidDetail['component'], value: number) {
+    super(`render-intent-invalid: ${component}.updateIntent is not an admitted value`);
+    this.name = 'RenderIntentInvalidError';
+    this.expected = `${component}.updateIntent is one of 0, 1, or 2`;
+    this.hint = `set ${component}.updateIntent to 0, 1, or 2`;
+    this.detail = { component, field: 'updateIntent', value, allowed: [0, 1, 2] };
+  }
+}
+
+export interface VolumeOwnerConflictDetail {
+  readonly ownerCount: number;
+}
+
+export class VolumeOwnerConflictError extends Error {
+  readonly code = 'volume-owner-conflict' as const;
+  readonly expected = 'at most eight local VolumetricFog owners per rendered World';
+  readonly hint = 'reduce simultaneously visible volume owners and retry extraction';
+  readonly detail: VolumeOwnerConflictDetail;
+
+  constructor(ownerCount: number) {
+    super(`volume-owner-conflict: received ${ownerCount} owners`);
+    this.name = 'VolumeOwnerConflictError';
+    this.detail = { ownerCount };
+  }
+}
+
+export interface VolumeDensityShapeMismatchDetail {
+  readonly guid: string;
+  readonly viewDimension: string;
+}
+
+export class VolumeDensityShapeMismatchError extends Error {
+  readonly code = 'volume-density-shape-mismatch' as const;
+  readonly expected = 'density is a linear 3D TextureAsset';
+  readonly hint = 'bind a verified linear texture with viewDimension 3d';
+  readonly detail: VolumeDensityShapeMismatchDetail;
+
+  constructor(guid: string, viewDimension: string) {
+    super(`volume-density-shape-mismatch: ${viewDimension} density is not 3d`);
+    this.name = 'VolumeDensityShapeMismatchError';
+    this.detail = { guid, viewDimension };
+  }
+}
+
+export interface VolumeInvalidBoundsDetail {
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+}
+
+export class VolumeInvalidBoundsError extends Error {
+  readonly code = 'volume-invalid-bounds' as const;
+  readonly expected = 'bounds are finite and max is greater than min on every axis';
+  readonly hint = 'set finite non-degenerate volume bounds';
+  readonly detail: VolumeInvalidBoundsDetail;
+
+  constructor(bounds: VolumeInvalidBoundsDetail) {
+    super('volume-invalid-bounds: bounds must be finite and non-degenerate');
+    this.name = 'VolumeInvalidBoundsError';
+    this.detail = bounds;
+  }
+}
+
+export interface VolumeInvalidParametersDetail {
+  readonly field: string;
+  readonly value: unknown;
+}
+
+export class VolumeInvalidParametersError extends Error {
+  readonly code = 'volume-invalid-parameters' as const;
+  readonly expected = 'volume parameters remain finite and inside their closed ranges';
+  readonly hint = 'repair extinction, albedo, emission, anisotropy, maxDistance, or sampling';
+  readonly detail: VolumeInvalidParametersDetail;
+
+  constructor(input: {
+    readonly maxDistance?: number;
+    readonly anisotropy?: number;
+    readonly sampling?: string;
+  }) {
+    const invalidSampling =
+      input.sampling !== undefined && input.sampling !== 'noise' && input.sampling !== 'density';
+    const field = invalidSampling
+      ? 'sampling'
+      : input.maxDistance !== undefined && input.maxDistance <= 0
+        ? 'maxDistance'
+        : 'parameters';
+    const value = invalidSampling
+      ? input.sampling
+      : field === 'maxDistance'
+        ? input.maxDistance
+        : input.anisotropy;
+    super(`volume-invalid-parameters: ${field} is outside the authored range`);
+    this.name = 'VolumeInvalidParametersError';
+    this.detail = { field, value };
+  }
+}
+
+export type VolumeError =
+  | VolumeOwnerConflictError
+  | VolumeDensityShapeMismatchError
+  | VolumeInvalidBoundsError
+  | VolumeInvalidParametersError;
+
+export interface ProjectorBindingDetail {
+  readonly guid: string;
+  readonly status: 'pending' | 'invalid' | 'bind-failed';
+}
+
+export class ProjectorBindingError extends Error {
+  readonly code = 'projector-binding-failed' as const;
+  readonly expected = 'authored projector is accepted and bound for both surface and volume';
+  readonly hint =
+    'inspect the projector Meta/Pack receipt, repair the source, and retry with the same GUID';
+  readonly detail: ProjectorBindingDetail;
+
+  constructor(guid: string, status: ProjectorBindingDetail['status']) {
+    super(`projector binding failed for ${guid}: ${status}`);
+    this.name = 'ProjectorBindingError';
+    this.detail = { guid, status };
+  }
+}
+
 // -- RenderErrorCode / RenderError closed unions --------------------------------
 
 /**
@@ -1250,17 +2021,41 @@ export type RenderErrorCode = RenderError['code'];
  * Closed union of the render-cluster structured error classes, each carrying a
  * `RenderErrorCode` discriminant on `.code`.
  */
+export class CameraViewInvalidError extends Error {
+  readonly code = 'camera-view-invalid';
+  readonly hint: string;
+  readonly detail: { readonly field: string; readonly value: unknown };
+  constructor(
+    field: string,
+    value: unknown,
+    readonly expected: string,
+  ) {
+    super(`Invalid CameraView.${field}`);
+    this.name = 'CameraViewInvalidError';
+    this.hint = `repair CameraView.${field} before drawing again`;
+    this.detail = { field, value };
+  }
+}
+
 export type RenderError =
+  | CameraViewInvalidError
+  | import('../decals/component').ProjectedDecalInvalidError
+  | import('../components/planar-reflection').PlanarReflectionInvalidError
+  | RenderPublicationError
   | LifecycleConstructionError
+  | AutoExposureError
   | RendererExpectedOperationError
   | FrameReceiptStaleError
   | RendererContractFailureError
   | ObservationUnavailableError
+  | SceneDataUnavailableError
+  | TaaUnavailableError
   | ShadowInvalidConfigError
   | EquirectProjectionFailedError
-  | HdrpLightBudgetExceededError
-  | HdrpIndexListOverflowError
-  | HdrpDeferredCapsInsufficientError
+  | StandardLightBudgetExceededError
+  | StandardClusterIndexOverflowError
+  | StandardClusterTransportUnavailableError
+  | StandardProfileInvalidError
   | PointShadowAtlasUninitializedError
   | PointShadowAtlasBoundsViolationError
   | VideoUploadUnsupportedError
@@ -1269,6 +2064,7 @@ export type RenderError =
   | SkinPaletteOverflowError
   | SkinMaterialMismatchError
   | MaterialSkinAttrMissingError
+  | TransmissionCapabilityMissingError
   | RenderFeatureRegistrationConflictError
   | RenderFeatureStageFailedError
   | RenderFeatureCapabilityMissingError
@@ -1276,9 +2072,33 @@ export type RenderError =
   | RenderFeaturePreparationFailedError
   | RenderFeaturePreparedStateMismatchError
   | RenderFeatureDrawRecordingFailedError
+  | EnvironmentSourceConflictError
+  | FogCardinalityError
+  | SunCardinalityError
+  | TaaCapsInsufficientError
+  | EnvironmentGenerationFailedError
+  | AtmosphereInvalidParameterError
+  | OutlineInvalidParameterError
+  | BarrelDistortionInvalidParameterError
+  | LensEffectsInvalidParameterError
+  | CloudLayerError
+  | DynamicResolutionInvalidParameterError
+  | DynamicResolutionRequiresTaaError
+  | DynamicResolutionTimingUnavailableError
+  | MotionBlurValidationError
+  | OwnerStageFailedError
   | PointsLinesInvalidStyleError
   | PointsLinesTopologyMismatchError
   | PointsLinesStyleUnsupportedError
   | PointsLinesMaterialUnsupportedError
   | PointsLinesBudgetExceededError
-  | PointsLinesPrepareFailedError;
+  | PointsLinesPrepareFailedError
+  | LightResourceUnavailableError
+  | RenderTargetDescriptorInvalidError
+  | RenderTargetCapabilityMissingError
+  | RenderTargetStateInvalidError
+  | RenderTargetOperationFailedError
+  | ReflectionProbeBudgetExceededError
+  | RenderIntentInvalidError
+  | ProjectorBindingError
+  | VolumeError;

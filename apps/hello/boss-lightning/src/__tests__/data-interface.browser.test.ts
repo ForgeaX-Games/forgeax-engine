@@ -27,8 +27,15 @@ describe('Boss Lightning Data Interface Browser path', () => {
     const host = createVfxRuntimeHost({
       camera: { read: () => undefined },
       providers: [
-        createCameraProvider({ available: () => true }),
-        createSceneDepthProvider({ available: () => true }),
+        createCameraProvider({
+          available: () => true,
+          resource: () => ({ kind: 'buffer', value: {}, size: 16, usage: 'uniform' }),
+        }),
+        createSceneDepthProvider({
+          available: () => true,
+          sampleCount: 1,
+          resource: () => ({ kind: 'texture-view', value: {} }),
+        }),
       ],
     });
     const result = host.resolveDataInterfaces({ requirements, generation: 4 });
@@ -39,7 +46,10 @@ describe('Boss Lightning Data Interface Browser path', () => {
     const host = createVfxRuntimeHost({
       camera: { read: () => undefined },
       providers: [
-        createCameraProvider({ available: () => true }),
+        createCameraProvider({
+          available: () => true,
+          resource: () => ({ kind: 'buffer', value: {}, size: 16, usage: 'uniform' }),
+        }),
         createSceneDepthProvider({ available: () => false }),
       ],
     });

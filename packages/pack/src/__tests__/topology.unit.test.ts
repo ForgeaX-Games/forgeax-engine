@@ -82,4 +82,27 @@ describe('diffTopology', () => {
     expect(result.preserved).toEqual([]);
     expect(result.ambiguous).toMatchObject([{ reason: 'duplicate-source-key' }]);
   });
+
+  it('keeps LOD source keys prefix-stable while allowing a suffix level', () => {
+    const result = diffTopology(
+      [
+        { guid: 'root', sourceKey: 'mesh/root', sourceIndex: 0, kind: 'mesh' },
+        { guid: 'lod1', sourceKey: 'mesh/lod1', sourceIndex: 1, kind: 'mesh' },
+      ],
+      [
+        { guid: 'root-next', sourceKey: 'mesh/root', sourceIndex: 0, kind: 'mesh' },
+        { guid: 'lod1-next', sourceKey: 'mesh/lod1', sourceIndex: 1, kind: 'mesh' },
+        { guid: 'lod2-next', sourceKey: 'mesh/lod2', sourceIndex: 2, kind: 'mesh' },
+      ],
+    );
+    expect(result.preserved).toEqual([
+      { guid: 'root', oldKey: 'mesh/root', newKey: 'mesh/root' },
+      { guid: 'lod1', oldKey: 'mesh/lod1', newKey: 'mesh/lod1' },
+    ]);
+    expect(result.added).toEqual([
+      { guid: 'lod2-next', sourceKey: 'mesh/lod2', sourceIndex: 2, kind: 'mesh' },
+    ]);
+    expect(result.removed).toEqual([]);
+    expect(result.ambiguous).toEqual([]);
+  });
 });

@@ -1,9 +1,15 @@
 #define_import_path forgeax_material::unlit
-#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, sampleMaterialTextureLinear, packSceneTemporal}
-#import forgeax_view::fog::{apply_fog}
+#import forgeax_clipping::planes::{applyViewClipping, applyLocalClipping}
+#import forgeax_view::common::{View, Mesh, meshMotionValid, InstanceData, view, meshes, instances, sampleMaterialTextureLinear}
+#import forgeax_shadow::surface::{projectShadowPosition}
+#import forgeax_scene_temporal::{packSceneTemporalV1WithValidity}
+#import forgeax_material::alpha_hash::{applyAlphaHash}
+#import forgeax_view::fog::{translucent_fog}
+#import forgeax_material::oit::{OitOutput, oitAccumulate}
 
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #pragma variant_axis VERTEX_COLOR_AVAILABLE
+#pragma variant_axis COVERAGE_ONLY
 
 // @forgeax/engine-shader - unlit.wgsl (M5 feat-20260511-asset-system-v1;
 // refactored M5 T-18 feat-20260512-naga-oil-composition-hmr to pull View +
@@ -25,7 +31,7 @@
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
 //   @group(2) @binding(0) meshes                     storage   (see common.wgsl;
-//                                                               normalMatrix not
+//                                                               temporal fields not
 //                                                               consumed in unlit)
 //   @group(3) @binding(0) instances                  storage   (per-instance
 //                                                               localFromInstance mat4;
@@ -43,8 +49,19 @@
 struct Material {
   baseColor : vec4<f32>,
   alphaCutoff : f32,
+  alphaHash : f32,
   baseColorTextureCoordinatesTransform : vec4<f32>,
   baseColorTextureCoordinatesMetadata : vec4<f32>,
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  clippingControl : vec4<f32>,
+  clippingPlaneA : vec4<f32>,
+  clippingPlaneB : vec4<f32>,
+  clippingPlaneC : vec4<f32>,
+  clippingPlaneD : vec4<f32>,
+  clippingPlaneE : vec4<f32>,
+  clippingPlaneF : vec4<f32>,
+#endif
+
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -67,7 +84,8 @@ struct VsIn {
 #endif
 };
 struct VsOut {
-  @builtin(position) clip : vec4<f32>,
+  @location(3) positionOS : vec3<f32>,
+  @builtin(position) @invariant clip : vec4<f32>,
   @location(0) uv : vec2<f32>,
   @location(1) worldPos : vec3<f32>,
 #ifdef VERTEX_COLOR_AVAILABLE
@@ -75,20 +93,32 @@ struct VsOut {
 #endif
 };
 
-@vertex
-fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
+fn unlitVertex(in : VsIn, idx : u32) -> VsOut {
   // feat-20260604-instances-per-instance-transform-shader-group3-bin M1 / w5:
   // entity world from meshes[0] (dynamic-offset window), per-instance local
   // from instances[idx] (flat @group(3) buffer indexed by instance_index).
   // Combine: entity_world * per_instance_local.
   let world = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(in.pos, 1.0);
   var out : VsOut;
+  out.positionOS = in.pos;
   out.clip = view.worldViewProj * world;
   out.uv = in.uv;
   out.worldPos = world.xyz;
 #ifdef VERTEX_COLOR_AVAILABLE
   out.color = in.color;
 #endif
+  return out;
+}
+
+@vertex
+fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
+  return unlitVertex(in, idx);
+}
+
+@vertex
+fn vs_shadow(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
+  var out = unlitVertex(in, idx);
+  out.clip = projectShadowPosition(vec4<f32>(out.worldPos, 1.0));
   return out;
 }
 
@@ -100,43 +130,73 @@ fn materialVertexColor(in : VsOut) -> vec4<f32> {
 #endif
 }
 
-fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
-  var origin = viewParams.cameraPos;
-  var direction = normalize(worldPos - origin);
-  var rayDistance = length(worldPos - origin);
-  if (viewParams.temporalProjection.z >= 0.5) {
-    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
-    let nearPoint = nearH.xyz / nearH.w;
-    let farPoint = farH.xyz / farH.w;
-    direction = normalize(farPoint - nearPoint);
-    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
-    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+// Shaded, fogged straight-alpha color shared by the sorted and OIT entry points.
+fn unlitColor(in : VsOut) -> vec4<f32> {
+  applyViewClipping(in.worldPos, false);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.worldPos, false, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+
+  let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw);
+  let vertexColor = materialVertexColor(in);
+  let alpha = material.baseColor.a * texSample.a * vertexColor.a;
+  applyAlphaHash(alpha, in.positionOS, material.alphaHash);
+  if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
+    discard;
   }
-  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
+  let color = material.baseColor.rgb * texSample.rgb * vertexColor.rgb;
+  return vec4<f32>(translucent_fog(view, in.worldPos, color, alpha), alpha);
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  let color = unlitColor(in);
+#ifdef COVERAGE_ONLY
+  return vec4<f32>(1.0);
+#else
+  return color;
+#endif
+}
+
+// Weighted blended OIT accumulation for straight-alpha blend states.
+@fragment
+fn fs_oit(in : VsOut) -> OitOutput {
+  let color = unlitColor(in);
+  return oitAccumulate(color.rgb * color.a, color.a, distance(in.worldPos, view.cameraPos));
+}
+
+// Weighted blended OIT accumulation for premultiplied blend states.
+@fragment
+fn fs_oit_premultiplied(in : VsOut) -> OitOutput {
+  let color = unlitColor(in);
+  return oitAccumulate(color.rgb, color.a, distance(in.worldPos, view.cameraPos));
+}
+
+// Depth-only shadow variant. Keep alpha clipping identical to the color path,
+// but return no color target because the shadow pass has a depth attachment only.
+@fragment
+fn fs_shadow(in : VsOut) {
+  applyViewClipping(in.worldPos, true);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.worldPos, true, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+
   let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw);
   let vertexColor = materialVertexColor(in);
   let alpha = material.baseColor.a * texSample.a * vertexColor.a;
+  applyAlphaHash(alpha, in.positionOS, material.alphaHash);
   if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
     discard;
   }
-  return applySceneFog(
-    view,
-    material.baseColor.rgb * texSample.rgb * vertexColor.rgb,
-    alpha,
-    in.worldPos,
-  );
 }
 
 struct TemporalVsOut {
-  @builtin(position) clip : vec4<f32>,
+  @location(3) positionOS : vec3<f32>,
+  @location(4) clippingPositionWS : vec3<f32>,
+  @builtin(position) @invariant clip : vec4<f32>,
   @location(0) uv : vec2<f32>,
-  @location(1) @interpolate(linear) currentClip : vec4<f32>,
-  @location(2) @interpolate(linear) previousClip : vec4<f32>,
+  @location(1) @interpolate(perspective) currentClip : vec4<f32>,
+  @location(2) @interpolate(perspective) previousClip : vec4<f32>,
 #ifdef VERTEX_COLOR_AVAILABLE
   @location(14) color : vec4<f32>,
 #endif
@@ -152,8 +212,10 @@ fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32) -> TemporalVsOut {
     instances[idx].previousLocalFromInstance * vec4<f32>(in.pos, 1.0);
 #endif
   var out : TemporalVsOut;
+  out.positionOS = in.pos;
+  out.clippingPositionWS = currentWorld.xyz;
   out.currentClip = view.temporalCurrentViewProj * currentWorld;
-  out.clip = out.currentClip;
+  out.clip = view.worldViewProj * currentWorld;
   out.previousClip = view.temporalPreviousViewProj * previousWorld;
   out.uv = in.uv;
 #ifdef VERTEX_COLOR_AVAILABLE
@@ -172,15 +234,32 @@ fn temporalVertexColor(in : TemporalVsOut) -> vec4<f32> {
 
 @fragment
 fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+  applyViewClipping(in.clippingPositionWS, false);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.clippingPositionWS, false, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+
   let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw);
   let vertexColor = temporalVertexColor(in);
   let alpha = material.baseColor.a * texSample.a * vertexColor.a;
+  applyAlphaHash(alpha, in.positionOS, material.alphaHash);
   if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
     discard;
   }
-  var reactive = 1.0;
+#ifdef COVERAGE_ONLY
+  return vec4<f32>(1.0);
+#endif
+  var reactive = 0.0;
+  var motionValid = true;
 #if STORAGE_BUFFER_AVAILABLE == true
   reactive = meshes[0].temporal.x;
+  motionValid = meshMotionValid(meshes[0].temporal.y);
 #endif
-  return packSceneTemporal(in.currentClip, in.previousClip, reactive);
+  return packSceneTemporalV1WithValidity(
+    in.currentClip,
+    in.previousClip,
+    view.temporalProjection,
+    reactive,
+    motionValid,
+  );
 }

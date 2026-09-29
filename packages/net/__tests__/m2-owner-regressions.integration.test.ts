@@ -234,7 +234,7 @@ describe('M2 confirmed owner regressions', () => {
 
   it('starts connector recovery immediately after an active peer disconnects', async () => {
     const [sender, receiver] = createMemoryEndpointPair();
-    const [replacement] = createMemoryEndpointPair();
+    const [replacementSender, replacement] = createMemoryEndpointPair();
     let calls = 0;
     const connector: NetEndpointConnector = {
       connect: () => {
@@ -265,6 +265,17 @@ describe('M2 confirmed owner regressions', () => {
     expect(calls).toBe(1);
     await flushMicrotasks();
     expect(session.getRecoverySnapshot().state.kind).toBe('resyncing');
+
+    replacementSender
+      .send(2 as PeerId, encodeReplicationPacket(baseline(replication, 2), replication.limits).unwrap())
+      .unwrap();
+    // A replacement transport can queue its peer-connected and baseline events
+    // before the next frame. The first poll must expose resyncing; the next
+    // poll applies the fresh sequence-one baseline and becomes active.
+    expect(session.receiveEvents()).toEqual([]);
+    expect(session.getRecoverySnapshot().state.kind).toBe('resyncing');
+    expect(session.receiveEvents()).toEqual([]);
+    expect(session.getRecoverySnapshot().state.kind).toBe('active');
   });
 
   it('isolates the old endpoint when explicit recovery starts', () => {

@@ -1,4 +1,4 @@
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
 
 const attributes = {
@@ -8,10 +8,10 @@ const attributes = {
   tangent: new Float32Array(12),
 };
 
-describe('mesh-bin v4 morph contract', () => {
+describe('mesh-bin v5 morph contract', () => {
   it('round-trips bounded target streams and default weights into metadata', () => {
     const vertices = new Float32Array(3 * 12);
-    const result = packMeshBinV4(
+    const result = packMeshBin(
       {
         vertices,
         attributes,
@@ -22,12 +22,12 @@ describe('mesh-bin v4 morph contract', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(new DataView(result.value.buffer).getUint32(0, true)).toBe(4);
+    expect(new DataView(result.value.buffer).getUint32(0, true)).toBe(5);
     expect(new TextDecoder().decode(result.value)).toContain('morphWeights');
   });
 
-  it('preserves deferred target payloads without truncation', () => {
-    const result = packMeshBinV4(
+  it('rejects excess targets before publishing bytes', () => {
+    const result = packMeshBin(
       {
         vertices: new Float32Array(3 * 12),
         attributes,
@@ -35,10 +35,6 @@ describe('mesh-bin v4 morph contract', () => {
       },
       'gltf://morph-invalid',
     );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const encoded = new TextDecoder().decode(result.value);
-    expect(encoded).toContain('morphTargets');
-    expect(encoded.match(/"position"/g)?.length).toBe(9);
+    expect(result.ok).toBe(false);
   });
 });

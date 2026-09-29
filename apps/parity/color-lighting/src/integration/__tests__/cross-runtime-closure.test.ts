@@ -1,16 +1,20 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import Ajv2020 from 'ajv/dist/2020.js';
+import caseReportSchema from '../../../schemas/case-report.schema.json' with { type: 'json' };
 import {
   mergePipelineEvidence,
   type PipelineEvidence,
   type PipelineEvidenceArtifact,
 } from '../../report/merge-pipeline-evidence';
 
+const validateCaseReport = new Ajv2020({ allErrors: true, strict: false }).compile(caseReportSchema);
+
 const sceneCase = {
   caseId: 'direct-directional',
   required: true,
   colorDomain: 'linearHdr',
-  pipeline: { identity: 'urp', engineId: 'forgeax::urp' },
+  pipeline: { identity: 'standard', engineId: 'forgeax::standard', renderPath: 'forward' },
   scene: { width: 1, height: 1, background: [0, 0, 0, 1] },
   budget: { analyticMax: 0.01, roiMax: 0.01, byteMax: 0 },
 };
@@ -57,7 +61,7 @@ function makeArtifact(
     pipelineId,
     runtimeId,
     backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
-    frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
+    frameId: runtimeId === 'browser' ? 3 : 299,
     copySrc: true,
     lifetime: 'active',
     semantic: 'linear-hdr',
@@ -81,7 +85,7 @@ function makeArtifact(
       format: 'rgba16float',
       size,
       rawHash: hashBytes(linearBytes),
-      frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
+      frameId: runtimeId === 'browser' ? 3 : 299,
       pipelineId,
       backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
     },
@@ -92,7 +96,7 @@ function makeArtifact(
       format: 'rgba8unorm',
       size,
       rawHash: hashBytes(finalBytes),
-      frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
+      frameId: runtimeId === 'browser' ? 3 : 299,
       pipelineId,
       backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
     },
@@ -101,8 +105,8 @@ function makeArtifact(
 
 function validArtifacts(): readonly PipelineEvidenceArtifact[] {
   return [
-    makeArtifact('forgeax::urp', 'browser', 1),
-    makeArtifact('forgeax::hdrp', 'dawn', 11),
+    makeArtifact('forgeax::standard', 'browser', 1),
+    makeArtifact('forgeax::standard', 'dawn', 11),
   ];
 }
 
@@ -119,7 +123,8 @@ describe('cross-runtime closure contract', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error.hint);
     expect(result.value.report.attachmentEvidence.producers).toHaveLength(2);
-    expect(result.value.report.attachmentEvidence.capturedPipelineIds).toEqual(['urp', 'hdrp']);
+    expect(validateCaseReport(result.value.report), JSON.stringify(validateCaseReport.errors)).toBe(true);
+    expect(result.value.report.attachmentEvidence.capturedPipelineIds).toEqual(['standard']);
     expect(result.value.report.attachmentEvidence.missingPipelineIds).toEqual([]);
     expect(result.value.report.attachmentEvidence.producers.map((entry) => entry.frameId)).toEqual([3, 299]);
   });
@@ -128,8 +133,8 @@ describe('cross-runtime closure contract', () => {
     ['stale invocation', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact) => ({ ...artifact, invocationId: 'old' }))],
     ['source identity mismatch', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, sourceHash: 'wrong' } : artifact)],
     ['semantic identity mismatch', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, semanticHash: 'wrong' } : artifact)],
-    ['duplicate pipeline', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact) => ({ ...artifact, pipelineId: 'forgeax::urp' as const }))],
-    ['URP as HDRP', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, pipelineId: 'forgeax::urp' as const } : artifact)],
+    ['duplicate runtime', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact) => ({ ...artifact, runtimeId: 'browser' as const }))],
+    ['Dawn relabeled as browser', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, runtimeId: 'browser' as const } : artifact)],
     ['hash tampering', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, linearHdr: { ...artifact.linearHdr, rawHash: 'wrong' } } : artifact)],
     ['replay substitution', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, source: 'replay' as const } : artifact)],
     ['guessed curve', (artifacts: readonly PipelineEvidenceArtifact[]) => artifacts.map((artifact, index) => index === 1 ? { ...artifact, normalization: { ...artifact.normalization, rangeModel: 'guessed' as const } } : artifact)],

@@ -120,6 +120,24 @@ function checkPublicFacadeImports(file, source) {
   }
 }
 
+function checkDocumentationImports(file, source) {
+  for (const match of source.matchAll(
+    /\b(?:from|import)\s*(?:type\s*)?(?:\(\s*)?['"](@forgeax\/engine-[^'"]+)['"]/g,
+  )) {
+    fail(file, `documentation example leaks physical package: ${match[1]}`);
+  }
+  for (const token of [
+    'templates/game-empty',
+    'templates/game-default',
+    'templates/game-brotato-3d',
+    'forge.json#entry',
+    'package.json#forgeax.assets',
+    'executionEntry',
+  ]) {
+    if (source.includes(token)) fail(file, `documentation retains retired contract: ${token}`);
+  }
+}
+
 const skillDirectories = (await readdir(skillsRoot, { withFileTypes: true }))
   .filter((entry) => entry.isDirectory())
   .sort((left, right) => left.name.localeCompare(right.name));
@@ -161,9 +179,7 @@ for (const file of await markdownFiles(skillsRoot)) {
   await checkLinks(file, source);
   checkPublicFacadeImports(file, source);
   if (file === resolve(skillsRoot, 'forgeax-engine-sdk/references/feature-catalog.md')) {
-    const baseline = source.match(
-      /\| (?:\u80fd\u529b\u5185\u5bb9\u57fa\u7ebf|Capability baseline) \| `([0-9a-f]{40})`/u,
-    )?.[1];
+    const baseline = source.match(/Generation baseline commit:\s*`([0-9a-f]{40})`/u)?.[1];
     if (baseline === undefined) {
       fail(file, 'missing full capability baseline commit');
     } else {
@@ -176,6 +192,22 @@ for (const file of await markdownFiles(skillsRoot)) {
       }
     }
   }
+}
+
+const projectDocumentation = [
+  resolve(root, 'AGENTS.md'),
+  resolve(root, 'packages/project/README.md'),
+  resolve(root, 'packages/plugin/README.md'),
+  resolve(root, 'packages/devkit/README.md'),
+  resolve(root, 'packages/pack/README.md'),
+  resolve(root, 'packages/scene/README.md'),
+  resolve(root, 'packages/engine/README.md'),
+];
+for (const file of projectDocumentation) {
+  const source = await readFile(file, 'utf8');
+  await checkLinks(file, source);
+  checkPublicFacadeImports(file, source);
+  checkDocumentationImports(file, source);
 }
 
 for (const file of [

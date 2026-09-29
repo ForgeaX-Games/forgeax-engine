@@ -5,6 +5,7 @@ import {
   GPU_TEXTURE_USAGE_COPY_SRC,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+  GPU_TEXTURE_USAGE_STORAGE_BINDING,
   GPU_TEXTURE_USAGE_TEXTURE_BINDING,
 } from '../gpu-texture-usage';
 
@@ -19,13 +20,14 @@ const consumerSources = [
 ];
 
 describe('texture usage owner', () => {
-  it('keeps the four texture usage bits in one owner', () => {
+  it('keeps the five texture usage bits in one owner', () => {
     expect(GPU_TEXTURE_USAGE_COPY_SRC).toBe(0x01);
     expect(GPU_TEXTURE_USAGE_COPY_DST).toBe(0x02);
     expect(GPU_TEXTURE_USAGE_TEXTURE_BINDING).toBe(0x04);
+    expect(GPU_TEXTURE_USAGE_STORAGE_BINDING).toBe(0x08);
     expect(GPU_TEXTURE_USAGE_RENDER_ATTACHMENT).toBe(0x10);
     expect(GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING).toBe(0x14);
-    expect(ownerSource.match(/export const GPU_TEXTURE_USAGE_/g)).toHaveLength(5);
+    expect(ownerSource.match(/export const GPU_TEXTURE_USAGE_/g)).toHaveLength(6);
   });
 
   it('routes texture usage consumers through the owner', () => {

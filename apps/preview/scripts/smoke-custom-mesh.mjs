@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const ARTIFACT_DIR = resolve(process.env.FORGEAX_CUSTOM_MESH_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/custom-mesh'));
+const ARTIFACT_DIR = resolve(process.env.FORGEAX_CUSTOM_MESH_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/custom-mesh'));
 const PORT = Number.parseInt(process.env.FORGEAX_CUSTOM_MESH_PORT ?? '5188', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 

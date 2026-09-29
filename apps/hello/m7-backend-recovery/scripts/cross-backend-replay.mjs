@@ -2,7 +2,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { create as createDawn, globals as dawnGlobals } from 'webgpu';
 import { PNG } from 'pngjs';
-import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
+import { buildFrameModel, decodeTape, openReplay, replayDeviceRequest } from '@forgeax/engine-rhi-debug';
 import {
   createShaderModule as createNullShaderModule,
   rhi as nullRhi,
@@ -19,11 +19,24 @@ const decoded = decodeTape(new Uint8Array(await readFile(artifactPath)));
 if (!decoded.ok) throw new Error(`decodeTape failed: ${decoded.error.code} (${decoded.error.hint})`);
 const tape = decoded.value;
 const model = buildFrameModel(tape);
-const workIndex = model.works.findIndex((work) => work.kind.startsWith('draw'));
+// A real hello-cube frame contains depth-only shadow draws and compute
+// dispatches before the first colour attachment. Cross-backend pixel replay
+// must select an attachment-bearing render work, not merely the first draw
+// opcode (which has no readable colour target).
+const workIndex = model.works.findIndex((work) => {
+  if (!work.kind.startsWith('draw')) return false;
+  const pass = model.passes.find((candidate) => candidate.passIndex === work.passIndex);
+  const begin = pass === undefined ? undefined : tape.events[pass.beginEventIndex];
+  return (
+    begin?.kind === 'beginRenderPass' &&
+    begin.colorAttachmentViewHandleIds.some((candidate) => candidate !== undefined)
+  );
+});
 const frameMarkCount = tape.events.filter((event) => event.kind === 'frameMark').length;
 if (workIndex < 0 || frameMarkCount === 0) {
   throw new Error(`browser tape lacks dynamic evidence: works=${model.works.length} frameMarks=${frameMarkCount}`);
 }
+console.log(`[m7-backend] cross-backend selected colour workIndex=${workIndex}`);
 
 Object.assign(globalThis, dawnGlobals);
 if (!('navigator' in globalThis) || globalThis.navigator === undefined) {
@@ -40,13 +53,10 @@ const dawnAdapterResult = await webgpuRhi.requestAdapter();
 if (!dawnAdapterResult.ok) {
   throw new Error(`Dawn adapter failed: ${dawnAdapterResult.error.code} (${dawnAdapterResult.error.hint})`);
 }
-const requiredFeatures = dawnAdapterResult.value.features.has('texture-compression-bc')
-  ? ['texture-compression-bc']
-  : [];
-const dawnDeviceResult = await dawnAdapterResult.value.requestDevice({
-  requiredFeatures,
-  requiredLimits: { maxUniformBufferBindingSize: 262144 },
-});
+const dawnAdapter = dawnAdapterResult.value;
+const dawnDeviceResult = await dawnAdapter.requestDevice(
+  replayDeviceRequest(tape, dawnAdapter.features, dawnAdapter.limits),
+);
 if (!dawnDeviceResult.ok) {
   throw new Error(`Dawn device failed: ${dawnDeviceResult.error.code} (${dawnDeviceResult.error.hint})`);
 }
@@ -55,7 +65,7 @@ const dawnReplayResult = await openReplay(tape, {
   createShaderModule,
 });
 if (!dawnReplayResult.ok) {
-  throw new Error(`Dawn openReplay failed: ${dawnReplayResult.error.code} (${dawnReplayResult.error.hint})`);
+  throw new Error(`Dawn openReplay failed: ${dawnReplayResult.error.code} (${dawnReplayResult.error.hint}): ${JSON.stringify(dawnReplayResult.error.detail)}`);
 }
 const dawnInspection = await dawnReplayResult.value.inspectWork(workIndex, ['pixels']);
 if (!dawnInspection.ok) {
@@ -107,14 +117,17 @@ if (!(await dawnReplayResult.value.dispose()).ok) throw new Error('Dawn replay d
 
 const nullAdapterResult = await nullRhi.requestAdapter();
 if (!nullAdapterResult.ok) throw new Error(`null adapter failed: ${nullAdapterResult.error.code}`);
-const nullDeviceResult = await nullAdapterResult.value.requestDevice();
+const nullAdapter = nullAdapterResult.value;
+const nullDeviceResult = await nullAdapter.requestDevice(
+  replayDeviceRequest(tape, nullAdapter.features, nullAdapter.limits),
+);
 if (!nullDeviceResult.ok) throw new Error(`null device failed: ${nullDeviceResult.error.code}`);
 const nullReplayResult = await openReplay(tape, {
   device: nullDeviceResult.value,
   createShaderModule: createNullShaderModule,
 });
 if (!nullReplayResult.ok) {
-  throw new Error(`null openReplay failed: ${nullReplayResult.error.code} (${nullReplayResult.error.hint})`);
+  throw new Error(`null openReplay failed: ${nullReplayResult.error.code} (${nullReplayResult.error.hint}): ${JSON.stringify(nullReplayResult.error.detail)}`);
 }
 const nullInspection = await nullReplayResult.value.inspectWork(workIndex);
 if (!nullInspection.ok) {

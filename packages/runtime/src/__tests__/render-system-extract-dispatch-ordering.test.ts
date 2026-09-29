@@ -55,7 +55,8 @@ import { Camera, Instances, MeshFilter, MeshRenderer } from '@forgeax/engine-ren
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function identityTransform() {

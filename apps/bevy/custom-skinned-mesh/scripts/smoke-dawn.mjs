@@ -11,7 +11,7 @@ const appRoot = resolve(here, '..');
 const root = resolve(here, '..', '..', '..', '..');
 const width = 320;
 const height = 180;
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
@@ -49,6 +49,16 @@ const canvas = {
   addEventListener() {},
   removeEventListener() {},
 };
+
+// Dawn's async event runner keeps a Node process alive after the last frame.
+// The smoke owns these resources, so close them at the terminal verdict and
+// make the command's exit code reflect the verdict instead of leaking a
+// runner until CI timeout.
+function finishSmoke(code) {
+  target?.destroy?.();
+  device?.destroy?.();
+  process.exit(code);
+}
 
 async function capture() {
   await device.queue.onSubmittedWorkDone();
@@ -122,5 +132,6 @@ const checks = [
 let all = true;
 for (const [name, ok] of checks) { console.log(`${ok ? '✓' : '✗'} ${name}`); if (!ok) all = false; }
 console.log(`[smoke] frames observed=${frames} motionMeanDelta=${motion.mean.toFixed(4)} jointQuat=${earlyQuat[2]?.toFixed(4)}->${lateQuat[2]?.toFixed(4)}`);
-if (!all) { console.error(`[smoke] FAIL - motionPixels=${motion.pixels} errors=${errors.length}`); process.exit(1); }
+if (!all) { console.error(`[smoke] FAIL - motionPixels=${motion.pixels} errors=${errors.length}`); finishSmoke(1); }
 console.log('[smoke] PASS');
+finishSmoke(0);

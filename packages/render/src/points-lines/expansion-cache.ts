@@ -6,7 +6,7 @@ export interface PointsLinesExpandedGeometry {
   readonly component: 'Points' | 'Lines';
   /** Source endpoints retained for the M3 triangle-expansion consumer. */
   readonly positions: Float32Array;
-  /** Interleaved position/otherPosition/corner stream for WGSL. */
+  /** Canonical position/normal/uv/tangent stream: endpoints, corner, neighbor and distance. */
   readonly vertices: Float32Array;
   /** Six indices per expanded quad. */
   readonly indices: Uint32Array;
@@ -66,7 +66,10 @@ function deriveExpandedGeometry(
   let segmentCount = 0;
   const expectedTopology = component === 'Points' ? 'point-list' : 'line-list';
   for (const submesh of mesh.submeshes) {
-    if (submesh.topology !== expectedTopology) {
+    if (
+      submesh.topology !== expectedTopology &&
+      !(component === 'Lines' && submesh.topology === 'line-strip')
+    ) {
       sourceCursor += submesh.vertexCount;
       continue;
     }
@@ -97,24 +100,50 @@ function deriveExpandedGeometry(
         emitQuad(vertices, indices, position, position);
       }
     } else {
-      segmentCount += Math.floor(elements.length / 2);
-      for (let element = 0; element + 1 < elements.length; element += 2) {
-        const startOffset = (elements[element] ?? 0) * 3;
-        const endOffset = (elements[element + 1] ?? 0) * 3;
+      const strip = submesh.topology === 'line-strip';
+      const point = (element: number): readonly number[] => {
+        const offset = (elements[element] ?? 0) * 3;
+        return [
+          sourcePositions[offset] ?? 0,
+          sourcePositions[offset + 1] ?? 0,
+          sourcePositions[offset + 2] ?? 0,
+        ];
+      };
+      const same = (a: readonly number[], b: readonly number[]) => a.every((v, i) => v === b[i]);
+      // Collapse consecutive duplicates once, keeping strip construction linear
+      // even for a long stationary trajectory. Preserve the repeated closing end.
+      if (strip) {
+        let count = 0;
+        for (let i = 0; i < elements.length; i++) {
+          if (count === 0 || !same(point(i), point(count - 1)))
+            elements[count++] = elements[i] ?? 0;
+        }
+        elements.length = count;
+      }
+      const closed = strip && elements.length > 2 && same(point(0), point(elements.length - 1));
+      let distance = 0;
+      for (let element = 0; element + 1 < elements.length; element += strip ? 1 : 2) {
+        const start = point(element);
+        const end = point(element + 1);
+        const length = Math.hypot(
+          (end[0] ?? 0) - (start[0] ?? 0),
+          (end[1] ?? 0) - (start[1] ?? 0),
+          (end[2] ?? 0) - (start[2] ?? 0),
+        );
         emitQuad(
           vertices,
           indices,
-          [
-            sourcePositions[startOffset] ?? 0,
-            sourcePositions[startOffset + 1] ?? 0,
-            sourcePositions[startOffset + 2] ?? 0,
-          ],
-          [
-            sourcePositions[endOffset] ?? 0,
-            sourcePositions[endOffset + 1] ?? 0,
-            sourcePositions[endOffset + 2] ?? 0,
-          ],
+          start,
+          end,
+          strip ? point(element > 0 ? element - 1 : closed ? elements.length - 2 : 0) : start,
+          strip
+            ? point(element + 2 < elements.length ? element + 2 : closed ? 1 : element + 1)
+            : end,
+          distance,
+          distance + length,
         );
+        distance += length;
+        segmentCount++;
       }
     }
     sourceCursor += submesh.vertexCount;
@@ -131,7 +160,7 @@ function deriveExpandedGeometry(
     sourceVertexCount: sourcePositions.length / 3,
     pointCount,
     segmentCount,
-    expandedVertexCount: expandedVertices.length / 8,
+    expandedVertexCount: expandedVertices.length / 12,
     expandedIndexCount: expandedIndices.length,
     sourceBytes: mesh.vertices.byteLength + (mesh.indices?.byteLength ?? 0),
     derivedBytes: expandedVertices.byteLength + expandedIndices.byteLength,
@@ -144,8 +173,12 @@ function emitQuad(
   indices: number[],
   start: readonly number[],
   end: readonly number[],
+  previous: readonly number[] = start,
+  next: readonly number[] = end,
+  startDistance = 0,
+  endDistance = 0,
 ): void {
-  const base = vertices.length / 8;
+  const base = vertices.length / 12;
   const corners: readonly (readonly [number, number])[] = [
     [-1, -1],
     [-1, 1],
@@ -162,6 +195,8 @@ function emitQuad(
       end[2] ?? 0,
       x,
       y,
+      ...(x < 0 ? previous : next),
+      x < 0 ? startDistance : endDistance,
     );
   }
   indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);

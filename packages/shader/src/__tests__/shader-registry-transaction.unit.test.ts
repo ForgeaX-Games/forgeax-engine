@@ -114,3 +114,18 @@ describe('ShaderRegistry public manifest transaction', () => {
     }
   });
 });
+
+it('loads CPU shader metadata without a GPU and forks the same manifest into a device owner', async () => {
+  const registry = new ShaderRegistry({
+    manifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(CORRECTED_MANIFEST))}`,
+  });
+  expect((await registry.loadManifest()).ok).toBe(true);
+  expect(registry.findMaterialArtifact('my-game::corrected')).toBeDefined();
+  const unavailable = registry.get(FIRST_ENTRY.hash);
+  expect(unavailable.ok).toBe(false);
+  if (!unavailable.ok) expect(unavailable.error.code).toBe('rhi-not-available');
+  const { device, created } = createTrackingDevice();
+  const fork = registry.forkForDevice(device);
+  expect(fork.get(FIRST_ENTRY.hash).ok).toBe(true);
+  expect(created).toEqual(['first-wgsl']);
+});

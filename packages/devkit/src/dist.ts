@@ -3,7 +3,7 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 import type { CommandResult, ProjectFacts } from './types.js';
 
-interface DistArtifact {
+export interface DistArtifact {
   readonly path: string;
   readonly mediaType: string;
   readonly bytes: number;
@@ -21,13 +21,27 @@ export interface DistManifest {
   readonly artifacts: readonly DistArtifact[];
 }
 
-function mediaType(path: string): string {
+export function mediaType(path: string): string {
   if (path.endsWith('.html')) return 'text/html';
   if (path.endsWith('.js') || path.endsWith('.mjs')) return 'text/javascript';
   if (path.endsWith('.json')) return 'application/json';
   if (path.endsWith('.wasm')) return 'application/wasm';
   if (path.endsWith('.png')) return 'image/png';
   if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg';
+  if (path.endsWith('.css')) return 'text/css';
+  if (path.endsWith('.svg')) return 'image/svg+xml';
+  if (path.endsWith('.webp')) return 'image/webp';
+  if (path.endsWith('.gif')) return 'image/gif';
+  if (path.endsWith('.mp3')) return 'audio/mpeg';
+  if (path.endsWith('.wav')) return 'audio/wav';
+  if (path.endsWith('.ogg')) return 'audio/ogg';
+  if (path.endsWith('.mp4')) return 'video/mp4';
+  if (path.endsWith('.webm')) return 'video/webm';
+  if (path.endsWith('.woff')) return 'font/woff';
+  if (path.endsWith('.woff2')) return 'font/woff2';
+  if (path.endsWith('.ttf')) return 'font/ttf';
+  if (path.endsWith('.otf')) return 'font/otf';
+  if (path.endsWith('.wgsl') || path.endsWith('.glsl')) return 'text/plain';
   return 'application/octet-stream';
 }
 
@@ -86,7 +100,7 @@ export async function verifyDist(rootInput: string): Promise<CommandResult<DistM
       error: {
         code: 'dist-manifest-unreadable',
         expected: 'a readable dist/forgeax-dist.json',
-        hint: 'Run forgeax build and do not edit its derived manifest.',
+        hint: 'Run forgeax project build and do not edit its derived manifest.',
         detail: { root, reason: cause instanceof Error ? cause.message : String(cause) },
       },
     };

@@ -35,11 +35,16 @@ function model(): ViewerModel {
         resourceKind: 'texture',
         bufferOffset: null,
         bufferSize: null,
+        dynamicOffset: null,
       },
     ],
     vertexBuffers: [{ slot: 0, bufferHandleId: 'buffer:vertices', offset: 4, size: 24 }],
     indexBuffer: null,
-    attachments: { colorViewHandleIds: ['view:color'], depthStencilViewHandleId: null },
+    attachments: {
+      colorViewHandleIds: ['view:color'],
+      colorResolveViewHandleIds: [null],
+      depthStencilViewHandleId: null,
+    },
   };
   return {
     commands: [
@@ -92,6 +97,7 @@ function model(): ViewerModel {
       },
     ],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [work],
     passes: [
       {
@@ -102,6 +108,7 @@ function model(): ViewerModel {
         workIndices: [0],
         commandIndices: [0, 1],
         colorAttachmentViewHandleIds: ['view:color'],
+        colorAttachmentResolveViewHandleIds: [null],
         depthStencilViewHandleId: null,
       },
     ],

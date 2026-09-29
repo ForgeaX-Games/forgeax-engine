@@ -388,13 +388,13 @@ function stubImporter(key: string): Importer {
         expect(reg.get('gltf')).toBeUndefined();
       });
 
-      it('re-registering the same key is idempotent (last write wins, no throw)', () => {
+      it('rejects duplicate producer keys without replacing the active importer', () => {
         const reg = new ImporterRegistry();
         const first = stubImporter('gltf');
         const second = stubImporter('gltf');
         reg.register(first);
-        expect(() => reg.register(second)).not.toThrow();
-        expect(reg.get('gltf')).toBe(second);
+        expect(() => reg.register(second)).toThrow('duplicate importer gltf');
+        expect(reg.get('gltf')).toBe(first);
         expect(reg.registeredImporters().filter((k) => k === 'gltf')).toHaveLength(1);
       });
 

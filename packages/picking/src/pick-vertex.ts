@@ -15,7 +15,7 @@
 //   - { limit: N }       → VertexHit[]
 //
 // Reuses pick()'s full skeleton (camera validation / view=invert(world) / projection branch /
-// screenToRay / resolveAssetHandle / Transform.world / AABB coarse cull), then for each
+// screenToRay / resolveAssetHandle / GlobalTransform.world / AABB coarse cull), then for each
 // triangle-list submesh that passes the AABB test, iterates every triangle and collects
 // vertex candidates via rayTriangleIntersects.
 //
@@ -24,7 +24,7 @@
 //   - D-8: reuses PickError with ZERO new error codes — the sole throw remains
 //     camera-component-missing; all other miss conditions return undefined / [].
 //   - D-9: caller MUST propagateTransforms(world) before calling — the function reads
-//     Transform.world directly.
+//     GlobalTransform.world directly.
 //   - AC-08: deformed = isSkinned (attributes.skinIndex && attributes.skinWeight both
 //     defined, SSOT at asset-registry.ts:1417-1418).
 //   - R-3: behind-camera vertices (worldToScreen returns behind=true) are excluded.
@@ -39,7 +39,7 @@
 //          plan-strategy D-2/D-3/D-4/D-5/D-7/D-8/D-9 §4 R-2/R-3;
 //          research Finding 1 (reuse pick skeleton) / Finding 2 (PickError) /
 //          Finding 4 (computeAABB three-branch) / Finding 5 (builtin withoutAabb) /
-//          Finding 6 (non-indexed sequence) / Finding 8 (Transform.world) /
+//          Finding 6 (non-indexed sequence) / Finding 8 (GlobalTransform.world) /
 //          Finding 9 (behind flag) / Finding 10 (isSkinned);
 //          plan-tasks.json w5/w8 acceptanceCheck.
 
@@ -47,10 +47,10 @@ import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { mat4, ray, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import { computeScreenRay, readWorldMatrix } from './pick-core';
+import { computeScreenRay, readWorldMatrix, type ScreenRay } from './pick-core';
 
 // ── types ────────────────────────────────────────────────────────────────
 
@@ -197,24 +197,22 @@ function narrowPosition(
  */
 function collectVertexHits(
   world: World,
-  cameraEntity: EntityHandle,
+  cameraEntity: EntityHandle | undefined,
   screenX: number,
   screenY: number,
   viewportWidth: number,
   viewportHeight: number,
   entity: EntityHandle,
+  screenRayOverride?: ScreenRay,
 ): VertexHit[] {
   // ── camera validation + view/projection + screen->world ray (pick-core skeleton) ──
   // Throws PickError('camera-component-missing') when cameraEntity has no Camera;
-  // returns undefined when the camera has no resolvable Transform.world (D-9 preamble miss).
-  const screenRay = computeScreenRay(
-    world,
-    cameraEntity,
-    screenX,
-    screenY,
-    viewportWidth,
-    viewportHeight,
-  );
+  // returns undefined when the camera has no resolvable GlobalTransform.world (D-9 preamble miss).
+  const screenRay =
+    screenRayOverride ??
+    (cameraEntity === undefined
+      ? undefined
+      : computeScreenRay(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight));
   if (screenRay === undefined) {
     return [];
   }
@@ -293,12 +291,16 @@ function collectVertexHits(
     const cy = positions[i2 * 3 + 1] as number;
     const cz = positions[i2 * 3 + 2] as number;
 
-    const triResult = ray.rayTriangleIntersects(
-      r,
-      [ax, ay, az] as unknown as Vec3Like,
-      [bx, by, bz] as unknown as Vec3Like,
-      [cx, cy, cz] as unknown as Vec3Like,
-    );
+    // The screen ray is in world space. Transform the triangle into that same
+    // space before testing it; testing local positions against a world ray
+    // makes translated/rotated/non-uniform instances return false hits.
+    const worldA = vec3.create();
+    const worldB = vec3.create();
+    const worldC = vec3.create();
+    mat4.transformPoint(worldA, entityWMLike, [ax, ay, az] as unknown as Vec3Like);
+    mat4.transformPoint(worldB, entityWMLike, [bx, by, bz] as unknown as Vec3Like);
+    mat4.transformPoint(worldC, entityWMLike, [cx, cy, cz] as unknown as Vec3Like);
+    const triResult = ray.rayTriangleIntersects(r, worldA, worldB, worldC);
 
     if (!triResult.hit) return;
 
@@ -310,8 +312,7 @@ function collectVertexHits(
       if (Number.isNaN(lx) || Number.isNaN(ly) || Number.isNaN(lz)) continue;
       if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) continue;
 
-      const worldVec = vec3.create();
-      mat4.transformPoint(worldVec, entityWMLike, [lx, ly, lz] as unknown as Vec3Like);
+      const worldVec = vi === i0 ? worldA : vi === i1 ? worldB : worldC;
       const wx = worldVec[0] as number;
       const wy = worldVec[1] as number;
       const wz = worldVec[2] as number;
@@ -443,14 +444,39 @@ export function pickVertexOnEntity(
   entity: EntityHandle,
   options?: { limit: number },
 ): VertexHit | VertexHit[] | undefined {
-  const candidates = collectVertexHits(
+  return pickVertexOnEntityWithScreenRay(
     world,
-    cameraEntity,
+    computeScreenRay(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight),
     screenX,
     screenY,
     viewportWidth,
     viewportHeight,
     entity,
+    options,
+  );
+}
+
+/** Query one entity using a receipt-bound screen ray from the accepted frame. */
+export function pickVertexOnEntityWithScreenRay(
+  world: World,
+  screenRay: ScreenRay | undefined,
+  screenX: number,
+  screenY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  entity: EntityHandle,
+  options?: { limit: number },
+): VertexHit | VertexHit[] | undefined {
+  if (screenRay === undefined) return options === undefined ? undefined : [];
+  const candidates = collectVertexHits(
+    world,
+    undefined,
+    screenX,
+    screenY,
+    viewportWidth,
+    viewportHeight,
+    entity,
+    screenRay,
   );
 
   // ── sort by screenDist ascending ──
@@ -522,7 +548,7 @@ export function pickVertex(
 ): VertexHit | VertexHit[] | undefined {
   // ── camera validation + view/projection + screen->world ray (pick-core skeleton) ──
   // Throws PickError('camera-component-missing') when cameraEntity has no Camera;
-  // returns undefined when the camera has no resolvable Transform.world (degenerate miss).
+  // returns undefined when the camera has no resolvable GlobalTransform.world (degenerate miss).
   const screenRay = computeScreenRay(
     world,
     cameraEntity,
@@ -531,6 +557,47 @@ export function pickVertex(
     viewportWidth,
     viewportHeight,
   );
+  return pickVertexFromScreenRay(
+    world,
+    screenRay,
+    screenX,
+    screenY,
+    viewportWidth,
+    viewportHeight,
+    options,
+  );
+}
+
+/** Query all entities using a receipt-bound screen ray from the accepted frame. */
+export function pickVertexWithScreenRay(
+  world: World,
+  screenRay: ScreenRay | undefined,
+  screenX: number,
+  screenY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  options?: { limit: number },
+): VertexHit | VertexHit[] | undefined {
+  return pickVertexFromScreenRay(
+    world,
+    screenRay,
+    screenX,
+    screenY,
+    viewportWidth,
+    viewportHeight,
+    options,
+  );
+}
+
+function pickVertexFromScreenRay(
+  world: World,
+  screenRay: ScreenRay | undefined,
+  screenX: number,
+  screenY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  options?: { limit: number },
+): VertexHit | VertexHit[] | undefined {
   if (screenRay === undefined) {
     if (options) return [];
     return undefined;
@@ -539,7 +606,9 @@ export function pickVertex(
 
   // ── walk renderable archetypes (Transform + MeshFilter + MeshRenderer) ──
   // Reuse pick.ts archetype walk skeleton (research Finding 1).
-  const query = world.query({ read: [Transform, MeshFilter, MeshRenderer] }).unwrap();
+  const query = world
+    .query({ read: [Transform, GlobalTransform, MeshFilter, MeshRenderer] })
+    .unwrap();
 
   const allCandidates: VertexHit[] = [];
 
@@ -569,12 +638,13 @@ export function pickVertex(
     // Collect vertices for this entity
     const entityHits = collectVertexHits(
       world,
-      cameraEntity,
+      undefined,
       screenX,
       screenY,
       viewportWidth,
       viewportHeight,
       entity,
+      screenRay,
     );
     for (const h of entityHits) {
       allCandidates.push(h);

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import Ajv2020 from 'ajv/dist/2020.js';
 
 import {
+  discoverSdkTemplates,
   SDK_MANIFEST_VERSION,
   SDK_RESOURCE_ALLOWLIST,
   SDK_SOURCE_EXCLUDED_PATHS,
@@ -16,15 +19,33 @@ import {
   sdkTemplateResourceManifest,
 } from '../forgeax/sdk-lib.mjs';
 
+test('SDK template discovery fails closed on orphan and invalid descriptors', async () => {
+  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-templates-'));
+  try {
+    await mkdir(resolve(root, 'orphan'));
+    assert.throws(() => discoverSdkTemplates(root), /sdk-template-descriptor-missing/);
+    await rm(resolve(root, 'orphan'), { recursive: true, force: true });
+    await mkdir(resolve(root, 'broken'));
+    await writeFile(
+      resolve(root, 'broken', 'template.json'),
+      JSON.stringify({ id: 'broken', purpose: 'broken', defaultIdentity: {}, journeys: [] }),
+    );
+    assert.throws(() => discoverSdkTemplates(root), /sdk-template-descriptor-invalid/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('SDK source contract keeps the source root and prebuilt WASM closure explicit', () => {
-  assert.equal(SDK_MANIFEST_VERSION, '1.6.0');
+  assert.equal(SDK_MANIFEST_VERSION, '1.8.0');
   assert.equal(SDK_SOURCE_FORMAT, 'git-archive-public-snapshot');
   assert.deepEqual(SDK_SOURCE_EXCLUDED_PATHS, ['.gitmodules', 'forgeax-engine-assets']);
   assert.equal(SDK_SOURCE_ROOT, 'source/engine');
-  assert.deepEqual(SDK_TEMPLATES, [
-    { id: 'empty', sourceRoot: 'templates/game-empty', default: true },
-    { id: 'game-3d', sourceRoot: 'templates/game-3d', default: false },
-  ]);
+  assert.deepEqual(SDK_TEMPLATES, discoverSdkTemplates());
+  assert.deepEqual(
+    SDK_TEMPLATES.map(({ id }) => id),
+    ['empty', 'game-3d'],
+  );
   assert.deepEqual(
     SDK_SOURCE_WASM.map(({ package: packageName }) => packageName),
     ['@forgeax/engine-wgpu-wasm', '@forgeax/engine-fbx', '@forgeax/engine-codec'],
@@ -75,7 +96,7 @@ test('SDK templates need no contributor-only resource closure', () => {
 
 test('SDK manifest admits a pack-only template set with no copied resources', async () => {
   const schema = JSON.parse(
-    await readFile(new URL('../../sdk-manifest.schema.json', import.meta.url), 'utf8'),
+    await readFile(new URL('../../schemas/sdk-manifest.schema.json', import.meta.url), 'utf8'),
   );
   const validate = new Ajv2020({ strict: false, allErrors: true }).compile({
     ...schema.properties.templateResources,

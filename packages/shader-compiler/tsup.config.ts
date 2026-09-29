@@ -1,5 +1,5 @@
 import { defineConfig } from 'tsup';
-import { baseTsupConfig } from '../../tsup.base';
+import { baseTsupConfig } from '../../config/tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
@@ -7,5 +7,10 @@ export default defineConfig({
   entry: ['src/index.ts'],
   // top-level await + wasm-bindgen ESM loading (plan-strategy §S-5) requires esnext target.
   target: 'esnext',
-  external: ['@forgeax/engine-naga', '@forgeax/engine-types', '@webgpu/types'],
+  external: [
+    '@forgeax/engine-naga',
+    '@forgeax/engine-shader',
+    '@forgeax/engine-types',
+    '@webgpu/types',
+  ],
 });

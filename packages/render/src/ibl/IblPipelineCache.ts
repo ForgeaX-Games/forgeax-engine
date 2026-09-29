@@ -23,11 +23,11 @@
 
 // ─── RHI-owned handles ───────────────────────────────────────────────────────
 
+import { mat4 } from '@forgeax/engine-math';
 import {
   type BindGroup,
   type BindGroupLayout,
   type Buffer,
-  type CommandBuffer,
   err,
   ok,
   type RenderPipeline,
@@ -43,6 +43,14 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import type { DeviceScope } from '../device/device-scope';
+import { createIblKernelCache, type IblKernelCache } from './kernel-cache';
+
+export {
+  createIblKernelCache,
+  type IblKernelCache,
+  resetIblKernelCaches,
+} from './kernel-cache';
+
 import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from '../gpu-stage';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
@@ -85,11 +93,12 @@ export interface IblPipelineError {
  * Per-DeviceScope-generation IBL pipeline cache instance.
  *
  * M3.5 (round-2 t52): the 4 pipeline slots are mutable so createIblPipelines
- * can fill them after construction. The 4 textures + their views are also
- * cached here so runIblPrecompute targets are stable across calls
- * (idempotent).
+ * can fill them after construction. The output textures and views are
+ * promoted here only after a completed precompute submission.
  */
 export interface IblPipelineCache {
+  /** Reusable generation-scoped kernel state; per-probe outputs stay elsewhere. */
+  readonly probeKernel: IblKernelCache;
   /** Color format shared by all precompute outputs for this device. */
   outputFormat?: TextureFormat;
   /** Equirectangular-to-cubemap pipeline. */
@@ -151,6 +160,7 @@ export function getOrCreateIblCache(scope: DeviceScope): IblPipelineCache {
   if (existing !== undefined) return existing;
 
   const cache: IblPipelineCache = {
+    probeKernel: createIblKernelCache(scope.generation),
     irradianceBakeCount: 0,
     prefilterBakeCount: 0,
     brdfLutBakeCount: 0,
@@ -183,9 +193,14 @@ export interface IblComposedShaders {
   readonly prefilter: string;
   /** ibl-brdf-lut composed (fullscreen_vs + brdfLutBake_fs). */
   readonly brdfLut: string;
+  readonly probeBackground?: string;
 }
 
 let iblComposedShadersCache: IblComposedShaders | undefined;
+
+export function getIblProbeBackgroundSource(): string | undefined {
+  return iblComposedShadersCache?.probeBackground;
+}
 
 /**
  * Inject the composed ibl-* shader sources used by createIblPipelines.
@@ -252,15 +267,9 @@ function buildCaptureViewProjs(): Float32Array[] {
 }
 
 function cubemapCaptureProjection(fovy: number, near: number, far: number): Float32Array {
-  const f = 1.0 / Math.tan(fovy / 2);
-  const nf = 1.0 / (near - far);
-  // biome-ignore format: manual column-major mat4
-  return new Float32Array([
-    f, 0, 0, 0,
-    0, -f, 0, 0,
-    0, 0, (far + near) * nf, -1,
-    0, 0, 2 * far * near * nf, 0,
-  ]);
+  const projection = mat4.perspectiveReverseZ(mat4.create(), fovy, 1, near, far);
+  projection[5] = -(projection[5] ?? 0);
+  return projection;
 }
 
 function lookAtMatrix(
@@ -593,6 +602,17 @@ export interface RunIblPrecomputeOptions {
   readonly cubeVertexBuffer: Buffer;
 }
 
+interface IblPrecomputeCandidate {
+  irradianceTexture: Texture;
+  irradianceView: TextureView;
+  irradianceFaceViews: ReadonlyArray<TextureView>;
+  prefilterTexture: Texture;
+  prefilterView: TextureView;
+  prefilterFaceViewsByMip: ReadonlyArray<ReadonlyArray<TextureView>>;
+  brdfLutTexture: Texture;
+  brdfLutView: TextureView;
+}
+
 export interface IblPrecomputeError {
   readonly code: 'ibl-precompute-not-dispatched';
   readonly expected: string;
@@ -602,7 +622,9 @@ export interface IblPrecomputeError {
 
 /**
  * Execute the 4 IBL precompute passes (equirect-to-cube / irradiance /
- * prefilter / brdf-lut) in a single CommandEncoder and submit.
+ * prefilter / brdf-lut) as ordered, stage-bounded submissions. Outputs stay
+ * candidate-local until every queue completion fence and generation check
+ * pass.
  *
  * Counter invariant (AC-20, plan D-7 / N-3): the
  * `irradiance/prefilter/brdfLut BakeCount` counters are incremented
@@ -614,12 +636,19 @@ export interface IblPrecomputeError {
  * underlying device lacks queue.submit or one of the 4 pipelines was not
  * created (createIblPipelines must run first).
  */
-export function runIblPrecompute(
+export async function runIblPrecompute(
   opts: RunIblPrecomputeOptions,
-): Result<{ submitted: boolean }, IblPrecomputeError> {
+): Promise<Result<{ submitted: boolean }, IblPrecomputeError>> {
   const { device, scope } = opts;
   const cache = getOrCreateIblCache(scope);
   const outputFormat = cache.outputFormat ?? 'rgba16float';
+  const generation = scope.generation;
+  const candidate: Partial<IblPrecomputeCandidate> = {};
+  const fail = (stage: string, cause?: RhiError): Promise<Result<never, IblPrecomputeError>> => {
+    // Candidate textures are adopted by the DeviceScope immediately after
+    // allocation, so every failure is retired with the owning generation.
+    return Promise.resolve(err(badAlloc(stage, cause)));
+  };
 
   if (
     cache.equirectToCubePipeline === undefined ||
@@ -641,7 +670,7 @@ export function runIblPrecompute(
   // requires the TextureUsage::CopySrc bit on the source. Without it
   // Dawn fails-fast "usage doesn't include CopySrc".
 
-  if (cache.irradianceTexture === undefined) {
+  {
     const textureResult = device.createTexture({
       label: 'ibl-irradiance-cube',
       size: { width: IRRADIANCE_SIZE, height: IRRADIANCE_SIZE, depthOrArrayLayers: 6 },
@@ -656,15 +685,15 @@ export function runIblPrecompute(
       viewFormats: [],
       textureBindingViewDimension: undefined,
     });
-    if (!textureResult.ok) return err(badAlloc('irradiance-texture', textureResult.error));
-    cache.irradianceTexture = textureResult.value;
+    if (!textureResult.ok) return fail('irradiance-texture', textureResult.error);
+    candidate.irradianceTexture = adoptIblTexture(scope, device, textureResult.value);
     const cubeViewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-irradiance-cube-view',
       dimension: 'cube',
       arrayLayerCount: 6,
     });
-    if (!cubeViewResult.ok) return err(badAlloc('irradiance-view', cubeViewResult.error));
-    cache.irradianceView = cubeViewResult.value;
+    if (!cubeViewResult.ok) return fail('irradiance-view', cubeViewResult.error);
+    candidate.irradianceView = cubeViewResult.value;
     const faceViews: TextureView[] = [];
     for (let f = 0; f < 6; f++) {
       const viewResult = device.createTextureView(textureResult.value, {
@@ -673,13 +702,13 @@ export function runIblPrecompute(
         baseArrayLayer: f,
         arrayLayerCount: 1,
       });
-      if (!viewResult.ok) return err(badAlloc('irradiance-face-view', viewResult.error));
+      if (!viewResult.ok) return fail('irradiance-face-view', viewResult.error);
       faceViews.push(viewResult.value);
     }
-    cache.irradianceFaceViews = faceViews;
+    candidate.irradianceFaceViews = faceViews;
   }
 
-  if (cache.prefilterTexture === undefined) {
+  {
     const textureResult = device.createTexture({
       label: 'ibl-prefilter-cube',
       size: { width: PREFILTER_SIZE, height: PREFILTER_SIZE, depthOrArrayLayers: 6 },
@@ -694,8 +723,8 @@ export function runIblPrecompute(
       viewFormats: [],
       textureBindingViewDimension: undefined,
     });
-    if (!textureResult.ok) return err(badAlloc('prefilter-texture', textureResult.error));
-    cache.prefilterTexture = textureResult.value;
+    if (!textureResult.ok) return fail('prefilter-texture', textureResult.error);
+    candidate.prefilterTexture = adoptIblTexture(scope, device, textureResult.value);
     const cubeViewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-prefilter-cube-view',
       dimension: 'cube',
@@ -703,8 +732,8 @@ export function runIblPrecompute(
       baseMipLevel: 0,
       mipLevelCount: PREFILTER_MIP_LEVELS,
     });
-    if (!cubeViewResult.ok) return err(badAlloc('prefilter-view', cubeViewResult.error));
-    cache.prefilterView = cubeViewResult.value;
+    if (!cubeViewResult.ok) return fail('prefilter-view', cubeViewResult.error);
+    candidate.prefilterView = cubeViewResult.value;
     const mipViews: TextureView[][] = [];
     for (let m = 0; m < PREFILTER_MIP_LEVELS; m++) {
       const faces: TextureView[] = [];
@@ -717,15 +746,15 @@ export function runIblPrecompute(
           baseArrayLayer: f,
           arrayLayerCount: 1,
         });
-        if (!viewResult.ok) return err(badAlloc('prefilter-face-view', viewResult.error));
+        if (!viewResult.ok) return fail('prefilter-face-view', viewResult.error);
         faces.push(viewResult.value);
       }
       mipViews.push(faces);
     }
-    cache.prefilterFaceViewsByMip = mipViews;
+    candidate.prefilterFaceViewsByMip = mipViews;
   }
 
-  if (cache.brdfLutTexture === undefined) {
+  {
     const textureResult = device.createTexture({
       label: 'ibl-brdf-lut',
       size: { width: BRDF_LUT_SIZE, height: BRDF_LUT_SIZE, depthOrArrayLayers: 1 },
@@ -740,14 +769,14 @@ export function runIblPrecompute(
       viewFormats: [],
       textureBindingViewDimension: undefined,
     });
-    if (!textureResult.ok) return err(badAlloc('brdf-lut-texture', textureResult.error));
-    cache.brdfLutTexture = textureResult.value;
+    if (!textureResult.ok) return fail('brdf-lut-texture', textureResult.error);
+    candidate.brdfLutTexture = adoptIblTexture(scope, device, textureResult.value);
     const viewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-brdf-lut-view',
       dimension: '2d',
     });
-    if (!viewResult.ok) return err(badAlloc('brdf-lut-view', viewResult.error));
-    cache.brdfLutView = viewResult.value;
+    if (!viewResult.ok) return fail('brdf-lut-view', viewResult.error);
+    candidate.brdfLutView = viewResult.value;
   }
 
   // Shared sampler (filtering, linear-linear).
@@ -762,12 +791,35 @@ export function runIblPrecompute(
     addressModeV: 'clamp-to-edge',
     addressModeW: 'clamp-to-edge',
   });
-  if (!samplerResult.ok) return err(badAlloc('sampler', samplerResult.error));
+  if (!samplerResult.ok) return fail('sampler', samplerResult.error);
   const sampler: Sampler = samplerResult.value;
 
-  const encoderResult = device.createCommandEncoder({ label: 'ibl-precompute-encoder' });
-  if (!encoderResult.ok) return err(badAlloc('encoder', encoderResult.error));
-  const encoder: RhiCommandEncoder = encoderResult.value;
+  let encoderResult = device.createCommandEncoder({
+    label: 'ibl-precompute-encoder-equirect-to-cube',
+  });
+  if (!encoderResult.ok) return fail('encoder-equirect-to-cube', encoderResult.error);
+  let encoder: RhiCommandEncoder = encoderResult.value;
+
+  const submitStage = async (stage: string, createNextEncoder: boolean) => {
+    const finishRes = encoder.finish();
+    if (!finishRes.ok) return err(badAlloc(`${stage}-finish`, finishRes.error));
+    const submitRes = device.queue.submit([finishRes.value]);
+    if (!submitRes.ok) return err(badAlloc(`${stage}-submit`, submitRes.error));
+    try {
+      await device.queue.onSubmittedWorkDone();
+    } catch {
+      return err(badAlloc(`${stage}-fence`));
+    }
+    if (!scope.isAlive() || scope.generation !== generation) {
+      return err(badAlloc(`${stage}-device-scope-generation`));
+    }
+    if (createNextEncoder) {
+      encoderResult = device.createCommandEncoder({ label: `ibl-precompute-encoder-${stage}` });
+      if (!encoderResult.ok) return err(badAlloc(`${stage}-next-encoder`, encoderResult.error));
+      encoder = encoderResult.value;
+    }
+    return ok(true);
+  };
 
   const faceUniformsBgl = cache.faceUniformsBgl;
   const equirectGroup1Bgl = cache.equirectGroup1Bgl;
@@ -777,9 +829,14 @@ export function runIblPrecompute(
   const irradiancePipeline = cache.irradiancePipeline;
   const prefilterPipeline = cache.prefilterPipeline;
   const brdfLutPipeline = cache.brdfLutPipeline;
-  const irrFaceViews = cache.irradianceFaceViews;
-  const prefMipViews = cache.prefilterFaceViewsByMip;
-  const brdfLutView = cache.brdfLutView;
+  const candidateIrradianceTexture = candidate.irradianceTexture;
+  const candidateIrradianceView = candidate.irradianceView;
+  const irrFaceViews = candidate.irradianceFaceViews;
+  const candidatePrefilterTexture = candidate.prefilterTexture;
+  const candidatePrefilterView = candidate.prefilterView;
+  const prefMipViews = candidate.prefilterFaceViewsByMip;
+  const candidateBrdfLutTexture = candidate.brdfLutTexture;
+  const brdfLutView = candidate.brdfLutView;
   if (
     faceUniformsBgl === undefined ||
     equirectGroup1Bgl === undefined ||
@@ -789,11 +846,16 @@ export function runIblPrecompute(
     irradiancePipeline === undefined ||
     prefilterPipeline === undefined ||
     brdfLutPipeline === undefined ||
+    candidateIrradianceTexture === undefined ||
+    candidateIrradianceView === undefined ||
     irrFaceViews === undefined ||
+    candidatePrefilterTexture === undefined ||
+    candidatePrefilterView === undefined ||
     prefMipViews === undefined ||
+    candidateBrdfLutTexture === undefined ||
     brdfLutView === undefined
   ) {
-    return err(badAlloc('ibl-cache-resources'));
+    return fail('ibl-cache-resources');
   }
 
   // Bind group: equirect group(1).
@@ -805,7 +867,7 @@ export function runIblPrecompute(
       { binding: 1, resource: { kind: 'sampler', value: sampler } },
     ],
   });
-  if (!equirectBgResult.ok) return err(badAlloc('equirect-bg', equirectBgResult.error));
+  if (!equirectBgResult.ok) return fail('equirect-bg', equirectBgResult.error);
   const equirectBg: BindGroup = equirectBgResult.value;
 
   // Bind group: cube group(1) for irradiance + prefilter.
@@ -817,14 +879,14 @@ export function runIblPrecompute(
       { binding: 1, resource: { kind: 'sampler', value: sampler } },
     ],
   });
-  if (!cubeBgResult.ok) return err(badAlloc('cube-bg', cubeBgResult.error));
+  if (!cubeBgResult.ok) return fail('cube-bg', cubeBgResult.error);
   const cubeBg: BindGroup = cubeBgResult.value;
 
   // (a) equirect-to-cube: 6 face draws.
   const cubeFaceViews = opts.cubeFaceViews;
   for (let face = 0; face < 6; face++) {
     const cubeFaceView = cubeFaceViews[face];
-    if (cubeFaceView === undefined) return err(badAlloc('cube-face-view'));
+    if (cubeFaceView === undefined) return fail('cube-face-view');
     const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
       label: 'ibl-equirect-to-cube',
       colorAttachments: [
@@ -854,7 +916,7 @@ export function runIblPrecompute(
         },
       ],
     });
-    if (!faceBgResult.ok) return err(badAlloc('face-bg', faceBgResult.error));
+    if (!faceBgResult.ok) return fail('face-bg', faceBgResult.error);
     pass.setPipeline(equirectPipeline);
     pass.setBindGroup(0, faceBgResult.value);
     pass.setBindGroup(1, equirectBg);
@@ -863,10 +925,13 @@ export function runIblPrecompute(
     pass.end();
   }
 
+  const cubeStage = await submitStage('equirect-to-cube', true);
+  if (!cubeStage.ok) return err(cubeStage.error);
+
   // (b) irradiance convolve: 6 face draws.
   for (let face = 0; face < 6; face++) {
     const irrFaceView = irrFaceViews[face];
-    if (irrFaceView === undefined) return err(badAlloc('irradiance-face-view'));
+    if (irrFaceView === undefined) return fail('irradiance-face-view');
     const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
       label: 'ibl-irradiance',
       colorAttachments: [
@@ -895,23 +960,26 @@ export function runIblPrecompute(
         },
       ],
     });
-    if (!faceBgResult.ok) return err(badAlloc('irr-face-bg', faceBgResult.error));
+    if (!faceBgResult.ok) return fail('irr-face-bg', faceBgResult.error);
     pass.setPipeline(irradiancePipeline);
     pass.setBindGroup(0, faceBgResult.value);
     pass.setBindGroup(1, cubeBg);
     pass.setVertexBuffer(0, opts.cubeVertexBuffer);
     pass.draw(6, 1, face * 6, 0);
     pass.end();
+
+    const irradianceFaceStage = await submitStage(`irradiance-face-${face}`, true);
+    if (!irradianceFaceStage.ok) return err(irradianceFaceStage.error);
   }
 
   // (c) prefilter env: 5 mips x 6 faces = 30 sub-passes.
   for (let mip = 0; mip < PREFILTER_MIP_LEVELS; mip++) {
     const mipFaceViews = prefMipViews[mip];
-    if (mipFaceViews === undefined) return err(badAlloc('prefilter-mip-views'));
+    if (mipFaceViews === undefined) return fail('prefilter-mip-views');
     for (let face = 0; face < 6; face++) {
       const subIdx = mip * 6 + face;
       const mipFaceView = mipFaceViews[face];
-      if (mipFaceView === undefined) return err(badAlloc('prefilter-face-view'));
+      if (mipFaceView === undefined) return fail('prefilter-face-view');
       const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
         label: 'ibl-prefilter',
         colorAttachments: [
@@ -951,13 +1019,17 @@ export function runIblPrecompute(
           },
         ],
       });
-      if (!bgResult.ok) return err(badAlloc('pref-bg', bgResult.error));
+      if (!bgResult.ok) return fail('pref-bg', bgResult.error);
       pass.setPipeline(prefilterPipeline);
       pass.setBindGroup(0, bgResult.value);
       pass.setBindGroup(1, cubeBg);
       pass.setVertexBuffer(0, opts.cubeVertexBuffer);
       pass.draw(6, 1, face * 6, 0);
       pass.end();
+
+      // Bound software-GPU work just as for irradiance; preserve every sample.
+      const faceStage = await submitStage(`prefilter-mip-${mip}-face-${face}`, true);
+      if (!faceStage.ok) return err(faceStage.error);
     }
   }
 
@@ -979,13 +1051,30 @@ export function runIblPrecompute(
     pass.end();
   }
 
-  // Finish + submit. Counter increments are STRICTLY after submit; if
-  // submit throws or fails, counters stay at 0 (AC-20 critical invariant).
-  const finishRes = encoder.finish();
-  if (!finishRes.ok) return err(badAlloc('finish', finishRes.error));
-  const cmdBuffer: CommandBuffer = finishRes.value;
-  const submitRes = device.queue.submit([cmdBuffer]);
-  if (!submitRes.ok) return err(badAlloc('queue.submit', submitRes.error));
+  // The final stage is fenced before the candidate is promoted.
+  const brdfStage = await submitStage('brdf-lut', false);
+  if (!brdfStage.ok) return err(brdfStage.error);
+
+  const promoted: IblPrecomputeCandidate = {
+    irradianceTexture: candidateIrradianceTexture,
+    irradianceView: candidateIrradianceView,
+    irradianceFaceViews: irrFaceViews,
+    prefilterTexture: candidatePrefilterTexture,
+    prefilterView: candidatePrefilterView,
+    prefilterFaceViewsByMip: prefMipViews,
+    brdfLutTexture: candidateBrdfLutTexture,
+    brdfLutView,
+  };
+  // Previous outputs remain DeviceScope-owned until scope retirement. This
+  // avoids destroying a texture still referenced by an already-recorded pass.
+  cache.irradianceTexture = promoted.irradianceTexture;
+  cache.irradianceView = promoted.irradianceView;
+  cache.irradianceFaceViews = promoted.irradianceFaceViews;
+  cache.prefilterTexture = promoted.prefilterTexture;
+  cache.prefilterView = promoted.prefilterView;
+  cache.prefilterFaceViewsByMip = promoted.prefilterFaceViewsByMip;
+  cache.brdfLutTexture = promoted.brdfLutTexture;
+  cache.brdfLutView = promoted.brdfLutView;
 
   // POST-SUBMIT counter increments (AC-20).
   cache.irradianceBakeCount += 1;
@@ -993,6 +1082,13 @@ export function runIblPrecompute(
   cache.brdfLutBakeCount += 1;
 
   return ok({ submitted: true });
+}
+
+function adoptIblTexture(scope: DeviceScope, device: IblRhiOwner, texture: Texture): Texture {
+  scope._adopt('texture', texture, (value) => {
+    device.destroyTexture(value);
+  });
+  return texture;
 }
 
 // Local helper -- structured error payload shared across allocation paths.

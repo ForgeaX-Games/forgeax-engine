@@ -9,9 +9,11 @@ LearnOpenGL is the most-cited graphics tutorial on the web; its chapter ordering
 
 Each `apps/learn-render/N.<chapter>/M.<topic>/` is the forgeax counterpart of LO `src/N.<chapter>/M.<topic>/`. The demos exist for three audiences:
 
+For the completed HDR Bloom carrier, start with [5.7 Bloom](5.advanced-lighting/7.bloom/README.md); its README names the contributor asset prerequisite and the self-contained public `hello-bloom` fallback.
+
 1. **AI users** reading the codebase to learn forgeax's preferred shape for camera / lighting / material / asset usage — by example
 2. **Engine designers** who can run a demo, screenshot it, and check it matches the LO hero image (visual SSOT)
-3. **CI** — each demo (when ready) ships a 60-300 frame `dawn-node` smoke that proves the render path didn't break
+3. **CI** — each demo (when ready) ships a 60-60 frame `dawn-node` smoke that proves the render path didn't break
 
 ## Translation rules
 

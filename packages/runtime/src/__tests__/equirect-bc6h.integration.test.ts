@@ -145,12 +145,14 @@ describe.skipIf(!hasGpu)('equirect renderable-source integration (feat-20260707 
     // POD mirrors that 2D surface.
     const source = {
       kind: 'texture' as const,
-      width: asset.width,
-      height: asset.height,
+      shape: { viewDimension: '2d' as const, extent: { width: asset.width, height: asset.height } },
       format: asset.format,
-      data: asset.data,
+      data:
+        asset.data instanceof Uint8ClampedArray
+          ? new Uint8Array(asset.data.buffer, asset.data.byteOffset, asset.data.byteLength)
+          : asset.data,
       colorSpace: asset.colorSpace,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     };
     const res = deriveRenderDataCubemap(source);
     expect(res.ok).toBe(true);

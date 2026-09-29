@@ -4,7 +4,8 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -21,10 +22,53 @@ const PAIR_LINEAGE = 'learn-render-msaa-browser-pair';
 const WORKLOAD = 'learn-render-4.10-anti-aliasing-msaa';
 const LOGICAL_FRAME = 'frame-1';
 const CAPTURE_ENVIRONMENT = 'browser-webgpu';
-const DEV_SERVER_URL = 'http://localhost:5183/';
+const MAX_VITE_READINESS_TIMEOUT_MS = 180_000;
+const VITE_READINESS_TIMEOUT_MS = Math.min(
+  Math.max(Number.parseInt(process.env.FORGEAX_MSAA_VITE_READINESS_TIMEOUT_MS ?? '90000', 10) || 90_000, 1),
+  MAX_VITE_READINESS_TIMEOUT_MS,
+);
 const browserHeadless = !['0', 'false'].includes(
   (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
 );
+
+async function findFreePort() {
+  return await new Promise((resolvePort, reject) => {
+    const portServer = createServer();
+    portServer.once('error', reject);
+    portServer.listen(0, '127.0.0.1', () => {
+      const address = portServer.address();
+      const port = typeof address === 'object' && address !== null ? address.port : undefined;
+      portServer.close((error) => {
+        if (error) {
+          reject(error);
+        } else if (port === undefined) {
+          reject(new Error('could not resolve an ephemeral Vite port'));
+        } else {
+          resolvePort(String(port));
+        }
+      });
+    });
+  });
+}
+
+async function stopViteServer(server) {
+  if (server.pid === undefined || server.exitCode !== null || server.signalCode !== null) return;
+  const exited = new Promise((resolveExit) => server.once('exit', resolveExit));
+  const signal = (name) => {
+    try {
+      if (process.platform === 'win32') server.kill(name);
+      else process.kill(-server.pid, name);
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+  };
+  signal('SIGTERM');
+  if (await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)])) return;
+  signal('SIGKILL');
+  if (!(await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]))) {
+    throw new Error('vite process-group cleanup incomplete after SIGKILL');
+  }
+}
 
 function tapeFacts(tape, runId) {
   const bootstrapCreates = tape.bootstrap.map((resource) => resource.create);
@@ -67,6 +111,14 @@ function assertPairManifest(manifest, off, on) {
     throw new Error('paired manifest is missing explicit baseline and comparison artifacts');
   }
   const { baseline, comparison } = manifest;
+  for (const [side, artifact] of [['baseline', baseline], ['comparison', comparison]]) {
+    if (typeof artifact.tapePath !== 'string' || !existsSync(artifact.tapePath)) {
+      throw new Error(`paired manifest ${side} is missing its materialized capture tape`);
+    }
+    if (typeof artifact.tapeDigest !== 'string' || artifact.tapeDigest.length === 0) {
+      throw new Error(`paired manifest ${side} is missing its capture tape digest`);
+    }
+  }
   if (baseline.artifactId === comparison.artifactId) {
     throw new Error('paired manifest must use distinct baseline and comparison artifact IDs');
   }
@@ -105,8 +157,13 @@ function assertPairManifest(manifest, off, on) {
     ['baseline', baseline],
     ['comparison', comparison],
   ]) {
-    if (!artifact.tape || !Array.isArray(artifact.tape.events) || artifact.tape.events.length === 0) {
-      throw new Error(`paired manifest ${side} is missing its materialized capture tape`);
+    if (
+      typeof artifact.tapePath !== 'string' ||
+      !existsSync(artifact.tapePath) ||
+      !Number.isSafeInteger(artifact.tapeFacts?.eventCount) ||
+      artifact.tapeFacts.eventCount === 0
+    ) {
+      throw new Error(`paired manifest ${side} is missing its bounded tape evidence`);
     }
   }
 }
@@ -373,7 +430,9 @@ function captureArtifact(captureResult, msaa, logicalFrame = LOGICAL_FRAME) {
     captureEnvironment: CAPTURE_ENVIRONMENT,
     evidenceScope: 'final-color-rgb8',
     outputShape: captureResult.outputShape,
-    tape: captureResult.tape,
+    tapePath: captureResult.artifactPath,
+    tapeDigest: captureResult.artifactDigest,
+    tapeFacts: captureResult.facts,
   };
 }
 
@@ -413,7 +472,15 @@ function writeManifest(name, manifest) {
 }
 
 mkdirSync(artifactDir, { recursive: true });
-const server = spawn(process.execPath, [resolve(appDir, 'node_modules/vite/bin/vite.js')], {
+const vitePort = await findFreePort();
+const devServerUrl = `http://127.0.0.1:${vitePort}/`;
+const server = spawn(process.execPath, [
+  resolve(appDir, 'node_modules/vite/bin/vite.js'),
+  '--host',
+  '127.0.0.1',
+  '--port',
+  vitePort,
+], {
   cwd: appDir,
   env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },
   detached: true,
@@ -421,25 +488,33 @@ const server = spawn(process.execPath, [resolve(appDir, 'node_modules/vite/bin/v
 });
 let url;
 let serverOutput = '';
-server.stdout.on('data', (chunk) => {
+let serverSpawnError;
+let serverExit;
+const observeServerOutput = (stream, chunk) => {
   const text = chunk.toString();
   serverOutput = `${serverOutput}${text}`.slice(-8192);
-  process.stdout.write(`[vite] ${text}`);
-  const match = serverOutput.match(/Local:\s+(http:\/\/[^\s]+)/);
+  process[stream === 'stdout' ? 'stdout' : 'stderr'].write(`[vite${stream === 'stderr' ? '-err' : ''}] ${text}`);
+  const plain = serverOutput.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+  const match = plain.match(/Local:\s+(http:\/\/[^\s]+)/);
   if (match) url = match[1];
-});
-server.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
+};
+server.stdout.on('data', (chunk) => observeServerOutput('stdout', chunk));
+server.stderr.on('data', (chunk) => observeServerOutput('stderr', chunk));
+server.once('error', (error) => { serverSpawnError = error; });
+server.once('exit', (code, signal) => { serverExit = { code, signal }; });
 
 const consoleErrors = [];
 const notFound = [];
 let browser;
 try {
-  const deadline = Date.now() + 30_000;
+  const readinessStartedAt = Date.now();
   let ready = false;
-  while (!ready && Date.now() < deadline) {
-    const candidate = url ?? DEV_SERVER_URL;
+  let lastStatus;
+  while (!ready && serverSpawnError === undefined && serverExit === undefined && Date.now() - readinessStartedAt < VITE_READINESS_TIMEOUT_MS) {
+    const candidate = url ?? devServerUrl;
     try {
       const response = await fetch(candidate, { signal: AbortSignal.timeout(500) });
+      lastStatus = response.status;
       if (response.status < 500) {
         url = candidate;
         ready = true;
@@ -449,7 +524,16 @@ try {
     }
     if (!ready) await sleep(200);
   }
-  if (!ready || !url) throw new Error('vite did not become ready in 30s');
+  if (!ready || !url) {
+    throw new Error(`vite did not become ready within ${VITE_READINESS_TIMEOUT_MS}ms: ${JSON.stringify({
+      elapsedMs: Date.now() - readinessStartedAt,
+      pid: server.pid ?? null,
+      lastStatus: lastStatus ?? null,
+      spawnError: serverSpawnError === undefined ? null : String(serverSpawnError),
+      exit: serverExit ?? null,
+      output: serverOutput.trim() || 'none',
+    })}`);
+  }
 
   const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome';
   const chromeArgs = [
@@ -461,7 +545,7 @@ try {
   if (chromeChannel === 'chrome-beta') {
     chromeArgs.push(
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--disable-gpu-driver-bug-workarounds',
       '--disable-dawn-features=disallow_unsafe_apis',
     );
@@ -562,7 +646,9 @@ try {
     comparison: {
       ...pairManifest.comparison,
       finalColorRgb8: [...pairManifest.baseline.finalColorRgb8],
-      tape: pairManifest.baseline.tape,
+      tapePath: pairManifest.baseline.tapePath,
+      tapeDigest: pairManifest.baseline.tapeDigest,
+      tapeFacts: pairManifest.baseline.tapeFacts,
     },
   };
   const equalPixelsManifestPath = writeManifest(
@@ -661,11 +747,5 @@ try {
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await browser?.close();
-  if (server.pid !== undefined) {
-    try {
-      process.kill(-server.pid, 'SIGTERM');
-    } catch {
-      server.kill('SIGTERM');
-    }
-  }
+  await stopViteServer(server);
 }

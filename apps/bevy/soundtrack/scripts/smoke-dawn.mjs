@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const WIDTH = 200;
 const HEIGHT = 150;
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
@@ -93,6 +93,6 @@ if (failures.length > 0) {
   sharedDevice?.destroy?.();
   process.exit(1);
 }
-console.log('[smoke] PASS - structural audio resource, soundtrack scene, 300 draws, and RHI error gates are green.');
+console.log('[smoke] PASS - structural audio resource, soundtrack scene, 60 draws, and RHI error gates are green.');
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

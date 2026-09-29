@@ -10,7 +10,7 @@ import * as SceneOwner from '@forgeax/engine-scene';
 //     AND the state map population);
 //   - AC-20 setSceneOverride writes the override + readback equals value;
 //     removeSceneOverride rolls back to the source SceneAsset value.
-//   - detach/reattach mark the localId in state.detachedLocalIds; member
+//   - detach/reattach mark the runtime slot in state.detachedLocalIds; member
 //     entity remains alive.
 //   - setSceneOverride type mismatch -> Err 'scene-override-type-mismatch'
 //     with detail.{ comp, field, expectedType, actualType }.
@@ -33,24 +33,25 @@ describe('AC-19 mount-time override apply (w20)', () => {
     const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [1, 0, 0] } } } },
     };
     const childHandle = registerSceneAsset(world, child);
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: 0,
-          memberFirst: 1 as never,
-          memberCount: 1,
-          overrides: [{ localId: 1 as never, comp: 'Transform', field: 'pos', value: [42, 0, 0] }],
+      entities: {
+        instance: {
+          components: {},
+          instance: {
+            source: 'child',
+            overrides: [{ target: ['entity-0'], components: { Transform: { pos: [42, 0, 0] } } }],
+          },
         },
-      ],
+      },
     };
     const parentHandle = registerSceneAsset(world, parent);
-    SceneOwner.worldSetSceneAssetResolver(world, () => ok(childHandle));
+    SceneOwner.worldSetSceneAssetResolver(world, (source) =>
+      source === 'child' ? ok(childHandle) : ok(childHandle),
+    );
     const r = SceneOwner.worldInstantiateScene(world, parentHandle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
@@ -79,7 +80,7 @@ describe('world.setSceneOverride (w20)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [1, 0, 0] } } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -112,7 +113,7 @@ describe('world.setSceneOverride (w20)', () => {
     registerSceneComponents(world, [Hp]);
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { SceneOverrideHp: {} } }],
+      entities: { 'entity-0': { components: { SceneOverrideHp: {} } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -141,7 +142,7 @@ describe('world.removeSceneOverride (w20)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [5, 0, 0] } } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);
@@ -176,7 +177,7 @@ describe('world.detachSceneMember + reattachSceneMember (w20)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     const handle = registerSceneAsset(world, asset);
     const r = SceneOwner.worldInstantiateScene(world, handle);

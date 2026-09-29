@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import type { Mat4, Vec3 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { ChildOf, GlobalTransform, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import { describe, expect, it } from 'vitest';
 
@@ -125,13 +125,13 @@ describe('skin parented double transform (AC-01)', () => {
     const r = propagateTransforms(world);
     expect(r.ok).toBe(true);
 
-    // Read Transform.world for skin entity and joint entity.
-    const st = world.get(skinEntity, Transform);
+    // Read derived GlobalTransform.world for skin entity and joint entity.
+    const st = world.get(skinEntity, GlobalTransform);
     expect(st.ok).toBe(true);
     if (!st.ok) return;
     const meshWorldMat = mat4FromFloat32Array(st.value.world as unknown as Float32Array);
 
-    const jt = world.get(jointEntity, Transform);
+    const jt = world.get(jointEntity, GlobalTransform);
     expect(jt.ok).toBe(true);
     if (!jt.ok) return;
     const jointWorldMat = mat4FromFloat32Array(jt.value.world as unknown as Float32Array);
@@ -202,7 +202,7 @@ describe('skin parented double transform (AC-01)', () => {
     const r = propagateTransforms(world);
     expect(r.ok).toBe(true);
 
-    const jt = world.get(jointEntity, Transform);
+    const jt = world.get(jointEntity, GlobalTransform);
     expect(jt.ok).toBe(true);
     if (!jt.ok) return;
     const jointWorldMat = mat4FromFloat32Array(jt.value.world as unknown as Float32Array);

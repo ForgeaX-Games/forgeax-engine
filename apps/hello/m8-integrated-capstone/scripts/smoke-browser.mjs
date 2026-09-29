@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 import { PNG } from 'pngjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -150,15 +151,17 @@ try {
   const url = await waitForUrl();
   browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist', '--autoplay-policy=user-gesture-required'],
+    channel: browserLaunch.channel,
+    args: [...browserLaunch.args.filter(arg => !arg.startsWith('--autoplay-policy=')), ...(process.env.CI ? ['--use-angle=swiftshader'] : []), '--autoplay-policy=user-gesture-required'],
   });
   page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
   const pageErrors = [];
   const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error' && !message.text().includes('404')) consoleErrors.push(message.text()); });
-  await page.goto(`${url}/?m8-probe=1`, { waitUntil: 'networkidle', timeout: 30_000 });
+  // The live bridge need not become network-idle. Verify content and gameplay
+  // readiness explicitly below before mutating or capturing the scene.
+  await page.goto(`${url}/?m8-probe=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForFunction(() => document.querySelector('#status')?.textContent?.includes('content=ready'), undefined, { timeout: 30_000 });
   await page.waitForFunction(() => document.querySelector('#status')?.textContent?.includes('phase=playing'), undefined, { timeout: 30_000 });
   await page.waitForTimeout(500);
@@ -193,31 +196,31 @@ try {
 
   const captured = await captureArtifact('before-fault');
   const rhiSummary = runRhiCli(
-    ['run', 'rhi.summary', '--artifact', captured.path, '--digest', captured.digest],
+    ['debug', 'rhi', 'summary', '--artifact', captured.path, '--digest', captured.digest],
     'M8 RHI summary',
   );
-  if (!Array.isArray(rhiSummary.model?.works) || rhiSummary.model.works.length < 1 || !Array.isArray(rhiSummary.model.commands) || rhiSummary.model.commands.length < 1) {
-    throw new Error(`M8 RHI summary lacks draw/command evidence: ${JSON.stringify(rhiSummary.meta)}`);
+  if (!Array.isArray(rhiSummary.summary?.works) || rhiSummary.summary.works.length < 1 || !Number.isInteger(rhiSummary.summary.commandCount) || rhiSummary.summary.commandCount < 1) {
+    throw new Error(`M8 RHI summary lacks draw/command evidence: ${JSON.stringify(rhiSummary)}`);
   }
   writeFileSync(resolve(artifactDir, 'rhi-summary.json'), `${JSON.stringify(rhiSummary, null, 2)}\n`);
-  const colorWorkIndex = rhiSummary.model.works.findIndex((work) => work.kind.startsWith('draw'));
+  const colorWorkIndex = rhiSummary.summary.works.findIndex((work) => work.kind.startsWith('draw'));
   if (colorWorkIndex < 0) throw new Error('M8 RHI summary has no draw work');
   const rhiInspect = runRhiCli(
-    ['run', 'rhi.inspect', '--artifact', captured.path, '--digest', captured.digest, '--work-index', String(colorWorkIndex)],
+    ['debug', 'rhi', 'inspect', '--artifact', captured.path, '--digest', captured.digest, '--work-index', String(colorWorkIndex)],
     'M8 RHI inspect',
   );
   if (rhiInspect.inspection?.workIndex !== colorWorkIndex || rhiInspect.inspection?.eventIndex === undefined) {
     throw new Error(`M8 RHI inspect lacks work evidence: ${JSON.stringify(rhiInspect)}`);
   }
   writeFileSync(resolve(artifactDir, 'rhi-inspect.json'), `${JSON.stringify(rhiInspect, null, 2)}\n`);
-  console.log(`[m8-capstone] RHI capture/inspect: PASS works=${rhiSummary.model.works.length} commands=${rhiSummary.model.commands.length} workIndex=${rhiInspect.inspection.workIndex}`);
+  console.log(`[m8-capstone] RHI capture/inspect: PASS works=${rhiSummary.summary.works.length} commands=${rhiSummary.summary.commandCount} workIndex=${rhiInspect.inspection.workIndex}`);
   const fault = liveEval('globalThis.__forgeaxM8.injectFault()');
   if (fault.ok !== false || typeof fault.code !== 'string') throw new Error(`M8 fault oracle failed: ${JSON.stringify(fault)}`);
   const recovery = liveEval('globalThis.__forgeaxM8.recover()');
   if (recovery.ok !== true || recovery.entityCount !== baseline.entityCount) throw new Error(`M8 recovery call failed: ${JSON.stringify(recovery)}`);
   await page.waitForFunction(() => document.querySelector('#status')?.textContent?.includes('phase=recovered'), undefined, { timeout: 15_000 });
   const rendererHealth = liveEval('globalThis.__forgeaxM8.health()');
-  if (rendererHealth?.reason !== 'alive') throw new Error(`M8 post-recovery renderer health failed: ${JSON.stringify(rendererHealth)}`);
+  if (rendererHealth !== 'alive') throw new Error(`M8 post-recovery renderer health failed: ${JSON.stringify(rendererHealth)}`);
   const afterPath = resolve(artifactDir, 'after-recovery.png');
   await page.screenshot({ path: afterPath });
   const after = liveEval('globalThis.__forgeaxM8.snapshot()');
@@ -228,7 +231,7 @@ try {
   if (consoleErrors.length > 0) throw new Error(`M8 console errors: ${consoleErrors.join(' | ')}`);
   console.log(`[m8-capstone] remote-live mutation: PASS pick=${picked.hit} render=${switched.renderMode} fixed=${mutated.fixedTicks}`);
   console.log(`[m8-capstone] structured fault/recovery: PASS code=${fault.code} phase=${after.phase} entities=${after.entityCount}`);
-  const summary = { health, reimport: { originalTitle: originalContent.title, mutatedTitle: mutatedContent.title, markers: baseline.content.markers }, baseline, audio, picked, switched, mutated, capture: captured, rhi: { works: rhiSummary.model.works.length, commands: rhiSummary.model.commands.length, workIndex: rhiInspect.inspection.workIndex }, fault, recovery, after, beforeVisual, afterVisual, pageErrors, consoleErrors };
+  const summary = { health, reimport: { originalTitle: originalContent.title, mutatedTitle: mutatedContent.title, markers: baseline.content.markers }, baseline, audio, picked, switched, mutated, capture: captured, rhi: { works: rhiSummary.summary.works.length, commands: rhiSummary.summary.commandCount, workIndex: rhiInspect.inspection.workIndex }, fault, recovery, after, beforeVisual, afterVisual, pageErrors, consoleErrors };
   writeFileSync(resolve(artifactDir, 'browser-summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`[m8-capstone] browser long-lived journey: PASS phase=${after.phase} entities=${after.entityCount} fixed=${after.fixedTicks} pick=${after.pickCount} fault=${fault.code} beforeNonBlack=${beforeVisual.nonBlack} afterNonBlack=${afterVisual.nonBlack}`);
 } catch (error) {

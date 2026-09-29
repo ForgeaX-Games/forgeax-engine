@@ -31,7 +31,7 @@ It saves before/after PNG evidence under `apps/hello/audio/.forgeax-audio/browse
 | **One-shot takeoff** | `createApp(canvas, { plugins: [audioPlugin(), physicsPlugin('rapier-3d')] })` -- both capabilities are assembled through the app plugin seam. |
 | **Declarative ECS audio** | `AudioSource({ clip, playing })` drives `audioTickSystem` edge detection -- no imperative `backend.play()` bypass (AC-07). |
 | **Pack-index asset loading** | SFX GUID flows through `assets.loadByGuid<AudioClipAsset>`; the injected audio loader resolves the Vite catalog row and decodes it before the demo mints an `AudioSource.clip` shared ref. |
-| **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `Transform.world` mat4. |
+| **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `GlobalTransform.world` mat4. |
 | **Collision cleanup** | A dynamic ECS actor reads `CollidingEntities`, starts its own spatial `AudioSource` on contact, then `world.despawn()` removes the Collider and audio source; the browser gate verifies `activeSourceCount` returns to zero. |
 | **Overlay readout** | Left/top overlay shows listener-emitter distance + L/R pan as text (charter F2: text anchors spatial audio verification). |
 
@@ -48,6 +48,7 @@ It saves before/after PNG evidence under `apps/hello/audio/.forgeax-audio/browse
 ```ts
 import { audioPlugin } from '@forgeax/engine-audio';
 import { physicsPlugin } from '@forgeax/engine-physics';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 
 // 1. One-shot takeoff -- audioPlugin() auto-attaches the WebAudioBackend;
 //    input is in the canvas-form default plugin set.
@@ -76,9 +77,9 @@ const camera = world.spawn(
 ).unwrap();
 
 // 5. Per-frame: listener sync via engine.listener getter (D-2). createApp
-//    auto-wires propagateTransforms, so Transform.world is fresh each frame.
+//    auto-wires propagateTransforms, so GlobalTransform.world is fresh each frame.
 app.registerUpdate(() => {
-  const worldMatrix = world.get(camera, Transform).unwrap().world;
+  const worldMatrix = world.get(camera, GlobalTransform).unwrap().world;
   const engine = world.getResource('AudioEngine');
   if (engine instanceof WebAudioEngine) {
     const l = engine.listener; // getter triggers lazy ensureContext()
@@ -92,7 +93,7 @@ app.registerUpdate(() => {
 ### headless has no AudioContext
 
 dawn-node (used by smoke and CI) has no Web Audio API, so audio playback is
-impossible in headless. The smoke gate is structural-only (boot + 300 frames
+impossible in headless. The smoke gate is structural-only (boot + 60 frames
 + no errors). Browser-based `pnpm dev` is required to hear the SFX and
 experience spatial panning.
 

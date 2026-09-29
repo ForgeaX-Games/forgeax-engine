@@ -1,16 +1,149 @@
-import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile, spawnSync } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, describe, expect, it } from 'vitest';
-
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sdkLauncherSource } from '../sdk-launcher.mjs';
 import {
   assertNoRetiredPackageFiles,
+  mapConcurrent,
+  normalizeLicenseReport,
   normalizePackageArchive,
   normalizePnpmStore,
+  prepareWasmPackageForPack,
+  waitForNpmPublications,
+  writePackageArchive,
 } from '../sdk-lib.mjs';
+import { sdkStage } from '../sdk-stage.mjs';
+
+it('SDK stage failures retain the child exit code and captured diagnostic', async () => {
+  const messages = [];
+  const output = vi.spyOn(console, 'error').mockImplementation((message) => messages.push(message));
+  try {
+    await expect(
+      sdkStage('fixture compile', () =>
+        promisify(execFile)(process.execPath, [
+          '-e',
+          "process.stderr.write('missing fixture input'); process.exit(7)",
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: 7 });
+    expect(messages.join('\n')).toContain('[sdk] failed fixture compile');
+    expect(messages.join('\n')).toContain('code=7 signal=none');
+    expect(messages.join('\n')).toContain('missing fixture input');
+  } finally {
+    output.mockRestore();
+  }
+});
+
+it('mapConcurrent bounds work while preserving input order', async () => {
+  let active = 0;
+  let highWater = 0;
+  const values = await mapConcurrent(
+    [1, 2, 3, 4, 5],
+    async (value) => {
+      active += 1;
+      highWater = Math.max(highWater, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return value * 2;
+    },
+    2,
+  );
+
+  expect(values).toEqual([2, 4, 6, 8, 10]);
+  expect(highWater).toBe(2);
+});
+
+it('mapConcurrent stops scheduling after a failure and settles in-flight work', async () => {
+  const started = [];
+  const settled = [];
+  const failure = mapConcurrent(
+    [1, 2, 3, 4, 5],
+    async (value) => {
+      started.push(value);
+      await new Promise((resolve) => setTimeout(resolve, value === 1 ? 1 : 10));
+      settled.push(value);
+      if (value === 1) throw new Error('publish-failed');
+      return value;
+    },
+    2,
+  );
+
+  await expect(failure).rejects.toThrow('publish-failed');
+  expect(started).toEqual([1, 2]);
+  expect(settled).toEqual([1, 2]);
+});
+
+it('normalizes workspace-specific license report paths', () => {
+  const root = '/runner/work/forgeax-engine/forgeax-engine';
+  expect(
+    normalizeLicenseReport(
+      {
+        MIT: [
+          {
+            name: 'example',
+            paths: [`${root}/node_modules/.pnpm/example@1.0.0/node_modules/example`],
+          },
+        ],
+      },
+      root,
+    ),
+  ).toEqual({
+    MIT: [
+      {
+        name: 'example',
+        paths: ['node_modules/.pnpm/example@1.0.0/node_modules/example'],
+      },
+    ],
+  });
+  expect(() => normalizeLicenseReport({ paths: ['/other/example'] }, root)).toThrow(
+    'sdk-license-path-outside-workspace',
+  );
+});
+
+it('stages a self-contained WASM package for npm pack', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-wasm-stage-test-'));
+  tempRoots.push(root);
+  const packageRoot = join(root, 'package');
+  await mkdir(join(packageRoot, 'scripts'), { recursive: true });
+  await mkdir(join(packageRoot, 'pkg'), { recursive: true });
+  await writeFile(join(packageRoot, '.gitignore'), 'pkg\n');
+  await writeFile(join(packageRoot, '.npmignore'), 'src\n');
+  await writeFile(
+    join(packageRoot, 'scripts', 'ensure-wasm.mjs'),
+    "import '../../../scripts/lib/ensure-wasm-lib.mjs';\n",
+  );
+  await writeFile(join(packageRoot, 'pkg', 'module.wasm'), 'wasm\n');
+  const helperSource = join(root, 'ensure-wasm-lib.mjs');
+  await writeFile(helperSource, 'export const ready = true;\n');
+
+  const staged = await prepareWasmPackageForPack({
+    packageRoot,
+    helperSource,
+    postinstallScripts: ['scripts/ensure-wasm.mjs'],
+    wasmFiles: ['pkg/module.wasm'],
+  });
+  tempRoots.push(staged.root);
+
+  await expect(readFile(join(staged.packageRoot, '.gitignore'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  await expect(readFile(join(staged.packageRoot, '.npmignore'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  await expect(
+    readFile(join(staged.packageRoot, 'scripts', 'ensure-wasm.mjs'), 'utf8'),
+  ).resolves.toBe("import './ensure-wasm-lib.mjs';\n");
+  await expect(
+    readFile(join(staged.packageRoot, 'scripts', 'ensure-wasm-lib.mjs'), 'utf8'),
+  ).resolves.toBe('export const ready = true;\n');
+  await expect(readFile(join(staged.packageRoot, 'pkg', 'module.wasm'), 'utf8')).resolves.toBe(
+    'wasm\n',
+  );
+});
 
 const tempRoots = [];
 const execFileAsync = promisify(execFile);
@@ -88,6 +221,50 @@ describe('normalizePackageArchive', () => {
     });
   });
 
+  it('does not publish TypeScript incremental build caches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-package-cache-test-'));
+    tempRoots.push(root);
+    await mkdir(join(root, 'package', 'dist'), { recursive: true });
+    await writeFile(
+      join(root, 'package', 'package.json'),
+      '{"name":"@forgeax/engine-example","version":"0.0.0"}\n',
+    );
+    await writeFile(join(root, 'package', 'dist', 'index.mjs'), 'export {}\n');
+    await writeFile(join(root, 'package', 'dist', '.tsbuildinfo'), '{"version":"local"}\n');
+    const archive = join(root, 'example.tgz');
+    await execFileAsync('tar', ['-czf', archive, '-C', root, 'package']);
+
+    await normalizePackageArchive(archive, execFileAsync);
+
+    const { stdout } = await execFileAsync('tar', ['-tzf', archive]);
+    expect(stdout).toContain('package/dist/index.mjs');
+    expect(stdout).not.toContain('package/dist/.tsbuildinfo');
+  });
+
+  it('normalizes hydrated WASM execute bits for reproducible archives', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-package-mode-test-'));
+    tempRoots.push(root);
+    await mkdir(join(root, 'package', 'pkg'), { recursive: true });
+    await writeFile(
+      join(root, 'package', 'package.json'),
+      '{"name":"@forgeax/engine-example","version":"1.2.3"}\n',
+    );
+    const payload = join(root, 'package', 'pkg', 'module.wasm');
+    await writeFile(payload, 'wasm\n');
+    await chmod(payload, 0o644);
+    const first = join(root, 'first.tgz');
+    await writePackageArchive(root, first);
+
+    // Release downloads and local caches do not guarantee the source mode.
+    await chmod(payload, 0o755);
+    const second = join(root, 'second.tgz');
+    await writePackageArchive(root, second);
+
+    await expect(readFile(second)).resolves.toEqual(await readFile(first));
+    const { stdout } = await execFileAsync('tar', ['-tvzf', second]);
+    expect(stdout).toMatch(/-rw-r--r-- .*package\/pkg\/module\.wasm/);
+  });
+
   it('preserves a pnpm content-addressed path that needs a PAX header', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-package-pax-test-'));
     tempRoots.push(root);
@@ -111,6 +288,9 @@ describe('normalizePackageArchive', () => {
       `package/sdk/store/pnpm/v11/files/00/${hash}`,
     ]);
     expect(stdout).toBe('content\n');
+    const direct = join(root, 'direct.tgz');
+    await writePackageArchive(root, direct);
+    expect(await readFile(direct)).toEqual(await readFile(archive));
   });
 });
 
@@ -131,6 +311,69 @@ describe('assertNoRetiredPackageFiles', () => {
         'dist/runtime-diagnostics.d.ts',
       ]),
     ).not.toThrow();
+  });
+});
+
+describe('waitForNpmPublications', () => {
+  it('waits for exact metadata, dist-tag, and tarball availability', async () => {
+    let round = 0;
+    let clock = 0;
+    const item = {
+      name: '@forgeax/engine-sdk',
+      version: '1.2.3',
+      integrity: 'sha512-exact',
+    };
+    const fetchImpl = async (input, init = {}) => {
+      const url = String(input);
+      if (url.endsWith('/%40forgeax%2Fengine-sdk/1.2.3')) {
+        if (round === 0) return new Response(null, { status: 404 });
+        return Response.json({
+          dist: {
+            integrity: item.integrity,
+            tarball: 'https://registry.npmjs.org/@forgeax/engine-sdk/-/engine-sdk-1.2.3.tgz',
+          },
+        });
+      }
+      if (url.endsWith('/dist-tags')) return Response.json({ latest: item.version });
+      if (init.method === 'HEAD') {
+        return new Response(null, { status: round === 1 ? 404 : 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+
+    await expect(
+      waitForNpmPublications([item], {
+        tag: 'latest',
+        fetchImpl,
+        timeoutMs: 100,
+        intervalMs: 10,
+        now: () => clock,
+        sleep: async (duration) => {
+          clock += duration;
+          round += 1;
+        },
+      }),
+    ).resolves.toEqual({ verified: 1, tag: 'latest' });
+    expect(round).toBe(2);
+  });
+
+  it('rejects immutable registry bytes that differ from the staged archive', async () => {
+    const item = {
+      name: '@forgeax/engine-sdk',
+      version: '1.2.3',
+      integrity: 'sha512-exact',
+    };
+    const fetchImpl = async () =>
+      Response.json({
+        dist: {
+          integrity: 'sha512-other',
+          tarball: 'https://registry.npmjs.org/archive.tgz',
+        },
+      });
+
+    await expect(waitForNpmPublications([item], { tag: 'latest', fetchImpl })).rejects.toThrow(
+      'npm-published-integrity-mismatch: @forgeax/engine-sdk',
+    );
   });
 });
 
@@ -160,5 +403,366 @@ describe('canonical kit output override', () => {
     await expect(readFile(join(output, 'cook-receipt.json'), 'utf8')).resolves.toContain(
       'packages/preview/scripts/build-canonical-kit.mjs',
     );
+  });
+});
+
+describe('SDK verifier template contract', () => {
+  it('generates a Windows-safe SDK launcher with a pnpm fallback', () => {
+    const launcher = sdkLauncherSource('pnpm@11.7.0');
+
+    expect(launcher).toContain("['/d', '/s', '/c', 'where', 'corepack']");
+    expect(launcher).toContain("const command = useCorepack ? 'corepack' : packageManagerName;");
+    expect(launcher).toContain('const packageManagerName = "pnpm";');
+    expect(launcher).not.toContain('corepack.cmd');
+  });
+
+  it('boots through pnpm when Corepack is unavailable on the host', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-launcher-test-'));
+    tempRoots.push(root);
+    const sdk = join(root, 'sdk with space');
+    const template = join(sdk, 'templates', 'empty');
+    const toolBin = join(root, 'tool bin');
+    await mkdir(join(sdk, 'bin'), { recursive: true });
+    await mkdir(template, { recursive: true });
+    await mkdir(toolBin, { recursive: true });
+    await writeFile(join(template, 'package.json'), '{"name":"sdk-runtime"}\n');
+    await writeFile(join(template, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+    await writeFile(join(template, 'pnpm-workspace.yaml'), 'packages: []\n');
+
+    const engineSource = "process.stdout.write('engine-bin-ok\\n');\nexport {};\n";
+    const packageManagerScript = join(toolBin, 'fake-pnpm.mjs');
+    await writeFile(
+      packageManagerScript,
+      [
+        "import { mkdir, writeFile } from 'node:fs/promises';",
+        "import { resolve } from 'node:path';",
+        "const engineBin = resolve(process.cwd(), 'node_modules', '@forgeax', 'engine', 'dist', 'bin', 'forgeax.mjs');",
+        "await mkdir(resolve(engineBin, '..'), { recursive: true });",
+        `await writeFile(engineBin, ${JSON.stringify(engineSource)});`,
+        "await writeFile(resolve(process.cwd(), 'package-manager-marker'), process.argv.slice(2).join('\\n'));",
+      ].join('\n'),
+    );
+    const packageManagerCommand = join(toolBin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+    if (process.platform === 'win32') {
+      await writeFile(
+        packageManagerCommand,
+        `@echo off\r\n"${process.execPath}" "${packageManagerScript}" %*\r\n`,
+      );
+    } else {
+      const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+      await writeFile(
+        packageManagerCommand,
+        `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(packageManagerScript)} "$@"\n`,
+      );
+      await chmod(packageManagerCommand, 0o755);
+    }
+
+    const launcher = join(sdk, 'bin', 'forgeax.mjs');
+    await writeFile(launcher, sdkLauncherSource('pnpm@11.7.0'));
+    const result = spawnSync(process.execPath, [launcher], {
+      cwd: sdk,
+      env: {
+        ...process.env,
+        PATH: toolBin,
+        ComSpec: process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
+      },
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('engine-bin-ok');
+    expect(
+      await readFile(join(sdk, '.forgeax', 'cli-runtime', 'package-manager-marker'), 'utf8'),
+    ).toContain('install');
+  });
+
+  it('keeps the generated template typecheck script in the SDK gates', async () => {
+    const builder = await readFile(join(repositoryRoot, 'scripts/forgeax/build-sdk.mjs'), 'utf8');
+    const verifier = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const carrierVerifier = await readFile(
+      join(repositoryRoot, 'scripts/forgeax/publish-sdk-npm.mjs'),
+      'utf8',
+    );
+    expect(builder).toContain("typecheck: 'pnpm exec tsc --noEmit'");
+    expect(verifier).toContain("const templateTypecheckScript = 'pnpm exec tsc --noEmit'");
+    expect(verifier).toContain("['run', 'typecheck', '--pretty', 'false']");
+    expect(verifier).toContain("['exec', 'forgeax', 'project', 'package', '--output'");
+    expect(carrierVerifier).toContain("'run', 'typecheck', '--pretty', 'false'");
+    expect(carrierVerifier).toContain("'exec', 'forgeax', 'project', 'package', '--output'");
+  });
+
+  it('ships the feedback document into both generated game templates', async () => {
+    const agents = await readFile(join(repositoryRoot, 'templates/AGENTS.md'), 'utf8');
+    expect(agents).toContain('docs/feedback.md');
+    for (const template of ['empty', 'game-3d']) {
+      await expect(
+        readFile(join(repositoryRoot, `templates/${template}/README.md`), 'utf8'),
+      ).resolves.toContain('docs/feedback.md');
+      await expect(
+        readFile(join(repositoryRoot, `templates/${template}/docs/feedback.md`), 'utf8'),
+      ).resolves.toContain('Web ZIP');
+    }
+  });
+
+  it('keeps game-3d UI authoring as readable sources in the default build path', async () => {
+    const manifest = JSON.parse(
+      await readFile(join(repositoryRoot, 'templates/game-3d/package.json'), 'utf8'),
+    );
+    expect(manifest.forgeax).not.toHaveProperty('assets');
+    const host = await readFile(join(repositoryRoot, 'packages/devkit/src/host.ts'), 'utf8');
+    expect(host).toContain("import { createUiImporter } from '@forgeax/engine-ui/importer';");
+    expect(host).toContain('  createUiImporter(),');
+    const html = await readFile(
+      join(repositoryRoot, 'templates/game-3d/assets/guide.ui.html'),
+      'utf8',
+    );
+    const css = await readFile(
+      join(repositoryRoot, 'templates/game-3d/assets/guide.ui.css'),
+      'utf8',
+    );
+    const meta = JSON.parse(
+      await readFile(
+        join(repositoryRoot, 'templates/game-3d/assets/guide.ui.html.meta.json'),
+        'utf8',
+      ),
+    );
+    expect(html).toContain('WASD move');
+    expect(html).toContain('\n');
+    expect(css).toContain(':host {');
+    expect(css).toContain('\n');
+    expect(meta).toMatchObject({ importer: 'ui', source: 'guide.ui.html' });
+    expect(meta.subAssets).toEqual([
+      expect.objectContaining({ sourceKey: 'ui/guide', kind: 'ui' }),
+    ]);
+    const { default: uiPack } = await import('../../../templates/game-3d/assets/ui/ui.pack.ts');
+    const built = await uiPack.build();
+    expect(built.ok).toBe(true);
+    expect(built.value['plugin/host'].config.guide.$asset).toBe(meta.subAssets[0].guid);
+  });
+
+  it('uses the bounded source-distribution collision exception and validates its exact evidence', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    expect(source).toContain("FORGEAX_TEMPLATE_SMOKE_GAME3D_COLLISION_MODE: 'omit-sdk-source'");
+    expect(source).toContain("sourceGame3dCollision?.status !== 'omitted'");
+    expect(source).toContain("sourceGame3dCollision.reason !== 'sdk-source-distribution'");
+    expect(source).toContain(
+      "Object.keys(sourceGame3dCollision).sort().join(',') !== 'reason,status'",
+    );
+    expect(source).toContain('sdk-source-template-collision-contract');
+    expect(source).toContain("sourceTemplateEvidence.status !== 'passed-with-omissions'");
+    expect(source).toContain("sourceHostGpuInstanceLoss?.status !== 'omitted'");
+    expect(source).toContain("sourceHostGpuInstanceLoss?.status !== 'not-observed'");
+    expect(source).toContain("sourceHostGpuInstanceLoss.eventPhase !== 'interaction'");
+    expect(source).toContain('sourceHostGpuInstanceLoss.eventSequence >=');
+    expect(source).toContain('sourceHostGpuInstanceLoss.journeyCompleteSequence');
+    expect(source).toContain("sourceJourneyRendererHealth?.reason !== 'device-lost'");
+    expect(source).toContain("sourceFreshProcessRendererHealth?.reason !== 'alive'");
+    expect(source).toContain('sourceHostGpuInstanceLoss.freshProcessFrameId <= 0');
+    expect(source).toContain('sdk-source-host-gpu-instance-loss-contract');
+  });
+
+  it('selects the empty template when creating the offline project', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const createdProject = source.slice(
+      source.indexOf('const createdProject ='),
+      source.indexOf('const createdProjectEnvelope ='),
+    );
+    expect(createdProject).toMatch(/'--template',\s*'empty'/);
+  });
+
+  it('validates the final plugin-based empty project layout', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const template = JSON.parse(
+      await readFile(join(repositoryRoot, 'templates/empty/forge.json'), 'utf8'),
+    );
+    const layoutCheck = source.slice(
+      source.indexOf('const projectManifestPath ='),
+      source.indexOf(
+        "await readFile(resolve(project, 'assets', 'world', 'world.scene.pack.json'))",
+      ),
+    );
+    expect(template).toMatchObject({
+      schemaVersion: '3.0.0',
+      roots: { engine: expect.any(String) },
+    });
+    expect(template).not.toHaveProperty('entry');
+    expect(source).toContain("'templates/empty/.gitignore'");
+    expect(source).toContain("'templates/empty/tsconfig.json'");
+    expect(source).toContain("'templates/empty/vitest.config.ts'");
+    expect(layoutCheck).toContain('projectManifest.entry !== undefined');
+    expect(layoutCheck).toContain("typeof projectManifest.roots?.engine !== 'string'");
+    expect(layoutCheck).not.toContain("entry.id === 'gameplay'");
+    expect(layoutCheck).not.toContain("entry.name === './src/main.ts'");
+    expect(source).toContain("resolve(project, 'assets', '__tests__', 'empty-project.test.ts')");
+    expect(source).not.toContain("resolve(project, 'src', '__tests__', 'starter.test.ts')");
+    const projectLayout = source.slice(
+      source.indexOf('projectLayout: {'),
+      source.indexOf("starterTest: 'assets/__tests__/empty-project.test.ts'") +
+        "starterTest: 'assets/__tests__/empty-project.test.ts'".length,
+    );
+    expect(projectLayout).toContain('roots: projectManifest.roots');
+    expect(projectLayout).toContain("starterTest: 'assets/__tests__/empty-project.test.ts'");
+    expect(projectLayout).not.toContain('entry: projectManifest.entry');
+    expect(source).toContain('sdk-empty-authored-scene-not-empty');
+    expect(source).not.toContain('sdk-empty-authored-camera-missing');
+    expect(source).toContain("retiredPath of ['src', 'src/main.ts', 'src/__tests__']");
+  });
+
+  it('uses a real center-canvas gesture for the game-3d browser check', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const interaction = source.slice(
+      source.indexOf('const before ='),
+      source.indexOf("await page.keyboard.down('KeyW')"),
+    );
+    expect(interaction).toContain("const canvas = page.locator('canvas').first();");
+    expect(interaction).toContain('const canvasBox = await canvas.boundingBox();');
+    expect(interaction).toContain('await page.mouse.click(centerX, centerY);');
+  });
+
+  it('waits for the game-3d guide mount before taking the gameplay baseline', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const readiness = source.slice(
+      source.indexOf('async function openReadyProjectPage'),
+      source.indexOf('async function readSelectedPlayerProjection'),
+    );
+    expect(readiness).toContain("document.querySelector('#game-ui')?.childElementCount");
+    expect(readiness).toContain('sdk-selected-game-not-ready:');
+    expect(readiness).toContain("reads.includes('game-3d.player')");
+    expect(readiness).toContain('sdk-selected-game-projection-not-ready:');
+  });
+
+  it('waits for the startup fade to finish before sending gameplay input', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const readiness = source.slice(
+      source.indexOf('async function openReadyProjectPage'),
+      source.indexOf('async function readSelectedPlayerProjection'),
+    );
+    expect(readiness).toContain("document.querySelector('#forgeax-loading')");
+    expect(readiness).toContain('getComputedStyle(loading)');
+    expect(readiness).toContain("style.display === 'none'");
+    expect(readiness).toContain("loading.getAttribute('data-fading') !== 'true'");
+    expect(readiness).toContain('sdk-selected-startup-not-entered:');
+  });
+
+  it('isolates the source-distribution browser journey after closing the SDK browser', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const browserClose = source.slice(
+      source.indexOf('async function closeSelectedBrowser'),
+      source.indexOf('async function launchSelectedBrowser'),
+    );
+    expect(browserClose).toContain('for (const context of browser.contexts())');
+    expect(browserClose).toContain('context.close()');
+    expect(browserClose).toContain('const errors = []');
+    expect(browserClose).toContain('browser.close()');
+    expect(source).toContain('const cleanupErrors = []');
+    expect(source).toContain("await attemptCleanup('server signal'");
+    expect(source).toContain("await attemptCleanup('server exit'");
+    expect(source).toContain('new AggregateError([operationError, cleanupFailure]');
+    const sourceSmoke = source.slice(
+      source.indexOf('const sourceSmokeArgs ='),
+      source.indexOf('return JSON.parse(await readFile(resolve(sourceSmokeDir'),
+    );
+    expect(sourceSmoke).toContain("'xvfb-run'");
+    expect(sourceSmoke).toContain("FORGEAX_BROWSER_HEADLESS === '0'");
+    expect(sourceSmoke).toContain('sourcePackageManager');
+  });
+
+  it('exposes game-owned read projections from the generated Dev host', async () => {
+    const source = await readFile(join(repositoryRoot, 'packages/devkit/src/host.ts'), 'utf8');
+    expect(source).toContain('const gameProjectionDefinitions = new Map();');
+    expect(source).toContain('globalThis.__forgeaxGameInspection = {');
+    expect(source).toContain('import.meta.env.DEV ? { gameProjection } : {}');
+    expect(source).toContain(
+      'if ((import.meta.env.DEV || cpuProfileRequested) && !workerExecution) exposeGameInspection(app as App);',
+    );
+  });
+
+  it('holds gameplay input until the game-owned projection proves movement', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const journey = source.slice(
+      source.indexOf("await page.keyboard.down('KeyW');"),
+      source.indexOf('const movementDelta ='),
+    );
+    expect(journey).toContain('const movementDeadline = Date.now() + 120_000');
+    expect(journey).toContain('readSelectedPlayerProjection(page)');
+    expect(journey).toContain('candidate.position[2] < before.position[2] - 0.01');
+    expect(journey).toContain('candidate.fixedTick > before.fixedTick');
+    expect(journey).toContain('sdk-selected-third-person-movement-timeout');
+    expect(journey).not.toContain('submittedFrameId >=');
+    expect(journey).not.toContain('inputStartFrameId');
+    expect(journey).not.toContain('waitForFunction(\n        async');
+    expect(journey).toContain('finally');
+    expect(journey).toContain("await page.keyboard.up('KeyW');");
+  });
+
+  it('keeps frame timeout diagnostics bounded and runtime-specific', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const frameDiagnostics = source.slice(
+      source.indexOf('const MAX_DIAGNOSTIC_ITEMS'),
+      source.indexOf('async function openReadyProjectPage'),
+    );
+    expect(frameDiagnostics).toContain('MAX_DIAGNOSTIC_ITEMS = 32');
+    expect(frameDiagnostics).toContain('DIAGNOSTIC_TEXT_LIMIT = 4_000');
+    expect(frameDiagnostics).toContain('values.length < MAX_DIAGNOSTIC_ITEMS');
+    expect(frameDiagnostics).toContain('value.slice(-DIAGNOSTIC_TEXT_LIMIT)');
+    expect(frameDiagnostics).toContain("document.querySelector('#forgeax-fatal')");
+    expect(frameDiagnostics).toContain('forgeaxFrameSubmitted');
+    expect(frameDiagnostics).toContain('__forgeaxGameInspection');
+    expect(frameDiagnostics).toContain('serverOutput: diagnostics.serverOutput()');
+    expect(source).toContain(
+      'serverOutput: () => ({ stdout: boundedTail(stdout), stderr: boundedTail(stderr) })',
+    );
+    expect(source).toContain('sdk-selected-render-frame-not-submitted:');
+    expect(source).toContain('JSON.stringify(evidence)');
+    expect(source).toContain('{ timeout: 120_000, polling: 100 }');
+  });
+
+  it('separates sealed candidate gates from idempotent promotion', async () => {
+    const candidateWorkflow = await readFile(
+      join(repositoryRoot, '.github/workflows/sdk-release-candidate.yml'),
+      'utf8',
+    );
+    const promotionWorkflow = await readFile(
+      join(repositoryRoot, '.github/workflows/sdk-release-promote.yml'),
+      'utf8',
+    );
+    expect(candidateWorkflow).toContain('workflow_dispatch:');
+    expect(candidateWorkflow).toContain('SDK candidates must verify current origin/main');
+    expect(candidateWorkflow).toContain('--workflow ci.yml');
+    expect(candidateWorkflow).toContain('--commit "$sha"');
+    expect(candidateWorkflow).toContain('SDK candidates require successful same-commit CI');
+    expect(candidateWorkflow).toContain('Build exact SDK candidate seed once');
+    expect(candidateWorkflow).toContain('npm-consumer:');
+    expect(candidateWorkflow).toContain('archive-browser:');
+    expect(candidateWorkflow).toContain('reproducibility:');
+    expect(candidateWorkflow).toContain('collision:');
+    expect(candidateWorkflow).toContain('sdk-candidate.mjs seal');
+    expect(candidateWorkflow).toContain('npm-consumer.log');
+    expect(candidateWorkflow).toContain('tail -n 1 artifacts/gates/npm-consumer.log');
+    expect(candidateWorkflow).not.toContain('quick');
+    expect(promotionWorkflow).toContain('candidate_run_id:');
+    expect(promotionWorkflow).toContain('sdk-candidate.mjs verify');
+    expect(promotionWorkflow).toContain('--candidate "$RUNNER_TEMP/sdk-candidate"');
+    expect(promotionWorkflow).toContain('NPM_CONFIG_LOGLEVEL: error');
+    expect(promotionWorkflow).toContain('finalize-sdk-release.mjs');
+    expect(promotionWorkflow).toContain(
+      '--asset "$RUNNER_TEMP/sdk-candidate/sdk-verify-result.json"',
+    );
+    expect(promotionWorkflow).not.toContain('pnpm sdk:build');
+    expect(promotionWorkflow).not.toContain('pnpm sdk:verify');
+  });
+
+  it('uses semantic movement and renderer health without a lavapipe screenshot', async () => {
+    const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
+    const browserCheck = source.slice(
+      source.indexOf('async function verifyProjectBrowser'),
+      source.indexOf('const selectedTemplateEvidence ='),
+    );
+    expect(browserCheck).toContain('movementDistance');
+    expect(browserCheck).toContain("renderer?.state !== 'alive'");
+    expect(browserCheck).not.toContain('page.screenshot');
+    expect(browserCheck).not.toContain('toDataURL');
   });
 });

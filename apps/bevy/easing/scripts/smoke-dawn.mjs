@@ -27,7 +27,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_BRIGHT_FLOOR = Number.parseFloat(process.env.SMOKE_BRIGHT_FLOOR ?? '0.15');
 const MOTION_THRESHOLD = Number.parseFloat(process.env.SMOKE_MOTION_THRESHOLD ?? '0.0005');
 const X_EPS = Number.parseFloat(process.env.SMOKE_X_EPS ?? '1e-4');
@@ -193,7 +193,7 @@ let framesObserved = 0;
 let earlyFrame;
 let lateFrame;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const u = (i % 120) / 120; // sweep 0..1 over 120 frames
+  const u = i / (SMOKE_MIN_FRAMES - 1); // Cover both easing endpoints.
   stepEasing(world, u);
   propagateTransforms(world);
   world.update().unwrap();

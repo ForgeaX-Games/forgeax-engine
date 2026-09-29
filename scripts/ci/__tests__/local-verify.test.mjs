@@ -17,7 +17,6 @@ import {
   isLocalShardDdcDownload,
   isLocalShardReportsDownload,
   isLocalSharedInputsDownload,
-  isLocalSharedProvenanceDownload,
   isLocalSharedProvenanceOutput,
   isLocalWebkitStatusDownload,
   isMatrixStepEnabled,
@@ -31,7 +30,6 @@ import {
   localizeRunnerProvisioning,
   localShardArtifactPath,
   localShardReportPaths,
-  localSharedProvenancePaths,
   localTargets,
   matrixCombinations,
   needsGitHubEnvironment,
@@ -44,6 +42,7 @@ import {
   substituteLocalMatrix,
   substituteLocalNeedsOutputs,
   substituteLocalNeedsResults,
+  substituteLocalRunnerTemp,
   substituteLocalStepOutputs,
   targetsForGroup,
 } from '../local-verify.mjs';
@@ -51,6 +50,10 @@ import {
 const root = resolve(import.meta.dirname, '..', '..', '..');
 const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
 const localVerifySource = readFileSync(resolve(root, 'scripts/ci/local-verify.mjs'), 'utf8');
+const transmissionDawnSmoke = readFileSync(
+  resolve(root, 'apps/learn-render/6.pbr/4.transmission-refraction/scripts/smoke-dawn.mjs'),
+  'utf8',
+);
 const githubExpression = (value) => ['$', '{{ ', value, ' }}'].join('');
 
 test('local PR CI projection scopes GITHUB_ENV to one job or matrix leg', () => {
@@ -62,12 +65,108 @@ test('local PR CI projection scopes GITHUB_ENV to one job or matrix leg', () => 
   assert.equal(localVerifySource.lastIndexOf('const githubEnvironment = {};'), environment);
 });
 
+test('local PR CI projection resolves runner temp for repeated job projections', () => {
+  const runnerTemp = '/tmp/forgeax-ci-runner-temp-test';
+  const output = `${githubExpression('runner.temp')}/forgeax-engine-editor-prerequisite`;
+  assert.equal(
+    substituteLocalRunnerTemp(output, runnerTemp),
+    `${runnerTemp}/forgeax-engine-editor-prerequisite`,
+  );
+  assert.equal(substituteLocalRunnerTemp('unchanged', runnerTemp), 'unchanged');
+});
+
+test('hello-taa falsifier owns the only PR Chrome Beta headed browser lane', () => {
+  const browserSteps = extractRunSteps(workflow).filter((step) =>
+    step.command.includes('pnpm --filter @forgeax/hello-taa smoke:browser'),
+  );
+  const falsifierSteps = extractRunSteps(workflow).filter((step) =>
+    step.command.includes('pnpm --filter @forgeax/hello-taa smoke:falsify'),
+  );
+  assert.equal(browserSteps.length, 0);
+  assert.equal(falsifierSteps.length, 1);
+  const falsifier = falsifierSteps[0];
+  assert.equal(falsifier.environment?.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
+  assert.equal(falsifier.environment?.FORGEAX_BROWSER_HEADLESS, '0');
+  assert.equal(falsifier.environment?.FORGEAX_TAA_FALSIFIER_PROFILE, 'ci');
+  assert.equal(falsifier.environment?.SMOKE_FALSIFY_CONCURRENCY, '1');
+  assert.match(falsifier.command, /^xvfb-run -a /);
+});
+
+test('M4 Dawn fleet topology owns four shards and preserves independent evidence gates', () => {
+  const smokeStart = workflow.indexOf('  smoke-fleet:\n');
+  const requiredStart = workflow.indexOf('  smoke-fleet-required-context:\n', smokeStart);
+  const smokeFleet = workflow.slice(smokeStart, requiredStart);
+  const required = workflow.slice(requiredStart).split(/\n(?= {2}[a-zA-Z0-9_-]+:\n)/)[0];
+
+  assert.match(smokeFleet, /fail-fast: false[\s\S]*?group: \[0, 1, 2, 3\]/);
+  assert.match(
+    smokeFleet,
+    /node scripts\/ci\/run-dawn-smoke-roster\.mjs --run[\s\S]*?--shard-index \$\{\{ matrix\.group \}\}[\s\S]*?--shard-count 4[\s\S]*?--report artifacts\/renderer-device-loss\/smoke-roster\/shard-\$\{\{ matrix\.group \}\}\.json/,
+  );
+  assert.match(smokeFleet, /node scripts\/ci\/run-authorized-m7-smoke\.mjs --allow-blocked/);
+  assert.match(smokeFleet, /Run authoritative Dawn roster shard[\s\S]*?timeout-minutes: 45/);
+  assert.match(smokeFleet, /SMOKE_MIN_FRAMES: 60/);
+  assert.match(smokeFleet, /DAWN_SMOKE_ENTRY_TIMEOUT_MS: 300000/);
+  const pointShadowStep = extractRunSteps(smokeFleet).find((step) =>
+    step.command.includes('@forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows'),
+  );
+  assert.equal(pointShadowStep?.environment?.SMOKE_MIN_FRAMES, '60');
+  assert.match(smokeFleet, /- name: Upload Dawn roster shard evidence[\s\S]*?if: always\(\)/);
+  assert.match(smokeFleet, /name: renderer-device-loss-smoke-shard-\$\{\{ matrix\.group \}\}/);
+  for (const step of smokeFleet.split(/\n(?= {6}- )/)) {
+    if (!step.includes('uses: ./.github/actions/upload-optional-artifact')) {
+      assert.doesNotMatch(step, /continue-on-error:/);
+    }
+  }
+  assert.doesNotMatch(smokeFleet, /run-hello-learn-render-smoke-roster\.mjs/);
+  assert.match(smokeFleet, /name: Build hello-taa smoke consumer\n\s+if: matrix\.group == 3/);
+  assert.doesNotMatch(smokeFleet, /name: Build video-texture smoke consumer/);
+  assert.doesNotMatch(smokeFleet, /name: Build hello-lod-occlusion smoke consumer/);
+  assert.doesNotMatch(smokeFleet, /pnpm --filter @forgeax\/engine-shadertoy-fractal-pyramid build/);
+  assert.doesNotMatch(smokeFleet, /pnpm --filter @forgeax\/hello-shadow-opt-out build/);
+  assert.doesNotMatch(smokeFleet, /pnpm --filter @forgeax\/engine-shadertoy-happy-blob build/);
+  assert.doesNotMatch(smokeFleet, /Build consumer-owned Sponza smoke app/);
+
+  assert.match(required, /needs: \[smoke-fleet\]/);
+  assert.match(required, /if: \$\{\{ !cancelled\(\) \}\}/);
+  assert.match(
+    required,
+    /FORGEAX_ARTIFACT_EXPECTED_SHA: \$\{\{ env\.EXPECTED_PRODUCT_SHA \}\}[\s\S]*?download-artifact-with-retry\.mjs[\s\S]*?--run-id[\s\S]*?--artifact-pattern "renderer-device-loss-smoke-shard-\*"[\s\S]*?--expected-count 4[\s\S]*?--merge-multiple/,
+  );
+  assert.match(
+    required,
+    /run-dawn-smoke-roster\.mjs --aggregate[\s\S]*?--shard-count 4[\s\S]*?--reports/,
+  );
+  assert.doesNotMatch(required, /continue-on-error:/);
+
+  for (const command of [
+    'pnpm --filter @forgeax/hello-m7-backend-recovery smoke',
+    'pnpm --filter @forgeax/hello-taa smoke:webgl2',
+    'pnpm --filter @forgeax/hello-taa smoke:rhinull',
+    'pnpm --filter @forgeax/hello-taa smoke:falsify',
+    'pnpm --filter @forgeax/hello-taa smoke:performance',
+    'node apps/hello/triangle/scripts/smoke-coverage-gate.mjs',
+  ]) {
+    assert.match(smokeFleet, new RegExp(command.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.equal(
+    (smokeFleet.match(/- name: Hello-taa temporal Motion Blur correctness evidence/g) ?? []).length,
+    1,
+  );
+});
+
+test('transmission Dawn smoke selects the isolated project without repeating repository typecheck', () => {
+  assert.match(transmissionDawnSmoke, /runDawnPartitions\('transmission'/);
+});
+
 test('local PR CI projection covers every required context and maps matrix legs to their workflow job', () => {
   const contexts = requiredContexts();
   assert.ok(contexts.includes('smoke-fleet-0'));
+  assert.ok(contexts.includes('smoke-fleet-3'));
   assert.ok(contexts.includes('bevy-smoke-fleet-2'));
   assert.equal(contextJob('smoke-fleet'), 'smoke-fleet-required-context');
   assert.equal(contextJob('smoke-fleet-1'), 'smoke-fleet');
+  assert.equal(contextJob('smoke-fleet-3'), 'smoke-fleet');
   assert.equal(contextJob('bevy-smoke-fleet-2'), 'bevy-smoke-fleet');
   assert.equal(contextJob('primary-pnpm'), 'primary-pnpm');
   for (const target of [
@@ -144,7 +243,7 @@ test('local PR CI projection covers every required context and maps matrix legs 
   );
   const workflowXvfbCommands = extractRunSteps(workflow)
     .map((step) => step.command)
-    .filter((command) => command.includes('xvfb-run -a'));
+    .filter((command) => command.includes('xvfb-run -a') && !isRunnerProvisioning(command));
   assert.ok(workflowXvfbCommands.length > 0);
   assert.ok(
     workflowXvfbCommands.every((command) => {
@@ -312,15 +411,8 @@ test('local PR CI projection covers every required context and maps matrix legs 
       '1',
     ],
   );
-  const sharedProvenanceDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.shared-app-inputs.outputs.provenance_artifact_id')}" --path provenance-records`;
-  assert.equal(isLocalSharedProvenanceDownload(sharedProvenanceDownload), true);
-  assert.equal(
-    isLocalSharedProvenanceDownload('node scripts/ci/download-artifact-with-retry.mjs --path .'),
-    false,
-  );
-  const sharedInputsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.shared-app-inputs.outputs.shared_artifact_id')}" --path shared-app-inputs`;
+  const sharedInputsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.shared-app-inputs.outputs.shared_artifact_id')}" --path shared-app-inputs-transfer`;
   assert.equal(isLocalSharedInputsDownload(sharedInputsDownload), true);
-  assert.equal(isLocalSharedInputsDownload(sharedProvenanceDownload), false);
   const shardReportsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.app-shard-0.outputs.app_report_artifact_id')},${githubExpression('needs.app-shard-1.outputs.app_report_artifact_id')},${githubExpression('needs.app-shard-2.outputs.app_report_artifact_id')}" --path shard-reports`;
   assert.equal(isLocalShardReportsDownload(shardReportsDownload), true);
   assert.equal(
@@ -340,17 +432,12 @@ test('local PR CI projection covers every required context and maps matrix legs 
     true,
   );
   assert.equal(isLocalShardArtifactsDownload(shardReportsDownload), false);
-  assert.equal(isLocalShardReportsDownload(sharedProvenanceDownload), false);
   assert.equal(
     isLocalWebkitStatusDownload(
       `artifact_id='${githubExpression('needs.webkit-fallback.outputs.webkit_status_artifact_id')}'\nnode scripts/ci/download-artifact-with-retry.mjs --artifact-ids "$artifact_id" --path report/color-lighting-parity`,
     ),
     true,
   );
-  assert.deepEqual(localSharedProvenancePaths('/repo', '7'), {
-    source: '/repo/provenance-shared-app-inputs-a7.json',
-    destination: '/repo/provenance-records/provenance-shared-app-inputs-a7.json',
-  });
   assert.deepEqual(localShardReportPaths('/repo'), {
     source: '/repo/shard-report-transfer/report',
     destination: '/repo/shard-reports/report',
@@ -418,12 +505,24 @@ test('local artifact isolation hides runner outputs for both lint entrypoints an
 test('local PR CI projection extracts workflow shell commands rather than a copied smoke ledger', () => {
   const start = workflow.indexOf('  smoke-fleet:');
   const end = workflow.indexOf('\n  smoke-fleet-required-context:', start);
-  const commands = extractRunCommands(workflow.slice(start, end));
-  assert.ok(commands.includes('pnpm --filter @forgeax/hello-triangle smoke'));
-  assert.equal(
-    commands.some((command) => command.includes('@forgeax/hello-custom-shader smoke')),
-    true,
+  const block = workflow.slice(start, end);
+  const commands = extractRunCommands(block);
+  assert.ok(
+    commands.some((command) => command.includes('run-dawn-smoke-roster.mjs --run')),
+    'smoke-fleet must invoke the single authoritative Dawn roster runner',
   );
+  assert.equal(
+    commands.some((command) => command.includes('run-hello-learn-render-smoke-roster.mjs')),
+    false,
+  );
+  assert.equal(
+    commands.some((command) => command.includes('@forgeax/hello-m7-backend-recovery smoke')),
+    true,
+    'M7 recovery smoke remains an independent gate',
+  );
+  assert.match(block, /SMOKE_MIN_FRAMES: 60/);
+  assert.match(block, /DAWN_SMOKE_ENTRY_TIMEOUT_MS: 300000/);
+  assert.match(block, /group: \[0, 1, 2, 3\]/);
 });
 
 test('CI runs the engine-template browser smoke with the headed WebGPU Chrome Beta channel', () => {
@@ -438,7 +537,7 @@ test('CI runs the engine-template browser smoke with the headed WebGPU Chrome Be
   assert.equal(step.environment.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
 });
 
-test('local PR CI projection runs the owned WebKit dev-server step and carries its URL', () => {
+test('local PR CI projection runs the owned Chromium fallback dev-server step and carries its URL', () => {
   const start = workflow.indexOf('  webkit-fallback:');
   const end = workflow.indexOf('\n  portability-bun:', start);
   const step = extractRunSteps(workflow.slice(start, end)).find(
@@ -458,14 +557,36 @@ test('local PR CI projection runs the owned WebKit dev-server step and carries i
   const verifyStep = extractRunSteps(workflow.slice(start, end)).find(
     (candidate) =>
       candidate.command ===
-      'DEV_SERVER_URL="$DEV_SERVER_URL" node scripts/dev-verify/verify-webkit-r5-stability.mjs',
+      'xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 FORGEAX_FALLBACK_BROWSER=chromium DEV_SERVER_URL="$DEV_SERVER_URL" node scripts/dev-verify/verify-webkit-r5-stability.mjs',
   );
   assert.ok(verifyStep);
   assert.deepEqual(verifyStep.environment, {
     TIMEOUT_MS: '120000',
-    SCREENSHOT_A: '/tmp/r5-over-capacity-webkit.png',
-    SCREENSHOT_B: '/tmp/r5-bad-submit-webkit.png',
+    FORGEAX_CHROME_CHANNEL: 'chrome-beta',
+    FORGEAX_BROWSER_HEADLESS: '0',
+    SCREENSHOT_A: '/tmp/r5-over-capacity-chromium.png',
+    SCREENSHOT_B: '/tmp/r5-bad-submit-chromium.png',
   });
+  const fallbackSteps = extractRunSteps(workflow.slice(start, end));
+  for (const lane of ['direct', 'clustered']) {
+    const fxaaStep = fallbackSteps.find(
+      (candidate) =>
+        candidate.command.includes('pnpm --filter @forgeax/hello-fxaa smoke:browser') &&
+        candidate.environment?.FORGEAX_DARK_GRADIENT_LANE === lane,
+    );
+    assert.ok(fxaaStep, `FXAA ${lane} fallback smoke must be present`);
+    assert.equal(fxaaStep.environment.FORGEAX_BROWSER_CHANNEL, 'chrome-beta');
+  }
+  const mipmapStep = fallbackSteps.find((candidate) =>
+    candidate.command.includes('pnpm --filter @forgeax/hello-fxaa smoke:mipmap'),
+  );
+  assert.ok(mipmapStep, 'FXAA mipmap fallback smoke must be present');
+  assert.equal(mipmapStep.environment.FORGEAX_BROWSER_CHANNEL, 'chrome-beta');
+  const parityStep = fallbackSteps.find((candidate) =>
+    candidate.command.includes('node scripts/dev-verify/verify-webkit-color-lighting.mjs'),
+  );
+  assert.ok(parityStep, 'color-lighting fallback parity smoke must be present');
+  assert.equal(parityStep.environment.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
 });
 
 test('local PR CI projection expands the actual Bevy smoke matrix', () => {
@@ -497,26 +618,23 @@ test('local PR CI projection expands the actual Bevy smoke matrix', () => {
 test('local PR CI projection carries matrix results through step-level environment', () => {
   const start = workflow.indexOf('  smoke-fleet-required-context:');
   const end = workflow.indexOf('\n  bevy-smoke-fleet:', start);
-  const [step] = extractRunSteps(workflow.slice(start, end));
-  assert.deepEqual(step.environment, {
-    MATRIX_RESULT: githubExpression('needs.smoke-fleet.result'),
-  });
+  const steps = extractRunSteps(workflow.slice(start, end));
+  const skipStep = steps.find((candidate) => candidate.command.includes('intentionally skipped'));
+  assert.ok(skipStep);
+  assert.equal(skipStep.environment, undefined);
+  const aggregateStep = steps.find((candidate) => candidate.command.includes('--aggregate'));
+  assert.ok(aggregateStep, 'required context must run the roster aggregate');
+  const matrixResult = githubExpression('needs.smoke-fleet.result');
   assert.equal(
-    substituteLocalNeedsResults(
-      step.environment.MATRIX_RESULT,
-      new Map([['smoke-fleet', 'success']]),
-    ),
+    substituteLocalNeedsResults(matrixResult, new Map([['smoke-fleet', 'success']])),
     'success',
   );
   assert.equal(
-    substituteLocalNeedsResults(
-      step.environment.MATRIX_RESULT,
-      new Map([['smoke-fleet', 'skipped']]),
-    ),
+    substituteLocalNeedsResults(matrixResult, new Map([['smoke-fleet', 'skipped']])),
     'skipped',
   );
   assert.throws(
-    () => substituteLocalNeedsResults(step.environment.MATRIX_RESULT, new Map()),
+    () => substituteLocalNeedsResults(matrixResult, new Map()),
     /ci-local-verify-needs-result-missing: jobs\.smoke-fleet/,
   );
 });
@@ -596,12 +714,18 @@ test('M4-T1: workflow evidence wiring preserves execution and payload boundaries
     workflow,
     /concurrency:[\s\S]*group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event_name == 'pull_request' && github\.ref \|\| github\.run_id \}\}[\s\S]*cancel-in-progress: true/,
   );
-  for (const block of [core, shared, shard0, shard1, shard2, buildArtifacts]) {
-    assert.match(
-      block,
-      /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "standard"\]'\) \}\}/,
-    );
+  for (const [block, pool] of [
+    [core, 'standard'],
+    [shared, 'standard'],
+    [shard0, 'heavy'],
+    [shard1, 'heavy'],
+    [shard2, 'heavy'],
+    [buildArtifacts, 'standard'],
+  ]) {
+    const expectedRunner = `runs-on: \${{ fromJSON('["self-hosted", "Linux", "X64", "${pool}"]') }}`;
+    assert.ok(block.includes(expectedRunner), `expected ${pool} runner selector`);
   }
+  assert.match(shard2, /Verify heavy runner capacity[\s\S]*--pool heavy/);
   assert.deepEqual(jobDependencies(workflow, 'build-artifacts'), [
     'core-build',
     'shared-app-inputs',
@@ -620,8 +744,12 @@ test('M4-T1: workflow evidence wiring preserves execution and payload boundaries
     /name: core-build-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: ci-artifacts\/core/,
   );
   assert.match(
+    core,
+    /Bind core artifact to the checked-out Engine source[\s\S]*engine-prerequisite-build-manifest\.json[\s\S]*JSON\.stringify\(\{ engineSha: process\.env\.EXPECTED_PRODUCT_SHA \}, null, 2\)/,
+  );
+  assert.match(
     shared,
-    /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: \|\n\s+shared-app-inputs\/assets\n\s+shared-app-inputs\/shaders\n\s+shared-app-inputs\/manifest\.json/,
+    /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: shared-app-inputs-transfer\/shared-app-inputs\.tar\.gz[\s\S]*compression-level: 0/,
   );
   assert.doesNotMatch(shared, /shared-app-inputs-full|shared-app-inputs-shard/);
   for (const [index, block] of [shard0, shard1, shard2].entries()) {

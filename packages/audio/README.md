@@ -64,7 +64,7 @@ app.world.spawn(
 
 | Field | Type | Description |
 |:--|:--|:--|
-| _(none)_ | -- | Marker component. Attach to the entity whose `Transform.world` (16-float column-major mat4, written by propagateTransforms) drives Web Audio listener position/orientation. Only the first `AudioListener` entity in the World is synced per frame (E-3). |
+| _(none)_ | -- | Marker component. Attach to the entity whose `GlobalTransform.world` (16-float column-major mat4, written by propagateTransforms) drives Web Audio listener position/orientation. Only the first `AudioListener` entity in the World is synced per frame (E-3). |
 
 ## Bus control via AudioEngine Resource
 

@@ -38,7 +38,7 @@ describe('AppErrorCode closed union', () => {
       'app-system-update-failed',
       'app-pointer-lock-failed',
       'app-plugin-activation-failed',
-      'app-execution-tier-unavailable',
+      'app-execution-worker-unavailable',
       'app-execution-bootstrap-failed',
       'app-execution-deadline-exceeded',
       'app-execution-kernel-failed',
@@ -75,7 +75,7 @@ describe('AppErrorCode closed union', () => {
           return 'pointer lock failed';
         case 'app-plugin-activation-failed':
           return 'plugin activation failed';
-        case 'app-execution-tier-unavailable':
+        case 'app-execution-worker-unavailable':
         case 'app-execution-bootstrap-failed':
         case 'app-execution-deadline-exceeded':
         case 'app-execution-kernel-failed':

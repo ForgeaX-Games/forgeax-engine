@@ -1,9 +1,13 @@
 import {
   buildMeshAttributeMapForUvSets,
+  DEFAULT_VERTEX_ATTRIBUTE_MAP,
   deriveVertexBufferLayout,
+  deriveVertexBufferLayoutFromProjection,
+  deriveVertexCount,
   deriveVertexLayoutProjection,
   deriveVertexLayoutProjectionFromMask,
   packInterleavedVertexAttributes,
+  SKIN_VERTEX_ATTRIBUTE_MAP,
 } from '@forgeax/engine-geometry';
 import type { VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -29,6 +33,50 @@ function makeCompleteAttributeMap(): VertexAttributeMap {
 }
 
 describe('vertex attribute layout owner', () => {
+  it('shares immutable layouts by attribute presence while observing mutable map edits', () => {
+    const map = { position: makeBuffer(), normal: makeBuffer() };
+    const first = deriveVertexLayoutProjection(map);
+    const sibling = deriveVertexLayoutProjection({ normal: makeBuffer(), position: makeBuffer() });
+    expect(sibling).toBe(first);
+    expect(deriveVertexLayoutProjectionFromMask(first.mask).unwrap()).toBe(first);
+    expect(Object.isFrozen(first.attributes[0])).toBe(true);
+    const edited: Record<string, Float32Array> = map;
+    edited.color = makeBuffer();
+    const colored = deriveVertexLayoutProjection(edited);
+    expect(colored).not.toBe(first);
+    expect(colored.arrayStride).toBe(first.arrayStride + 16);
+    delete edited.color;
+    expect(deriveVertexLayoutProjection(edited)).toBe(first);
+  });
+
+  it('publishes the ordinary and skinned maps from the same geometry owner', () => {
+    expect(Object.keys(DEFAULT_VERTEX_ATTRIBUTE_MAP)).toEqual([
+      'position',
+      'normal',
+      'uv',
+      'tangent',
+    ]);
+    expect(Object.keys(SKIN_VERTEX_ATTRIBUTE_MAP)).toEqual([
+      'position',
+      'normal',
+      'uv',
+      'tangent',
+      'skinIndex',
+      'skinWeight',
+    ]);
+    expect(deriveVertexLayoutProjection(DEFAULT_VERTEX_ATTRIBUTE_MAP).arrayStride).toBe(48);
+    expect(deriveVertexLayoutProjection(SKIN_VERTEX_ATTRIBUTE_MAP).arrayStride).toBe(72);
+  });
+
+  it('derives counts only when vertex bytes match the projected stride', () => {
+    const plain = deriveVertexLayoutProjection(DEFAULT_VERTEX_ATTRIBUTE_MAP);
+    const skinned = deriveVertexLayoutProjection(SKIN_VERTEX_ATTRIBUTE_MAP);
+    expect(deriveVertexCount(new Float32Array(24), plain)).toBe(2);
+    expect(deriveVertexCount(new Float32Array(18), skinned)).toBe(1);
+    expect(deriveVertexCount(new Float32Array(23), plain)).toBeUndefined();
+    expect(deriveVertexCount(new Float32Array(17), skinned)).toBeUndefined();
+  });
+
   it('derives the complete 13-key layout from the format owner', () => {
     expect(deriveVertexBufferLayout(makeCompleteAttributeMap())).toEqual([
       {
@@ -177,5 +225,24 @@ describe('vertex attribute layout owner', () => {
         ],
       },
     ]);
+  });
+
+  it('aliases sparse UV holes without duplicating authored shader locations', () => {
+    const map = { position: makeBuffer(), uv: makeBuffer(), uv7: makeBuffer() };
+    const projection = deriveVertexLayoutProjection(map);
+    const fromMap = deriveVertexBufferLayout(map, { shaderUvSetCount: 8 });
+    const fromProjection = deriveVertexBufferLayoutFromProjection(projection, {
+      shaderUvSetCount: 8,
+    });
+    expect(fromMap).toEqual(fromProjection);
+    const layout = fromProjection[0];
+    expect(layout?.arrayStride).toBe(28);
+    expect(layout?.attributes).toHaveLength(9);
+    expect(new Set(layout?.attributes.map((entry) => entry.shaderLocation)).size).toBe(9);
+    expect(
+      layout?.attributes
+        .filter((entry) => entry.shaderLocation >= 6)
+        .every((entry) => entry.offset === 20),
+    ).toBe(true);
   });
 });

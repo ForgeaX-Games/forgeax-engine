@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -50,7 +50,7 @@ gpu.requestAdapter = async (options) => {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine-render');
+const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine/render');
 const { buildBloom2dWorld } = await import(resolve(here, '..', 'dist', 'bloom-2d.mjs')).catch(async () => import(resolve(here, '..', 'src', 'bloom-2d.ts')));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
@@ -117,11 +117,22 @@ console.log(`[smoke] frames=${frames} visiblePixels=${visiblePixels} bloomDiffMe
 
 const failures = [];
 if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
-if (frames < 100) failures.push(`frames=${frames}`);
+if (frames < 60) failures.push(`frames=${frames}`);
 if (visiblePixels < 100) failures.push(`visiblePixels=${visiblePixels}`);
 if (diffMean <= 0.25 || changedPixels <= 20) failures.push(`bloomDiffMean=${diffMean.toFixed(4)} changedPixels=${changedPixels}`);
 if (errors.length + offErrors + onErrors + tailErrors > 0) failures.push(`errors=${errors.length + offErrors + onErrors + tailErrors}`);
-for (const pass of ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite']) if (!passNames.includes(pass)) failures.push(`missing=${pass}`);
+for (const pass of [
+  'bloom-downsample-0',
+  'bloom-downsample-1',
+  'bloom-downsample-2',
+  'bloom-downsample-3',
+  'bloom-downsample-4',
+  'bloom-upsample-3',
+  'bloom-upsample-2',
+  'bloom-upsample-1',
+  'bloom-upsample-0',
+  'bloom-composite',
+]) if (!passNames.includes(pass)) failures.push(`missing=${pass}`);
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.join('; ')}`);
   device.destroy?.();

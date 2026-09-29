@@ -1,6 +1,5 @@
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { structuredPluginError } from './structured-plugin-error.js';
 
 export interface PackBuildInputOptions {
@@ -20,7 +19,7 @@ export function resolvePackBuildInputs(options: PackBuildInputOptions): {
   const cwd = process.cwd();
   const roots =
     options.roots === undefined
-      ? loadAssetConfig(cwd).roots
+      ? [join(cwd, 'assets')]
       : options.roots.map((root) => (resolve(root) === root ? root : join(cwd, root)));
   return { roots, basePrefix: normalizeBasePrefix(options.base) };
 }

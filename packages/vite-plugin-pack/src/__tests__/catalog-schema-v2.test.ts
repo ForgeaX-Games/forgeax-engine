@@ -22,7 +22,7 @@ describe('Pack index catalog v2 schema', () => {
     expect(properties).toHaveProperty('generation');
     expect(properties).toHaveProperty('digest');
     expect(properties).toHaveProperty('outputSetDigest');
-    expect(properties).not.toHaveProperty('publication');
+    expect(properties).toHaveProperty('publication.$ref', '#/$defs/publication');
   });
 
   it('requires packageUrl and rejects legacy/content facts', async () => {

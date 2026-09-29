@@ -1,10 +1,10 @@
 // apps/hello/shadow-opt-out/__tests__/shadow-opt-out.dawn.test.ts
 // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat T-018
-// AC-17: dawn smoke test for castShadow opt-out + cutout shadow.
+// AC-17: dawn smoke test for ShadowParticipation opt-out + cutout shadow.
 //
 // Three cubes + floor fixture:
 //   A: Materials.standard({baseColor:red}) — casts shadow (default)
-//   B: Materials.standard({baseColor:green, castShadow:false}) — no shadow
+//   B: Materials.standard({baseColor:green}) + ShadowParticipation{cast:false} — no shadow
 //   C: custom cutout shadow shader — shadow via cutout WGSL with discard
 //
 // Structural-only smoke: 1 frame render, shadow factor sampling confirms
@@ -17,7 +17,7 @@ import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer, ShadowParticipation } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import type { Renderer } from '@forgeax/engine-render';
@@ -160,12 +160,12 @@ function buildWorld(): World {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
-describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
+describe('shadow-opt-out AC-17 dawn (ShadowParticipation + cutout)', () => {
   it.skipIf(!dawnReady)("'dawn-binding-missing' -- dawn.node not injected", () => {
     expect(dawnReady).toBe(true);
   });
 
-  describe('AC-17 three-cube castShadow + cutout shadow', () => {
+  describe('AC-17 three-cube ShadowParticipation + cutout shadow', () => {
     it('cube A shadow < 1, cube B shadow =~ 1, cube C cutout shadow present', async () => {
       const manifestUrl = await loadManifestDataUrl();
       if (manifestUrl === null) {
@@ -199,8 +199,8 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
         { component: MeshRenderer, data: { materials: [matA] } },
       );
 
-      // Cube B: no shadow (castShadow: false)
-      const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
+      // Cube B: no shadow (ShadowParticipation { cast: false })
+      const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1] }));
       world.spawn(
         {
           component: Transform,
@@ -208,6 +208,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matB] } },
+    { component: ShadowParticipation, data: { cast: false, receive: true } },
       );
 
       // Cube C: cutout shadow shader
@@ -215,7 +216,11 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
         kind: 'material',
         passes: [
           { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
-          { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
+          {
+            name: 'ShadowCaster',
+            program: { module: CUTOUT_SHADER_PATH, vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+            renderState: { tags: { LightMode: 'ShadowCaster' } },
+          },
         ],
         values: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
       });

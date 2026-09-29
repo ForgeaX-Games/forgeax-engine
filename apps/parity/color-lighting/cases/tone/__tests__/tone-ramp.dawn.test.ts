@@ -1,3 +1,4 @@
+import { shaderManifestUrl as createShaderManifestUrl } from '../../../../../../packages/runtime/src/__tests__/shader-manifest-url.fixture';
 import { World } from '@forgeax/engine-ecs';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import {
@@ -27,6 +28,7 @@ const TEXTURE_USAGE_COPY_SRC = 0x01;
 const MAP_READ = 0x0001;
 const COPY_DST = 0x0008;
 const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
+const LIGHTWEIGHT_DAWN = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
 
 function tonemapToU32(mode: string): number {
   switch (mode) {
@@ -51,7 +53,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = createShaderManifestUrl(ENGINE_MANIFEST);
 
 async function readPixels(device: GPUDevice, target: GPUTexture): Promise<Uint8Array> {
   const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
@@ -148,7 +150,7 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
   for (const [index, sceneCase] of cases.entries()) {
     const material = Materials.unlit(
       [sceneCase.tone.color[0], sceneCase.tone.color[1], sceneCase.tone.color[2], 1],
-      { colorSpace: 'linear', castShadow: false, renderState: { cullMode: 'none' } },
+      { renderState: { cullMode: 'none' } },
     );
     const materialHandle = world.allocSharedRef('MaterialAsset', material);
     world.spawn(
@@ -193,7 +195,13 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
 }
 
 describe('tone ramp Dawn gate', () => {
-  for (const mode of TONE_REQUIRED_MODES) {
+  // The browser parity matrix validates every public mode and all four
+  // samples. Keep three shader-family representatives in the overloaded PR
+  // Dawn lane; local/nightly runs retain the complete six-mode roster.
+  const dawnModes = LIGHTWEIGHT_DAWN
+    ? (['linear', 'aces-filmic', 'neutral'] as const)
+    : TONE_REQUIRED_MODES;
+  for (const mode of dawnModes) {
     it.skipIf(!dawnReady)(`executes ${mode} through the ForgeaX renderer`, async () => {
       const bytes = await captureMode(mode);
       expect(bytes.byteLength).toBeGreaterThan(0);

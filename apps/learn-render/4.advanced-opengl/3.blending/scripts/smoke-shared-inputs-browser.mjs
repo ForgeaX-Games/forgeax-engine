@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import {
   assertApplicationBootstrap,
+  isAlphaShaderReady,
+  isTargetShaderUrl,
+  isTargetViteHmrUpdate,
   startViteServer,
   pollHttpReady,
   probeFailureRecord,
@@ -21,6 +24,82 @@ const packageName = '@forgeax/app-learn-render-4-advanced-opengl-3-blending';
 const alphaPath = resolve(appRoot, 'src/alpha-test.wgsl');
 const require = createRequire(import.meta.url);
 const shaderRoot = resolve(dirname(require.resolve('@forgeax/engine-shader/package.json')), 'src');
+const EXTERNAL_INSTANCE_LOSS_MESSAGE = 'A valid external Instance reference no longer exists';
+const MAX_BROWSER_RECOVERIES = 2;
+const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL || 'chrome';
+const browserHeadless = !['0', 'false'].includes(
+  (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+);
+const chromeArgs = [
+  '--disable-features=MacAppCodeSignClone',
+  '--enable-unsafe-webgpu',
+  '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+  '--ignore-gpu-blocklist',
+];
+if (chromeChannel === 'chrome-beta') {
+  chromeArgs.push(
+    '--use-vulkan=swiftshader',
+    '--use-angle=swiftshader',
+    '--disable-gpu-driver-bug-workarounds',
+    '--disable-dawn-features=disallow_unsafe_apis',
+  );
+}
+const browserLaunchOptions = Object.freeze({ headless: browserHeadless, channel: chromeChannel, args: chromeArgs });
+const lightweight = process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1';
+const positiveEnv = (name, fallback) => {
+  const value = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+};
+const browserViewport = lightweight
+  ? {
+      viewport: {
+        width: positiveEnv('FORGEAX_BROWSER_CI_VIEWPORT_WIDTH', 320),
+        height: positiveEnv('FORGEAX_BROWSER_CI_VIEWPORT_HEIGHT', 180),
+      },
+    }
+  : {};
+const settleMs = lightweight ? 250 : 1_000;
+
+function isTransientExternalInstanceError(error) {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return message.includes(EXTERNAL_INSTANCE_LOSS_MESSAGE);
+}
+
+async function collectApplicationErrors(page, consoleErrors) {
+  const busErrors = await page.evaluate(() => {
+    const errors = globalThis.__learnRenderErrors ?? [];
+    return errors.map((error) => {
+      try {
+        return `BUS-ERR app.onError: ${JSON.stringify(error)}`;
+      } catch {
+        return `BUS-ERR app.onError: ${String(error.code)}`;
+      }
+    });
+  });
+  // Prefer the structured bus over its one-line console mirror so hosted
+  // external-Instance failures retain the nested provider cause for recovery
+  // classification instead of being reduced to `device-operation-failed`.
+  return [...busErrors, ...consoleErrors];
+}
+
+async function withBrowserRecovery(label, launchOptions, callback) {
+  let recoveryCount = 0;
+  while (true) {
+    let browser;
+    try {
+      browser = await chromium.launch(launchOptions);
+      return await callback(browser);
+    } catch (error) {
+      if (!isTransientExternalInstanceError(error) || recoveryCount >= MAX_BROWSER_RECOVERIES) throw error;
+      recoveryCount += 1;
+      console.warn(
+        `[blending] transient WebGPU external Instance loss; restarting ${label} (recovery ${recoveryCount}/${MAX_BROWSER_RECOVERIES})`,
+      );
+    } finally {
+      await browser?.close().catch(() => {});
+    }
+  }
+}
 
 async function buildSharedInputs(sharedRoot) {
   const { execa } = await import('execa');
@@ -61,88 +140,187 @@ async function buildApp(manifest) {
   await execa('pnpm', ['-F', packageName, 'exec', 'vite', 'build', '--base', '/blending/'], { cwd: repoRoot, env, stdio: 'inherit' });
 }
 
-async function browserCheck(origin) {
-  const browser = await chromium.launch({ headless: true, channel: process.env.FORGEAX_CHROME_CHANNEL || 'chrome', args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'] });
+async function browserCheck(origin, resource) {
+  return withBrowserRecovery(
+    'preview browser',
+    browserLaunchOptions,
+    async (browser) => {
+      const page = await browser.newPage(browserViewport);
+      await page.addInitScript(() => { globalThis.__learnRenderErrors = []; });
+      const applicationErrors = [];
+      page.on('pageerror', (error) => applicationErrors.push(`PAGEERROR: ${error.message}`));
+      page.on('console', (message) => {
+        if (message.type() === 'error') applicationErrors.push(`CONSOLE-ERR: ${message.text()}`);
+      });
+      const failedRequests = [];
+      page.on('requestfailed', (request) => pushRecent(failedRequests, {
+        url: request.url(),
+        error: request.failure()?.errorText,
+      }));
+      await page.goto(`${origin}/blending/`, { waitUntil: 'networkidle', timeout: 30_000 });
+      await page.waitForTimeout(settleMs);
+      try {
+        assertApplicationBootstrap(await collectApplicationErrors(page, applicationErrors), `${origin}/blending/`);
+      } catch (error) {
+        console.error('[blending] preview bootstrap evidence', JSON.stringify({
+          pageUrl: page.url(),
+          shaderManifest: await page.evaluate(() => globalThis.__forgeaxShaderManifest ?? null),
+          failedRequests,
+          viteOutput: resource?.diagnosticOutput?.() ?? '',
+        }));
+        throw error;
+      }
+      const urls = ['/blending/pack-index.json', '/blending/shaders/manifest.json'];
+      const payloads = await Promise.all(urls.map(async (path) => {
+        const response = await page.evaluate(async (url) => { const r = await fetch(url); return { ok: r.ok, status: r.status, body: await r.text() }; }, path).catch((cause) => {
+          throw new Error(`preview fetch failed ${path}: ${JSON.stringify({
+            pageUrl: page.url(),
+            failedRequests,
+            applicationErrors,
+            viteOutput: resource?.diagnosticOutput?.() ?? '',
+          })}`, { cause });
+        });
+        if (!response.ok) throw new Error(`preview fetch failed ${path}: ${response.status}`);
+        return response.body;
+      }));
+      const catalog = JSON.parse(payloads[0]);
+      const manifest = JSON.parse(payloads[1]);
+      const originUrl = new URL(origin);
+      const hasSharedAsset = Array.isArray(catalog) && catalog.some((entry) => {
+        if (typeof entry.packageUrl !== 'string') return false;
+        const packageUrl = new URL(entry.packageUrl, originUrl);
+        return packageUrl.origin === originUrl.origin && packageUrl.pathname.includes('/assets/');
+      });
+      if (!hasSharedAsset) throw new Error('catalog omitted shared asset URL');
+      const source = JSON.stringify(manifest);
+      if (!source.includes('alpha-test.wgsl') || !source.includes('discard')) throw new Error('shader manifest omitted alpha-test marker/discard');
+      assertApplicationBootstrap(await collectApplicationErrors(page, applicationErrors), `${origin}/blending/`);
+    },
+  );
+}
+
+const pushRecent = (entries, value, limit = 24) => {
+  entries.push(value);
+  if (entries.length > limit) entries.shift();
+};
+
+function diagnosticsForHmrFailure(frames, requests, responses, resource) {
+  return JSON.stringify({
+    recentWebSocketFrames: frames,
+    shaderRequests: requests,
+    shaderResponses: responses,
+    viteOutput: resource.diagnosticOutput?.() ?? '',
+  });
+}
+
+async function waitForDeadline(promise, timeoutMs, message) {
+  let timer;
   try {
-    const page = await browser.newPage();
-    const applicationErrors = [];
-    page.on('pageerror', (error) => applicationErrors.push(`PAGEERROR: ${error.message}`));
-    page.on('console', (message) => {
-      if (message.type() === 'error') applicationErrors.push(`CONSOLE-ERR: ${message.text()}`);
-    });
-    await page.goto(`${origin}/blending/`, { waitUntil: 'networkidle', timeout: 30_000 });
-    await page.waitForTimeout(1_000);
-    const urls = ['/blending/pack-index.json', '/blending/shaders/manifest.json'];
-    const payloads = await Promise.all(urls.map(async (path) => {
-      const response = await page.evaluate(async (url) => { const r = await fetch(url); return { ok: r.ok, status: r.status, body: await r.text() }; }, path);
-      if (!response.ok) throw new Error(`preview fetch failed ${path}: ${response.status}`);
-      return response.body;
-    }));
-    const catalog = JSON.parse(payloads[0]);
-    const manifest = JSON.parse(payloads[1]);
-    const originUrl = new URL(origin);
-    const hasSharedAsset = Array.isArray(catalog) && catalog.some((entry) => {
-      if (typeof entry.packageUrl !== 'string') return false;
-      const packageUrl = new URL(entry.packageUrl, originUrl);
-      return packageUrl.origin === originUrl.origin && packageUrl.pathname.includes('/assets/');
-    });
-    if (!hasSharedAsset) throw new Error('catalog omitted shared asset URL');
-    const source = JSON.stringify(manifest);
-    if (!source.includes('alpha-test.wgsl') || !source.includes('discard')) throw new Error('shader manifest omitted alpha-test marker/discard');
-    assertApplicationBootstrap(applicationErrors, `${origin}/blending/`);
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); }),
+    ]);
   } finally {
-    await browser.close();
+    clearTimeout(timer);
   }
 }
 
-async function hmrCheck(origin, original) {
-  const browser = await chromium.launch({ headless: true, channel: process.env.FORGEAX_CHROME_CHANNEL || 'chrome' });
-  try {
-    const page = await browser.newPage();
-    const applicationErrors = [];
-    page.on('pageerror', (error) => applicationErrors.push(`PAGEERROR: ${error.message}`));
-    page.on('console', (message) => {
-      if (message.type() === 'error') applicationErrors.push(`CONSOLE-ERR: ${message.text()}`);
-    });
-    const session = await page.context().newCDPSession(page);
-    const frames = [];
-    await session.send('Network.enable');
-    session.on('Network.webSocketFrameReceived', ({ response }) => frames.push(response.payloadData));
-    await page.goto(`${origin}/blending/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForTimeout(1_000);
-    assertApplicationBootstrap(applicationErrors, `${origin}/blending/`);
-    // `domcontentloaded` precedes Vite's HMR WebSocket handshake on a busy
-    // runner. Mutating before the server sends its protocol `connected` frame
-    // produces a legitimate update that this browser was never subscribed to.
-    const connectionDeadline = Date.now() + 10_000;
-    while (Date.now() < connectionDeadline && !frames.some((frame) => frame.includes('connected'))) await new Promise((resolve) => setTimeout(resolve, 100));
-    if (!frames.some((frame) => frame.includes('connected'))) throw new Error('custom-shader-hmr: Vite HMR client did not connect');
-    await writeFile(alphaPath, `${original}\n// probe alpha threshold variant ${Date.now()}\n`);
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && !frames.some((frame) => frame.includes('alpha-test') && frame.includes('update'))) await new Promise((resolve) => setTimeout(resolve, 100));
-    if (!frames.some((frame) => frame.includes('alpha-test') && frame.includes('update'))) throw new Error('custom-shader-hmr: target alpha-test update was not observed');
-  } finally {
-    await browser.close();
-  }
+async function hmrCheck(origin, original, resource) {
+  return withBrowserRecovery(
+    'HMR browser',
+    browserLaunchOptions,
+    async (browser) => {
+      const page = await browser.newPage(browserViewport);
+      await page.addInitScript(() => { globalThis.__learnRenderErrors = []; });
+      const applicationErrors = [];
+      page.on('pageerror', (error) => applicationErrors.push(`PAGEERROR: ${error.message}`));
+      page.on('console', (message) => {
+        if (message.type() === 'error') applicationErrors.push(`CONSOLE-ERR: ${message.text()}`);
+      });
+      const session = await page.context().newCDPSession(page);
+      const frames = [];
+      const shaderRequests = [];
+      const shaderResponses = [];
+      let connected = false;
+      let shaderReady = false;
+      let resolveReady;
+      const ready = new Promise((resolve) => { resolveReady = resolve; });
+      const maybeResolveReady = () => {
+        if (connected && shaderReady) resolveReady();
+      };
+      await session.send('Network.enable');
+      page.on('request', (request) => {
+        if (isTargetShaderUrl(request.url())) pushRecent(shaderRequests, { url: request.url(), method: request.method() });
+      });
+      page.on('response', (response) => {
+        if (!isTargetShaderUrl(response.url())) return;
+        const record = { url: response.url(), status: response.status(), ok: response.ok() };
+        pushRecent(shaderResponses, record);
+        if (isAlphaShaderReady(record)) {
+          shaderReady = true;
+          maybeResolveReady();
+        }
+      });
+      session.on('Network.webSocketFrameReceived', ({ response }) => {
+        pushRecent(frames, response.payloadData);
+        try {
+          const frame = JSON.parse(response.payloadData);
+          if (frame?.type === 'connected') {
+            connected = true;
+            maybeResolveReady();
+          }
+        } catch {}
+      });
+      await page.goto(`${origin}/blending/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      assertApplicationBootstrap(await collectApplicationErrors(page, applicationErrors), `${origin}/blending/`);
+      await waitForDeadline(
+        ready,
+        10_000,
+        `custom-shader-hmr: shader/HMR readiness not observed ${diagnosticsForHmrFailure(frames, shaderRequests, shaderResponses, resource)}`,
+      );
+      let resolveUpdate;
+      const update = new Promise((resolve) => { resolveUpdate = resolve; });
+      const onUpdate = ({ response }) => {
+        if (isTargetViteHmrUpdate(response.payloadData)) resolveUpdate();
+      };
+      session.on('Network.webSocketFrameReceived', onUpdate);
+      try {
+        await writeFile(alphaPath, `${original}\n// probe alpha threshold variant ${Date.now()}\n`);
+        await waitForDeadline(
+          update,
+          10_000,
+          `custom-shader-hmr: target alpha-test update was not observed ${diagnosticsForHmrFailure(frames, shaderRequests, shaderResponses, resource)}`,
+        );
+      } finally {
+        session.off('Network.webSocketFrameReceived', onUpdate);
+      }
+    },
+  );
 }
 
 async function main() {
   const previousSharedMode = process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
+  const previousSharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
   process.env.FORGEAX_SHARED_APP_INPUTS_MODE = 'catalog-only';
   const tempRoot = await mkdtemp(resolve(tmpdir(), 'forgeax-blending-probe-'));
   try {
     const sharedRoot = resolve(tempRoot, 'shared-app-inputs');
     const manifest = await resolveSharedInputs(sharedRoot);
+    // The preview and dev servers must consume the exact immutable projection
+    // produced above.  buildApp() passes it only to its child process; without
+    // forwarding it here the HMR server silently falls back to source shader
+    // compilation, making cold startup both much slower and unlike CI.
+    process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = manifest;
     await buildApp(manifest);
-    await withServerLifecycle(startViteServer({ mode: 'preview', root: appRoot, base: '/blending/', port: 0 }), async ({ origin, server }) => {
-      await pollHttpReady(`${origin}/blending/`, { stage: 'preview-readiness' });
-      await browserCheck(origin);
-      if (!server) throw new Error('preview server missing');
+    await withServerLifecycle(startViteServer({ mode: 'preview', root: appRoot, base: '/blending/', port: 0 }), async (resource) => {
+      await pollHttpReady(`${resource.origin}/blending/`, { stage: 'preview-readiness' });
+      await browserCheck(resource.origin, resource);
+      if (!resource.process) throw new Error('preview server process missing');
     });
     await withRestoredFile(alphaPath, async (original) => {
-      await withServerLifecycle(startViteServer({ mode: 'dev', root: appRoot, base: '/blending/', port: 0 }), async ({ origin }) => {
-        await pollHttpReady(`${origin}/blending/`, { stage: 'preview-fetch' });
-        await hmrCheck(origin, original);
+      await withServerLifecycle(startViteServer({ mode: 'dev', root: appRoot, base: '/blending/', port: 0 }), async (resource) => {
+        await pollHttpReady(`${resource.origin}/blending/`, { stage: 'preview-fetch' });
+        await hmrCheck(resource.origin, original, resource);
       });
     });
     process.stdout.write('shared-input browser probe passed\n');
@@ -150,6 +328,8 @@ async function main() {
     await rm(tempRoot, { recursive: true, force: true });
     if (previousSharedMode === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
     else process.env.FORGEAX_SHARED_APP_INPUTS_MODE = previousSharedMode;
+    if (previousSharedManifest === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+    else process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = previousSharedManifest;
   }
 }
 

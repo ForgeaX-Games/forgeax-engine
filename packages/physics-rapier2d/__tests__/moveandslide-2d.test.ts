@@ -27,7 +27,7 @@ import {
   RigidBodyTypeValue,
   registerPhysicsComponents,
 } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import {
   createRapier2DPhysicsWorld,
@@ -40,8 +40,14 @@ type Vec2Tuple = [number, number];
 function prepareWorld(): World {
   const world = new World();
   world.components.register(Transform).unwrap();
+  world.components.register(GlobalTransform).unwrap();
   registerPhysicsComponents(world);
   return world;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: test fixture accepts the ECS spawn component tuple.
+function spawnPairedEntity(world: World, ...components: any[]) {
+  return world.spawn(...components);
 }
 
 describe('moveAndSlide 2D (AC-12)', () => {
@@ -61,8 +67,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     cc?: Record<string, number>,
     bodyType: number = RigidBodyTypeValue.kinematic,
   ): number {
-    const entity = world
-      .spawn(
+    const entity = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [pos[0], pos[1], 0]} },
         { component: RigidBody as never, data: { type: bodyType } },
         {
@@ -76,8 +81,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
   }
 
   function spawnStaticBox(world: World, pos: Vec2Tuple, halfExtents: Vec2Tuple): number {
-    const entity = world
-      .spawn(
+    const entity = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [pos[0], pos[1], 0]} },
         { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
         {
@@ -406,8 +410,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
       registerPhysicsSystems2D(world);
 
       // Plain kinematic body (no CharacterController) — Transform drives it.
-      const platform = world
-        .spawn(
+      const platform = spawnPairedEntity(world,
           { component: Transform as never, data: { pos: [5, 2, 0]} },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           { component: Collider as never, data: { shape: 0, halfExtents: [1, 0.2] } },

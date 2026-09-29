@@ -4,6 +4,8 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
+import type { TextureAsset } from '@forgeax/engine-types';
 import {
   Camera,
   DEFAULT_STANDARD_PROFILE,
@@ -13,17 +15,23 @@ import {
   MeshRenderer,
   PointLight,
   SpotLight,
+  TONEMAP_ACES_FILMIC,
 } from '@forgeax/engine-render';
 import type { RendererLegacyHostAdapter } from '@forgeax/engine-render/internal/construct-renderer';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { Transform } from '@forgeax/engine-scene';
 import { buildEngineShaderManifest } from '@forgeax/engine-vite-plugin-shader';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { readbackTexturePixels } from '../../../../../../packages/rhi-debug/src/readback';
 import sceneCaseSchema from '../../../schemas/scene-case.schema.json' with { type: 'json' };
 import { createForgeaxAdapter } from '../../../src/adapters/forgeax-adapter';
 import { createThreeAdapter } from '../../../src/adapters/three-adapter';
-import { projectObservation, validateAttachmentEvidence, type AttachmentEvidence } from '../../../src/capture/attachment-readback';
+import {
+  decodeLinearHdrRgba16Float,
+  projectObservation,
+  validateAttachmentEvidence,
+  type AttachmentEvidence,
+} from '../../../src/capture/attachment-readback';
 import { probeReadback } from '../../../src/capture/readback-probe';
 import type { CaptureConfig } from '../../../src/capture/named-capture';
 import { runParityMatrix } from '../../../src/cli/run-parity';
@@ -34,8 +42,17 @@ import { createPipelineEvidenceArtifact, writePipelineEvidence } from '../../../
 import { readbackRgba16float } from '../../../src/capture/rhi-readback';
 import {
   asSceneCase,
+  compareSpotShadowRoi,
+  compareSpotShadowToCanonicalExpected,
+  createDirectLightCanonicalExpected,
+  createDirectLightPairedRecord,
+  currentDirectLightExactSha,
+  directLightCarrierIdentity,
+  directLightUnavailableByApi,
   measureSpotShadowDelta,
+  perturbDirectLightCanonicalExpected,
   SPOT_SHADOW_SCENES,
+  type DirectLightProvenance,
   type SpotShadowFalsifierId,
   type SpotShadowReceiverVariant,
   type SpotShadowScene,
@@ -43,18 +60,51 @@ import {
 
 const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 // The direct-light matrix is a static producer contract. Its Browser parity
-// adapter uses the same bounded 60-frame warmup while each artifact retains its
-// producer-local frameId; the required 300-frame stability budget stays in the Dawn smoke fleet.
-const SPOT_SHADOW_CAPTURE_FRAMES = 300;
-const SPOT_SHADOW_FALSIFIER_CAPTURE_FRAMES = 60;
-const casePaths = ['directional-urp', 'point-urp', 'spot-urp', 'khr-spot-urp'].map((name) =>
-  resolve(import.meta.dirname, `../cases/${name}.json`),
+// adapter uses the same bounded 2-frame warmup while each artifact retains its
+// producer-local frameId. The CI job opts into the bounded warmup because the
+// partition runner already provides a fresh native process; local and nightly
+// runs keep the longer window for debugging and full evidence collection.
+const SPOT_SHADOW_CAPTURE_FRAMES = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 2 : 60;
+const SPOT_SHADOW_FALSIFIER_CAPTURE_FRAMES =
+  process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 2 : 60;
+// The partition runner gives each scene group a fresh native process.
+// On Ubuntu lavapipe, the paired and falsifier captures can legitimately exceed
+// the ordinary two-minute per-test budget. The runner bounds the complete
+// process lifetime; keep the shorter default for a direct Vitest invocation.
+const SPOT_SHADOW_HEAVY_TEST_TIMEOUT_MS = process.env.FORGEAX_DAWN_PARTITION === undefined
+  ? 120_000
+  : 600_000;
+const lightCaseNames = ['directional', 'point', 'spot', 'khr-spot'] as const;
+const casePaths = lightCaseNames.map((name) =>
+  resolve(import.meta.dirname, `../cases/${name}-urp.json`),
 );
-const hdrpCasePaths = ['directional-hdrp', 'point-hdrp', 'spot-hdrp', 'khr-spot-hdrp'].map((name) =>
-  resolve(import.meta.dirname, `../cases/${name}.json`),
+const hdrpCasePaths = lightCaseNames.map((name) =>
+  resolve(import.meta.dirname, `../cases/${name}-hdrp.json`),
 );
 const validate = new Ajv2020({ allErrors: true, strict: false }).compile(sceneCaseSchema);
 type DawnEngineManifest = Awaited<ReturnType<typeof buildEngineShaderManifest>>;
+
+async function dawnProvenance(backend: string): Promise<DirectLightProvenance> {
+  const adapter = navigator.gpu === undefined ? null : await navigator.gpu.requestAdapter();
+  const info = (adapter as unknown as { readonly info?: Record<string, unknown> } | null)?.info;
+  const adapterInfo = info === undefined
+    ? directLightUnavailableByApi('GPUAdapter.info is absent in the Dawn carrier')
+    : { value: Object.fromEntries(Object.entries(info).map(([key, value]) => [key, String(value)])), source: 'GPUAdapter.info' };
+  const versions = process.versions as unknown as Record<string, string | undefined>;
+  return {
+    os: { value: process.platform, source: 'node:process.platform' },
+    arch: { value: process.arch, source: 'node:process.arch' },
+    runtime: { value: process.version, source: 'node:process.version' },
+    browser: directLightUnavailableByApi('Dawn is a Node carrier and has no browser identity'),
+    backend: { value: backend, source: 'live linear-HDR observation.backendId' },
+    adapter: { value: adapter === null ? 'unavailable-by-api' : 'available', source: 'navigator.gpu.requestAdapter()' },
+    device: { value: 'available-by-capture', source: 'live Dawn capture created and read back linear HDR bytes' },
+    adapterInfo,
+    adapterCreation: { value: adapter === null ? 'unavailable-by-api' : 'available', source: 'navigator.gpu.requestAdapter()' },
+    deviceCreation: { value: 'available-by-capture', source: 'live Dawn capture' },
+    ...(versions.dawn === undefined ? {} : { dawnVersion: { value: versions.dawn, source: 'node:process.versions.dawn' } }),
+  };
+}
 
 function mutateSpotShaderSource(source: string, falsifier: string): string {
   if (falsifier === 'tile-minus-one' || falsifier === 'wrong-tile') {
@@ -103,28 +153,53 @@ function applySpotShaderFalsifier(manifest: DawnEngineManifest, falsifier: strin
 const manifestPath = process.env.FORGEAX_DAWN_SHADER_MANIFEST;
 const sourceManifest = manifestPath === undefined
   ? await buildEngineShaderManifest()
-  : JSON.parse(readFileSync(manifestPath, 'utf8')) as DawnEngineManifest;
+  : await readShaderManifestPublication(
+      JSON.parse(readFileSync(manifestPath, 'utf8')),
+    ) as DawnEngineManifest;
 const ENGINE_MANIFEST = process.env.FORGEAX_DAWN_SPOT_SHADOW_FALSIFIER === undefined
   ? sourceManifest
   : applySpotShaderFalsifier(sourceManifest, process.env.FORGEAX_DAWN_SPOT_SHADOW_FALSIFIER);
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(
+  new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
+);
+afterAll(() => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 interface DawnSurface {
   readonly canvas: HTMLCanvasElement;
   readonly getTexture: () => GPUTexture;
   readonly getFormat: () => string;
+  readonly dispose: () => Promise<void>;
 }
 
 interface CapturedProducerEvidence {
   readonly evidence: AttachmentEvidence;
-  readonly pipelineId: 'forgeax::urp' | 'forgeax::hdrp';
+  readonly pipelineId: 'forgeax::standard';
   readonly copySrc: boolean;
   readonly lifetime: 'active' | 'retired';
   readonly size: { readonly width: number; readonly height: number };
+  readonly errorCodes: readonly string[];
+}
+
+/**
+ * A deliberately high-contrast cookie for the live surface falsifier.  The
+ * texture is authored in the same TextureAsset POD shape used by a game
+ * project, then resolved through the normal World shared-ref and GPU-resident
+ * paths; no test-only shader or bind group is involved.
+ */
+function projectorTexture(): TextureAsset {
+  return {
+    kind: 'texture',
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
+    format: 'rgba8unorm',
+    data: Uint8Array.from([0, 0, 0, 255]),
+    colorSpace: 'linear',
+    mips: { kind: 'none' },
+  };
 }
 
 function createDawnSurface(width: number, height: number): DawnSurface {
   let texture: GPUTexture | undefined;
+  let device: GPUDevice | undefined;
   let format = 'rgba8unorm';
   const canvas = {
     width,
@@ -133,6 +208,8 @@ function createDawnSurface(width: number, height: number): DawnSurface {
       if (kind !== 'webgpu') return null;
       return {
         configure(desc: { device: GPUDevice; format?: GPUTextureFormat }) {
+          texture?.destroy();
+          device = desc.device;
           format = desc.format ?? 'rgba8unorm';
           texture = desc.device.createTexture({
             size: { width, height, depthOrArrayLayers: 1 },
@@ -141,7 +218,10 @@ function createDawnSurface(width: number, height: number): DawnSurface {
             viewFormats: [format === 'rgba8unorm' ? 'rgba8unorm-srgb' : 'bgra8unorm-srgb'],
           });
         },
-        unconfigure() {},
+        unconfigure() {
+          texture?.destroy();
+          texture = undefined;
+        },
         getCurrentTexture(): GPUTexture {
           if (texture === undefined) throw new Error('Dawn surface is not configured');
           return texture;
@@ -158,6 +238,19 @@ function createDawnSurface(width: number, height: number): DawnSurface {
       return texture;
     },
     getFormat: () => format,
+    dispose: async () => {
+      try {
+        await device?.queue.onSubmittedWorkDone();
+      } finally {
+        texture?.destroy();
+        texture = undefined;
+        if (device !== undefined) {
+          device.destroy();
+          expect((await device.lost).reason).toBe('destroyed');
+          device = undefined;
+        }
+      }
+    },
   };
 }
 
@@ -167,6 +260,7 @@ function spawnHdrpScene(
   spotScene?: SpotShadowScene,
   falsifier?: SpotShadowFalsifierId,
   receiver: SpotShadowReceiverVariant = 'base',
+  projectorEnabled = false,
 ): void {
   const light = sceneCase.light;
   if (light === undefined) throw new Error(`HDRP case ${sceneCase.caseId} is missing light metadata`);
@@ -194,6 +288,7 @@ function spawnHdrpScene(
         aspect: (spotScene?.scene.width ?? sceneCase.scene.width) / (spotScene?.scene.height ?? sceneCase.scene.height),
         near: 0.1,
         far: 100,
+        tonemap: TONEMAP_ACES_FILMIC,
       },
     },
   ).unwrap();
@@ -242,6 +337,9 @@ function spawnHdrpScene(
     return;
   }
   const spot = spotScene?.light;
+  const projectorHandle = projectorEnabled
+    ? world.allocSharedRef('TextureAsset', projectorTexture())
+    : undefined;
   world.spawn(
     { component: Transform, data: { pos: spot?.position ?? [0, 0, 2] } },
     { component: SpotLight, data: {
@@ -252,6 +350,7 @@ function spawnHdrpScene(
       innerConeDeg: spot?.innerConeDeg ?? light.innerConeDeg ?? 0,
       outerConeDeg: spot?.outerConeDeg ?? light.outerConeDeg ?? 45,
       castShadow: falsifier === 'no-shadow-allocation' ? false : (spot?.castShadow ?? false),
+      ...(projectorHandle === undefined ? {} : { projector: projectorHandle }),
     } },
   ).unwrap();
 
@@ -287,7 +386,7 @@ async function readHdrpEvidence(
   device: import('@forgeax/engine-rhi').RhiDevice,
   surface: DawnSurface,
   sceneCase: SceneCase,
-  expectedPipelineId: 'forgeax::urp' | 'forgeax::hdrp',
+  expectedPipelineId: 'forgeax::standard',
 ): Promise<CapturedProducerEvidence> {
   const linearResult = await legacyHost.observeCurrentFrame({
     semantic: 'linear-hdr',
@@ -340,26 +439,34 @@ async function readHdrpEvidence(
 
 async function capturePipelineEvidence(
   sceneCase: SceneCase,
-  pipelineId: 'forgeax::urp' | 'forgeax::hdrp',
+  pipelineId: 'forgeax::standard',
   falsifier?: SpotShadowFalsifierId,
   receiver: SpotShadowReceiverVariant = 'base',
   captureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
+  projectorEnabled = false,
 ): Promise<CapturedProducerEvidence> {
   const surface = createDawnSurface(sceneCase.scene.width, sceneCase.scene.height);
-  const expectedLighting = pipelineId === 'forgeax::hdrp' ? 'clustered' : 'direct';
+  const expectedRenderPath = sceneCase.pipeline?.renderPath ?? 'forward';
   const constructed = await constructRuntimeRendererHost(
     surface.canvas,
-    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: expectedLighting } },
+    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, renderPath: expectedRenderPath } },
     { shaderManifestUrl: ENGINE_MANIFEST_URL },
   );
-  if (!constructed.ok) throw constructed.error;
-  const { renderer, debugDrawHost } = constructed.value;
-  if (renderer.inspect().profile.lighting !== expectedLighting) {
-    throw new Error(`direct-light ${pipelineId} selected ${renderer.inspect().profile.lighting} instead of ${expectedLighting}`);
+  if (!constructed.ok) {
+    await surface.dispose();
+    throw constructed.error;
   }
+  const { renderer, debugDrawHost } = constructed.value;
   const legacyHost = debugDrawHost as unknown as RendererLegacyHostAdapter;
+  const errorCodes: string[] = [];
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') errorCodes.push(event.error.code);
+  });
   let lease: import('@forgeax/engine-render').RenderWorldLease | undefined;
   try {
+    if (renderer.inspect().profile.renderPath !== expectedRenderPath) {
+      throw new Error(`direct-light ${pipelineId} selected ${renderer.inspect().profile.renderPath} instead of ${expectedRenderPath}`);
+    }
     const world = new World();
     const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
@@ -369,7 +476,7 @@ async function capturePipelineEvidence(
       : sceneCase.caseId === 'direct-spot-hdrp'
         ? SPOT_SHADOW_SCENES.hdrp
         : undefined;
-    spawnHdrpScene(world, sceneCase, spotScene, falsifier, receiver);
+    spawnHdrpScene(world, sceneCase, spotScene, falsifier, receiver, projectorEnabled);
     world.update().unwrap();
     for (let frame = 0; frame < captureFrames; frame += 1) {
       const drawn = renderer.draw({
@@ -382,10 +489,18 @@ async function capturePipelineEvidence(
       if (!completed.ok) throw completed.error;
       if (frame + 1 < captureFrames) world.update().unwrap();
     }
-    return await readHdrpEvidence(legacyHost, debugDrawHost.device, surface, sceneCase, pipelineId);
+    return {
+      ...(await readHdrpEvidence(legacyHost, debugDrawHost.device, surface, sceneCase, pipelineId)),
+      errorCodes,
+    };
   } finally {
     lease?.dispose();
-    await renderer.dispose();
+    try {
+      const disposed = await renderer.dispose();
+      if (!disposed.ok) throw disposed.error;
+    } finally {
+      await surface.dispose();
+    }
   }
 }
 
@@ -475,13 +590,13 @@ describe('direct-light Dawn evidence contract', () => {
     for (const receiver of ['base', 'clearcoat'] as const) {
       const urpCapture = await capturePipelineEvidence(
         asSceneCase(SPOT_SHADOW_SCENES.urp, 'urp'),
-        'forgeax::urp',
+        'forgeax::standard',
         undefined,
         receiver,
       );
       const hdrpCapture = await capturePipelineEvidence(
         asSceneCase(scene, 'hdrp'),
-        'forgeax::hdrp',
+        'forgeax::standard',
         undefined,
         receiver,
       );
@@ -493,15 +608,27 @@ describe('direct-light Dawn evidence contract', () => {
       const urpMetrics = measureSpotShadowDelta(urpBytes, SPOT_SHADOW_SCENES.urp);
       const hdrpMetrics = measureSpotShadowDelta(hdrpBytes, scene);
 
-      expect(urpCapture.pipelineId).toBe('forgeax::urp');
-      expect(hdrpCapture.pipelineId).toBe('forgeax::hdrp');
+      expect(urpCapture.pipelineId).toBe('forgeax::standard');
+      expect(hdrpCapture.pipelineId).toBe('forgeax::standard');
       expect(urpCapture.evidence.linearHdr.status).toBe('ready');
       expect(hdrpCapture.evidence.linearHdr.status).toBe('ready');
       expect(urpMetrics.delta, `${receiver} URP metrics`).toBeGreaterThan(scene.threshold.shadowDelta);
       expect(hdrpMetrics.delta, JSON.stringify({ receiver, urpMetrics, hdrpMetrics })).toBeGreaterThan(scene.threshold.shadowDelta);
       expect(Math.abs(urpMetrics.delta - hdrpMetrics.delta), `${receiver} cross-pipeline metrics`).toBeLessThanOrEqual(scene.threshold.pipelineEpsilon);
+      const record = createDirectLightPairedRecord({
+        exactSha: currentDirectLightExactSha(),
+        scene,
+        receiver,
+        legacyProjectedExpected: urpMetrics,
+        dawn: {
+          ...directLightCarrierIdentity('dawn', hdrpCapture.evidence.linearHdr.backendId ?? 'unavailable-by-api'),
+          observed: hdrpMetrics,
+          provenance: await dawnProvenance(hdrpCapture.evidence.linearHdr.backendId ?? 'unavailable-by-api'),
+        },
+      });
+      console.log(`DIRECT_LIGHT_PAIRED_RECORD ${JSON.stringify(record)}`);
     }
-  }, 120_000);
+  }, SPOT_SHADOW_HEAVY_TEST_TIMEOUT_MS);
 
   it('reports HDRP spot-shadow falsifier pixels for an external baseline comparison', async () => {
     if (process.env.FORGEAX_DAWN_SPOT_SHADOW_METRICS !== '1') return;
@@ -515,7 +642,7 @@ describe('direct-light Dawn evidence contract', () => {
     const sceneFalsifier = process.env.FORGEAX_DAWN_SPOT_SHADOW_SCENE_FALSIFIER as SpotShadowFalsifierId | undefined;
     const capture = await capturePipelineEvidence(
       asSceneCase(scene, metricPipeline),
-      metricPipeline === 'urp' ? 'forgeax::urp' : 'forgeax::hdrp',
+      'forgeax::standard',
       sceneFalsifier,
     );
     const bytes = capture.evidence.linearHdr.bytes;
@@ -523,10 +650,17 @@ describe('direct-light Dawn evidence contract', () => {
       throw new Error(`${falsifier ?? 'baseline'} linear HDR bytes are unavailable`);
     }
     const metrics = measureSpotShadowDelta(bytes, scene);
+    const canonical = createDirectLightCanonicalExpected(scene);
+    const perturbedExpected = perturbDirectLightCanonicalExpected(canonical, 'base', 0, canonical.epsilonAbs + 0.01);
+    const canonicalComparison = compareSpotShadowToCanonicalExpected(perturbedExpected, 'base', metrics);
+    expect(canonicalComparison.verdict).toBe('non-pass');
     const record = {
       falsifier: falsifier ?? sceneFalsifier ?? 'baseline',
       bytes: bytes.byteLength,
       metrics,
+      roi: scene.roi,
+      epsilonAbs: canonical.epsilonAbs,
+      canonicalComparison,
       hash: capture.evidence.linearHdr.rawHash,
     };
     console.log(`SPOT_SHADOW_METRICS ${JSON.stringify(record)}`);
@@ -534,18 +668,18 @@ describe('direct-light Dawn evidence contract', () => {
     if (metricsPath !== undefined) {
       writeFileSync(metricsPath, JSON.stringify(record));
     }
-    expect(capture.pipelineId).toBe(metricPipeline === 'urp' ? 'forgeax::urp' : 'forgeax::hdrp');
+    expect(capture.pipelineId).toBe('forgeax::standard');
     expect(Number.isFinite(metrics.delta)).toBe(true);
   }, 120_000);
 
-  it('keeps no-caster and no-shadow-allocation as real-pixel falsifiers', async () => {
-    if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for spot-shadow falsifiers');
-    const pipelineCases = [
-      { scene: SPOT_SHADOW_SCENES.urp, pipeline: 'urp' as const, pipelineId: 'forgeax::urp' as const },
-      { scene: SPOT_SHADOW_SCENES.hdrp, pipeline: 'hdrp' as const, pipelineId: 'forgeax::hdrp' as const },
-    ];
-    for (const pipelineCase of pipelineCases) {
-      for (const receiver of ['base', 'clearcoat'] as const) {
+  for (const pipelineCase of [
+    { scene: SPOT_SHADOW_SCENES.urp, pipeline: 'urp' as const, pipelineId: 'forgeax::standard' as const },
+    { scene: SPOT_SHADOW_SCENES.hdrp, pipeline: 'hdrp' as const, pipelineId: 'forgeax::standard' as const },
+  ]) {
+    for (const receiver of ['base', 'clearcoat'] as const) {
+      it(`keeps no-caster and no-shadow-allocation as real-pixel falsifiers (${pipelineCase.pipeline}/${receiver})`, async () => {
+        if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for spot-shadow falsifiers');
+        const provenance = await dawnProvenance(pipelineCase.pipelineId);
         const baseline = await capturePipelineEvidence(
           asSceneCase(pipelineCase.scene, pipelineCase.pipeline),
           pipelineCase.pipelineId,
@@ -554,7 +688,11 @@ describe('direct-light Dawn evidence contract', () => {
           SPOT_SHADOW_FALSIFIER_CAPTURE_FRAMES,
         );
         const baselineBytes = baseline.evidence.linearHdr.bytes;
-        if (!(baselineBytes instanceof Uint8Array)) throw new Error(`${pipelineCase.pipelineId}/${receiver}/baseline linear HDR bytes are unavailable`);
+        if (!(baselineBytes instanceof Uint8Array)) {
+          throw new Error(
+            `${pipelineCase.pipelineId}/${receiver}/baseline linear HDR bytes are unavailable`,
+          );
+        }
         const baselineMetrics = measureSpotShadowDelta(baselineBytes, pipelineCase.scene);
         for (const falsifier of ['no-caster', 'no-shadow-allocation', 'reverse-occlusion'] as const) {
           const capture = await capturePipelineEvidence(
@@ -579,10 +717,101 @@ describe('direct-light Dawn evidence contract', () => {
               baselineMetrics.delta,
             );
           }
+          const comparison = compareSpotShadowRoi(
+            baselineMetrics,
+            metrics,
+            pipelineCase.scene.threshold.shadowDelta,
+          );
+          expect(comparison.verdict, `${pipelineCase.pipelineId}/${receiver}/${falsifier} ROI falsifier`).toBe('non-pass');
+          console.log(`DIRECT_LIGHT_FALSIFIER_RECORD ${JSON.stringify({
+            exactSha: currentDirectLightExactSha(),
+            scene: { caseId: pipelineCase.scene.caseId, receiver, roi: pipelineCase.scene.roi, colorDomain: 'linearHdr' },
+            adapter: directLightCarrierIdentity('dawn', capture.evidence.linearHdr.backendId ?? 'unavailable-by-api'),
+            provenance,
+            falsifier,
+            comparison,
+          })}`);
         }
-      }
+      }, SPOT_SHADOW_HEAVY_TEST_TIMEOUT_MS);
     }
-  }, 120_000);
+  }
+  it('changes a fog-disabled surface for the same SpotLight projector in shadowed and projector-only paths', async () => {
+    if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for projector surface falsifier');
+    const adapter = await navigator.gpu.requestAdapter();
+    const sampledTextureLimit = adapter?.limits.maxSampledTexturesPerShaderStage ?? 0;
+    // The Standard PBR projector variant adds the 17th sampled texture. Keep
+    // the test truthful on WebGPU-minimum adapters: the production capability
+    // gate intentionally selects the white-projector variant there, so there
+    // is no real projector path to falsify. CI heavy adapters with the raised
+    // limit execute the two live on/off captures below.
+    if (sampledTextureLimit < 17) {
+      console.info(`PROJECTOR_SURFACE_NOT_RUN maxSampledTexturesPerShaderStage=${sampledTextureLimit} required=17`);
+      return;
+    }
+    // Use the forward Standard surface for the pixel falsifier. HDRP's
+    // deferred lighting producer intentionally consumes only the G-buffer;
+    // the shared clustered SpotLight evaluator (and its projector binding)
+    // is exercised by the forward lane while URP/HDRP topology parity is
+    // covered by the paired evidence test above.
+    const scene = asSceneCase(SPOT_SHADOW_SCENES.urp, 'urp');
+    for (const [path, falsifier] of [
+      ['shadowed', undefined],
+      ['projector-only', 'no-shadow-allocation' as const],
+    ] as const) {
+      const projectorOff = await capturePipelineEvidence(
+        scene,
+        'forgeax::standard',
+        falsifier,
+        'base',
+        SPOT_SHADOW_FALSIFIER_CAPTURE_FRAMES,
+        false,
+      );
+      const projectorOn = await capturePipelineEvidence(
+        scene,
+        'forgeax::standard',
+        falsifier,
+        'base',
+        SPOT_SHADOW_FALSIFIER_CAPTURE_FRAMES,
+        true,
+      );
+      expect(projectorOff.errorCodes, `${path} projector-off renderer errors`).toEqual([]);
+      expect(projectorOn.errorCodes, `${path} projector-on renderer errors`).toEqual([]);
+      const offBytes = projectorOff.evidence.linearHdr.bytes;
+      const onBytes = projectorOn.evidence.linearHdr.bytes;
+      if (!(offBytes instanceof Uint8Array) || !(onBytes instanceof Uint8Array)) {
+        throw new Error(`${path} projector surface linear HDR bytes are unavailable`);
+      }
+      const offPixels = decodeLinearHdrRgba16Float(offBytes, scene.scene.width, scene.scene.height);
+      const onPixels = decodeLinearHdrRgba16Float(onBytes, scene.scene.width, scene.scene.height);
+      let changedPixels = 0;
+      let totalRgbDelta = 0;
+      let offLuma = 0;
+      let onLuma = 0;
+      for (let index = 0; index < scene.scene.width * scene.scene.height; index += 1) {
+        const offset = index * 4;
+        offLuma += (offPixels[offset] ?? 0) + (offPixels[offset + 1] ?? 0) + (offPixels[offset + 2] ?? 0);
+        onLuma += (onPixels[offset] ?? 0) + (onPixels[offset + 1] ?? 0) + (onPixels[offset + 2] ?? 0);
+        const delta = Math.abs((onPixels[offset] ?? 0) - (offPixels[offset] ?? 0))
+          + Math.abs((onPixels[offset + 1] ?? 0) - (offPixels[offset + 1] ?? 0))
+          + Math.abs((onPixels[offset + 2] ?? 0) - (offPixels[offset + 2] ?? 0));
+        totalRgbDelta += delta;
+        if (delta > 1e-3) changedPixels += 1;
+      }
+      console.log(`PROJECTOR_SURFACE_METRICS ${JSON.stringify({
+        path,
+        projectorOffHash: projectorOff.evidence.linearHdr.rawHash,
+        projectorOnHash: projectorOn.evidence.linearHdr.rawHash,
+        changedPixels,
+        totalRgbDelta,
+        offLuma,
+        onLuma,
+        projectorOffErrors: projectorOff.errorCodes,
+        projectorOnErrors: projectorOn.errorCodes,
+      })}`);
+      expect(changedPixels, `${path} projector must change real surface pixels`).toBeGreaterThan(0);
+      expect(totalRgbDelta, `${path} projector RGB delta`).toBeGreaterThan(1e-2);
+    }
+  }, SPOT_SHADOW_HEAVY_TEST_TIMEOUT_MS);
 
   it('loads the required light, import, pipeline, and finite budget fields', async () => {
     const cases = await Promise.all(casePaths.map(async (path) => {
@@ -593,7 +822,9 @@ describe('direct-light Dawn evidence contract', () => {
       if (!result.ok) throw new Error(result.error.hint);
       return result.value;
     }));
-    expect(cases.every((sceneCase) => sceneCase.pipeline?.identity === 'urp')).toBe(true);
+    expect(cases.every((sceneCase) => sceneCase.pipeline?.identity === 'standard')).toBe(true);
+    expect(cases.every((sceneCase) => sceneCase.pipeline?.engineId === 'forgeax::standard')).toBe(true);
+    expect(cases.every((sceneCase) => sceneCase.pipeline?.renderPath === 'forward')).toBe(true);
     expect(cases.every((sceneCase) => sceneCase.light?.authorityId === 'threeR184SquaredWindow')).toBe(true);
     expect(cases.every((sceneCase) => sceneCase.import?.intensityScale === 1)).toBe(true);
     expect(cases.every((sceneCase) => Number.isFinite(sceneCase.budget.analyticMax))).toBe(true);
@@ -637,7 +868,7 @@ describe('direct-light Dawn evidence contract', () => {
     );
     const report = result.cases[0]?.report;
     expect(result.ok).toBe(true);
-    expect(report?.pipeline?.engineId).toBe('forgeax::urp');
+    expect(report?.pipeline?.engineId).toBe('forgeax::standard');
     expect(report?.light?.kind).toBe('directional');
     expect(report?.import?.intensityScale).toBe(1);
     expect(report?.readback).toEqual({ forgeax: 'unavailable', three: 'unavailable' });
@@ -649,18 +880,18 @@ describe('direct-light Dawn evidence contract', () => {
     expect(adapter).not.toBeNull();
   });
 
-  it('captures independent HDRP producer evidence for every required case', async () => {
-    if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for HDRP producer evidence');
-    const cases = await Promise.all(hdrpCasePaths.map(async (path) => {
-      const result = await loadSceneCase(path);
+  for (const [index, lightKind] of lightCaseNames.entries()) {
+    it(`captures independent HDRP producer evidence (${lightKind})`, async () => {
+      if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for HDRP producer evidence');
+      const result = await loadSceneCase(hdrpCasePaths[index]!);
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error(result.error.hint);
-      return result.value;
-    }));
-    expect(cases.every((sceneCase) => sceneCase.pipeline?.identity === 'hdrp')).toBe(true);
-    for (const [index, sceneCase] of cases.entries()) {
-      const urpCapture = await capturePipelineEvidence(sceneCase, 'forgeax::urp');
-      const hdrpCapture = await capturePipelineEvidence(sceneCase, 'forgeax::hdrp');
+      const sceneCase = result.value;
+      expect(sceneCase.pipeline?.identity).toBe('standard');
+      expect(sceneCase.pipeline?.engineId).toBe('forgeax::standard');
+      expect(sceneCase.pipeline?.renderPath).toBe('deferred');
+      const urpCapture = await capturePipelineEvidence(sceneCase, 'forgeax::standard');
+      const hdrpCapture = await capturePipelineEvidence(sceneCase, 'forgeax::standard');
       const evidence = hdrpCapture.evidence;
       const sharedCaseId = sceneCase.caseId.replace(/-(urp|hdrp)$/, '');
       const audit = auditCrossPipelineEvidence({
@@ -673,13 +904,13 @@ describe('direct-light Dawn evidence contract', () => {
       expect(audit.reasons, audit.reasons.join('; ')).toEqual([]);
       expect(audit.missingPipelineIds).toEqual([]);
       expect(audit.firstDivergence).not.toBeNull();
-      const evidenceValidation = validateAttachmentEvidence(evidence, 'forgeax::hdrp');
+      const evidenceValidation = validateAttachmentEvidence(evidence, 'forgeax::standard');
       expect(evidenceValidation.ok).toBe(true);
       expect(evidence.linearHdr.status).toBe('ready');
       expect(evidence.linearHdr.format).toBe('rgba16float');
       expect(evidence.linearHdr.bytes?.byteLength).toBeGreaterThan(0);
       expect(evidence.linearHdr.rawHash).toMatch(/^[0-9a-f]{8,}$/);
-      expect(evidence.linearHdr.pipelineId).toBe('forgeax::hdrp');
+      expect(evidence.linearHdr.pipelineId).toBe('forgeax::standard');
       expect(evidence.finalDisplay.status).toBe('ready');
       expect(evidence.finalDisplay.format).toMatch(/^(rgba|bgra)8unorm$/);
       expect(evidence.finalDisplay.bytes?.byteLength).toBeGreaterThan(0);
@@ -731,8 +962,8 @@ describe('direct-light Dawn evidence contract', () => {
       );
       expect(reportResult.ok).toBe(true);
       const report = reportResult.cases[0]?.report;
-      expect(report?.attachmentEvidence?.linearHdr.pipelineId).toBe('forgeax::hdrp');
-      expect(report?.attachmentEvidence?.finalDisplay.pipelineId).toBe('forgeax::hdrp');
+      expect(report?.attachmentEvidence?.linearHdr.pipelineId).toBe('forgeax::standard');
+      expect(report?.attachmentEvidence?.finalDisplay.pipelineId).toBe('forgeax::standard');
       expect(report?.status).toBe('partial');
       const sourceCaseResult = await loadSceneCase(casePaths[index]!);
       expect(sourceCaseResult.ok).toBe(true);
@@ -744,17 +975,17 @@ describe('direct-light Dawn evidence contract', () => {
           await createHdrpArtifact(sourceCaseResult.value, hdrpCapture),
         );
       }
-    }
-  }, 120_000);
+    }, SPOT_SHADOW_HEAVY_TEST_TIMEOUT_MS);
+  }
 
   it('projects a live HDRP capture into an explicit artifact', async () => {
     if (!dawnReady) throw new Error('dawn-node navigator.gpu is required for HDRP producer evidence');
     const loaded = await loadSceneCase(casePaths[0]!);
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) throw new Error(loaded.error.hint);
-    const capture = await capturePipelineEvidence(loaded.value, 'forgeax::hdrp');
+    const capture = await capturePipelineEvidence(loaded.value, 'forgeax::standard');
     const artifact = await createHdrpArtifact(loaded.value, capture);
-    expect(artifact.pipelineId).toBe('forgeax::hdrp');
+    expect(artifact.pipelineId).toBe('forgeax::standard');
     expect(artifact.runtimeId).toBe('dawn');
     expect(artifact.source).toBe('live-producer');
     expect(artifact.linearHdr.bytes).toEqual(Array.from(capture.evidence.linearHdr.bytes ?? []));

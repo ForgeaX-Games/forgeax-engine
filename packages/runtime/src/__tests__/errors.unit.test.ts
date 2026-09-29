@@ -349,7 +349,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
       });
     });
 
-    describe('t2 - AC-15 ImageErrorCode exhaustive switch (new member)', () => {
+    describe('t2 - AC-15 ImageErrorCode exhaustive switch (new members)', () => {
       it('ImageErrorCode includes image-hdr-decode-failed', () => {
         const code: ImageErrorCode = 'image-hdr-decode-failed';
         expect(code).toBe('image-hdr-decode-failed');
@@ -378,10 +378,17 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'atlas size exceeded';
             case 'atlas-region-mismatch':
               return 'atlas region mismatch';
+            // feat-20260829-deep-agent-game-feedback-resolution M5 —
+            // PixelSurface authoring errors remain part of the closed image
+            // error vocabulary and must stay covered by every exhaustive
+            // consumer switch.
+            case 'image-surface-invalid':
+              return 'surface invalid';
           }
         }
         expect(exhaustive('image-decode-failed')).toBe('decode failed');
         expect(exhaustive('image-hdr-decode-failed')).toBe('hdr decode failed');
+        expect(exhaustive('image-surface-invalid')).toBe('surface invalid');
       });
     });
   });
@@ -394,6 +401,14 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
       it('exhaustive switch covers all members without a default branch', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'auto-exposure-invalid-parameter':
+              return 'auto exposure invalid parameter';
+            case 'auto-exposure-capability-unavailable':
+              return 'auto exposure capability unavailable';
+            case 'auto-exposure-stale-generation':
+              return 'auto exposure stale generation';
+            case 'auto-exposure-stage-failed':
+              return 'auto exposure stage failed';
             case 'lifecycle-construction-failed':
               return 'lifecycle construction failed';
             case 'world-lease-invalid':
@@ -418,14 +433,32 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'recovery failed';
             case 'cleanup-failed':
               return 'cleanup failed';
+            case 'scene-data-unavailable':
+              return 'scene data unavailable';
+            case 'standard-profile-invalid':
+              return 'standard profile invalid';
             case 'frame-receipt-stale':
               return 'frame receipt stale';
             case 'renderer-contract-failed':
               return 'renderer contract failed';
             case 'observation-unavailable':
               return 'observation unavailable';
+            case 'taa-unavailable':
+              return 'taa unavailable';
             case 'shadow-invalid-config':
               return 'shadow invalid config';
+            case 'environment-source-conflict':
+              return 'environment source conflict';
+            case 'fog-cardinality':
+              return 'fog cardinality';
+            case 'taa-caps-insufficient':
+              return 'taa caps insufficient';
+            case 'environment-generation-failed':
+              return 'environment generation failed';
+            case 'atmosphere-invalid-parameter':
+              return 'atmosphere invalid parameter';
+            case 'owner-stage-failed':
+              return 'owner stage failed';
             case 'skin-joint-count-exceeded':
               return 'skin joint count exceeded';
             case 'skin-joint-despawned':
@@ -448,14 +481,24 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'mesh ssbo capacity exceeded';
             case 'mesh-ssbo-ceiling-reached':
               return 'mesh ssbo ceiling reached';
-            case 'hdrp-light-budget-exceeded':
-              return 'hdrp light budget exceeded';
-            case 'hdrp-index-list-overflow':
-              return 'hdrp index list overflow';
-            // feat-20260612-hdrp-deferred-shading-learn-render-5-8 M1 / w6:
-            // 3 new deferred-path error codes.
-            case 'hdrp-deferred-caps-insufficient':
-              return 'hdrp deferred caps insufficient';
+            case 'render-target-descriptor-invalid':
+              return 'render target descriptor invalid';
+            case 'render-target-capability-missing':
+              return 'render target capability missing';
+            case 'render-target-state-invalid':
+              return 'render target state invalid';
+            case 'render-target-operation-failed':
+              return 'render target operation failed';
+            case 'reflection-probe-budget-exceeded':
+              return 'reflection probe budget exceeded';
+            case 'render-intent-invalid':
+              return 'render intent invalid';
+            case 'standard-light-budget-exceeded':
+              return 'standard light budget exceeded';
+            case 'standard-cluster-index-overflow':
+              return 'standard cluster index overflow';
+            case 'standard-cluster-transport-unavailable':
+              return 'standard cluster transport unavailable';
             // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
             // bidirectional Skin <-> pbr-skin material mismatch detected at extract.
             case 'skin-material-mismatch':
@@ -512,6 +555,20 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'points lines budget exceeded';
             case 'points-lines-prepare-failed':
               return 'points lines prepare failed';
+            case 'light-resource-unavailable':
+              return 'light resource unavailable';
+            case 'transmission-capability-missing':
+              return 'transmission capability missing';
+            case 'projector-binding-failed':
+              return 'projector binding failed';
+            case 'volume-owner-conflict':
+              return 'volume owner conflict';
+            case 'volume-density-shape-mismatch':
+              return 'volume density shape mismatch';
+            case 'volume-invalid-bounds':
+              return 'volume invalid bounds';
+            case 'volume-invalid-parameters':
+              return 'volume invalid parameters';
           }
         }
         expect(exhaustive('equirect-projection-failed')).toBe('equirect projection failed');
@@ -523,21 +580,25 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
     });
 
     /*
-     * feat-20260612-hdrp-deferred-shading-learn-render-5-8 M1 / w3:
-     * RuntimeErrorCode +3 members — exhaustive narrow test.
+     * Standard lighting closed error codes — exhaustive narrow test.
      *
-     * AC-07: three new error codes must be members of RuntimeErrorCode closed union.
+     * AC-07: three Standard lighting codes are members of the closed render union.
      * Each error code narrows without a default branch in switch (err.code).
      */
-    describe('RuntimeErrorCode +3 new members (w3)', () => {
-      it('hdrp-deferred-caps-insufficient is a valid RuntimeErrorCode', () => {
-        const code: RuntimeLayerErrorCode = 'hdrp-deferred-caps-insufficient';
-        expect(code).toBe('hdrp-deferred-caps-insufficient');
+    describe('Standard lighting error members', () => {
+      it('standard-cluster-transport-unavailable is a valid RenderErrorCode', () => {
+        const code: RuntimeLayerErrorCode = 'standard-cluster-transport-unavailable';
+        expect(code).toBe('standard-cluster-transport-unavailable');
       });
 
       it('exhaustive switch covers all 3 new members alongside existing members', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'auto-exposure-invalid-parameter':
+            case 'auto-exposure-capability-unavailable':
+            case 'auto-exposure-stale-generation':
+            case 'auto-exposure-stage-failed':
+              return 'ok';
             case 'lifecycle-construction-failed':
               return 'ok';
             case 'world-lease-invalid':
@@ -562,13 +623,30 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'cleanup-failed':
               return 'ok';
+            case 'scene-data-unavailable':
+            case 'standard-profile-invalid':
+              return 'ok';
             case 'frame-receipt-stale':
               return 'ok';
             case 'renderer-contract-failed':
               return 'ok';
             case 'observation-unavailable':
               return 'ok';
+            case 'taa-unavailable':
+              return 'ok';
             case 'shadow-invalid-config':
+              return 'ok';
+            case 'environment-source-conflict':
+              return 'ok';
+            case 'fog-cardinality':
+              return 'ok';
+            case 'taa-caps-insufficient':
+              return 'ok';
+            case 'environment-generation-failed':
+              return 'ok';
+            case 'atmosphere-invalid-parameter':
+              return 'ok';
+            case 'owner-stage-failed':
               return 'ok';
             case 'skin-joint-count-exceeded':
               return 'ok';
@@ -592,9 +670,9 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'mesh-ssbo-ceiling-reached':
               return 'ok';
-            case 'hdrp-light-budget-exceeded':
+            case 'standard-light-budget-exceeded':
               return 'ok';
-            case 'hdrp-index-list-overflow':
+            case 'standard-cluster-index-overflow':
               return 'ok';
             case 'skin-material-mismatch':
               return 'ok';
@@ -606,7 +684,19 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'joint-entity-dangling':
               return 'ok';
-            case 'hdrp-deferred-caps-insufficient':
+            case 'standard-cluster-transport-unavailable':
+              return 'ok';
+            case 'render-target-descriptor-invalid':
+              return 'ok';
+            case 'render-target-capability-missing':
+              return 'ok';
+            case 'render-target-state-invalid':
+              return 'ok';
+            case 'render-target-operation-failed':
+              return 'ok';
+            case 'reflection-probe-budget-exceeded':
+              return 'ok';
+            case 'render-intent-invalid':
               return 'ok';
             case 'point-shadow-atlas-uninitialized':
               return 'ok';
@@ -644,9 +734,22 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'points-lines-prepare-failed':
               return 'ok';
+            case 'light-resource-unavailable':
+            case 'transmission-capability-missing':
+              return 'ok';
+            case 'projector-binding-failed':
+              return 'ok';
+            case 'volume-owner-conflict':
+              return 'ok';
+            case 'volume-density-shape-mismatch':
+              return 'ok';
+            case 'volume-invalid-bounds':
+              return 'ok';
+            case 'volume-invalid-parameters':
+              return 'ok';
           }
         }
-        expect(exhaustive('hdrp-deferred-caps-insufficient')).toBe('ok');
+        expect(exhaustive('standard-cluster-transport-unavailable')).toBe('ok');
         expect(exhaustive('point-shadow-atlas-uninitialized')).toBe('ok');
         expect(exhaustive('point-shadow-atlas-bounds-violation')).toBe('ok');
       });

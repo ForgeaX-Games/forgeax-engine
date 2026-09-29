@@ -30,6 +30,8 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
   it('type-level: exhaustive switch on Asset.kind includes "video" arm without default', () => {
     function describeKind(a: Asset): string {
       switch (a.kind) {
+        case 'plugin':
+          return 'plugin';
         case 'mesh':
           return 'mesh';
         case 'texture':
@@ -52,6 +54,8 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
           return 'animation-graph';
         case 'audio':
           return 'audio';
+        case 'ies-profile':
+          return 'ies-profile';
         case 'font':
           return 'font';
         case 'render-pipeline':

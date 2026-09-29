@@ -163,7 +163,7 @@ FORGEAX_PRODUCTION_MATERIAL_EDIT_DIR=<run>/artifacts \
 ```
 
 The Preview manifest declares the template and binary sidecar roots for the build cache, so changing
-an external `templates/game-default` asset is a cache miss rather than a stale production `dist/` hit.
+an external `apps/game-capability-lab` asset is a cache miss rather than a stale production `dist/` hit.
 The smoke restores the source and rebuilds the restored output in `finally`.
 
 The RHI debug plugin is serve-only. Production Preview builds set
@@ -233,3 +233,24 @@ provider for DevKit summary and fresh-device inspection. Do not pass raw World,
 renderer, physics, audio, or GPU objects through the inspection surface. Recover
 from a failure by reading `code`, `expected`, `hint`, and `detail`, then retry
 the owner-level path with a fresh target.
+
+## Shoreline water study
+
+```bash
+pnpm --filter @forgeax/preview dev:water
+```
+
+Open `/water.html`. The scene loads cooked material GUIDs and the contributor
+sky asset through the ordinary Pack/Catalog route.
+
+| Control | Observe |
+| --- | --- |
+| Shore overview | A continuous sand bed, submerged stones, and the shallow-to-deep transition |
+| Low water view | Fresnel sky reflection and refracted pier supports |
+| Step into water | An expanding ripple authored by the water Surface using bounded dynamic events |
+| Animate waves | Pause the material clock to inspect a fixed ripple |
+
+> [!NOTE]
+> Reflections use the Engine sky environment. This example does not claim
+> real-time reflection of shore objects. The Engine owns optical integration;
+> the material owns waves, sand appearance, and footstep disturbance.

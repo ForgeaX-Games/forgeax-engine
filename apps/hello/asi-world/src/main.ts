@@ -442,13 +442,14 @@ function makeTextureAsset(
 ): TextureAsset {
   return {
     kind: 'texture',
-    width: png.width,
-    height: png.height,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: png.width, height: png.height },
+    },
     format: 'rgba8unorm-srgb',
     data: png.rgba,
     colorSpace: 'srgb',
-    mipmap: false,
-    mipLevelCount: 1,
+    mips: { kind: 'none' },
   };
 }
 

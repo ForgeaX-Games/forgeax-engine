@@ -6,7 +6,51 @@
 // `recover(): Promise<Result<void, RecoverFailure>>`, NOT the onError fanout
 // channel (see render-contract.ts RendererError composition).
 
-import type { DeviceScopeReceipt } from '../device/resource-types';
+import type { RecoveryGuidance, RecoveryPhase } from '../assembly/renderer-lifecycle';
+import type { DeviceResourceKind, DeviceScopeReceipt } from '../device/resource-types';
+import type { ReflectionFallbackRecoveryAction } from '../inspection-types';
+import type { SsrAdmissionError, SsrOwnerRecoveryAction } from '../ssr/errors';
+
+export type { RecoveryGuidance, RecoveryPhase } from '../assembly/renderer-lifecycle';
+export { RECOVERY_PHASES } from '../assembly/renderer-lifecycle';
+export type { ReflectionFallbackRecoveryAction } from '../inspection-types';
+
+export function reflectionFallbackRecoveryAction(
+  source: 'probe' | 'skylight' | 'neutral',
+  hasLastKnownGood: boolean,
+): ReflectionFallbackRecoveryAction {
+  if (source === 'probe' && hasLastKnownGood) return 'use-LKG';
+  if (source === 'skylight') return 'use-Skylight';
+  return 'use-neutral';
+}
+
+/**
+ * Maps a detached admission failure to the owning producer action. This is
+ * an instruction projection only; SSR never performs the recovery itself.
+ */
+export function ssrAdmissionRecoveryAction(error: SsrAdmissionError): SsrOwnerRecoveryAction {
+  switch (error.code) {
+    case 'ssr-not-requested':
+    case 'ssr-receipt-stale':
+      return 'retry';
+    case 'ssr-reflection-fallback-unavailable':
+      return error.detail.action;
+    case 'ssr-format-unavailable':
+    case 'ssr-temporal-unavailable':
+      return error.detail.action;
+    case 'ssr-receipt-identity-mismatch':
+      return 'rebuild';
+  }
+}
+
+/** Closed outcome vocabulary shared by recovery inspection and errors. */
+export type RecoveryOutcome = 'none' | 'succeeded' | 'failed' | 'disposed';
+
+/**
+ * `RecoveryPhase` is the stable lower-case hyphenated phase union used by
+ * inspect/recovery detail. `RecoveryGuidance` is the closed next-action union:
+ * retry the attempt, repair its owner, or rebuild the Renderer.
+ */
 
 // ── RecoverError (feat-20260621-renderer-health-recover-skeleton M1) ─────────
 
@@ -41,13 +85,13 @@ const RECOVER_ERROR_POLICY = {
   'recover-not-needed': {
     message: 'recover-not-needed: renderer is not in a degraded state',
     expected:
-      'renderer is healthy; call health() first to confirm degraded state before calling recover()',
-    hint: 'call health() first to confirm degraded state before calling recover()',
+      'renderer is healthy; use state() or inspect() to confirm degraded state before calling recover()',
+    hint: 'use state() or inspect().state to confirm degraded state before calling recover()',
   },
   'recover-not-implemented': {
     message: 'recover-not-implemented: self-heal recovery is not yet implemented',
     expected: 'recovery is not yet implemented; self-heal lands in S5',
-    hint: 'self-heal recovery lands in S5; health().reason still reflects the degraded state',
+    hint: 'self-heal recovery lands in S5; inspect().state still reflects the lifecycle state',
   },
   'recover-adapter-unavailable': {
     message: 'recover-adapter-unavailable: requestAdapter returned no adapter during rebuild',
@@ -95,6 +139,60 @@ export class RecoverError extends Error {
   }
 }
 
+export interface RecoveryFailureDetail {
+  /** The bounded phase that produced this failure. */
+  readonly phase: RecoveryPhase;
+  /** Active generation before the attempt; it changes only on publish. */
+  readonly oldGeneration: number;
+  /** Candidate generation; it changes only on publish. */
+  readonly candidateGeneration: number;
+  /** Monotonic explicit recovery attempt number. */
+  readonly attempt: number;
+  /** Wall-clock duration of this bounded attempt. */
+  readonly elapsedMs: number;
+  /** Whether the caller may explicitly retry without recreating the Renderer. */
+  readonly retryable: boolean;
+  /** Next action selected by the recovery owner. */
+  readonly guidance: RecoveryGuidance;
+  /** Producer or lifecycle owner that must be inspected first. */
+  readonly owner: string;
+  /** Structured resource category, never a raw GPU handle. */
+  readonly resourceKind: DeviceResourceKind;
+  /** Terminal outcome of this attempt. */
+  readonly lastOutcome: Exclude<RecoveryOutcome, 'none' | 'succeeded'>;
+  /** Number of candidate roots committed before publication. */
+  readonly rehydratedRoots: number;
+  /** Number of late notifications ignored from retired generations. */
+  readonly staleLossEvents: number;
+  /** Original structured cause retained for diagnostics. */
+  readonly cause: unknown;
+  /** Cleanup failures that prevented a complete candidate publication. */
+  readonly cleanupFailures: readonly unknown[];
+  /** Detached lifecycle receipt for the failed candidate. */
+  readonly receipt: DeviceScopeReceipt;
+}
+
+/** Stable structured failure returned by one bounded recovery attempt. */
+export class RecoveryFailedError extends Error {
+  readonly code = 'recovery-failed' as const;
+  readonly expected = 'one recovery attempt publishes a complete replacement device generation';
+  readonly hint = 'inspect detail and follow its guidance';
+  readonly detail: RecoveryFailureDetail;
+
+  constructor(detail: RecoveryFailureDetail) {
+    super('renderer recovery failed');
+    this.name = 'RecoveryFailedError';
+    this.detail = Object.freeze({
+      ...detail,
+      cleanupFailures: Object.freeze([...detail.cleanupFailures]),
+    });
+  }
+}
+
+export function createRecoveryFailedError(detail: RecoveryFailureDetail): RecoveryFailedError {
+  return new RecoveryFailedError(detail);
+}
+
 const RENDER_RECOVERY_ERROR_POLICY = {
   'recover-lifecycle-failed': {
     expected: 'the replacement DeviceScope must publish only after lifecycle cleanup succeeds',
@@ -109,10 +207,15 @@ const RENDER_RECOVERY_ERROR_POLICY = {
 export type RenderRecoveryErrorCode = keyof typeof RENDER_RECOVERY_ERROR_POLICY;
 
 export interface RenderRecoveryFailureDetail {
+  /** Producer/lifecycle owner whose recovery operation failed. */
   readonly owner: string;
+  /** Device generation associated with the failed recovery operation. */
   readonly generation: number;
+  /** Closed operation kind; no implicit background retry is represented. */
   readonly recovery: 'recover' | 'rebuild' | 'stop';
+  /** Lifecycle receipt retained as structured evidence, not a live handle. */
   readonly receipt: DeviceScopeReceipt;
+  /** Original structured cause for the failed operation. */
   readonly cause: unknown;
 }
 
@@ -133,7 +236,7 @@ export class RenderRecoveryError extends Error {
   }
 }
 
-export type RecoverFailure = RecoverError | RenderRecoveryError;
+export type RecoverFailure = RecoverError | RenderRecoveryError | RecoveryFailedError;
 
 export type IblCapabilityLossCode = 'ibl-hdr-capability-loss';
 

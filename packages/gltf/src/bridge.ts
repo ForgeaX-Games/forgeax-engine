@@ -19,7 +19,7 @@
 // (B3) child world pos accumulates parent transform
 // (B6) camera detection via GltfNodeIr.camera field (not legacy nodes[1] heuristic)
 
-import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import { computeTangentVec4, packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
 import type { Mat4 } from '@forgeax/engine-math';
 import { box3, mat4, quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid as AssetGuidCodec } from '@forgeax/engine-pack/guid';
@@ -29,6 +29,7 @@ import type {
   LocalEntityId,
   MaterialAsset,
   MaterialError,
+  MaterialPass,
   MaterialTextureValue,
   MeshAsset,
   MeshMaterialSlot,
@@ -36,9 +37,15 @@ import type {
   RenderQueue,
   Result,
   SceneAsset,
-  SceneEntity,
   Submesh,
   VertexAttributeMap,
+} from '@forgeax/engine-types';
+import {
+  STANDARD_LAYER_PARAMETER_GROUPS,
+  STANDARD_MATERIAL_PARAM_SCHEMA,
+  STANDARD_PHYSICAL_PARAMETER_NAMES,
+  STANDARD_TRANSMISSION_PARAMETER_NAMES,
+  standardMaterialParameters,
 } from '@forgeax/engine-types';
 import { createMaterialError, err, type GltfError, gltfErr, ok } from './errors.js';
 import type {
@@ -216,6 +223,71 @@ export function meshIrToMeshAsset(
     const materialSlot = slotFor(mesh.materialIndex);
     const primVertexCount = mesh.positions.length / 3;
     const primIndexCount = mesh.indices === undefined ? 0 : mesh.indices.length;
+    // Repair only undefined source frames; valid authored MikkTSpace tangents
+    // retain their direction and handedness. All consumers receive this same MeshAsset.
+    let sourceTangents = mesh.tangents;
+    const invalid: number[] = [];
+    if (sourceTangents !== undefined && mesh.normals !== undefined) {
+      for (let i = 0; i < primVertexCount; i++) {
+        const nx = mesh.normals[i * 3] ?? 0,
+          ny = mesh.normals[i * 3 + 1] ?? 0,
+          nz = mesh.normals[i * 3 + 2] ?? 0;
+        const tx = sourceTangents[i * 4] ?? 0,
+          ty = sourceTangents[i * 4 + 1] ?? 0,
+          tz = sourceTangents[i * 4 + 2] ?? 0;
+        if (
+          Math.hypot(ny * tz - nz * ty, nz * tx - nx * tz, nx * ty - ny * tx) <=
+          Math.hypot(nx, ny, nz) * Math.hypot(tx, ty, tz) * 1e-8
+        )
+          invalid.push(i);
+      }
+    }
+    if (
+      (sourceTangents === undefined || invalid.length > 0) &&
+      mesh.normals !== undefined &&
+      mesh.texcoord0 !== undefined
+    ) {
+      const generated = computeTangentVec4(
+        mesh.positions,
+        mesh.normals,
+        mesh.texcoord0,
+        mesh.indices,
+      );
+      if (generated.ok) {
+        if (sourceTangents === undefined) sourceTangents = generated.value;
+        else {
+          sourceTangents = sourceTangents.slice();
+          for (const i of invalid)
+            sourceTangents.set(generated.value.subarray(i * 4, i * 4 + 4), i * 4);
+        }
+      }
+    }
+    // Collapsed UVs leave orientation undefined. For an already supplied but
+    // parallel frame, use a deterministic normal-plane basis rather than a NaN.
+    // This repairs the producer data; it does not infer a meaningful UV direction.
+    if (invalid.length > 0 && sourceTangents !== undefined && mesh.normals !== undefined) {
+      sourceTangents = sourceTangents.slice();
+      for (const i of invalid) {
+        const nx = mesh.normals[i * 3] ?? 0,
+          ny = mesh.normals[i * 3 + 1] ?? 0,
+          nz = mesh.normals[i * 3 + 2] ?? 0;
+        const tx = sourceTangents[i * 4] ?? 0,
+          ty = sourceTangents[i * 4 + 1] ?? 0,
+          tz = sourceTangents[i * 4 + 2] ?? 0;
+        if (Math.hypot(ny * tz - nz * ty, nz * tx - nx * tz, nx * ty - ny * tx) > 1e-8) continue;
+        const t = Math.abs(nx) > Math.abs(nz) ? [-ny, nx, 0] : [0, -nz, ny];
+        const length = Math.hypot(...t);
+        if (!(length > 0) || !Number.isFinite(length))
+          return err(
+            gltfErr('gltf-mesh-bridge-invalid', {
+              reason: 'tangent-frame',
+              meshIndex: mesh.meshIndex,
+              primitiveIndex: prims.indexOf(mesh),
+            }),
+          );
+        for (let axis = 0; axis < 3; axis++) sourceTangents[i * 4 + axis] = (t[axis] ?? 0) / length;
+      }
+    }
     if (mesh.colors0 !== undefined && mesh.colors0.length !== primVertexCount * 4) {
       return err(
         gltfErr('gltf-mesh-bridge-invalid', {
@@ -247,12 +319,12 @@ export function meshIrToMeshAsset(
         uvsCat[(vertexCursor + i) * 2 + 0] = mesh.texcoord0[t + 0] as number;
         uvsCat[(vertexCursor + i) * 2 + 1] = mesh.texcoord0[t + 1] as number;
       }
-      if (mesh.tangents !== undefined) {
+      if (sourceTangents !== undefined) {
         const g = i * 4;
-        tangentsCat[(vertexCursor + i) * 4 + 0] = mesh.tangents[g + 0] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 1] = mesh.tangents[g + 1] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 2] = mesh.tangents[g + 2] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 3] = mesh.tangents[g + 3] as number;
+        tangentsCat[(vertexCursor + i) * 4 + 0] = sourceTangents[g + 0] as number;
+        tangentsCat[(vertexCursor + i) * 4 + 1] = sourceTangents[g + 1] as number;
+        tangentsCat[(vertexCursor + i) * 4 + 2] = sourceTangents[g + 2] as number;
+        tangentsCat[(vertexCursor + i) * 4 + 3] = sourceTangents[g + 3] as number;
       } else {
         tangentsCat[(vertexCursor + i) * 4 + 0] = 1;
         tangentsCat[(vertexCursor + i) * 4 + 3] = 1;
@@ -524,7 +596,7 @@ function composeMat4(
 export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): SceneAsset {
   const sceneIr = doc.scenes[doc.defaultSceneIndex];
   const resultNodes: MutableSceneEntity[] = [];
-  if (sceneIr === undefined) return { kind: 'scene', entities: [] };
+  if (sceneIr === undefined) return { kind: 'scene', entities: {} } as unknown as SceneAsset;
   const importedLights = doc.lights ?? doc.extensions?.KHR_lights_punctual?.lights ?? [];
   const animationTargetIds = new Map<number, string>();
   for (const clip of doc.animationClips) {
@@ -541,7 +613,7 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
 
   // bug-20260613: SceneAsset entities also emit ChildOf when a glTF node has a
   // parent (line 547 below). Runtime propagateTransforms then derives
-  // Transform.world via `parent.world * compose(child.local TRS)`. If we
+  // GlobalTransform.world via `parent.world * compose(child.local TRS)`. If we
   // wrote the *world* TRS into Transform here, every child node would get
   // baked twice -- once at importer time and again at propagate time --
   // collapsing the skin so vertices fly to (parent.world)^2 space and the
@@ -682,7 +754,7 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
       components.MeshRenderer = { materials: [] };
     }
 
-    // Instances on the same entity as MeshFilter/MeshRenderer.
+    // Scene authoring preserves instance matrices without a Renderer.
     if (ir.instancing !== undefined) {
       components.Instances = { transforms: ir.instancing.transforms };
     }
@@ -728,10 +800,21 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
 
   for (const rootIdx of sceneIr.nodes) visit(rootIdx, null);
 
-  const frozen: SceneEntity[] = resultNodes.map((n) => ({
-    localId: n.localId,
-    components: n.components,
-  }));
+  const keyByLocalId = new Map<number, string>();
+  for (const node of resultNodes) keyByLocalId.set(node.localIdx, `node-${node.localIdx}`);
+  const entities: Record<string, { readonly components: Record<string, Record<string, unknown>> }> =
+    {};
+  for (const node of resultNodes) {
+    const components = { ...node.components };
+    const childOf = components.ChildOf;
+    if (childOf !== undefined && typeof childOf.parent === 'number') {
+      const parentKey = keyByLocalId.get(childOf.parent);
+      if (parentKey === undefined)
+        throw new Error(`gltfDocToSceneAsset: missing parent node ${childOf.parent}`);
+      components.ChildOf = { ...childOf, parent: parentKey };
+    }
+    entities[`node-${node.localIdx}`] = { components };
+  }
   const lightFacts = importedLights.map((light) => ({
     kind: light.type,
     intensity: light.intensity,
@@ -740,9 +823,9 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
   }));
   return {
     kind: 'scene',
-    entities: frozen,
+    entities,
     ...(lightFacts.length === 0 ? {} : { lights: lightFacts }),
-  } as SceneAsset;
+  } as unknown as SceneAsset;
 }
 
 /** Internal helper: mark GltfNodeIr usable so future surface evolutions stay typed. */
@@ -776,7 +859,21 @@ type MaterialTextureSlot =
   | 'metallicRoughnessTexture'
   | 'normalTexture'
   | 'occlusionTexture'
-  | 'emissiveTexture';
+  | 'emissiveTexture'
+  | 'transmissionTexture'
+  | 'thicknessTexture'
+  | 'clearcoatTexture'
+  | 'clearcoatRoughnessTexture'
+  | 'clearcoatNormalTexture'
+  | 'anisotropyTexture'
+  | 'sheenColorTexture'
+  | 'sheenRoughnessTexture'
+  | 'iridescenceTexture'
+  | 'iridescenceThicknessTexture'
+  | 'specularTexture'
+  | 'specularColorTexture'
+  | 'diffuseTransmissionTexture'
+  | 'diffuseTransmissionColorTexture';
 
 function textureValue(
   info: GltfTextureInfoIr | number | undefined,
@@ -803,12 +900,6 @@ function textureValue(
       : { sampler: samplerHandle as unknown as NonNullable<MaterialTextureValue['sampler']> }),
     ...(coordinates === undefined ? {} : { coordinates }),
   };
-  if (slot === 'normalTexture') {
-    const normal = info as GltfMaterialIr['normalTexture'];
-    if (typeof normal === 'object' && normal?.scale !== undefined) {
-      return { ...value, normalScale: normal.scale };
-    }
-  }
   if (slot === 'occlusionTexture') {
     const occlusion = info as GltfMaterialIr['occlusionTexture'];
     if (typeof occlusion === 'object' && occlusion?.strength !== undefined) {
@@ -816,6 +907,117 @@ function textureValue(
     }
   }
   return value;
+}
+
+/**
+ * Select the exact Standard root contract emitted by the glTF producer.
+ * Numeric fields come from the shared schema; all texture slots are
+ * admitted only when the source actually declares them.  A parent root is
+ * retained for the legacy base-only path, while an extended glTF material
+ * becomes its own root so its extension declarations own cook/ABI identity.
+ */
+function standardRootParameterNames(mat: GltfMaterialIr): {
+  readonly names: ReadonlySet<string>;
+  readonly extended: boolean;
+} {
+  const names = new Set(
+    STANDARD_MATERIAL_PARAM_SCHEMA.filter(
+      (entry) =>
+        !entry.type.startsWith('texture') &&
+        !STANDARD_PHYSICAL_PARAMETER_NAMES.has(entry.name) &&
+        !STANDARD_TRANSMISSION_PARAMETER_NAMES.has(entry.name),
+    ).map((entry) => entry.name),
+  );
+  // IOR is consumed for the base dielectric F0 fallback even when the
+  // transmission/volume extension is absent.
+  names.add('ior');
+
+  const addLayer = (layer: keyof typeof STANDARD_LAYER_PARAMETER_GROUPS): void => {
+    for (const name of STANDARD_LAYER_PARAMETER_GROUPS[layer]) names.add(name);
+  };
+  const addTexture = (name: string, info: GltfTextureInfoIr | number | undefined): void => {
+    if (info !== undefined) names.add(name);
+  };
+
+  const clearcoat =
+    mat.clearcoatFactor !== undefined ||
+    mat.clearcoatRoughnessFactor !== undefined ||
+    mat.clearcoatNormalTexture !== undefined ||
+    mat.clearcoatTexture !== undefined ||
+    mat.clearcoatRoughnessTexture !== undefined;
+  const anisotropy =
+    mat.anisotropyStrength !== undefined ||
+    mat.anisotropyRotation !== undefined ||
+    mat.anisotropyTexture !== undefined;
+  const sheen =
+    mat.sheenColorFactor !== undefined ||
+    mat.sheenRoughnessFactor !== undefined ||
+    mat.sheenColorTexture !== undefined ||
+    mat.sheenRoughnessTexture !== undefined;
+  const iridescence =
+    mat.iridescenceFactor !== undefined ||
+    mat.iridescenceIor !== undefined ||
+    mat.iridescenceThicknessMinimum !== undefined ||
+    mat.iridescenceThicknessMaximum !== undefined ||
+    mat.iridescenceTexture !== undefined ||
+    mat.iridescenceThicknessTexture !== undefined;
+  const diffuseTransmission =
+    mat.diffuseTransmissionFactor !== undefined ||
+    mat.diffuseTransmissionColorFactor !== undefined ||
+    mat.diffuseTransmissionTexture !== undefined ||
+    mat.diffuseTransmissionColorTexture !== undefined;
+  if (clearcoat) addLayer('clearcoat');
+  if (anisotropy) addLayer('anisotropy');
+  if (sheen) addLayer('sheen');
+  if (iridescence) addLayer('iridescence');
+  if (diffuseTransmission) addLayer('diffuseTransmission');
+  if (clearcoat && mat.clearcoatNormalTexture !== undefined) names.add('clearcoatNormalScale');
+
+  addTexture('baseColorTexture', mat.baseColorTexture);
+  addTexture('metallicRoughnessTexture', mat.metallicRoughnessTexture);
+  addTexture('normalTexture', mat.normalTexture);
+  addTexture('emissiveTexture', mat.emissiveTexture);
+  addTexture('occlusionTexture', mat.occlusionTexture);
+  addTexture('clearcoatTexture', mat.clearcoatTexture);
+  addTexture('clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture);
+  addTexture('clearcoatNormalTexture', mat.clearcoatNormalTexture);
+  addTexture('anisotropyTexture', mat.anisotropyTexture);
+  addTexture('sheenColorTexture', mat.sheenColorTexture);
+  addTexture('sheenRoughnessTexture', mat.sheenRoughnessTexture);
+  addTexture('iridescenceTexture', mat.iridescenceTexture);
+  addTexture('iridescenceThicknessTexture', mat.iridescenceThicknessTexture);
+  addTexture('specularTexture', mat.specularTexture);
+  addTexture('specularColorTexture', mat.specularColorTexture);
+  addTexture('diffuseTransmissionTexture', mat.diffuseTransmissionTexture);
+  addTexture('diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture);
+
+  const transmission =
+    mat.transmissionFactor !== undefined ||
+    mat.transmissionTexture !== undefined ||
+    mat.ior !== undefined ||
+    mat.thicknessFactor !== undefined ||
+    mat.thicknessTexture !== undefined ||
+    mat.attenuationColor !== undefined ||
+    mat.attenuationDistance !== undefined;
+  if (transmission) {
+    // Transmission/volume keeps its existing paired backdrop ABI.  The
+    // producer may leave either value at its neutral fallback, but the pair
+    // remains part of the pre-existing transmission root contract.
+    for (const name of STANDARD_TRANSMISSION_PARAMETER_NAMES) names.add(name);
+  }
+
+  return {
+    names,
+    extended:
+      clearcoat ||
+      anisotropy ||
+      sheen ||
+      iridescence ||
+      diffuseTransmission ||
+      transmission ||
+      mat.specularTexture !== undefined ||
+      mat.specularColorTexture !== undefined,
+  };
 }
 
 export function validateMaterialUvSets(
@@ -830,6 +1032,20 @@ export function validateMaterialUvSets(
     ['normalTexture', mat.normalTexture],
     ['occlusionTexture', mat.occlusionTexture],
     ['emissiveTexture', mat.emissiveTexture],
+    ['transmissionTexture', mat.transmissionTexture],
+    ['thicknessTexture', mat.thicknessTexture],
+    ['clearcoatTexture', mat.clearcoatTexture],
+    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
+    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
+    ['anisotropyTexture', mat.anisotropyTexture],
+    ['sheenColorTexture', mat.sheenColorTexture],
+    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
+    ['iridescenceTexture', mat.iridescenceTexture],
+    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
+    ['specularTexture', mat.specularTexture],
+    ['specularColorTexture', mat.specularColorTexture],
+    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
+    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
   ];
   for (const [slot, rawBinding] of slots) {
     const binding = textureInfo(rawBinding);
@@ -850,8 +1066,67 @@ export function validateMaterialUvSets(
   return ok(undefined);
 }
 
+export function validateMaterialTangentInputs(
+  mat: GltfMaterialIr,
+  mesh: GltfMeshIr,
+  layer = 'clearcoat',
+): Result<void, MaterialError> {
+  // Anisotropy changes the base GGX lobe even when it has no texture map, so
+  // its tangent direction is part of the scalar layer contract.  Select UV 0
+  // for the scalar-only form; a mapped form keeps the map's explicit UV set.
+  const anisotropyDeclared =
+    mat.anisotropyStrength !== undefined ||
+    mat.anisotropyRotation !== undefined ||
+    mat.anisotropyTexture !== undefined;
+  const tangentSlot = anisotropyDeclared
+    ? { layer: 'anisotropy', info: mat.anisotropyTexture }
+    : mat.clearcoatNormalTexture !== undefined
+      ? { layer: 'clearcoat', info: mat.clearcoatNormalTexture }
+      : undefined;
+  if (tangentSlot === undefined) return ok(undefined);
+  const selected = textureInfo(tangentSlot.info);
+  const uvSet = selected?.texCoord ?? 0;
+  const uv = mesh[`texcoord${uvSet === 0 ? '0' : uvSet}` as keyof GltfMeshIr];
+  const attributes = ['NORMAL', `TEXCOORD_${uvSet}`, 'TANGENT'];
+  const fail = (reason: string): Result<void, MaterialError> =>
+    err(
+      createMaterialError('material-tangent-required', {
+        code: 'material-tangent-required',
+        material: mat.name ?? '<unnamed>',
+        mesh: mesh.name ?? '<unnamed>',
+        layer: tangentSlot.layer ?? layer,
+        uv: `TEXCOORD_${uvSet}`,
+        attributes,
+        reason,
+      }),
+    );
+  if (mesh.tangents !== undefined) {
+    if (
+      mesh.tangents.length !== (mesh.positions.length / 3) * 4 ||
+      mesh.tangents.some((value) => !Number.isFinite(value))
+    ) {
+      return fail('imported TANGENT must be finite vec4 per vertex');
+    }
+    return ok(undefined);
+  }
+  if (mesh.normals === undefined) return fail('NORMAL is required to generate tangent');
+  if (!(uv instanceof Float32Array))
+    return fail('the selected UV set is required to generate tangent');
+  const generated = computeTangentVec4(mesh.positions, mesh.normals, uv, mesh.indices);
+  if (!generated.ok) {
+    const detail = generated.error.detail;
+    const reason =
+      detail !== undefined && 'reason' in detail
+        ? String(detail.reason)
+        : 'tangent producer rejected topology';
+    return fail(reason);
+  }
+  return ok(undefined);
+}
+
 /** Convert a parsed GltfMaterialIr into a standard-root derived MaterialAsset. */
 export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext): MaterialAsset {
+  const rootContract = standardRootParameterNames(mat);
   const values: Record<string, NonNullable<MaterialAsset['values']>[string]> = {
     baseColor: mat.baseColorFactor,
     metallic: mat.metallicFactor,
@@ -867,6 +1142,20 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     ['normalTexture', mat.normalTexture],
     ['occlusionTexture', mat.occlusionTexture],
     ['emissiveTexture', mat.emissiveTexture],
+    ['transmissionTexture', mat.transmissionTexture],
+    ['thicknessTexture', mat.thicknessTexture],
+    ['clearcoatTexture', mat.clearcoatTexture],
+    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
+    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
+    ['anisotropyTexture', mat.anisotropyTexture],
+    ['sheenColorTexture', mat.sheenColorTexture],
+    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
+    ['iridescenceTexture', mat.iridescenceTexture],
+    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
+    ['specularTexture', mat.specularTexture],
+    ['specularColorTexture', mat.specularColorTexture],
+    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
+    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
   ];
   for (const [slot, info] of textureSlots) {
     const value = textureValue(info, slot, ctx);
@@ -875,6 +1164,45 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   if (mat.occlusionTexture !== undefined && values.occlusionStrength === undefined) {
     values.occlusionStrength = 1;
   }
+  if (rootContract.extended && rootContract.names.has('transmission')) {
+    values.transmission = mat.transmissionFactor ?? 0;
+    values.ior = mat.ior ?? 1.5;
+    values.thickness = mat.thicknessFactor ?? 0;
+    values.attenuationColor = mat.attenuationColor ?? [1, 1, 1];
+    if (mat.attenuationDistance !== undefined) values.attenuationDistance = mat.attenuationDistance;
+  }
+  if (rootContract.names.has('clearcoat')) {
+    values.clearcoat = mat.clearcoatFactor ?? 0;
+    values.clearcoatRoughness = mat.clearcoatRoughnessFactor ?? 0;
+  }
+  const normal = textureInfo(mat.normalTexture) as
+    | (GltfTextureInfoIr & { readonly scale?: number })
+    | undefined;
+  if (normal?.scale !== undefined) values.normalScale = [normal.scale, normal.scale];
+  const clearcoatNormal = textureInfo(mat.clearcoatNormalTexture) as
+    | (GltfTextureInfoIr & { readonly scale?: number })
+    | undefined;
+  if (clearcoatNormal?.scale !== undefined) values.clearcoatNormalScale = clearcoatNormal.scale;
+  if (rootContract.names.has('anisotropyStrength')) {
+    values.anisotropyStrength = mat.anisotropyStrength ?? 0;
+    values.anisotropyRotation = mat.anisotropyRotation ?? 0;
+  }
+  if (rootContract.names.has('sheenColor')) {
+    values.sheenColor = mat.sheenColorFactor ?? [0, 0, 0];
+    values.sheenRoughness = mat.sheenRoughnessFactor ?? 0;
+  }
+  if (rootContract.names.has('iridescence')) {
+    values.iridescence = mat.iridescenceFactor ?? 0;
+    values.iridescenceIor = mat.iridescenceIor ?? 1.3;
+    values.iridescenceThicknessMinimum = mat.iridescenceThicknessMinimum ?? 100;
+    values.iridescenceThicknessMaximum = mat.iridescenceThicknessMaximum ?? 400;
+  }
+  if (rootContract.names.has('diffuseTransmission')) {
+    values.diffuseTransmission = mat.diffuseTransmissionFactor ?? 0;
+    values.diffuseTransmissionColor = mat.diffuseTransmissionColorFactor ?? [1, 1, 1];
+  }
+  if (mat.specularFactor !== undefined) values.specular = mat.specularFactor;
+  if (mat.specularColorFactor !== undefined) values.specularColor = mat.specularColorFactor;
 
   const module = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
 
@@ -917,12 +1245,37 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
         : {}),
     },
   };
+  // Imported Standard roots participate in the same raster consumers as
+  // authored Standard materials. Physical layers and BLEND stay Forward;
+  // opaque/MASK materials also provide the deferred material attachments.
+  const passes: [MaterialPass, ...MaterialPass[]] = [pass];
+  if (!isBlend && !rootContract.extended) {
+    passes.push({
+      ...pass,
+      name: 'Deferred',
+      program: { module, fragmentEntry: 'fs_gbuffer' },
+      renderState: { ...pass.renderState, tags: { LightMode: 'Deferred' } },
+    });
+  }
+  passes.push({
+    name: 'ShadowCaster',
+    program: { module: 'forgeax::default-shadow-caster', fragmentEntry: 'fs_shadow' },
+    renderState: {
+      tags: { LightMode: 'ShadowCaster' },
+      ...(mat.doubleSided === true ? { cullMode: 'none' } : {}),
+    },
+  });
 
+  const child = !rootContract.extended && ctx?.standardRootGuid !== undefined;
   return {
     kind: 'material',
-    colorSpace: 'linear',
-    ...(ctx?.standardRootGuid === undefined ? {} : { parent: ctx.standardRootGuid }),
-    passes: [pass],
+    ...(child
+      ? { parent: ctx.standardRootGuid }
+      : {
+          colorSpace: 'linear' as const,
+          passes,
+          parameters: standardMaterialParameters(rootContract.names),
+        }),
     values,
   };
 }

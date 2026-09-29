@@ -9,6 +9,7 @@
   "smoke-fleet-0",
   "smoke-fleet-1",
   "smoke-fleet-2",
+  "smoke-fleet-3",
   "bevy-smoke-fleet",
   "bevy-smoke-fleet-0",
   "bevy-smoke-fleet-1",
@@ -19,5 +20,6 @@
   "metrics-validate-browser",
   "metrics-validate-runtime",
   "metrics-validate",
-  "collectathon-boot-e2e"
+  "collectathon-boot-e2e",
+  "gpu-pass-timing-contract"
 ]

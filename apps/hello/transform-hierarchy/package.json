@@ -34,7 +34,7 @@
         ]
       }
     },
-    "_comment": "smokeInvocation = self-contained SSOT. hello-transform-hierarchy exercises Transform.world + registerPropagateTransforms so a ChildOf child follows its parent's runtime world-space displacement; the dual-frame pixel-diff smoke moves the parent between two readbacks and asserts the child moved (diffCount > threshold) while a static reference frame stays stable.",
+    "_comment": "smokeInvocation = self-contained SSOT. hello-transform-hierarchy exercises GlobalTransform.world + registerPropagateTransforms so a ChildOf child follows its parent's runtime world-space displacement; the dual-frame pixel-diff smoke moves the parent between two readbacks and asserts the child moved (diffCount > threshold) while a static reference frame stays stable.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -69,7 +69,7 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

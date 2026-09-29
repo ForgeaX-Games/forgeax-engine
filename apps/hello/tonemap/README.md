@@ -7,7 +7,7 @@
 ```bash
 pnpm --filter @forgeax/hello-tonemap dev      # vite dev server -> http://localhost:5173
 pnpm --filter @forgeax/hello-tonemap build    # vite production build
-pnpm --filter @forgeax/hello-tonemap smoke    # dawn-node 300-frame headless smoke
+pnpm --filter @forgeax/hello-tonemap smoke    # dawn-node 60-frame headless smoke
 ```
 
 ## Source roadmap
@@ -27,7 +27,7 @@ pnpm --filter @forgeax/hello-tonemap smoke    # dawn-node 300-frame headless smo
 
 ## Template boundary
 
-This app remains the focused HDR/tonemap oracle. `templates/game-default` already
+This app remains the focused HDR/tonemap oracle. `templates/game-3d` already
 owns the same public `Camera.tonemap` path in its authored target-range loop,
 where bloom, FXAA, depth of field, transient post effects, lighting, gameplay,
 reset, and render-evidence share one lifecycle. Copying this static sphere would

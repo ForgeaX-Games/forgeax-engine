@@ -1,8 +1,5 @@
 import { World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import fogShader from './fog.wgsl';
-import { createFogFeatureFromSource } from './fog-feature.js';
 import { buildFogWorld, type FogDemoPhase, type FogPhase } from './fog.js';
 
 declare global {
@@ -42,8 +39,7 @@ if (!canvas) throw new Error('bevy-fog: missing <canvas id="app"> in index.html'
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
-    { features: [createFogFeatureFromSource(fogShader.wgsl)] },
-    forgeaxBundlerAdapter(),
+    {},
   );
   if (!appResult.ok) {
     console.error('[bevy-fog] createApp failed:', appResult.error);

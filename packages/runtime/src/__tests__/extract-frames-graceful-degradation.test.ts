@@ -25,7 +25,8 @@ import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import type { ExtractedFrame } from '../../../render/src/render-system-extract';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

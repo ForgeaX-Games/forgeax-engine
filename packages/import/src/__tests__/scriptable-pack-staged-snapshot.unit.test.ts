@@ -44,7 +44,14 @@ describe('ScriptablePack staged asset snapshot source', () => {
         guids: [DEPENDENCY],
         async build() {
           builds.push('dependency');
-          return ok([{ guid: DEPENDENCY, asset: mesh(2), digest: 'sha256:dependency' }]);
+          return ok([
+            {
+              guid: DEPENDENCY,
+              sourceKey: 'dependency',
+              asset: mesh(2),
+              digest: 'sha256:dependency',
+            },
+          ]);
         },
       },
       {
@@ -56,7 +63,7 @@ describe('ScriptablePack staged asset snapshot source', () => {
           if (!dependency.ok) return dependency;
           builds.push('root:end');
           const value = dependency.value.asset as MeshAsset;
-          return ok([{ guid: ROOT, asset: mesh(value.vertices[0] ?? 0) }]);
+          return ok([{ guid: ROOT, sourceKey: 'root', asset: mesh(value.vertices[0] ?? 0) }]);
         },
       },
     ];
@@ -81,7 +88,9 @@ describe('ScriptablePack staged asset snapshot source', () => {
         guids: [ROOT],
         async build(source) {
           const result = await source.readByGuid(DEPENDENCY);
-          return result.ok ? ok([{ guid: ROOT, asset: result.value.asset }]) : result;
+          return result.ok
+            ? ok([{ guid: ROOT, sourceKey: 'root', asset: result.value.asset }])
+            : result;
         },
       },
       {
@@ -89,7 +98,9 @@ describe('ScriptablePack staged asset snapshot source', () => {
         guids: [DEPENDENCY],
         async build(source) {
           const result = await source.readByGuid(ROOT);
-          return result.ok ? ok([{ guid: DEPENDENCY, asset: result.value.asset }]) : result;
+          return result.ok
+            ? ok([{ guid: DEPENDENCY, sourceKey: 'dependency', asset: result.value.asset }])
+            : result;
         },
       },
     ];
@@ -101,8 +112,11 @@ describe('ScriptablePack staged asset snapshot source', () => {
     expect(result).toMatchObject({
       ok: false,
       error: {
-        code: 'pack-source-build-cycle',
-        actual: 'a.pack.ts -> b.pack.ts -> a.pack.ts',
+        code: 'pack-content-dependency-stalled',
+        detail: {
+          waitingGuids: [AssetGuid.format(ROOT)],
+          pendingSubjects: ['a.pack.ts', 'b.pack.ts', 'a.pack.ts'],
+        },
       },
     });
   });
@@ -116,7 +130,9 @@ describe('ScriptablePack staged asset snapshot source', () => {
           guids: [ROOT],
           async build(ownerSource) {
             const result = await ownerSource.readByGuid(DEPENDENCY);
-            return result.ok ? ok([{ guid: ROOT, asset: result.value.asset }]) : result;
+            return result.ok
+              ? ok([{ guid: ROOT, sourceKey: 'root', asset: result.value.asset }])
+              : result;
           },
         },
       ],
@@ -134,7 +150,7 @@ describe('ScriptablePack staged asset snapshot source', () => {
   it('resolves declared direct Pack outputs in the same generation', async () => {
     const source = createScriptablePackStagedAssetSnapshotSource({
       generation: 3,
-      declaredExternalOutputs: [{ guid: DEPENDENCY, asset: mesh(7) }],
+      declaredExternalOutputs: [{ guid: DEPENDENCY, sourceKey: 'dependency', asset: mesh(7) }],
       owners: [
         {
           id: 'root.pack.ts',
@@ -145,6 +161,7 @@ describe('ScriptablePack staged asset snapshot source', () => {
               ? ok([
                   {
                     guid: ROOT,
+                    sourceKey: 'root',
                     asset: mesh((dependency.value.asset as MeshAsset).vertices[0] ?? 0),
                   },
                 ])
@@ -178,7 +195,14 @@ describe('ScriptablePack staged asset snapshot source', () => {
         guids: [DEPENDENCY],
         async build() {
           dependencyBuilds += 1;
-          return ok([{ guid: DEPENDENCY, asset: mesh(2), digest: 'sha256:dependency' }]);
+          return ok([
+            {
+              guid: DEPENDENCY,
+              sourceKey: 'dependency',
+              asset: mesh(2),
+              digest: 'sha256:dependency',
+            },
+          ]);
         },
       },
       {
@@ -192,7 +216,12 @@ describe('ScriptablePack staged asset snapshot source', () => {
           await repairBuildGate;
           const value = dependency.value.asset as MeshAsset;
           return ok([
-            { guid: ROOT, asset: mesh((value.vertices[0] ?? 0) + 1), digest: 'sha256:root' },
+            {
+              guid: ROOT,
+              sourceKey: 'root',
+              asset: mesh((value.vertices[0] ?? 0) + 1),
+              digest: 'sha256:root',
+            },
           ]);
         },
       },
@@ -201,7 +230,9 @@ describe('ScriptablePack staged asset snapshot source', () => {
         guids: [HEALTHY],
         async build() {
           healthyBuilds += 1;
-          return ok([{ guid: HEALTHY, asset: mesh(7), digest: 'sha256:healthy' }]);
+          return ok([
+            { guid: HEALTHY, sourceKey: 'healthy', asset: mesh(7), digest: 'sha256:healthy' },
+          ]);
         },
       },
     ];
@@ -272,7 +303,7 @@ describe('ScriptablePack staged asset snapshot source', () => {
       id: 'mesh.pack.ts',
       guids: [ROOT],
       async build() {
-        return ok([{ guid: ROOT, asset: mesh(3), digest: 'sha256:mesh' }]);
+        return ok([{ guid: ROOT, sourceKey: 'mesh', asset: mesh(3), digest: 'sha256:mesh' }]);
       },
     };
     const first = await createScriptablePackStagedAssetSnapshotSource({

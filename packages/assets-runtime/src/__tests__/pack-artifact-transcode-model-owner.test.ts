@@ -22,6 +22,10 @@ describe('assets-runtime transcode model owner', () => {
 
   it('derives the private model view from the codec owner', () => {
     expect(packArtifactSource).toContain('import type { CodecError, TranscodeModel }');
+    expect(packArtifactSource).toContain('selectTranscodeTarget,');
+    expect(packArtifactSource).toContain('transcodeKtx2,');
+    expect(packArtifactSource).not.toContain("await import('@forgeax/engine-codec')");
+    expect(packArtifactSource).not.toContain('codec.module.import');
     expect(packArtifactSource).toContain(
       'function transcodeModel(profile: string): TranscodeModel | undefined',
     );

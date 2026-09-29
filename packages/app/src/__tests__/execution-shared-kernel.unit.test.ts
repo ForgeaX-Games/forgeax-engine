@@ -1,6 +1,6 @@
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { defineSharedKernel, type KernelDispatchSpan } from '@forgeax/engine-ecs/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createKernelPool } from '../execution/kernel-pool';
 
 const Position = defineComponent('ExecutionKernelPosition', { x: 'f32' });
@@ -84,6 +84,47 @@ function workerFactory(run: (job: TestJob) => void, preloadStatus = 1): () => Wo
 }
 
 describe('shared kernel pool', () => {
+  it('joins a lane that completes between the counter observation and the wait', () => {
+    const { spans } = sharedDispatchSpans();
+    let control: Int32Array | undefined;
+    const pool = createKernelPool({
+      lanes: 1,
+      timeoutMs: 10,
+      workerFactory: workerFactory((job) => {
+        control = job.control;
+        Atomics.store(job.status, job.jobIndex, 1);
+      }),
+    });
+    pool.warmup?.(kernel);
+    const load = Atomics.load;
+    let raced = false;
+    const observation = vi.spyOn(Atomics, 'load').mockImplementation(((
+      array: Int32Array,
+      index: number,
+    ) => {
+      const value = load(array, index);
+      if (array === control && !raced) {
+        raced = true;
+        // Model a read of zero immediately before the final lane publishes one.
+        // Keep the real shared counter and Atomics.wait: waiting on one has no
+        // future notifier, whereas waiting on the observed zero is not-equal.
+        return value - 1;
+      }
+      return value;
+    }) as typeof Atomics.load);
+    try {
+      expect(pool.execute(kernel, spans)).toMatchObject({
+        mode: 'shared',
+        dispatched: 1,
+        completed: 1,
+      });
+      expect(raced).toBe(true);
+    } finally {
+      observation.mockRestore();
+      pool.dispose();
+    }
+  });
+
   it('shards SAB spans without copying and joins all lanes', () => {
     const { world, spans } = sharedDispatchSpans();
     const pool = createKernelPool({

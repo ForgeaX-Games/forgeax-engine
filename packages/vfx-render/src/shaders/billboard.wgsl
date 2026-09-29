@@ -1,7 +1,8 @@
 #define_import_path forgeax::vfx-render.particles.billboard
-#import forgeax_view::common::{View, FogViewParams, FogRay, view}
-#import forgeax_view::fog::{apply_fog}
-
+#import forgeax_view::common::{View, view}
+#import forgeax_view::fog::{translucent_fog, ndc_world}
+// View-and-scene-depth layout: the renderer binds the View copy selected by the
+// particle blend, so each billboard fogs itself at its own depth.
 @group(0) @binding(1) var scene_depth: texture_depth_2d;
 
 struct VertexOutput {
@@ -35,7 +36,7 @@ fn billboardPivot(corner: vec2<f32>, pivot: vec2<f32>) -> vec2<f32> {
 
 fn softParticleFactor(particleDepth: f32, sceneDepth: f32, fadeDistance: f32) -> f32 {
   if (fadeDistance <= 0.0) { return 1.0; }
-  return clamp((sceneDepth - particleDepth) / fadeDistance, 0.0, 1.0);
+  return clamp((particleDepth - sceneDepth) / fadeDistance, 0.0, 1.0);
 }
 
 fn billboardSortingKey(depth: f32, mode: u32) -> f32 {
@@ -45,33 +46,11 @@ fn billboardSortingKey(depth: f32, mode: u32) -> f32 {
 fn softParticle(position: vec4<f32>, alpha: f32, fadeDistance: f32) -> f32 {
   let pixel = vec2<i32>(position.xy);
   let sceneDepth = textureLoad(scene_depth, pixel, 0);
+  if (sceneDepth <= 0.0) { return alpha; }
   if (fadeDistance <= 0.0) {
-    return select(alpha, 0.0, position.z > sceneDepth);
+    return select(alpha, 0.0, position.z < sceneDepth);
   }
   return alpha * softParticleFactor(position.z, sceneDepth, fadeDistance);
-}
-
-fn fogWorldPoint(ndc: vec3<f32>) -> vec3<f32> {
-  let homogeneous = view.inverseViewProj * vec4<f32>(ndc, 1.0);
-  let divisor = select(1.0, homogeneous.w, abs(homogeneous.w) > 0.000001);
-  return homogeneous.xyz / divisor;
-}
-
-fn fogRayFromNdc(ndc: vec3<f32>) -> FogRay {
-  let worldPosition = fogWorldPoint(ndc);
-  let nearPosition = fogWorldPoint(vec3<f32>(ndc.xy, 0.0));
-  let farPosition = fogWorldPoint(vec3<f32>(ndc.xy, 1.0));
-  let perspective = view.temporalProjection.z < 0.5;
-  let perspectiveVector = worldPosition - view.cameraPos;
-  let orthographicVector = farPosition - nearPosition;
-  let direction = normalize(select(orthographicVector, perspectiveVector, perspective));
-  let origin = select(nearPosition, view.cameraPos, perspective);
-  let ray_distance = select(
-    max(dot(worldPosition - nearPosition, direction), 0.0),
-    length(perspectiveVector),
-    perspective,
-  );
-  return FogRay(origin, direction, ray_distance);
 }
 
 struct VertexInput {
@@ -125,8 +104,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let highlight = core * clearcoat * (1.0 - roughness * 0.65);
   let emissive = input.emissive_intensity.rgb * input.emissive_intensity.a;
   let alpha = softParticle(input.position, input.color.a * edge, input.fade_distance);
-  let sheetPulse = 0.82 + 0.18 * fract(input.sheet_frame * 0.618 + input.sheet_uv.x + input.sheet_uv.y);
-  let rgb = (input.color.rgb + emissive * (0.35 + core * 0.65) + vec3<f32>(highlight)) * sheetPulse;
-  let fogged = apply_fog(view.fog, fogRayFromNdc(input.clip_position), vec4<f32>(rgb, alpha));
-  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  let rgb = input.color.rgb + emissive * (0.35 + core * 0.65) + vec3<f32>(highlight);
+  let fogged = translucent_fog(view, ndc_world(view, input.clip_position), rgb * alpha, alpha);
+  return vec4<f32>(fogged, alpha);
 }

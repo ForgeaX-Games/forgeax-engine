@@ -282,8 +282,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const baseColorTextureHandle = USE_BASE_COLOR_TEXTURE_MIPMAP
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 4,
-        height: 4,
+        shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           0, 0, 0, 255,
@@ -304,23 +303,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: FALSIFY_BASE_COLOR_TEXTURE_MIPMAP === '1',
+        mips: FALSIFY_BASE_COLOR_TEXTURE_MIPMAP === '1' ? { kind: 'generate' } : { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_SRGB
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: FALSIFY_BASE_COLOR_TEXTURE_SRGB === '1' ? 'rgba8unorm-srgb' : 'rgba8unorm',
         data: new Uint8Array([128, 128, 128, 255]),
         colorSpace: FALSIFY_BASE_COLOR_TEXTURE_SRGB === '1' ? 'srgb' : 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_UV_TRANSFORM
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 255, 255,
@@ -329,13 +326,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_UV_SET
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           0, 0, 0, 255,
@@ -344,13 +340,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           255, 255, 255, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_RED
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           128, 255, 255, 255,
@@ -359,13 +354,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           128, 255, 255, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_GREEN
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 128, 255, 255,
@@ -374,13 +368,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           255, 128, 255, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_BLUE
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 128, 255,
@@ -389,13 +382,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           255, 255, 128, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_RGB
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           128, 128, 128, 255,
@@ -404,13 +396,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           128, 128, 128, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_ALPHA
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 255, FALSIFY_BASE_COLOR_TEXTURE_ALPHA === '0.5' ? 128 : 0,
@@ -419,13 +410,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           255, 255, 255, FALSIFY_BASE_COLOR_TEXTURE_ALPHA === '0.5' ? 128 : 0,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_SAMPLER
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 255, 255,
@@ -434,13 +424,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 255, 255,
@@ -449,13 +438,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_SAMPLER_MAG_FILTER
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 2,
-        height: 2,
+        shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           255, 255, 255, 255,
@@ -464,13 +452,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_BASE_COLOR_TEXTURE_SAMPLER_FORENSICS
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 4,
-        height: 4,
+        shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
         format: 'rgba8unorm',
         data: new Uint8Array([
           0, 0, 0, 255,
@@ -491,7 +478,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           0, 0, 0, 255,
         ]),
         colorSpace: 'linear',
-        mipmap: true,
+        mips: { kind: 'generate' },
       })
     : undefined;
   const baseColorSamplerHandle = USE_BASE_COLOR_TEXTURE_MIPMAP
@@ -650,45 +637,48 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const occlusionTextureHandle = USE_MATERIAL_OCCLUSION_STRENGTH
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([0, 0, 0, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : undefined;
   const metallicRoughnessTextureHandle = USE_MATERIAL_METALLIC_CHANNEL
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([255, 255, 0, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width:
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIN_FILTER ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY
-            ? 4
-            : 2,
-        height:
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIN_FILTER ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP ||
-          USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY
-            ? 4
-            : 2,
+        shape: {
+          viewDimension: '2d',
+          extent: {
+            width:
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIN_FILTER ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY
+                ? 4
+                : 2,
+            height:
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIN_FILTER ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP ||
+              USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY
+                ? 4
+                : 2,
+          },
+        },
         format: 'rgba8unorm',
         data:
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ||
@@ -737,24 +727,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
                 0, 0, 0, 255,
               ]),
         colorSpace: 'linear',
-        mipmap:
+        mips:
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER ||
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIN_FILTER ||
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP ||
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP ||
           USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY ||
           (USE_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP &&
-            FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP === '1'),
+            FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP === '1')
+            ? { kind: 'generate' }
+            : { kind: 'none' },
       })
     : USE_MATERIAL_ROUGHNESS_CHANNEL
     ? world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([0, 255, 0, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       })
     : undefined;
   const metallicRoughnessSamplerHandle =

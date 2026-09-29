@@ -25,6 +25,24 @@ function spec(
 }
 
 describe('DeviceScope lifecycle transaction', () => {
+  it('does not retain a late LUT resource after recovery disposal', async () => {
+    const scope = DeviceScope.create(40, 'renderer');
+    let resolveCreate: ((value: { id: string }) => void) | undefined;
+    const transaction = new LifecycleTransaction(scope);
+    transaction.add({
+      kind: 'texture',
+      create: () => new Promise<{ id: string }>((resolve) => (resolveCreate = resolve)),
+      cleanup: () => undefined,
+    });
+    const pending = transaction.commit();
+    scope.dispose();
+    resolveCreate?.({ id: 'late-lut' });
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(scope.resourceDelta()).toBe(0);
+    expect(scope.state).toBe('disposed');
+  });
+
   it('rolls back the first N-1 resources in reverse order and keeps the primary error', async () => {
     const scope = DeviceScope.create(7, 'renderer');
     const order: string[] = [];
@@ -148,4 +166,51 @@ describe('DeviceScope lifecycle transaction', () => {
     expect(scope.state).toBe('disposed');
     expect(scope.resourceDelta()).toBe(0);
   });
+
+  it('runs an adopted cleanup once across repeated scope termination', async () => {
+    const scope = DeviceScope.create(31, 'renderer');
+    let cleanupCount = 0;
+    const transaction = new LifecycleTransaction(scope);
+    transaction.add({
+      kind: 'pipeline',
+      create: () => ({ id: 'candidate-pipeline' }),
+      cleanup: () => {
+        cleanupCount += 1;
+      },
+    });
+
+    const result = await transaction.commit();
+
+    expect(result.ok).toBe(true);
+    scope.retire();
+    scope.dispose();
+    scope.abandon();
+    expect(cleanupCount).toBe(1);
+  });
+});
+
+it('detaches terminal child scopes while retaining pending ownership', () => {
+  const parent = DeviceScope.create(1, 'renderer');
+  const pending = parent.createChild('pending');
+  let cleaned = 0;
+  pending._adopt('buffer', {}, () => {
+    cleaned += 1;
+  });
+  pending.beginRetire();
+  for (let index = 0; index < 300; index += 1) {
+    for (const action of ['retire', 'abandon', 'dispose'] as const) {
+      const child = parent.createChild(action);
+      child._adopt('buffer', {}, () => {
+        cleaned += 1;
+      });
+      child[action]();
+      child[action]();
+    }
+  }
+  expect(parent.childrenSnapshot).toEqual([pending]);
+  expect(cleaned).toBe(900);
+  pending.retire();
+  expect(parent.childrenSnapshot).toEqual([]);
+  parent.dispose();
+  expect(cleaned).toBe(901);
 });

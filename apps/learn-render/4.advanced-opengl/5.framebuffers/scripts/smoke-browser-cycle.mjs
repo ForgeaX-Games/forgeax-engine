@@ -12,13 +12,19 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeReferencePng } from '../../../../shared/png-codec.mjs';
+import { createOwnedProcessGroupStopper } from '../../../../shared/scripts/rhi-debug-process.mjs';
+import { extractViteLocalUrl } from './vite-local-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..', '..');
-const { PNG } = createRequire(resolve(REPO_ROOT, 'packages/rhi-debug/package.json'))('pngjs');
+const { PNG } = createRequire(resolve(APP_ROOT, 'package.json'))('pngjs');
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M24_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm24-browser-cycle'),
+);
+const VITE_READY_TIMEOUT_MS = Math.min(
+  Math.max(Number.parseInt(process.env.FORGEAX_RHI_DEBUG_VITE_READINESS_TIMEOUT_MS ?? '120000', 10) || 120_000, 1),
+  180_000,
 );
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
@@ -28,14 +34,18 @@ const viteProc = spawn(
   {
     cwd: REPO_ROOT,
     env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   },
 );
+const stopVite = createOwnedProcessGroupStopper(viteProc);
 let portUrl;
+let viteOutput = '';
 viteProc.stdout.on('data', (chunk) => {
   const text = chunk.toString();
+  viteOutput = `${viteOutput}${text}`.slice(-8192);
   process.stdout.write(`[vite] ${text}`);
-  portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
+  portUrl ??= extractViteLocalUrl(viteOutput)?.replace(/\/$/, '');
 });
 viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
@@ -153,17 +163,26 @@ async function installAndCapture(page, method, label) {
 }
 
 try {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + VITE_READY_TIMEOUT_MS;
   while (!portUrl && Date.now() < deadline) await sleep(200);
-  if (!portUrl) throw new Error('vite did not become ready in 30s');
+  if (!portUrl) throw new Error(`vite did not become ready in ${VITE_READY_TIMEOUT_MS}ms`);
 
+  const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL;
+  const browserHeadless = !['0', 'false'].includes(
+    (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+  );
   const browser = await chromium.launch({
-    headless: true,
-    channel: 'chrome',
+    headless: browserHeadless,
+    ...(chromeChannel === undefined ? {} : { channel: chromeChannel }),
     args: [
+      '--disable-features=MacAppCodeSignClone',
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+      '--use-vulkan=swiftshader',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
+      '--disable-gpu-driver-bug-workarounds',
+      '--disable-dawn-features=disallow_unsafe_apis',
     ],
   });
   try {
@@ -175,13 +194,13 @@ try {
       if (message.type() === 'error' && !message.text().includes('404')) consoleErrors.push(message.text());
     });
 
-    await page.goto(`${portUrl}/`, { waitUntil: 'networkidle', timeout: 30_000 });
+    await page.goto(`${portUrl}/`, { waitUntil: 'networkidle', timeout: 60_000 });
     await page.waitForFunction(
       () => document.querySelector('#hud')?.textContent === 'passthrough'
         && typeof globalThis.__captureFramebuffers === 'function'
         && typeof globalThis.__learnRenderFramebuffers?.installCyclePipeline === 'function',
       undefined,
-      { timeout: 30_000 },
+      { timeout: 90_000 },
     );
     await page.waitForTimeout(500);
 
@@ -259,6 +278,6 @@ try {
   console.error(`[m24] browser cycle/recovery: FAIL - ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  viteProc.kill('SIGTERM');
+  await stopVite();
   await sleep(300);
 }

@@ -39,6 +39,7 @@ import { ok, unwrapHandle } from '@forgeax/engine-types';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import { replayCapturedFrameInBrowser } from '@forgeax/apps-shared/rhi-debug-browser-replay';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // Six post-process WGSL effects, imported from ./shaders/*.wgsl. The
@@ -201,7 +202,7 @@ const recoveryFeature: RenderFeature<undefined> = {
     if (recoveryMode === 'cycle' || recoveryMode === 'invalid-format') {
       throw new Error(`framebuffer recovery probe rejected ${recoveryMode} plan`);
     }
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [] });
   },
 };
 
@@ -218,22 +219,34 @@ function captureExpectedPipelineError(error: {
       : undefined;
   const cause =
     detail?.cause !== null && typeof detail?.cause === 'object'
-      ? (detail.cause as { readonly name?: unknown })
+      ? (detail.cause as { readonly code?: unknown })
       : undefined;
   const wrappedFeatureFailure =
-    error.code === 'device-operation-failed' && cause?.name === 'RenderFeatureStageFailedError';
+    error.code === 'device-operation-failed' && cause?.code === 'render-feature-stage-failed';
   if (error.code !== 'render-feature-stage-failed' && !wrappedFeatureFailure) {
     return false;
   }
+  const featureError = wrappedFeatureFailure ? detail?.cause : error;
+  const featureErrorRecord =
+    featureError !== null && typeof featureError === 'object'
+      ? (featureError as {
+          readonly expected?: unknown;
+          readonly hint?: unknown;
+          readonly detail?: unknown;
+        })
+      : undefined;
   const diagnostic: FeatureFailureDiagnostic = {
     code: 'render-feature-stage-failed',
     mode: recoveryMode,
     expected:
-      typeof error.expected === 'string'
-        ? error.expected
-        : 'the recovery probe completes its declarative plan without an error',
-    hint: error.hint,
-    detail: wrappedFeatureFailure ? detail?.cause : error.detail,
+      typeof featureErrorRecord?.expected === 'string'
+        ? featureErrorRecord.expected
+        : typeof error.expected === 'string'
+          ? error.expected
+          : 'the recovery probe completes its declarative plan without an error',
+    hint:
+      typeof featureErrorRecord?.hint === 'string' ? featureErrorRecord.hint : error.hint,
+    detail: featureErrorRecord?.detail ?? error.detail,
   };
   if (recoveryMode === 'cycle') {
     pipelineRecoveryState.cycleDiagnostic = diagnostic;
@@ -394,7 +407,10 @@ void bootstrap(canvas);
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    { features: [framebufferEffect, recoveryFeature] },
+    {
+      features: [framebufferEffect, recoveryFeature],
+      ...(runtimeBinding === undefined ? {} : { assetRuntimeBinding: runtimeBinding }),
+    },
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
@@ -637,7 +653,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
 function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
-  const win = window as unknown as { __captureFramebuffers?: CaptureHook };
+  const win = window as unknown as {
+    __captureFramebuffers?: CaptureHook;
+    __replayFramebuffersCapture?: typeof replayCapturedFrameInBrowser;
+  };
   const renderer = app.renderer;
   const attached = renderer.attach(world);
   if (!attached.ok) throw attached.error;
@@ -665,11 +684,16 @@ function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasEle
     }
     return r.value;
   };
+  // Keep pixel ownership in the same browser/WebGPU implementation. Dawn
+  // replay remains mandatory diagnostic evidence, but software-GPU
+  // rasterization can differ at sparse edge pixels from Chrome's surface.
+  win.__replayFramebuffersCapture = replayCapturedFrameInBrowser;
 }
 
 declare global {
   interface Window {
     __captureFramebuffers?: () => Promise<Uint8Array>;
+    __replayFramebuffersCapture?: typeof replayCapturedFrameInBrowser;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
     __learnRenderFramebuffers?: {
       installCyclePipeline: typeof installCyclePipeline;

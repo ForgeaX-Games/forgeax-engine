@@ -23,14 +23,16 @@
 //   - P5 producer/consumer split: assemble form (B) is the canonical
 //     truth; (A) only adds canvas-specific glue.
 
+import { audioBackendPlugin, createAudioIntentBackend } from '@forgeax/engine-audio';
 import { World } from '@forgeax/engine-ecs';
+import { Context } from '@forgeax/engine-plugin';
 import { type Renderer } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
 import { AppError } from '../src/errors';
-import type { CanvasAppError } from '../src/types';
+import type { App, CanvasAppError } from '../src/types';
 
 // Local helper: minimal Renderer stub for the (B) path bypass test.
 function makeRendererStub(): Renderer {
@@ -86,8 +88,12 @@ describe('createApp(assemble) -- (B) path does NOT trigger canvas-detach check (
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app = result.value;
-    expect(app.renderer).toBe(renderer);
-    expect(app.world).toBe(world);
+    try {
+      expect(app.renderer).toBe(renderer);
+      expect(app.world).toBe(world);
+    } finally {
+      expect((await app.dispose()).ok).toBe(true);
+    }
   });
 });
 
@@ -105,6 +111,33 @@ describe('createApp(canvas) thin wrapper -- (A) path success path (AC-09)', () =
     connectedCanvas.remove();
   });
 
+  it.each([false, true])('borrows a plugin scope with optional audio = %s', async (withAudio) => {
+    const root = new Context();
+    const outerAudio = createAudioIntentBackend({ emit: () => undefined });
+    const innerAudio = createAudioIntentBackend({ emit: () => undefined });
+    let app: App | undefined;
+    try {
+      await root.plugin(audioBackendPlugin(outerAudio));
+      await root.isolate('audio').isolate('physics').plugin({
+        name: 'app-owner',
+        async apply(ctx) {
+          app = (await createApp(connectedCanvas, {
+            context: ctx,
+            plugins: withAudio ? [audioBackendPlugin(innerAudio)] : [],
+          })).unwrap();
+          expect(app.physics).toBeUndefined();
+          expect(app.audio).toBe(withAudio ? innerAudio : undefined);
+          expect((await app.dispose()).ok).toBe(true);
+          expect(ctx.get('world')).toBeUndefined();
+        },
+      });
+      expect(root.audio).toBe(outerAudio);
+    } finally {
+      await app?.dispose();
+      await root.fiber.dispose();
+    }
+  }, 30_000);
+
   // A real Chrome/lavapipe device can spend >15s on its first createRenderer
   // call after another browser group closes. Keep this owner bounded without
   // raising the timeout for the rest of the app browser suite.
@@ -115,13 +148,16 @@ describe('createApp(canvas) thin wrapper -- (A) path success path (AC-09)', () =
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       const app = result.value;
-      // Type-level discoverability: app.renderer.draw + app.world.update
-      // are invokable directly off the App handle (AC-09).
-      expect(typeof app.renderer.draw).toBe('function');
-      expect(typeof app.world.update).toBe('function');
-      // No throw on the call site -- prove the surface is reachable
-      // without unsafe casts.
-      app.stop();
+      try {
+        // Type-level discoverability: app.renderer.draw + app.world.update
+        // are invokable directly off the App handle (AC-09).
+        expect(typeof app.renderer.draw).toBe('function');
+        expect(typeof app.world.update).toBe('function');
+      } finally {
+        // stop() only controls frames; disposal releases the owned renderer
+        // and plugin effects even when a discovery assertion fails.
+        expect((await app.dispose()).ok).toBe(true);
+      }
     },
     30_000,
   );

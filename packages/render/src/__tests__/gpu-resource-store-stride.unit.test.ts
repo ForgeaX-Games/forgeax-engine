@@ -18,7 +18,6 @@ describe('GpuResidencyCache mesh stride', () => {
       },
       device.caps,
     );
-
     const mesh: MeshAsset = {
       kind: 'mesh',
       // The producer owns a canonical 20-float interleaved buffer:
@@ -55,5 +54,125 @@ describe('GpuResidencyCache mesh stride', () => {
     expect(entry?.layoutProjection).toEqual(deriveVertexLayoutProjection(mesh.attributes));
     expect(entry?.layoutProjection.arrayStride).toBe(80);
     expect(entry?.vertexCount).toBe(4);
+  });
+
+  it('packs lower-detail geometry into shared buffers with distinct ranges', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const store = new GpuResidencyCache();
+    store.configureGpuDevice(
+      device,
+      undefined,
+      () => {
+        throw new Error('cubemap registration is not part of this test');
+      },
+      device.caps,
+    );
+    const indexWrites: Uint8Array[] = [];
+    const queue = device.queue;
+    const writeBuffer = queue.writeBuffer.bind(queue);
+    queue.writeBuffer = (buffer, bufferOffset, data, dataOffset, size) => {
+      const bytes =
+        data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      if (bytes.byteLength === 12) indexWrites.push(new Uint8Array(bytes));
+      return writeBuffer(buffer, bufferOffset, data, dataOffset, size);
+    };
+    const attributes = {
+      position: new Float32Array(9),
+      normal: new Float32Array(9),
+      uv: new Float32Array(6),
+      tangent: new Float32Array(12),
+    };
+    const submesh = {
+      indexOffset: 0,
+      indexCount: 3,
+      vertexCount: 3,
+      topology: 'triangle-list' as const,
+      materialSlot: 0,
+    };
+    const root: MeshAsset = {
+      kind: 'mesh',
+      vertices: new Float32Array(36),
+      indices: new Uint16Array([0, 1, 2]),
+      attributes,
+      submeshes: [submesh],
+      materialSlots: [{ slotName: 'default' }],
+    };
+    const lower: MeshAsset = {
+      ...root,
+      vertices: new Float32Array(36).fill(2),
+      indices: new Uint16Array([0, 2, 1]),
+    };
+    const world = new World();
+    const handle = world.allocSharedRef('MeshAsset', root);
+    // The root can be pulled before the lower pack finishes loading. A later
+    // call with the complete chain must upgrade the same cache key.
+    const rootOnly = store.ensureResident(handle, root);
+    expect(rootOnly.ok).toBe(true);
+    if (!rootOnly.ok) return;
+    expect(rootOnly.value.lodRanges).toBeUndefined();
+
+    const resident = store.ensureResident(handle, root, 0, [lower]);
+    expect(resident.ok).toBe(true);
+    if (!resident.ok) return;
+    expect(resident.value.vboBytes).toBe(root.vertices.byteLength + lower.vertices.byteLength);
+    expect(resident.value.iboBytes).toBe(12);
+    expect(resident.value.lodRanges).toEqual([
+      [{ first: 0, count: 3, baseVertex: 0 }],
+      [{ first: 3, count: 3, baseVertex: 3 }],
+    ]);
+    const packedIndices = indexWrites.at(-1);
+    expect(packedIndices).toBeDefined();
+    if (packedIndices === undefined) return;
+    expect(new Uint16Array(packedIndices.buffer)).toEqual(new Uint16Array([0, 1, 2, 0, 2, 1]));
+
+    // A stable chain remains an O(1) hit and does not replace the entry again.
+    const stable = store.ensureResident(handle, root, 0, [lower]);
+    expect(stable.ok).toBe(true);
+    if (stable.ok) expect(stable.value).toBe(resident.value);
+  });
+
+  it('refuses a payload whose bytes do not match the projected stride', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const store = new GpuResidencyCache();
+    store.configureGpuDevice(
+      device,
+      undefined,
+      () => {
+        throw new Error('cubemap registration is not part of this test');
+      },
+      device.caps,
+    );
+    const mesh: MeshAsset = {
+      kind: 'mesh',
+      vertices: new Float32Array(49),
+      attributes: {
+        position: new Float32Array(9),
+        normal: new Float32Array(9),
+        uv: new Float32Array(6),
+        tangent: new Float32Array(12),
+      },
+      submeshes: [
+        {
+          indexOffset: 0,
+          indexCount: 0,
+          vertexCount: 3,
+          topology: 'triangle-list',
+          materialSlot: 0,
+        },
+      ],
+      materialSlots: [{ slotName: 'default' }],
+    };
+    const world = new World();
+    const handle = world.allocSharedRef('MeshAsset', mesh);
+
+    const resident = store.ensureResident(handle, mesh);
+
+    expect(resident.ok).toBe(false);
+    if (!resident.ok) expect(resident.error.code).toBe('asset-not-registered');
+    expect(store.getMeshGpuHandles(handle)).toBeUndefined();
   });
 });

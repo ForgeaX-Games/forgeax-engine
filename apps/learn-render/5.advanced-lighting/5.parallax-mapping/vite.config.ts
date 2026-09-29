@@ -12,7 +12,11 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
-const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')];
+// Publish the two complete texture sets consumed by this demo.
+const assetRoots = [
+  'bricks2.jpg', 'bricks2_normal.jpg', 'bricks2_disp.jpg',
+  'toy_box_diffuse.png', 'toy_box_normal.png', 'toy_box_disp.png',
+].map((file) => resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures', `${file}.meta.json`));
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-5-parallax-mapping');
 
 export default withRhiDebug({

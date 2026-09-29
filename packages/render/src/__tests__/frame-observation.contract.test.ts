@@ -6,6 +6,7 @@ import {
   type FrameObservationSource,
   observeCurrentFrame,
 } from '../record/frame.js';
+import { validateGraphTargetCaptureReadback } from '../record/frame-snapshot';
 import type { FrameObservationRequest, FrameReceipt } from '../render-contract';
 
 const texture = {} as Texture;
@@ -108,5 +109,40 @@ describe('render current-frame observation producer contract', () => {
 
     expect(result.ok).toBe(false);
     expect(readback).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty fallback bytes unless the selected rows are neutral', () => {
+    const bytes = new Uint8Array(256);
+    expect(
+      validateGraphTargetCaptureReadback({ bytes, expectedByteLength: bytes.byteLength }),
+    ).toEqual({ ok: false, code: 'capture-readback-empty' });
+    expect(
+      validateGraphTargetCaptureReadback({
+        bytes,
+        expectedByteLength: bytes.byteLength,
+        allowZero: true,
+      }),
+    ).toEqual({ ok: true });
+  });
+  it('validates every half-float encoding in both word lanes and an unaligned tail', () => {
+    const storage = new Uint8Array(8);
+    const bytes = storage.subarray(1, 7);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    for (let bits = 0; bits <= 0xffff; bits += 1) {
+      for (const offset of [0, 2, 4]) {
+        bytes.fill(0);
+        view.setUint16(offset, bits, true);
+        const result = validateGraphTargetCaptureReadback({
+          bytes,
+          expectedByteLength: bytes.byteLength,
+          allowZero: true,
+        });
+        const finite = (bits & 0x7c00) !== 0x7c00;
+        if (result.ok !== finite)
+          throw new Error(`half ${bits.toString(16)} at byte ${offset} misclassified`);
+        if (!result.ok && result.code !== 'capture-readback-non-finite')
+          throw new Error(`half ${bits.toString(16)} returned ${result.code}`);
+      }
+    }
   });
 });

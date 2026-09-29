@@ -146,7 +146,7 @@ describe('animation runtime diagnostics', () => {
     const bindingReadsAfterStructuralChange = get.mock.calls.filter(
       ([, component]) => component === AnimationTargets || component === AnimationTargetId,
     ).length;
-    expect(bindingReadsAfterStructuralChange).toBe(bindingReadsAfterStableUpdate);
+    expect(bindingReadsAfterStructuralChange).toBeGreaterThan(bindingReadsAfterStableUpdate);
 
     world.addComponent(target, { component: Transform, data: {} }).unwrap();
     world.set(target, AnimationTargetId, { value: 'b'.repeat(32) }).unwrap();

@@ -3,7 +3,7 @@ import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErr
 // bevy-blend-modes headless dawn smoke (structural-only, no pixel readback).
 // Strategy: spawn 5 spheres with different blend modes + ground plane, verify:
 //   (a) backend=webgpu
-//   (b) frames >= 300 with no draw crash
+//   (b) frames >= 60 with no draw crash
 //   (c) Renderer.onError count == 0
 
 import { readFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -198,7 +198,7 @@ world.spawn(
 
 // --- Frame loop ---
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 

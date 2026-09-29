@@ -90,6 +90,8 @@ const inventories = [0, 1, 2].map((index) =>
   ),
 );
 const seenPaths = new Map();
+const appArtifactPattern =
+  /^apps\/(.+)\/dist\/(?:shaders\/manifest\.json|pack-index\.json|assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-body\.bin|\.pack(?:-[A-Za-z0-9_-]+)?\.json))$/;
 for (const [index, inventory] of inventories.entries()) {
   if (!Array.isArray(inventory) || inventory.some((path) => typeof path !== 'string'))
     error('ci-shard-inventory-invalid', { shardIndex: index });
@@ -101,14 +103,35 @@ for (const [index, inventory] of inventories.entries()) {
         expected: 'app-dist paths only',
         hint: 'Do not include shared-app-inputs payloads in an app-shard inventory.',
       });
-    if (
-      !/^apps\/[^/]+(?:\/[^/]+)*\/dist\/shaders\/manifest\.json$/.test(path) ||
-      path.includes('..')
-    )
+    if (!appArtifactPattern.test(path) || path.includes('..') || path.includes('\\'))
       error('ci-shard-inventory-invalid-path', { shardIndex: index, path });
     if (seenPaths.has(path))
       error('ci-shard-inventory-path-intersection', { path, shards: [seenPaths.get(path), index] });
     seenPaths.set(path, index);
+  }
+}
+for (const [index, inventory] of inventories.entries()) {
+  const paths = new Set(inventory);
+  for (const path of inventory) {
+    const match = path.match(
+      /^apps\/(.+)\/dist\/assets\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-body\.bin|\.pack(?:-[A-Za-z0-9_-]+)?\.json)$/,
+    );
+    if (!match) continue;
+    const app = match[1];
+    const guid = match[2];
+    const packIndex = `apps/${app}/dist/pack-index.json`;
+    if (!paths.has(packIndex))
+      error('ci-shard-inventory-pack-closure-missing', {
+        shardIndex: index,
+        path,
+        expected: packIndex,
+      });
+    if (path.endsWith('.json') && !paths.has(`apps/${app}/dist/assets/${guid}-body.bin`))
+      error('ci-shard-inventory-pack-closure-missing', {
+        shardIndex: index,
+        path,
+        expected: `apps/${app}/dist/assets/${guid}-body.bin`,
+      });
   }
 }
 for (const [index, report] of reports.entries()) {
@@ -126,14 +149,13 @@ for (const [index, report] of reports.entries()) {
       hint: 'Upload every shard-required app-dist file before aggregation.',
     });
 }
-const plannedPaths = new Set(
-  reports.flatMap((report) => report.apps.map((app) => `apps/${app}/dist/shaders/manifest.json`)),
-);
+const plannedApps = new Set(reports.flatMap((report) => report.apps));
 for (const path of seenPaths.keys())
-  if (!plannedPaths.has(path)) error('ci-shard-inventory-unknown-app', { path });
+  if (!plannedApps.has(path.match(/^apps\/(.+)\/dist\//)?.[1]))
+    error('ci-shard-inventory-unknown-app', { path });
 for (const [index, inventory] of inventories.entries())
   for (const path of inventory) {
-    const app = path.match(/^apps\/(.+)\/dist\/shaders\/manifest\.json$/)?.[1];
+    const app = path.match(/^apps\/(.+)\/dist\//)?.[1];
     if (!reports[index].apps.includes(app))
       error('ci-shard-inventory-cross-app-path', {
         shardIndex: index,

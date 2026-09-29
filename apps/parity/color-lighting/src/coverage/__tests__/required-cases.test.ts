@@ -62,7 +62,7 @@ describe('required coverage accounting', () => {
       required: false,
       owner: 'm5',
     });
-    expect(PARITY_REQUIRED_BACKEND_IDS).toEqual(['browser-webgpu', 'dawn', 'webkit-webgl2']);
+    expect(PARITY_REQUIRED_BACKEND_IDS).toEqual(['browser-webgpu', 'dawn', 'chromium-webgl2']);
     expect(PARITY_REQUIRED_PIPELINE_IDS).toEqual(['urp', 'hdrp']);
     expect(new Set(PARITY_CASE_AUTHORITY.map((entry) => entry.caseId)).size).toBe(PARITY_CASE_AUTHORITY.length);
   });
@@ -78,7 +78,7 @@ describe('required coverage accounting', () => {
       matrixRequiredBackends: ['browser-webgpu', 'dawn'],
     });
     expect(PARITY_CASE_AUTHORITY.find((entry) => entry.caseId === 'direct-directional-urp')).toMatchObject({
-      matrixRequiredBackends: ['browser-webgpu', 'dawn', 'webkit-webgl2'],
+      matrixRequiredBackends: ['browser-webgpu', 'dawn', 'chromium-webgl2'],
     });
   });
 });

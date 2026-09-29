@@ -49,18 +49,14 @@ import {
 } from '@forgeax/engine-ecs';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { fillComponentDefaults } from '@forgeax/engine-ecs/projection';
-import type {
-  Handle,
-  LocalEntityId,
-  MountOverride,
-  SceneAsset,
-  SceneEntity,
-} from '@forgeax/engine-types';
+import type { MountOverride } from '@forgeax/engine-scene';
+import type { Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 
 /** Minimal structural view of a SceneInstanceState the fold reads (D-4 boundary:
  * `world.getSceneInstanceState(root).value` is structurally assignable). */
 export interface FoldSceneInstanceState {
   readonly source: Handle<'SceneAsset', 'shared'>;
+  readonly keyByLocalId: Map<number, string>;
   readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
 }
 
@@ -151,12 +147,6 @@ export function foldMountOverrides(world: World, state: FoldSceneInstanceState):
   if (!sourceRes.ok) return [];
   const source = sourceRes.value as SceneAsset;
 
-  // Index source entities by localId for O(1) baseline lookup.
-  const sourceByLid = new Map<number, SceneEntity>();
-  for (const node of source.entities) {
-    sourceByLid.set(node.localId as unknown as number, node);
-  }
-
   const excluded = excludedComponentNames();
   const registered = world.components.entries();
   const overrides: MountOverride[] = [];
@@ -170,7 +160,8 @@ export function foldMountOverrides(world: World, state: FoldSceneInstanceState):
   members.sort((a, b) => a[1] - b[1]);
 
   for (const [entity, lid] of members) {
-    const sourceNode = sourceByLid.get(lid);
+    const sourceKey = state.keyByLocalId.get(lid);
+    const sourceNode = sourceKey === undefined ? undefined : source.entities[sourceKey];
     const sourceComps = (sourceNode?.components ?? {}) as Record<string, Record<string, unknown>>;
 
     for (const [compName, compToken] of registered) {

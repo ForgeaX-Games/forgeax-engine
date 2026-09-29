@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { cookParticleCodeProgram } from '../code-program.js';
+import { PARTICLE_EVENT_MANAGED_RUNTIME } from '../managed-program.js';
 
 const source = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'bolt',
@@ -39,7 +40,7 @@ describe('managed GPU event artifact', () => {
     if (!result.ok) return;
     const emitter = result.value.program.emitters[0];
     expect(emitter?.reflection).toMatchObject({
-      resources: expect.arrayContaining(['channelInputs', 'events', 'eventCounters']),
+      resources: expect.arrayContaining(['eventBuffer']),
       eventChannels: [{ id: 'impact', capacity: 2, overflow: 'drop-newest' }],
       events: [{ id: 'impact-event', channel: 'impact', fanOut: 2, recursionDepth: 1 }],
     });
@@ -48,5 +49,14 @@ describe('managed GPU event artifact', () => {
   it('emits a stable cooked fingerprint', () => {
     if (!result.ok) return;
     expect(result.value.fingerprint).toBeTruthy();
+  });
+
+  it('keeps generic event-child mesh transforms bounded', () => {
+    expect(PARTICLE_EVENT_MANAGED_RUNTIME).toContain(
+      'vec3<f32>(0.06 + clamp(input.strength, 0.0, 1.0) * 0.04)',
+    );
+    expect(PARTICLE_EVENT_MANAGED_RUNTIME).not.toContain(
+      'vec3<f32>(1.0),\n      0.0,\n      input.sequence',
+    );
   });
 });

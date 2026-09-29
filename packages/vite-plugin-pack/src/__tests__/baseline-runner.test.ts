@@ -151,5 +151,7 @@ describe('M0 baseline runner', () => {
     expect((baseline.structural as { largestFunctionPath: string }).largestFunctionPath).toContain(
       '/packages/vite-plugin-pack/',
     );
-  });
+    // Final mode scans the checked-out workspace and git range; keep its
+    // bounded budget above the ordinary unit default under contended CI.
+  }, 15_000);
 });

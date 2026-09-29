@@ -16,6 +16,13 @@ import {
 import { join, relative, resolve } from 'node:path';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { build } from 'vite';
+import { runnerResources } from './lib/runner-resources.mjs';
+import {
+  recordSharedBuild,
+  reusableSharedBuild,
+  sharedShaderInputFingerprint,
+  sharedShaderReceipt,
+} from './lib/shared-build-cache.mjs';
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -63,6 +70,45 @@ for (const sourceRoot of sourceRoots) {
     throw new Error(`shared shader source is not a directory: ${sourceRoot}`);
 }
 
+function writeProductionFacts(compileCount, duration) {
+  const facts = {
+    schemaVersion: 2,
+    producer: 'repo-build-inputs',
+    inputFingerprint: fingerprint(sourceRoots),
+    engineShaderCompileCount: compileCount,
+    assetCookHitCount: 0,
+    assetCookMissCount: 0,
+    assetCookWriteFailureCount: 0,
+    stageDurationMs: { producer: duration },
+  };
+  writeFileSync(join(output, 'production-facts.json'), `${JSON.stringify(facts, null, 2)}\n`);
+  return facts;
+}
+
+// The producer loads built compiler/plugin packages plus authored shader sources.
+// Declarations and timing reports are excluded: they are not compiler inputs.
+const engineEntries = {
+  // Every app reuses this closure, including consumers that enable these
+  // public capabilities. Feature pruning belongs to an app-specific build.
+  pointShadows: !process.argv.includes('--no-point-shadows'),
+  hdrpSsao: !process.argv.includes('--no-hdrp-ssao'),
+};
+// This is the source producer: packaged release profiles must never hide a
+// source edit. Verified receipts are its only shortcut around compilation.
+process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
+// Engine variants compile on worker threads. Size that pool from the cgroup
+// quota because Node reports host CPUs inside a CPU-limited runner container.
+process.env.FORGEAX_SHADER_COMPILE_WORKERS ??= String(Math.max(1, runnerResources().cpus - 1));
+const inputFingerprint = sharedShaderInputFingerprint(root, engineEntries);
+if (
+  process.env.FORGEAX_BUILD_NO_TASK_CACHE !== '1' &&
+  reusableSharedBuild(root, output, inputFingerprint)
+) {
+  writeProductionFacts(0, 0);
+  console.log('[shared-build] verified local shader output; compile count=0');
+  process.exit(0);
+}
+
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 const startedAt = performance.now();
@@ -81,10 +127,7 @@ await build({
       },
     },
     forgeaxShader({
-      engineEntries: {
-        pointShadows: process.argv.includes('--point-shadows'),
-        hdrpSsao: process.argv.includes('--hdrp-ssao'),
-      },
+      engineEntries,
     }),
   ],
   build: {
@@ -110,19 +153,13 @@ const manifest = {
   schemaVersion: 2,
   producer: 'repo-build-inputs',
   inputFingerprint: fingerprint(sourceRoots),
+  shaderBuild: sharedShaderReceipt(root, join(output, 'shaders/manifest.json'), inputFingerprint),
   payload: { engineShaderManifest: `${outputRelative}/shaders/manifest.json` },
   inventory: inventory.length > 0 ? inventory : [`${outputRelative}/shaders/manifest.json`],
 };
 writeFileSync(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-const facts = {
-  schemaVersion: 2,
-  producer: manifest.producer,
-  inputFingerprint: manifest.inputFingerprint,
-  engineShaderCompileCount: 1,
-  assetCookHitCount: 0,
-  assetCookMissCount: 0,
-  assetCookWriteFailureCount: 0,
-  stageDurationMs: { producer: Number((performance.now() - startedAt).toFixed(1)) },
-};
-writeFileSync(join(output, 'production-facts.json'), `${JSON.stringify(facts, null, 2)}\n`);
-process.stdout.write(`${JSON.stringify({ ...manifest, facts })}\n`);
+const facts = writeProductionFacts(1, Number((performance.now() - startedAt).toFixed(1)));
+recordSharedBuild(root, output, inputFingerprint);
+process.stdout.write(
+  `${JSON.stringify({ manifest: join(output, 'manifest.json'), files: inventory.length, facts })}\n`,
+);

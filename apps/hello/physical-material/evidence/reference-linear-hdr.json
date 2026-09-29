@@ -1,0 +1,504 @@
+{
+  "artifactId": "physical-material-reference-v5",
+  "generator": "reference-generator.mjs",
+  "source": "analytic-raster-reference",
+  "revision": "physical-material-reference-r5",
+  "configHash": "a82390e5ae97e8bcbe459d7e434f263db52a769014dfb31f93d6d797080d39f1",
+  "environmentSourceSha256": "f521688ab09b3e748341921d0c8c114d1256e6ca9e94c6e6783b9952b0042c44",
+  "camera": "perspective-fov-45-at-origin",
+  "metric": "linear-hdr-rgb-mean",
+  "epsilon": 0.05,
+  "roi": {
+    "width": 50,
+    "height": 75
+  },
+  "scene": {
+    "input": "case-input.json",
+    "render": {
+      "width": 200,
+      "height": 150,
+      "clearColor": [
+        0.02,
+        0.02,
+        0.05,
+        1
+      ],
+      "tonemap": "reinhard-extended",
+      "exposure": 1,
+      "whitePoint": 8
+    },
+    "camera": {
+      "position": [
+        0,
+        0,
+        7
+      ],
+      "fovRadians": 0.7853981633974483,
+      "near": 0.1,
+      "far": 100,
+      "aspect": 1.3333333333333333,
+      "identity": "perspective-fov-45-at-origin"
+    },
+    "directLight": {
+      "direction": [
+        -0.4,
+        -0.8,
+        -0.3
+      ],
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 2
+    },
+    "ibl": {
+      "sourceGuid": "019e4a26-3c29-7420-af5d-20f2724a16b0",
+      "sourceRevision": "b84174ebac471401df41a2b8cad9ce06d1853b9cbadb1ed01e29b2a4963a2086",
+      "format": "rgba16float",
+      "colorSpace": "linear",
+      "width": 1600,
+      "height": 800,
+      "referenceRadiance": [
+        0.21533203125,
+        0.14111328125,
+        0.07666015625
+      ],
+      "referenceRadianceSample": {
+        "source": "newport_loft.hdr",
+        "bodySha256": "391ac77feea42745a6ae6b12d4da46bed90e8af4721525f4def0882c10cd8084",
+        "direction": [
+          0,
+          0,
+          1
+        ],
+        "uv": [
+          0.75,
+          0.5
+        ],
+        "texel": [
+          1200,
+          400
+        ]
+      }
+    },
+    "geometry": {
+      "rigid": {
+        "kind": "box",
+        "size": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "skinned": {
+        "kind": "triangle",
+        "positions": [
+          [
+            -0.55,
+            -0.55,
+            0
+          ],
+          [
+            0.55,
+            -0.55,
+            0
+          ],
+          [
+            0,
+            0.55,
+            0
+          ]
+        ],
+        "uv": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0.5,
+            1
+          ]
+        ],
+        "weights": [
+          [
+            0.75,
+            0.25
+          ],
+          [
+            0.35,
+            0.65
+          ],
+          [
+            0.6,
+            0.4
+          ]
+        ],
+        "jointIndices": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "pose": [
+          {
+            "pos": [
+              0.25,
+              0.1,
+              0
+            ],
+            "quat": [
+              0,
+              0,
+              0.258819,
+              0.965926
+            ],
+            "scale": [
+              1,
+              1.1,
+              1
+            ]
+          },
+          {
+            "pos": [
+              0.48,
+              -0.08,
+              0
+            ],
+            "quat": [
+              0,
+              0,
+              -0.130526,
+              0.991445
+            ],
+            "scale": [
+              0.9,
+              1.2,
+              1
+            ]
+          }
+        ]
+      },
+      "casePositions": {
+        "direct-rigid-factor-r": [
+          -2.7,
+          0.9
+        ],
+        "direct-rigid-roughness-g": [
+          -0.9,
+          0.9
+        ],
+        "direct-rigid-normal-rg": [
+          0.9,
+          0.9
+        ],
+        "direct-rigid-coat-normal-isolation": [
+          2.7,
+          0.9
+        ],
+        "direct-skinned-factor-r": [
+          -2.7,
+          -0.9
+        ],
+        "direct-skinned-roughness-g": [
+          -0.9,
+          -0.9
+        ],
+        "direct-skinned-normal-rg": [
+          0.9,
+          -0.9
+        ],
+        "direct-skinned-coat-normal-isolation": [
+          2.7,
+          -0.9
+        ]
+      },
+      "coveragePixels": {
+        "rigid": [
+          1467,
+          1215,
+          1215,
+          1467
+        ],
+        "skinned": [
+          415,
+          467,
+          452,
+          444
+        ]
+      }
+    },
+    "projection": {
+      "roiLayout": "phase-local-4x2",
+      "roiWidth": 50,
+      "roiHeight": 75
+    }
+  },
+  "cases": [
+    {
+      "caseId": "direct-rigid-factor-r",
+      "roi": {
+        "x": 0,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.080892,
+        0.027699,
+        0.034881
+      ],
+      "referenceHash": "94588ed14e3c7d009cfaa3a22b16f22d21081facad1effc472c8d0243f8f7419"
+    },
+    {
+      "caseId": "direct-rigid-roughness-g",
+      "roi": {
+        "x": 50,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.068531,
+        0.025951,
+        0.03736
+      ],
+      "referenceHash": "e780de670d8d8b65a1c517bcf352525e209aad8f692d4005a8b27a21ef208ae9"
+    },
+    {
+      "caseId": "direct-rigid-normal-rg",
+      "roi": {
+        "x": 100,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.068533,
+        0.025953,
+        0.037362
+      ],
+      "referenceHash": "99db2233352e2680734c68759855585eb480760b277a04acd5704af34d6b0c41"
+    },
+    {
+      "caseId": "direct-rigid-coat-normal-isolation",
+      "roi": {
+        "x": 150,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.080898,
+        0.027705,
+        0.034887
+      ],
+      "referenceHash": "910f5263c29de2d8243c760b8ad537fbc5d6043859b40d6834a2127561696716"
+    },
+    {
+      "caseId": "direct-skinned-factor-r",
+      "roi": {
+        "x": 0,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.038757,
+        0.022525,
+        0.045823
+      ],
+      "referenceHash": "6997e1af2ce5a72b2e56d7d083780e9eb8739478241156b594d471f88e0532fe"
+    },
+    {
+      "caseId": "direct-skinned-roughness-g",
+      "roi": {
+        "x": 50,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.041107,
+        0.022841,
+        0.045299
+      ],
+      "referenceHash": "7b99ca217f469af423cbfbd8977d2a19dc0a4d092476d06a90eb3db42d090db8"
+    },
+    {
+      "caseId": "direct-skinned-normal-rg",
+      "roi": {
+        "x": 100,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.040429,
+        0.02275,
+        0.04545
+      ],
+      "referenceHash": "1bca2104c18adc66f3287d2e4edb16e64eb854f8b4a36c8ea7bcbc871360a4e1"
+    },
+    {
+      "caseId": "direct-skinned-coat-normal-isolation",
+      "roi": {
+        "x": 150,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.040068,
+        0.022701,
+        0.045531
+      ],
+      "referenceHash": "f498db5fc4b21d97fe2b08688ea79ea383e2b2c32195c7d31056ad15a761020d"
+    },
+    {
+      "caseId": "ibl-rigid-factor-r",
+      "roi": {
+        "x": 0,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.086835,
+        0.02819,
+        0.04002
+      ],
+      "referenceHash": "ffbbb8c679c4c8e6c1011a3269a5f467c26667358eb343e7f37f588d2561495d"
+    },
+    {
+      "caseId": "ibl-rigid-roughness-g",
+      "roi": {
+        "x": 50,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.072376,
+        0.022222,
+        0.037983
+      ],
+      "referenceHash": "d2f3754c18cf8d16aa7f3693d451047d2d7a726a2976d0f1833c89e66c2fcbb9"
+    },
+    {
+      "caseId": "ibl-rigid-normal-rg",
+      "roi": {
+        "x": 100,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.069397,
+        0.020113,
+        0.036594
+      ],
+      "referenceHash": "eccf408f7ec1417aacea6bc1f173670167ea483f052de508b451bda94ec3439e"
+    },
+    {
+      "caseId": "ibl-rigid-coat-normal-isolation",
+      "roi": {
+        "x": 150,
+        "y": 0,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.0792,
+        0.020128,
+        0.033741
+      ],
+      "referenceHash": "b9cd1924db1fe686315d667cfab6ab1ddac9267e110d2e130363537f99aae46f"
+    },
+    {
+      "caseId": "ibl-skinned-factor-r",
+      "roi": {
+        "x": 0,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.041984,
+        0.021972,
+        0.04686
+      ],
+      "referenceHash": "8259f4ebeee402aed8c3c28e6d3113e8dbcda137607f04ebdbe0fd2558396633"
+    },
+    {
+      "caseId": "ibl-skinned-roughness-g",
+      "roi": {
+        "x": 50,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.042685,
+        0.020207,
+        0.044936
+      ],
+      "referenceHash": "37dc2df7af16ff704e6edc0b6deee78ff799bae045b7c97c32c0eabb38684837"
+    },
+    {
+      "caseId": "ibl-skinned-normal-rg",
+      "roi": {
+        "x": 100,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.041678,
+        0.020023,
+        0.044976
+      ],
+      "referenceHash": "7ee71d4be85ff5751122544fb76b1ecfd2733a5bb0211344e61e0ff9d974cb92"
+    },
+    {
+      "caseId": "ibl-skinned-coat-normal-isolation",
+      "roi": {
+        "x": 150,
+        "y": 75,
+        "width": 50,
+        "height": 75
+      },
+      "expectedLinearHdrMean": [
+        0.04243,
+        0.020671,
+        0.045376
+      ],
+      "referenceHash": "3010a6ccafffb53f6706998aef2d70aa1b3f1e1d15d8413e4d9ab1f05407ee87"
+    }
+  ],
+  "paired": {
+    "factor-zero-base-parity": {
+      "epsilon": 0.05
+    },
+    "default-custom-surface-physical-parity": {
+      "epsilon": 0.05
+    },
+    "additive-coat-falsifier": {
+      "metric": "linear-rgb-l1",
+      "baselineNoise": 0.001,
+      "energyTolerance": 0.05
+    }
+  }
+}

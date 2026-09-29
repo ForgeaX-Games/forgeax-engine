@@ -46,20 +46,23 @@ function makeSpec(shaderId: string): PipelineSpec {
 }
 
 describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
-  describe('pbr-view BGL (light buffers; binding 1+2)', () => {
-    it('sprite-lit vs sprite share the same 10-entry pbr-view BGL under storage-buffer caps', () => {
+  describe('pbr-view BGL (Cluster lights live in group(2))', () => {
+    it('sprite-lit vs sprite share the same 12-entry pbr-view BGL under storage-buffer caps', () => {
       const spriteSpec = makeSpec('forgeax::sprite');
       const spriteLitSpec = makeSpec('forgeax::sprite-lit');
       const sprite = buildBindGroupLayoutDescriptor(spriteSpec, {
         kind: 'pbr-view',
-        caps: { storageBuffer: true },
+        caps: { storageBuffer: true, extendedLighting: false },
       });
       const spriteLit = buildBindGroupLayoutDescriptor(spriteLitSpec, {
         kind: 'pbr-view',
-        caps: { storageBuffer: true },
+        caps: { storageBuffer: true, extendedLighting: false },
       });
       expect(JSON.stringify(spriteLit)).toBe(JSON.stringify(sprite));
-      expect(spriteLit.entries.length).toBe(10); // binding 10 is the shared Points/Lines view UBO
+      // Binding 10 is the shared Points/Lines view UBO; bindings 11/12 are
+      // the optional SpotLight projector resources, and 16/17 are the cloud
+      // shadow texture and sampler on the standard view contract.
+      expect(spriteLit.entries.length).toBe(12);
     });
 
     it('sprite-lit vs sprite share the same 10-entry pbr-view BGL under uniform fallback caps (AC-10)', () => {
@@ -67,25 +70,23 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
       const spriteLitSpec = makeSpec('forgeax::sprite-lit');
       const sprite = buildBindGroupLayoutDescriptor(spriteSpec, {
         kind: 'pbr-view',
-        caps: { storageBuffer: false },
+        caps: { storageBuffer: false, extendedLighting: false },
       });
       const spriteLit = buildBindGroupLayoutDescriptor(spriteLitSpec, {
         kind: 'pbr-view',
-        caps: { storageBuffer: false },
+        caps: { storageBuffer: false, extendedLighting: false },
       });
       expect(JSON.stringify(spriteLit)).toBe(JSON.stringify(sprite));
     });
 
-    it('binding 1 + 2 are read-only-storage on storageBuffer=true (point/spot light buffers)', () => {
+    it('does not expose point/spot light bindings on storageBuffer=true', () => {
       const entries = buildPbrViewBglEntries({ storageBuffer: true });
-      expect(entries[1]?.buffer?.type).toBe('read-only-storage');
-      expect(entries[2]?.buffer?.type).toBe('read-only-storage');
+      expect(entries.some((entry) => entry.binding === 1 || entry.binding === 2)).toBe(false);
     });
 
-    it('binding 1 + 2 fall back to uniform on storageBuffer=false (AC-10 fallback)', () => {
+    it('does not expose point/spot light bindings on storageBuffer=false', () => {
       const entries = buildPbrViewBglEntries({ storageBuffer: false });
-      expect(entries[1]?.buffer?.type).toBe('uniform');
-      expect(entries[2]?.buffer?.type).toBe('uniform');
+      expect(entries.some((entry) => entry.binding === 1 || entry.binding === 2)).toBe(false);
     });
   });
 
@@ -118,24 +119,31 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
   });
 
   describe('material BGL congruence (pbr-material-merged / unlit-material)', () => {
-    it('pbr-material-user-region entries are 13 (PBR layout reused by sprite & sprite-lit)', () => {
-      // sprite + sprite-lit use the default standard-PBR user-region
-      // schema (5 user fields produce 7 BGL entries after std140 merge).
-      // Both share the same userRegion shape and therefore the same BGL.
+    it('pbr-material-user-region entries are 25 (PBR layout reused by sprite & sprite-lit)', () => {
+      // The shared user region has one UBO and twelve map pairs.
       const base = buildPbrMaterialUserRegionEntries();
-      expect(base.length).toBe(13);
+      expect(base.length).toBe(25);
     });
 
-    it('pbr-material-merged stays 24 entries (sprite/sprite-lit do not change material BGL shape)', () => {
+    it('pbr-material-merged has 35 entries for the generic sprite contract', () => {
       const merged = buildBindGroupLayoutDescriptor(makeSpec('forgeax::sprite-lit'), {
         kind: 'pbr-material-merged',
       });
-      expect(merged.entries.length).toBe(24);
-      // mergeSkylightIntoMaterialBgl + lightmap injection must stay
-      // append-only against the 7-entry PBR base.
+      expect(merged.entries.length).toBe(35);
+      // mergeSkylightIntoMaterialBgl + transmission injection must stay
+      // append-only against the user region, including the generic backdrop sampler.
       const base = buildPbrMaterialUserRegionEntries();
       const afterSky = mergeSkylightIntoMaterialBgl(base);
-      const expected = [...afterSky, ...appendInjection(afterSky, 'lightmap')];
+      const expected = [
+        ...afterSky,
+        ...appendInjection(afterSky, 'transmission'),
+        {
+          binding: 46,
+          visibility: 0x1 | 0x2,
+          buffer: { type: 'read-only-storage', hasDynamicOffset: false },
+        },
+        { binding: 47, visibility: 0x2, texture: { sampleType: 'float', viewDimension: 'cube' } },
+      ];
       expect(merged.entries).toEqual(expected);
     });
   });

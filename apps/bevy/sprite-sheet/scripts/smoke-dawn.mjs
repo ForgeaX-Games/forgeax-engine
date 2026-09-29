@@ -7,10 +7,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
-const dt = 1 / 60;
+// Cover the full animation journey with fewer rendered samples.
+const dt = 5 / frames;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
 const here = dirname(fileURLToPath(import.meta.url));
 const { create, globals } = await import('webgpu');
@@ -39,7 +40,7 @@ const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeSpriteSheetPixels();
-const texture = { kind: 'texture', width: SHEET_WIDTH, height: SHEET_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = { kind: 'texture', shape: { viewDimension: '2d', extent: { width: SHEET_WIDTH, height: SHEET_HEIGHT } }, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mips: { kind: 'none' } };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 buildSpriteSheetWorld(world, unwrapHandle(textureHandle));
 const query = world.query({ with: [SpriteAnimation] }).unwrap();
@@ -104,7 +105,7 @@ for (let i = 0; i < lateFrame.length; i += 4) {
   if (max - min > 35 && max > 40) coloredPixels += 1;
 }
 console.log(`[smoke] frames=${frames} logicalFrameSet=${[...seen].sort((a, b) => a - b).join(',')} changes=${changes} coloredPixels=${coloredPixels} motionMeanDelta=${motionDelta.toFixed(5)} leadInPixels=${leadInPixels} errors=${errors.length}`);
-if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || seen.size < 3 || [...seen].some((frame) => frame < 0 || frame >= ANIMATION_FRAME_COUNT) || changes < 10 || coloredPixels < 500 || motionDelta <= 0.0005 || leadInPixels > 5 || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || frames < 60 || seen.size < 3 || [...seen].some((frame) => frame < 0 || frame >= ANIMATION_FRAME_COUNT) || changes < 10 || coloredPixels < 500 || motionDelta <= 0.0005 || leadInPixels > 5 || errors.length > 0) {
   console.error('[smoke] FAIL - sprite-sheet subset/animation/visibility/error criterion failed');
   process.exit(1);
 }

@@ -28,23 +28,23 @@ import {
   computeInvRangeSquared,
   degToCos,
   validateDirectionalLightData,
+  validatePointLightShadowData,
   validateSpotLightData,
 } from '../../../render/src/components/light-helpers';
 import type { ShadowInvalidConfigError } from '../../../render/src/errors/render';
 import {
-  BYTES_PER_LIGHT_SLOT,
-  LIGHTSLOT_LAYOUT,
-  LightSlotKind,
-  packLightArrayHeader,
-  packPointLight,
-  packSpotLight,
+  BYTES_PER_DIRECT_LIGHT_SLOT,
+  DIRECT_LIGHT_SLOT_LAYOUT,
+  DirectLightSlotKind,
+  packDirectLightSlot,
 } from '../../../render/src/light-buffer-layout';
 import { buildPbrViewBglEntries } from '../../../render/src/pbr-pipeline';
 import type {
   PointLightSnapshot,
   SpotLightSnapshot,
 } from '../../../render/src/render-system-extract';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 type LightSpawnResult = ReturnType<World['spawn']>;
 
@@ -62,6 +62,77 @@ function spawnValidatedLight(
 }
 
 {
+  describe('M1 directional closed shadow quality contract', () => {
+    it('publishes the five closed labels and PCSS defaults', () => {
+      const schema = componentSchema(DirectionalLight);
+      expect(schema.shadowFilter).toBe('enum');
+      expect(componentDefinition(DirectionalLight).defaults).toMatchObject({
+        shadowFilter: 2,
+        shadowAngularRadius: 0.00465,
+        maxPenumbraTexels: 32,
+      });
+      expect(DirectionalLight.fields.shadowFilter.labels).toEqual({
+        pcf1: 1,
+        pcf3: 2,
+        pcf5: 3,
+        pcssMedium: 4,
+        pcssHigh: 5,
+      });
+      expect('pcfKernelSize' in schema).toBe(false);
+    });
+
+    it.each([
+      ['shadowAngularRadius', Number.NaN],
+      ['shadowAngularRadius', 0.00009],
+      ['shadowAngularRadius', 0.05001],
+      ['maxPenumbraTexels', Number.NaN],
+      ['maxPenumbraTexels', 0],
+      ['maxPenumbraTexels', 65],
+      ['maxPenumbraTexels', 1.5],
+    ] as const)('rejects invalid PCSS field %s=%s with one structured detail shape', (field, value) => {
+      const result = spawnValidatedLight(new World(), DirectionalLight, {
+        direction: [0, -1, 0],
+        shadowFilter: 4,
+        [field]: value,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected validation to fail');
+      const error = result.error as unknown as ShadowInvalidConfigError;
+      expect(error.code).toBe('shadow-invalid-config');
+      expect(Object.keys(error.detail)).toEqual(['field', 'actual', 'bound', 'reason']);
+      expect(error.detail.field).toBe(field);
+      expect(error.detail.actual).toBe(value);
+      expect(['range', 'lower-bound', 'allowed-values']).toContain(error.detail.bound.kind);
+      expect(typeof error.detail.reason).toBe('string');
+    });
+
+    it('skips PCSS validation when Directional shadows are disabled', () => {
+      const result = validateDirectionalLightData({
+        direction: [0, -1, 0],
+        castShadow: false,
+        shadowFilter: 99,
+        shadowAngularRadius: Number.NaN,
+        maxPenumbraTexels: 0,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('keeps Point and Spot pcfKernelSize validation as their own contract', () => {
+      const point = validatePointLightShadowData({
+        mapSize: 512,
+        nearPlane: 0.1,
+        farPlane: 10,
+        pcfKernelSize: 3,
+      });
+      expect(point.ok).toBe(true);
+      const spot = validateSpotLightData({
+        direction: [0, -1, 0],
+        pcfKernelSize: 3,
+      });
+      expect(spot.ok).toBe(true);
+    });
+  });
+
   // ─── feat-20260709 M2 / w4: vec-collapse schema shape + default equivalence ───
   // AC-01 + E1: direction is array<f32,3> with NO default (D-5 -- the only
   // field deliberately left defaultless so an omitted/zero direction is a
@@ -274,16 +345,17 @@ function spawnValidatedLight(
         expect(defaults.splitLambda).toBeCloseTo(0.75, 5);
         expect(defaults.cascadeBlend).toBeCloseTo(0.2, 5);
         expect(defaults.mapSize).toBe(2048);
-        expect(defaults.depthBias).toBeCloseTo(0.005, 5);
+        expect(defaults.depthBias).toBeCloseTo(0.00001, 7);
         expect(defaults.normalBias).toBeCloseTo(0.05, 5);
         expect(defaults.shadowDistance).toBeCloseTo(200, 5);
-        expect(defaults.pcfKernelSize).toBe(3);
+        expect(defaults.shadowFilter).toBe(2);
 
         // Merged component: 3 light (direction + color arrays + intensity) +
-        // 1 castShadow + 8 shadow = 12 fields (feat-20260709 M2 collapsed
+        // 1 castShadow + 10 closed shadow-quality fields + contactShadowLength = 15 fields (feat-20260709 M2 collapsed
         // direction/color from 6 per-axis scalars to 2 array<f32,3> columns;
         // nearPlane removed — derived from camera near; farPlane -> shadowDistance)
-        expect(Object.keys(componentSchema(dl)).length).toBe(12);
+        expect(Object.keys(componentSchema(dl)).length).toBe(15);
+        expect('contactShadowLength' in componentSchema(dl)).toBe(true);
         expect('direction' in componentSchema(dl)).toBe(true);
         expect('color' in componentSchema(dl)).toBe(true);
         expect('cascadeCount' in componentSchema(dl)).toBe(true);
@@ -295,7 +367,7 @@ function spawnValidatedLight(
         expect('shadowDistance' in componentSchema(dl)).toBe(true);
         expect('nearPlane' in componentSchema(dl)).toBe(false);
         expect('farPlane' in componentSchema(dl)).toBe(false);
-        expect('pcfKernelSize' in componentSchema(dl)).toBe(true);
+        expect('pcfKernelSize' in componentSchema(dl)).toBe(false);
         // DirectionalLightShadow is deleted; the old orthoHalfExtent field is gone
       });
 
@@ -317,10 +389,9 @@ function spawnValidatedLight(
         expect(lightData.cascadeCount).toBe(4);
         expect(lightData.splitLambda).toBeCloseTo(0.75, 5);
         expect(lightData.cascadeBlend).toBeCloseTo(0.2, 5);
-        expect(lightData.depthBias).toBeCloseTo(0.005, 5);
+        expect(lightData.depthBias).toBeCloseTo(0.00001, 7);
         expect(lightData.normalBias).toBeCloseTo(0.05, 5);
         expect(lightData.shadowDistance).toBeCloseTo(200, 5);
-        expect(lightData.pcfKernelSize).toBe(3);
       });
 
       it('AC-02: spawn with empty data gets all defaults (single-component)', () => {
@@ -338,10 +409,9 @@ function spawnValidatedLight(
         expect(light.splitLambda).toBeCloseTo(0.75, 5);
         expect(light.cascadeBlend).toBeCloseTo(0.2, 5);
         expect(light.mapSize).toBeCloseTo(2048, 5);
-        expect(light.depthBias).toBeCloseTo(0.005, 5);
+        expect(light.depthBias).toBeCloseTo(0.00001, 7);
         expect(light.normalBias).toBeCloseTo(0.05, 5);
         expect(light.shadowDistance).toBeCloseTo(200, 5);
-        expect(light.pcfKernelSize).toBe(3);
       });
 
       it('AC-02: spawn with full explicit data overrides all defaults (single-component)', () => {
@@ -358,7 +428,7 @@ function spawnValidatedLight(
             depthBias: 0.01,
             normalBias: 0.1,
             shadowDistance: 100,
-            pcfKernelSize: 5,
+            shadowFilter: 5,
           },
         });
         expect(r.ok).toBe(true);
@@ -372,7 +442,7 @@ function spawnValidatedLight(
         expect(light.depthBias).toBeCloseTo(0.01, 5);
         expect(light.normalBias).toBeCloseTo(0.1, 5);
         expect(light.shadowDistance).toBeCloseTo(100, 5);
-        expect(light.pcfKernelSize).toBe(5);
+        expect(light.shadowFilter).toBe(5);
       });
 
       it('AC-05: single-component spawn bundles light + shadow fields (no dual-component needed)', () => {
@@ -396,7 +466,7 @@ function spawnValidatedLight(
         expect(dl.direction[0]).toBe(0);
         expect(dl.intensity).toBe(1);
         expect(dl.mapSize).toBeCloseTo(2048, 5);
-        expect(dl.depthBias).toBeCloseTo(0.005, 5);
+        expect(dl.depthBias).toBeCloseTo(0.00001, 7);
       });
 
       it('query: DirectionalLight entity is found via world.get', () => {
@@ -1174,7 +1244,7 @@ function spawnValidatedLight(
   describe('light-buffer-layout.test.ts', () => {
     const EPSILON = 1e-6;
 
-    describe('packPointLight - std430 32B layout (M3 w17 + feat-20260612 M1 T-M1-8)', () => {
+    describe('unified Point direct-light layout', () => {
       it('emits 8 floats / 32 bytes byte-for-byte (position + invRangeSquared + color + shadowAtlasLayer)', () => {
         const snap: PointLightSnapshot = {
           kind: 'point',
@@ -1184,10 +1254,10 @@ function spawnValidatedLight(
           intensity: 2,
           invRangeSquared: 0.04,
         };
-        const out = packPointLight(snap);
+        const out = packDirectLightSlot(snap);
         expect(out).toBeInstanceOf(Float32Array);
-        expect(out.length).toBe(8);
-        expect(out.byteLength).toBe(32);
+        expect(out.length).toBe(20);
+        expect(out.byteLength).toBe(80);
         // Slot 0..2: position vec3.
         expect(out[0]).toBeCloseTo(1.5, 6);
         expect(out[1]).toBeCloseTo(-2.25, 6);
@@ -1202,7 +1272,7 @@ function spawnValidatedLight(
         // Slot 7: shadowAtlasLayer i32; sentinel -1 (0xFFFFFFFF) when omitted.
         // Read via Int32Array view to confirm the i32 bits.
         const i32 = new Int32Array(out.buffer);
-        expect(i32[7]).toBe(-1);
+        expect(i32[17]).toBe(-1);
       });
 
       it('shadowAtlasLayer=0 packs as i32 0 in slot 7 (first shadow caster)', () => {
@@ -1214,9 +1284,9 @@ function spawnValidatedLight(
           invRangeSquared: 0,
           shadowAtlasLayer: 0,
         };
-        const out = packPointLight(snap);
+        const out = packDirectLightSlot(snap);
         const i32 = new Int32Array(out.buffer);
-        expect(i32[7]).toBe(0);
+        expect(i32[17]).toBe(0);
       });
 
       it('shadowAtlasLayer=3 packs as i32 3 in slot 7 (4th / last shadow caster, cap=4)', () => {
@@ -1228,9 +1298,9 @@ function spawnValidatedLight(
           invRangeSquared: 0,
           shadowAtlasLayer: 3,
         };
-        const out = packPointLight(snap);
+        const out = packDirectLightSlot(snap);
         const i32 = new Int32Array(out.buffer);
-        expect(i32[7]).toBe(3);
+        expect(i32[17]).toBe(3);
       });
 
       it('T-M3-8: 4 shadow lights pack as layers 0/1/2/3 in spawn order', () => {
@@ -1247,9 +1317,9 @@ function spawnValidatedLight(
             invRangeSquared: 0.04,
             shadowAtlasLayer: layer,
           };
-          const out = packPointLight(snap);
+          const out = packDirectLightSlot(snap);
           const i32 = new Int32Array(out.buffer);
-          expect(i32[7]).toBe(layer);
+          expect(i32[17]).toBe(layer);
           // Non-shadow lanes 0..6 stay f32 (slot 7 is the only i32 lane —
           // research L1.7 byte offset 28..32 i32 sentinel discriminator).
           expect(out[0]).toBeCloseTo(layer, 6);
@@ -1271,11 +1341,11 @@ function spawnValidatedLight(
           invRangeSquared: 0,
           shadowAtlasLayer: 2,
         };
-        const out = packPointLight(snap);
-        // Byte length is 32; the backing buffer is exactly the 8 f32 lanes.
-        expect(out.byteLength).toBe(32);
-        // i32 view starting at byte offset 28 (= slot 7 * 4 B / lane).
-        const i32 = new Int32Array(out.buffer, 28, 1);
+        const out = packDirectLightSlot(snap);
+        // Byte length is 80; the metadata row starts at byte offset 64.
+        expect(out.byteLength).toBe(80);
+        // i32 view at byte offset 68 (= metadata shadow word).
+        const i32 = new Int32Array(out.buffer, 68, 1);
         expect(i32[0]).toBe(2);
       });
 
@@ -1287,15 +1357,15 @@ function spawnValidatedLight(
           intensity: 0,
           invRangeSquared: 0,
         };
-        const out = packPointLight(snap);
+        const out = packDirectLightSlot(snap);
         for (let i = 0; i < 7; i++) expect(out[i]).toBe(0);
         // Slot 7 is shadowAtlasLayer sentinel -1 (no longer zero pad).
         const i32 = new Int32Array(out.buffer);
-        expect(i32[7]).toBe(-1);
+        expect(i32[17]).toBe(-1);
       });
     });
 
-    describe('packSpotLight - std430 64B layout (feat-20260625 M2 w6)', () => {
+    describe('unified Spot direct-light layout', () => {
       // feat-20260625-spot-light-shadow-mapping M2 w6 (D-4): SpotLight std430
       // stride 48 -> 64 (12 -> 16 floats). Slots 0..11 keep the prior layout;
       // slots 12..14 are vec4-alignment padding; slot 15 is shadowAtlasTile i32
@@ -1319,11 +1389,11 @@ function spawnValidatedLight(
         };
       }
 
-      it('emits 16 floats / 64 bytes; slots 0..11 unchanged from the 48B layout', () => {
-        const out = packSpotLight(makeSnap(0));
+      it('emits 20 floats / 80 bytes; slots 0..11 unchanged from the 48B layout', () => {
+        const out = packDirectLightSlot(makeSnap(0));
         expect(out).toBeInstanceOf(Float32Array);
-        expect(out.length).toBe(16);
-        expect(out.byteLength).toBe(64);
+        expect(out.length).toBe(20);
+        expect(out.byteLength).toBe(80);
         // Slot 0..2: position vec3.
         expect(out[0]).toBeCloseTo(3.0, 6);
         expect(out[1]).toBeCloseTo(4.0, 6);
@@ -1342,60 +1412,33 @@ function spawnValidatedLight(
         expect(out[10]).toBeCloseTo(0.0, 6);
         // Slot 11: cosOuter (packed into direction.w lane).
         expect(out[11]).toBeCloseTo(0.866, 6);
-        // Slot 12..14: vec4-alignment padding, zero-initialised.
-        expect(out[12]).toBe(0);
-        expect(out[13]).toBe(0);
-        expect(out[14]).toBe(0);
+        // Slot 12..14: default Spot receiver controls carried by row 3.
+        expect(out[12]).toBeCloseTo(0.005, 6);
+        expect(out[13]).toBeCloseTo(0.05, 6);
+        expect(out[14]).toBeCloseTo(1, 6);
+        // Slot 15: roll angle defaults to zero.
+        expect(out[15]).toBe(0);
       });
 
       it('slot 15 carries shadowAtlasTile as i32 (tile=0)', () => {
-        const out = packSpotLight(makeSnap(0));
+        const out = packDirectLightSlot(makeSnap(0));
         const i32 = new Int32Array(out.buffer);
-        expect(i32[15]).toBe(0);
+        expect(i32[17]).toBe(0);
       });
 
       it('slot 15 carries shadowAtlasTile sentinel -1 (0xFFFFFFFF bit pattern)', () => {
-        const out = packSpotLight(makeSnap(-1));
+        const out = packDirectLightSlot(makeSnap(-1));
         const i32 = new Int32Array(out.buffer);
-        expect(i32[15]).toBe(-1);
+        expect(i32[17]).toBe(-1);
         // -1 as i32 is 0xFFFFFFFF: reading the same lane as u32 confirms bits.
         const u32 = new Uint32Array(out.buffer);
-        expect(u32[15]).toBe(0xffffffff);
+        expect(u32[17]).toBe(0xffffffff);
       });
 
       it('slot 15 carries a valid tile index (tile=3, last cap slot)', () => {
-        const out = packSpotLight(makeSnap(3));
+        const out = packDirectLightSlot(makeSnap(3));
         const i32 = new Int32Array(out.buffer);
-        expect(i32[15]).toBe(3);
-      });
-    });
-
-    describe('packLightArrayHeader - 16B std430 header (M3 w17)', () => {
-      it('emits 16 bytes: count u32 at offset 0; remaining 12 bytes zero-pad to 16B alignment', () => {
-        const buf = packLightArrayHeader(3);
-        expect(buf).toBeInstanceOf(ArrayBuffer);
-        expect(buf.byteLength).toBe(16);
-        const u32 = new Uint32Array(buf);
-        expect(u32[0]).toBe(3);
-        // Slots 1..3 (12B pad) zero-initialised.
-        expect(u32[1]).toBe(0);
-        expect(u32[2]).toBe(0);
-        expect(u32[3]).toBe(0);
-      });
-
-      it('count = 0 emits all-zero 16B header', () => {
-        const buf = packLightArrayHeader(0);
-        const u32 = new Uint32Array(buf);
-        expect(u32[0]).toBe(0);
-        expect(u32[1]).toBe(0);
-        expect(u32[2]).toBe(0);
-        expect(u32[3]).toBe(0);
-      });
-
-      it('count = 4 (first-slice cap maximum) round-trips', () => {
-        const buf = packLightArrayHeader(4);
-        const u32 = new Uint32Array(buf);
-        expect(u32[0]).toBe(4);
+        expect(i32[17]).toBe(3);
       });
     });
 
@@ -1410,7 +1453,7 @@ function spawnValidatedLight(
         expect(f.byteLength).toBe(48);
       });
 
-      it('packPointLight slots are stable across two invocations (no shared backing store)', () => {
+      it('unified direct slots are stable across two invocations (no shared backing store)', () => {
         const snap: PointLightSnapshot = {
           kind: 'point',
           position: vec3.create(1, 2, 3),
@@ -1418,8 +1461,8 @@ function spawnValidatedLight(
           intensity: 1,
           invRangeSquared: 0.5,
         };
-        const a = packPointLight(snap);
-        const b = packPointLight(snap);
+        const a = packDirectLightSlot(snap);
+        const b = packDirectLightSlot(snap);
         expect(a.buffer).not.toBe(b.buffer);
         // Compare slots 0..6 as f32 (point/color/invRangeSquared are floats);
         // slot 7 is i32 (shadowAtlasLayer; reading as f32 yields NaN by design
@@ -1491,104 +1534,94 @@ function spawnValidatedLight(
 {
   // ─── from lightslot-layout.test.ts ───
   describe('lightslot-layout.test.ts', () => {
-    // ── test: BYTES_PER_LIGHT_SLOT === 64 absolute-value lock (AC-11 TS side) ─────
+    // ── test: unified direct-light slot byte-size lock ─────
 
-    describe('BYTES_PER_LIGHT_SLOT', () => {
-      it('is exactly 64 (AC-11 absolute-value lock)', () => {
-        expect(BYTES_PER_LIGHT_SLOT).toBe(64);
+    describe('BYTES_PER_DIRECT_LIGHT_SLOT', () => {
+      it('is exactly 80 (unified ABI lock)', () => {
+        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(80);
       });
     });
 
-    // ── test: LightSlotLayout byte-size lock ──────────────────────────────────────
+    // ── test: DirectLightSlot layout byte-size lock ───────────────────────────────
 
-    describe('LIGHTSLOT_LAYOUT byte-size', () => {
-      it('declares byteSize === 64', () => {
-        expect(LIGHTSLOT_LAYOUT.byteSize).toBe(64);
+    describe('DIRECT_LIGHT_SLOT_LAYOUT byte-size', () => {
+      it('declares byteSize === 80', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(80);
       });
 
-      it('declares floatCount === 16 (64 bytes / 4 bytes per f32)', () => {
-        expect(LIGHTSLOT_LAYOUT.floatCount).toBe(16);
+      it('declares floatCount === 20 (80 bytes / 4 bytes per f32)', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.floatCount).toBe(20);
       });
 
-      it('declares vec4Count === 4 (64 bytes / 16 bytes per vec4)', () => {
-        expect(LIGHTSLOT_LAYOUT.vec4Count).toBe(4);
+      it('declares vec4Count === 5 (80 bytes / 16 bytes per vec4)', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.vec4Count).toBe(5);
       });
     });
 
-    // ── test: LightSlotLayout field offsets match WGSL LightSlot struct ────────────
+    // ── test: DirectLightSlot field offsets match the WGSL struct ─────────────────
 
-    describe('LIGHTSLOT_LAYOUT field offsets', () => {
+    describe('DIRECT_LIGHT_SLOT_LAYOUT field offsets', () => {
       it('position at byte 0', () => {
-        expect(LIGHTSLOT_LAYOUT.positionOffset).toBe(0);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.positionOffset).toBe(0);
       });
       it('invRangeSquared at byte 12 (lane .w of vec4[0])', () => {
-        expect(LIGHTSLOT_LAYOUT.invRangeSquaredOffset).toBe(12);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.rangeOffset).toBe(12);
       });
       it('color at byte 16', () => {
-        expect(LIGHTSLOT_LAYOUT.colorOffset).toBe(16);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.colorOffset).toBe(16);
       });
       it('cosInner at byte 28 (lane .w of vec4[1])', () => {
-        expect(LIGHTSLOT_LAYOUT.cosInnerOffset).toBe(28);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.firstAngleOffset).toBe(28);
       });
       it('direction at byte 32', () => {
-        expect(LIGHTSLOT_LAYOUT.directionOffset).toBe(32);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.primaryAxisOffset).toBe(32);
       });
       it('cosOuter at byte 44 (lane .w of vec4[2])', () => {
-        expect(LIGHTSLOT_LAYOUT.cosOuterOffset).toBe(44);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.secondAngleOffset).toBe(44);
       });
       it('kind at byte 48', () => {
-        expect(LIGHTSLOT_LAYOUT.kindOffset).toBe(48);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.auxiliaryAxisOffset).toBe(48);
       });
       it('pad at byte 52 (3 x u32 = 12 bytes of padding)', () => {
-        expect(LIGHTSLOT_LAYOUT.shadowPayloadOffset).toBe(52);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.metadataByteOffset).toBe(64);
       });
-      // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
-      // pad lanes carry the per-light shadow triple on the HDRP path.
-      it('shadowAtlasLayer at byte 52 (i32 sentinel; pad lane .y of vec4[3])', () => {
-        // Pad layout reads:
-        //   byte 52..56 = shadowAtlasLayer (i32; default sentinel -1)
-        //   byte 56..60 = near (f32 bits)
-        //   byte 60..64 = far  (f32 bits)
-        const buf = new Float32Array(16);
+      it('metadata starts at byte 64 after four payload rows', () => {
+        const buf = new Float32Array(20);
         const i32 = new Int32Array(buf.buffer);
-        // Place a non-default value to verify byte mapping.
-        i32[13] = 7;
-        expect(i32[13]).toBe(7);
-        // Float lane access on the same backing buffer is unambiguous.
-        buf[14] = 0.25; // near
-        buf[15] = 50; // far
-        expect(buf[14]).toBeCloseTo(0.25, 5);
-        expect(buf[15]).toBeCloseTo(50, 5);
+        i32[16] = DirectLightSlotKind.SPOT;
+        i32[17] = 3;
+        expect(i32[16]).toBe(DirectLightSlotKind.SPOT);
+        expect(i32[17]).toBe(3);
       });
     });
 
-    // ── test: Float32Array(16).byteLength === 64 (one LightSlot strided) ──────────
+    // ── test: Float32Array(20).byteLength === 80 (one DirectLightSlot) ───────────
 
-    describe('Float32Array representation of one LightSlot', () => {
-      it('Float32Array(16).byteLength === 64', () => {
-        const buf = new Float32Array(16);
-        expect(buf.byteLength).toBe(64);
+    describe('Float32Array representation of one DirectLightSlot', () => {
+      it('Float32Array(20).byteLength === 80', () => {
+        const buf = new Float32Array(20);
+        expect(buf.byteLength).toBe(80);
       });
     });
 
-    // ── test: LightSlotKind closed enum (AC-12) ───────────────────────────────────
+    // ── test: DirectLightSlotKind closed enum (AC-12) ────────────────────────────
 
-    describe('LightSlotKind closed enum', () => {
+    describe('DirectLightSlotKind closed enum', () => {
       it('POINT === 0', () => {
-        expect(LightSlotKind.POINT).toBe(0);
+        expect(DirectLightSlotKind.POINT).toBe(0);
       });
       it('SPOT === 1', () => {
-        expect(LightSlotKind.SPOT).toBe(1);
+        expect(DirectLightSlotKind.SPOT).toBe(1);
       });
       it('kind values are disjoint (0 vs 1)', () => {
-        expect(LightSlotKind.POINT).not.toBe(LightSlotKind.SPOT);
+        expect(DirectLightSlotKind.POINT).not.toBe(DirectLightSlotKind.SPOT);
       });
       it('only two members exist (0 and 1)', () => {
-        const keys = Object.keys(LightSlotKind);
-        // LightSlotKind has 2 const keys + TypeScript adds nothing else
-        expect(keys.length).toBe(2);
+        const keys = Object.keys(DirectLightSlotKind);
+        expect(keys.length).toBe(3);
         expect(keys).toContain('POINT');
         expect(keys).toContain('SPOT');
+        expect(keys).toContain('RECT_AREA');
       });
     });
   });
@@ -1771,7 +1804,7 @@ function spawnValidatedLight(
         expect(view.castShadow).toBe(true);
       });
 
-      it('6 shadow fields align with DirectionalLight defaults', () => {
+      it('6 shadow fields retain SpotLight defaults', () => {
         const world = new World();
         const e = world
           .spawn({
@@ -1838,10 +1871,10 @@ function spawnValidatedLight(
         expect(view.splitLambda).toBeCloseTo(0.75, 5);
         expect(view.cascadeBlend).toBeCloseTo(0.2, 5);
         expect(view.mapSize).toBe(2048);
-        expect(view.depthBias).toBeCloseTo(0.005, 5);
+        expect(view.depthBias).toBeCloseTo(0.00001, 7);
         expect(view.normalBias).toBeCloseTo(0.05, 5);
         expect(view.shadowDistance).toBeCloseTo(200, 5);
-        expect(view.pcfKernelSize).toBe(3);
+        expect(view.shadowFilter).toBe(2);
       });
 
       it('spawn with direction-only data gets all 8 shadow defaults', () => {
@@ -1854,10 +1887,10 @@ function spawnValidatedLight(
         expect(view.splitLambda).toBeCloseTo(0.75, 5);
         expect(view.cascadeBlend).toBeCloseTo(0.2, 5);
         expect(view.mapSize).toBe(2048);
-        expect(view.depthBias).toBeCloseTo(0.005, 5);
+        expect(view.depthBias).toBeCloseTo(0.00001, 7);
         expect(view.normalBias).toBeCloseTo(0.05, 5);
         expect(view.shadowDistance).toBeCloseTo(200, 5);
-        expect(view.pcfKernelSize).toBe(3);
+        expect(view.shadowFilter).toBe(2);
       });
 
       it('spawn with full explicit shadow data overrides all 9 defaults', () => {
@@ -1874,7 +1907,7 @@ function spawnValidatedLight(
               depthBias: 0.01,
               normalBias: 0.1,
               shadowDistance: 100,
-              pcfKernelSize: 5,
+              shadowFilter: 5,
             },
           })
           .unwrap();
@@ -1886,11 +1919,11 @@ function spawnValidatedLight(
         expect(view.depthBias).toBeCloseTo(0.01, 5);
         expect(view.normalBias).toBeCloseTo(0.1, 5);
         expect(view.shadowDistance).toBeCloseTo(100, 5);
-        expect(view.pcfKernelSize).toBe(5);
+        expect(view.shadowFilter).toBe(5);
       });
 
-      it('schema has 12 fields (3 light + 1 castShadow + 8 shadow)', () => {
-        expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(12);
+      it('schema has 15 fields (3 light + 1 castShadow + 10 shadow-quality + contactShadowLength)', () => {
+        expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(15);
         expect('direction' in componentSchema(DirectionalLight)).toBe(true);
         expect('color' in componentSchema(DirectionalLight)).toBe(true);
         expect('castShadow' in componentSchema(DirectionalLight)).toBe(true);
@@ -1903,7 +1936,7 @@ function spawnValidatedLight(
         expect('shadowDistance' in componentSchema(DirectionalLight)).toBe(true);
         expect('nearPlane' in componentSchema(DirectionalLight)).toBe(false);
         expect('farPlane' in componentSchema(DirectionalLight)).toBe(false);
-        expect('pcfKernelSize' in componentSchema(DirectionalLight)).toBe(true);
+        expect('pcfKernelSize' in componentSchema(DirectionalLight)).toBe(false);
       });
     });
   });
@@ -1913,79 +1946,6 @@ function spawnValidatedLight(
   // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t2 ───
   describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t2', () => {
     describe('DirectionalLight.validate() shadow field enforcement', () => {
-      it('rejects even pcfKernelSize (2) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = spawnValidatedLight(world, DirectionalLight, {
-          direction: [0, -1, 0],
-          pcfKernelSize: 2,
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(2);
-        expect(err.detail.min).toBe(1);
-        // The hint must name the odd constraint so an AI retry does not loop
-        // 2 -> 3 wrong-way (4 -> 6); verify-step AI-user finding F-6.
-        expect(err.hint).toBe('set pcfKernelSize to an odd integer >= 1; got 2');
-      });
-
-      it('rejects pcfKernelSize < 1 (0) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = spawnValidatedLight(world, DirectionalLight, {
-          direction: [0, -1, 0],
-          pcfKernelSize: 0,
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(0);
-      });
-
-      it('rejects pcfKernelSize < 1 (-1) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = spawnValidatedLight(world, DirectionalLight, {
-          direction: [0, -1, 0],
-          pcfKernelSize: -1,
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(-1);
-      });
-
-      it('accepts pcfKernelSize=1 (smallest valid odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 1 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts pcfKernelSize=3 (default odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 3 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts pcfKernelSize=7 (larger odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 7 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
       it('rejects mapSize < 1 with ShadowInvalidConfigError', () => {
         const world = new World();
         const r = spawnValidatedLight(world, DirectionalLight, {
@@ -2023,7 +1983,7 @@ function spawnValidatedLight(
         const err = r.error as unknown as ShadowInvalidConfigError;
         expect(err.code).toBe('shadow-invalid-config');
         expect(err.detail.field).toBe('cascadeCount');
-        expect(err.detail.value).toBe(5);
+        expect(err.detail.actual).toBe(5);
       });
 
       it('rejects non-integer cascadeCount (1.5) with ShadowInvalidConfigError', () => {
@@ -2134,24 +2094,6 @@ function spawnValidatedLight(
   // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t3 ───
   describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t3', () => {
     describe('DirectionalLight.validate() skips shadow validation when castShadow=false', () => {
-      it('castShadow=false tolerates even pcfKernelSize (2) because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], castShadow: false, pcfKernelSize: 2 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates pcfKernelSize=0 because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], castShadow: false, pcfKernelSize: 0 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
       it('castShadow=false tolerates mapSize=0 because unused', () => {
         const world = new World();
         const r = world.spawn({
@@ -2187,33 +2129,6 @@ function spawnValidatedLight(
         });
         expect(r.ok).toBe(true);
       });
-
-      it('castShadow=true (explicit) still enforces pcfKernelSize odd>=1', () => {
-        const world = new World();
-        const r = spawnValidatedLight(world, DirectionalLight, {
-          direction: [0, -1, 0],
-          castShadow: true,
-          pcfKernelSize: 2,
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-      });
-
-      it('omitted castShadow (treated as default true) still enforces pcfKernelSize odd>=1', () => {
-        const world = new World();
-        const r = spawnValidatedLight(world, DirectionalLight, {
-          direction: [0, -1, 0],
-          pcfKernelSize: 2,
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-      });
     });
   });
 
@@ -2237,25 +2152,32 @@ function spawnValidatedLight(
     const VISIBILITY_VERTEX_FRAGMENT = 0x1 | 0x2;
 
     describe('binding 8 = spotShadowMap (D-5 always-on shadow entry)', () => {
-      it('declares binding 8 as a depth 2D texture, FRAGMENT-only', () => {
-        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+      it('declares binding 8 as a depth 2D array texture, FRAGMENT-only', () => {
+        const entries = buildPbrViewBglEntries({
+          storageBuffer: true,
+          extendedLighting: false,
+          projectorAvailable: false,
+        });
         const b8 = entries.find((e) => e.binding === 8);
         expect(b8).toBeDefined();
         if (b8 === undefined) throw new Error('binding 8 missing from view BGL');
         expect(b8.texture?.sampleType).toBe('depth');
-        expect(b8.texture?.viewDimension).toBe('2d');
+        expect(b8.texture?.viewDimension).toBe('2d-array');
         expect(b8.visibility).toBe(VISIBILITY_FRAGMENT);
       });
 
       it('declares binding 8 regardless of storageBuffer caps (always-on, no gate)', () => {
-        const withStorage = buildPbrViewBglEntries({ storageBuffer: true });
-        const noStorage = buildPbrViewBglEntries({ storageBuffer: false });
+        const withStorage = buildPbrViewBglEntries({
+          storageBuffer: true,
+          extendedLighting: false,
+        });
+        const noStorage = buildPbrViewBglEntries({ storageBuffer: false, extendedLighting: false });
         expect(withStorage.some((e) => e.binding === 8)).toBe(true);
         expect(noStorage.some((e) => e.binding === 8)).toBe(true);
       });
 
       it('reserves binding 9 and keeps Points/Lines at binding 10', () => {
-        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const entries = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false });
         expect(entries.some((e) => e.binding === 9)).toBe(false);
         const pointsLines = entries.find((e) => e.binding === 10);
         expect(pointsLines?.buffer?.type).toBe('uniform');
@@ -2281,28 +2203,25 @@ function spawnValidatedLight(
         // in its tail), binding 6 (point shadowParams), binding 7
         // (shadowCasterCascade), and binding 10 (Points/Lines view). No
         // standalone spot-matrix uniform buffer exists.
-        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const entries = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false });
         const uniformBufferBindings = entries
           .filter((e) => e.buffer?.type === 'uniform')
           .map((e) => e.binding)
           .sort((a, b) => a - b);
-        // storageBuffer=true: bindings 1+2 are read-only-storage (not uniform).
+        // Local lights are not in the view group; only the view, shadow
+        // params, cascade selector, and vertex-only Points/Lines UBO remain.
         expect(uniformBufferBindings).toEqual([0, 6, 7, 10]);
       });
 
       it('storageBuffer=false: WebGL2 fallback uniform-buffer bindings stay within budget', () => {
-        // On the WebGL2 fallback path bindings 1+2 (point/spot light arrays)
-        // become uniform buffers. The fragment-stage uniform-buffer count must
-        // stay <= 11 (GLES 3.0 max_uniform_buffers_per_shader_stage). View BGL
-        // fragment uniform buffers after w25: binding 0 (view), 1 (pointLights),
-        // 2 (spotLights), 6 (shadowParams), 7 (shadowCasterCascade) = 5. There is
-        // NO standalone spot-matrix uniform buffer (the 12th that overflowed).
-        const entries = buildPbrViewBglEntries({ storageBuffer: false });
+        // The no-storage shape keeps local lights out of the view group. The
+        // remaining fragment uniform buffers are view (0), point shadow
+        // params (6), and cascade selector (7).
+        const entries = buildPbrViewBglEntries({ storageBuffer: false, extendedLighting: false });
         const fragmentUniformBuffers = entries.filter(
           (e) => e.buffer?.type === 'uniform' && (e.visibility & VISIBILITY_FRAGMENT) !== 0,
         );
-        // 5 view-BG fragment uniform buffers (was 6 before the fold).
-        expect(fragmentUniformBuffers.length).toBe(5);
+        expect(fragmentUniformBuffers.length).toBe(3);
         // No binding 9 (the folded-away standalone spot-matrix UBO).
         expect(entries.some((e) => e.binding === 9)).toBe(false);
       });
@@ -2310,7 +2229,11 @@ function spawnValidatedLight(
 
     describe('sampler reuse (binding 4) — spot adds no new sampler (D-5)', () => {
       it('keeps binding 4 as the single comparison sampler (shared by directional/point/spot)', () => {
-        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const entries = buildPbrViewBglEntries({
+          storageBuffer: true,
+          extendedLighting: false,
+          projectorAvailable: false,
+        });
         const samplers = entries.filter((e) => e.sampler !== undefined);
         expect(samplers).toHaveLength(1);
         expect(samplers[0]?.binding).toBe(4);
@@ -2319,45 +2242,59 @@ function spawnValidatedLight(
     });
 
     describe('bindings 3/4/5/6/7 unchanged (AC-08 no-regress)', () => {
-      it('binding 3 = directional depth 2D, VERTEX|FRAGMENT', () => {
-        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 3);
+      it('binding 3 = directional depth 2D array, VERTEX|FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }).find(
+          (x) => x.binding === 3,
+        );
         expect(e?.texture?.sampleType).toBe('depth');
-        expect(e?.texture?.viewDimension).toBe('2d');
+        expect(e?.texture?.viewDimension).toBe('2d-array');
         expect(e?.visibility).toBe(VISIBILITY_VERTEX_FRAGMENT);
       });
 
       it('binding 4 = comparison sampler, FRAGMENT', () => {
-        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 4);
+        const e = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }).find(
+          (x) => x.binding === 4,
+        );
         expect(e?.sampler?.type).toBe('comparison');
         expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
       });
 
       it('binding 5 = point cube-array depth, FRAGMENT', () => {
-        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 5);
+        const e = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }).find(
+          (x) => x.binding === 5,
+        );
         expect(e?.texture?.sampleType).toBe('depth');
         expect(e?.texture?.viewDimension).toBe('cube-array');
         expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
       });
 
       it('binding 6 = point shadow params UBO, FRAGMENT', () => {
-        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 6);
+        const e = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }).find(
+          (x) => x.binding === 6,
+        );
         expect(e?.buffer?.type).toBe('uniform');
         expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
       });
 
       it('binding 7 = shadowCasterCascade UBO, VERTEX|FRAGMENT', () => {
-        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 7);
+        const e = buildPbrViewBglEntries({ storageBuffer: true, extendedLighting: false }).find(
+          (x) => x.binding === 7,
+        );
         expect(e?.buffer?.type).toBe('uniform');
         expect(e?.visibility).toBe(VISIBILITY_VERTEX_FRAGMENT);
       });
     });
 
-    describe('full binding roster reserves 9 for Points/Lines at 10', () => {
-      it('exposes bindings 0..8 plus binding 10, with binding 9 reserved', () => {
-        const bindings = buildPbrViewBglEntries({ storageBuffer: true })
+    describe('base binding roster keeps Points/Lines at 10', () => {
+      it('exposes camera/shadow bindings plus binding 10', () => {
+        const bindings = buildPbrViewBglEntries({
+          storageBuffer: true,
+          extendedLighting: false,
+          projectorAvailable: false,
+        })
           .map((e) => e.binding)
           .sort((a, b) => a - b);
-        expect(bindings).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 10]);
+        expect(bindings).toEqual([0, 3, 4, 5, 6, 7, 8, 10]);
       });
     });
   });
@@ -2380,7 +2317,8 @@ function spawnValidatedLight(
         const err = r.error as unknown as ShadowInvalidConfigError;
         expect(err.code).toBe('shadow-invalid-config');
         expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(2);
+        expect(err.detail.actual).toBe(2);
+        expect(err.detail.bound).toEqual({ kind: 'lower-bound', operator: '>=', value: 1 });
         expect(err.hint).toBe('set pcfKernelSize to an odd integer >= 1; got 2');
       });
 

@@ -32,7 +32,6 @@
 import {
   ASSET_ERROR_HINTS,
   AssetError,
-  countUvSets,
   err,
   ok,
   type Result,
@@ -95,6 +94,27 @@ const UV_KEYS: readonly AttributeKey[] = CANONICAL_KEYS.filter(
   (key) => key === 'uv' || key.startsWith('uv'),
 );
 
+// Empty typed-array values are presence sentinels for layout derivation. Keep
+// the common mesh maps here so renderers, recovery, and points/lines cannot
+// grow a second copy of the canonical attribute vocabulary.
+const EMPTY_FLOAT32 = new Float32Array(0);
+const EMPTY_UINT16 = new Uint16Array(0);
+
+/** Canonical position/normal/uv/tangent map for ordinary interleaved meshes. */
+export const DEFAULT_VERTEX_ATTRIBUTE_MAP: VertexAttributeMap = Object.freeze({
+  position: EMPTY_FLOAT32,
+  normal: EMPTY_FLOAT32,
+  uv: EMPTY_FLOAT32,
+  tangent: EMPTY_FLOAT32,
+});
+
+/** Canonical six-attribute map for skinned interleaved meshes. */
+export const SKIN_VERTEX_ATTRIBUTE_MAP: VertexAttributeMap = Object.freeze({
+  ...DEFAULT_VERTEX_ATTRIBUTE_MAP,
+  skinIndex: EMPTY_UINT16,
+  skinWeight: EMPTY_FLOAT32,
+});
+
 type Entry = {
   readonly key: AttributeKey;
   readonly shaderLocation: number;
@@ -102,16 +122,13 @@ type Entry = {
   readonly format: string;
 };
 
-function emitAliasEntries(
-  entries: Entry[],
-  fromIndex: number,
-  toIndex: number,
-  aliasOffset: number,
-  currentStride: number,
-): number {
-  for (let k = fromIndex; k < toIndex && k < UV_KEYS.length; k++) {
+function emitAliasEntries(entries: Entry[], toIndex: number, currentStride: number): number {
+  const lastUv = entries.filter((entry) => UV_KEYS.includes(entry.key)).at(-1);
+  const aliasOffset = lastUv?.offset ?? currentStride;
+  for (let k = 0; k < toIndex && k < UV_KEYS.length; k++) {
     // biome-ignore lint/style/noNonNullAssertion: bounded index on const array
     const uvKey = UV_KEYS[k]!;
+    if (entries.some((entry) => entry.key === uvKey)) continue;
     entries.push({
       key: uvKey,
       shaderLocation: CANONICAL_KEYS.indexOf(uvKey),
@@ -121,7 +138,7 @@ function emitAliasEntries(
   }
   // When meshUvSetCount===0, allocate 8 bytes for the zero UV area.
   // Otherwise no stride increase (aliased to existing offset).
-  return fromIndex === 0 ? currentStride + ATTRIBUTE_BYTE_STRIDE.uv : currentStride;
+  return lastUv === undefined ? currentStride + ATTRIBUTE_BYTE_STRIDE.uv : currentStride;
 }
 
 /**
@@ -138,12 +155,7 @@ function emitAliasEntries(
  * off-screen). uvSetCount <= 1 yields the canonical 4-attribute single-UV map.
  */
 export function buildMeshAttributeMapForUvSets(uvSetCount: number): VertexAttributeMap {
-  const map: Record<string, Float32Array> = {
-    position: new Float32Array(0),
-    normal: new Float32Array(0),
-    uv: new Float32Array(0),
-    tangent: new Float32Array(0),
-  };
+  const map = { ...DEFAULT_VERTEX_ATTRIBUTE_MAP } as unknown as Record<string, Float32Array>;
   for (let set = 1; set < uvSetCount && set < UV_KEYS.length; set++) {
     // biome-ignore lint/style/noNonNullAssertion: bounded index on const array
     map[UV_KEYS[set]!] = new Float32Array(0);
@@ -176,21 +188,7 @@ export function deriveVertexBufferLayout(
 
   // ── clamp-to-last alias (plan-strategy D-1) ──
   if (shaderUvSetCount > 0) {
-    const meshUvSetCount = countUvSets(map);
-
-    if (shaderUvSetCount > meshUvSetCount) {
-      const lastUvIndex = meshUvSetCount - 1;
-      const lastUvKey =
-        lastUvIndex >= 0 && lastUvIndex < UV_KEYS.length ? UV_KEYS[lastUvIndex] : undefined;
-      const aliasOffset = lastUvKey !== undefined ? CANONICAL_KEYS.indexOf(lastUvKey) : -1;
-
-      const aliasByteOffset =
-        aliasOffset >= 0
-          ? (entries.find((e) => e.shaderLocation === aliasOffset)?.offset ?? 0)
-          : offset;
-
-      offset = emitAliasEntries(entries, meshUvSetCount, shaderUvSetCount, aliasByteOffset, offset);
-    }
+    offset = emitAliasEntries(entries, shaderUvSetCount, offset);
   }
 
   if (present === 0 && shaderUvSetCount === 0) return [];
@@ -224,30 +222,7 @@ export function deriveVertexBufferLayoutFromProjection(
   let arrayStride = projection.arrayStride;
   const shaderUvSetCount = opts?.shaderUvSetCount ?? 0;
   if (shaderUvSetCount > 0) {
-    const meshUvSetCount = entries.filter(
-      (entry) => entry.key === 'uv' || entry.key.startsWith('uv'),
-    ).length;
-    if (shaderUvSetCount > meshUvSetCount) {
-      const lastUv = entries
-        .filter((entry) => entry.key === 'uv' || entry.key.startsWith('uv'))
-        .at(-1);
-      const aliasOffset = lastUv?.offset ?? arrayStride;
-      for (
-        let index = meshUvSetCount;
-        index < shaderUvSetCount && index < UV_KEYS.length;
-        index += 1
-      ) {
-        const key = UV_KEYS[index];
-        if (key === undefined) continue;
-        entries.push({
-          key,
-          shaderLocation: CANONICAL_KEYS.indexOf(key),
-          offset: aliasOffset,
-          format: ATTRIBUTE_FORMAT_MAP[key],
-        });
-      }
-      if (meshUvSetCount === 0) arrayStride += ATTRIBUTE_BYTE_STRIDE.uv;
-    }
+    arrayStride = emitAliasEntries(entries, shaderUvSetCount, arrayStride);
   }
   entries.sort((a, b) => a.shaderLocation - b.shaderLocation);
   return projection.attributes.length === 0
@@ -279,6 +254,32 @@ export interface VertexLayoutProjection {
   readonly mask: number;
   readonly arrayStride: number;
   readonly digest: string;
+}
+
+/**
+ * Derive a vertex count from the geometry-owned projection.
+ *
+ * Every upload, morph write, and draw range must use this same byte-level
+ * calculation. Returning `undefined` keeps malformed payloads out of GPU
+ * resource construction instead of silently truncating a fractional count.
+ */
+export function deriveVertexCount(
+  vertices: { readonly byteLength: number },
+  projection: VertexLayoutProjection,
+): number | undefined {
+  const stride = projection.arrayStride;
+  const byteLength = vertices.byteLength;
+  if (
+    !Number.isSafeInteger(stride) ||
+    stride <= 0 ||
+    !Number.isSafeInteger(byteLength) ||
+    byteLength < 0 ||
+    byteLength % stride !== 0
+  ) {
+    return undefined;
+  }
+  const count = byteLength / stride;
+  return Number.isSafeInteger(count) ? count : undefined;
 }
 
 function bytesForFormat(format: string): number {
@@ -314,24 +315,31 @@ function fnv1a(input: string): string {
   return `vlp-v1-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
+// The finite canonical mask is the complete layout identity. Do not key this
+// cache by a mesh/map object: authoring maps may change in place.
+const layoutsByMask = new Map<number, VertexLayoutProjection>();
+
 /** Derive the one canonical immutable layout projection for a vertex map. */
 export function deriveVertexLayoutProjection(map: VertexAttributeMap): VertexLayoutProjection {
+  let mask = 0;
+  for (let index = 0; index < CANONICAL_KEYS.length; index += 1) {
+    const key = CANONICAL_KEYS[index];
+    if (key !== undefined && map[key] !== undefined) mask |= 1 << index;
+  }
+  return layoutFromMask(mask);
+}
+
+function layoutFromMask(mask: number): VertexLayoutProjection {
+  const cached = layoutsByMask.get(mask);
+  if (cached !== undefined) return cached;
   const attributes: VertexLayoutProjectionAttribute[] = [];
   let offset = 0;
-  let mask = 0;
-  for (const key of CANONICAL_KEYS) {
-    const value = map[key];
-    if (value === undefined) continue;
+  for (let index = 0; index < CANONICAL_KEYS.length; index += 1) {
+    const key = CANONICAL_KEYS[index];
+    if (key === undefined || (mask & (1 << index)) === 0) continue;
     const format = ATTRIBUTE_FORMAT_MAP[key];
     const byteLength = bytesForFormat(format);
-    attributes.push({
-      key,
-      shaderLocation: CANONICAL_KEYS.indexOf(key),
-      offset,
-      format,
-      byteLength,
-    });
-    mask |= 1 << CANONICAL_KEYS.indexOf(key);
+    attributes.push(Object.freeze({ key, shaderLocation: index, offset, format, byteLength }));
     offset += byteLength;
   }
   const digestInput = [
@@ -342,13 +350,15 @@ export function deriveVertexLayoutProjection(map: VertexAttributeMap): VertexLay
       (entry) => `${entry.key},${entry.shaderLocation},${entry.offset},${entry.format}`,
     ),
   ].join('|');
-  return Object.freeze({
+  const projection: VertexLayoutProjection = Object.freeze({
     schemaVersion: 1,
     attributes: Object.freeze(attributes),
     mask,
     arrayStride: offset,
     digest: fnv1a(digestInput),
   });
+  layoutsByMask.set(mask, projection);
+  return projection;
 }
 
 export interface PackedVertexAttributes {
@@ -404,14 +414,7 @@ export function deriveVertexLayoutProjectionFromMask(
       detail: { mask, knownMask, unknownMask, reason: 'unknown-bits' },
     });
   }
-  const map: Record<string, Float32Array | Uint16Array> = {};
-  for (let index = 0; index < CANONICAL_KEYS.length; index += 1) {
-    if ((mask & (1 << index)) === 0) continue;
-    const key = CANONICAL_KEYS[index];
-    if (key !== undefined)
-      map[key] = key === 'skinIndex' ? new Uint16Array(0) : new Float32Array(0);
-  }
-  return ok(deriveVertexLayoutProjection(map as VertexAttributeMap));
+  return ok(layoutFromMask(unsignedMask));
 }
 
 /** Pack tightly-owned attributes into the projection's canonical interleaved bytes. */

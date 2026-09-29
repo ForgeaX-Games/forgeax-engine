@@ -23,14 +23,20 @@
 // inherits .tagName from HTMLElement, so the property test cleanly
 // separates the canvas argument from the AppAssembleArgs plain object.
 
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { type AssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import { createWorldContext, Update, World } from '@forgeax/engine-ecs';
+import { createWorldContext, Update, World, worldPlugin } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
-import type { Context, Plugin } from '@forgeax/engine-plugin';
+import type { Context, Fiber, Plugin } from '@forgeax/engine-plugin';
+import { createProfiler } from '@forgeax/engine-profiler';
 import type { RenderError } from '@forgeax/engine-render';
-import { CAMERA_PROJECTION_PERSPECTIVE, Camera, type Renderer } from '@forgeax/engine-render';
+import {
+  CAMERA_PROJECTION_PERSPECTIVE,
+  Camera,
+  type FrameReceipt,
+  type Renderer,
+} from '@forgeax/engine-render';
 import type { RendererHostAssembly } from '@forgeax/engine-render/internal/construct-renderer';
 import { RhiError } from '@forgeax/engine-rhi';
 import {
@@ -38,8 +44,9 @@ import {
   type CaptureFrameOptions,
   type RecorderAttachment,
 } from '@forgeax/engine-rhi-debug';
+import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
 import * as engineRuntimeModule from '@forgeax/engine-runtime';
-import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import {
   constructRuntimeRendererHost,
   loadRhiPack,
@@ -47,17 +54,25 @@ import {
 import { err, ok, type Result } from '@forgeax/engine-types';
 
 import { createAnimationPayloadLookup } from './animation-asset-lookup';
-import { publishBrowserFrameSubmitted, resetBrowserFrameSubmitted } from './browser-frame-signal';
+import { type AssetRuntimeAssembly, createAssetRuntimeAssembly } from './assets-runtime-assembly';
+import {
+  publishBrowserFrameCompleted,
+  publishBrowserFrameSubmitted,
+  resetBrowserFrameSubmitted,
+} from './browser-frame-signal';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { APP_ERROR_HINTS, APP_EXPECTED, AppError } from './errors';
 import {
+  activateExecutionRoot,
+  createExecutionFrameInspection,
   createExecutionReport,
   type ExecutionControl,
+  type ExecutionFrameInspection,
   executionBootstrapHostPlugin,
   type PreparedExecutionBootstrap,
   prepareBootstrapEntry,
   probeExecutionCapabilities,
-  selectExecutionTier,
+  selectExecutionWorkers,
   unavailableExecutionCapabilities,
 } from './execution';
 import { normalizeExecutionBootstrapUrl } from './execution/bootstrap-url';
@@ -75,10 +90,13 @@ import {
   bindRhiCaptureFrameDriver,
   createRhiCapture,
   createRhiInstrumentation,
+  mergeRhiInstrumentation,
   type RhiCapture,
 } from './internal/rhi-capture';
 import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
+import { createAppObservation } from './observation';
 import { createRenderFeatureHost, type RenderFeatureHost } from './renderer-plugin';
+import type { RuntimePackOptions } from './runtime-packs';
 import type {
   App,
   AppAssembleArgs,
@@ -97,6 +115,38 @@ function makeAppError<C extends AppErrorCode>(
   detail: AppErrorDetailFor<C>,
 ): AppError {
   return new AppError({ code, expected, hint, detail }) as AppError;
+}
+
+type RendererBootstrapDiagnostic = {
+  readonly name: string;
+  readonly startedAt: number;
+  readonly previousElapsedMs: number;
+  readonly detail?: Readonly<Record<string, unknown>>;
+};
+
+function markRendererBootstrapStage(
+  name: string,
+  detail?: Readonly<Record<string, unknown>>,
+): void {
+  const host = globalThis as {
+    __forgeaxRendererBootstrap?: RendererBootstrapDiagnostic;
+  };
+  const previous = host.__forgeaxRendererBootstrap;
+  const now = Date.now();
+  host.__forgeaxRendererBootstrap = {
+    name,
+    startedAt: now,
+    previousElapsedMs: previous === undefined ? 0 : now - previous.startedAt,
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
+
+interface FrameInspectionRef {
+  current: () => ExecutionFrameInspection;
+}
+
+function createFrameInspectionRef(): FrameInspectionRef {
+  return { current: createExecutionFrameInspection };
 }
 
 function canvasAspectPlugin(canvas: HTMLCanvasElement): Plugin {
@@ -135,7 +185,7 @@ function rhiDebugHostPlugin(dispose: () => void): Plugin {
  * through AppError | RhiError | EngineEnvironmentError per requirements AC-01.
  *
  * feat-20260608-create-app-param-surface-trim / M2 / D-3: the third arg is
- * `BundlerOptions` (importTransport + shaderManifestUrl) -- the SSOT for
+ * `BundlerOptions` (importTransport + shaderManifestUrl + build) -- the SSOT for
  * host-injected build-tool emit knowledge. M3 demos collapse the third-arg
  * literal to `forgeaxBundlerAdapter()` exported by `virtual:forgeax/bundler`.
  *
@@ -190,7 +240,7 @@ async function createAppFromCanvas(
   canvas: HTMLCanvasElement,
   opts: CreateAppOptions | undefined,
   // feat-20260608-create-app-param-surface-trim / M2 / D-3: BundlerOptions is
-  // the host-injection SSOT (importTransport + shaderManifestUrl). Forwarded
+  // the host-injection SSOT (importTransport + shaderManifestUrl + build). Forwarded
   // verbatim to createRenderer's third arg, so the engine reads
   // shaderManifestUrl in its ShaderRegistry fallback (D-2 q5-A) and threads
   // importTransport to AssetRegistry (AC-05 / R-4: keeps build-tool
@@ -229,8 +279,13 @@ async function createAppFromCanvas(
     const realmBoundOption = [
       ['features', opts.features],
       ['plugins', opts.plugins],
+      ['pluginPrograms', opts.pluginPrograms],
+      ['runtimePacks', opts.runtimePacks],
       ['rhi', opts.rhi],
       ['rhiInstrumentation', opts.rhiInstrumentation],
+      ['gpuPassTiming', opts.gpuPassTiming],
+      ['ssrIdentity', opts.ssrIdentity],
+      ['captureReflectionFallbackReadback', opts.captureReflectionFallbackReadback],
       ['drawSource', opts.drawSource],
       ['bundler.importTransport', bundler?.importTransport],
     ].find(([, value]) => value !== undefined)?.[0];
@@ -260,23 +315,71 @@ async function createAppFromCanvas(
     | undefined;
   let preparedExecutionBootstrap: PreparedExecutionBootstrap | undefined;
   if (opts?.execution !== undefined) {
-    const capabilities = await probeExecutionCapabilities(canvas);
-    const selected = selectExecutionTier({
-      requestedTier: opts.execution.tier ?? 'auto',
+    const capabilities = await probeExecutionCapabilities(canvas, opts.execution.startupTimeoutMs);
+    const selected = selectExecutionWorkers({
+      workers: opts.execution.workers ?? {},
       capabilities,
-      sharedEvidencePassed: true,
     });
     if (!selected.ok) return err(selected.error);
     executionContext = { capabilities, selection: selected.value };
-    if (selected.value.actualTier !== 'main-serial') {
-      return createWorkerExecutionApp({
+    if (selected.value.engine.enabled) {
+      const workerApp = await createWorkerExecutionApp({
         canvas,
         appOptions: opts,
-        syncCanvas: () => measureCanvasDrawingBuffer(canvas),
+        syncCanvas: (currentCanvas) => measureCanvasDrawingBuffer(currentCanvas),
         ...(bundler !== undefined ? { bundler } : {}),
         capabilities,
         selection: selected.value,
       });
+      if (
+        workerApp.ok &&
+        typeof import.meta !== 'undefined' &&
+        (import.meta as { env?: { DEV?: boolean; VITE_FORGEAX_ENGINE_BRIDGE?: string } }).env
+          ?.DEV === true &&
+        (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE?: string } }).env
+          ?.VITE_FORGEAX_ENGINE_BRIDGE === '1' &&
+        workerApp.value.remoteEval !== undefined
+      ) {
+        const bridgePort =
+          (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE_PORT?: string } }).env
+            ?.VITE_FORGEAX_ENGINE_BRIDGE_PORT ?? '5733';
+        const bridge = await import('./internal/browser-remote-bridge');
+        const teardown = await bridge.installBrowserExecutionBridge({
+          execute: workerApp.value.remoteEval,
+          readStatus: () => {
+            const execution = workerApp.value.execution.report();
+            return {
+              worldIdentity: execution.world.identity,
+              execution,
+              workers: execution.workers,
+            };
+          },
+          port: bridgePort,
+          ...(workerApp.value.clearInput === undefined
+            ? {}
+            : { clearInput: workerApp.value.clearInput }),
+          ...(workerApp.value.beginInputLease === undefined
+            ? {}
+            : { beginInputLease: workerApp.value.beginInputLease }),
+          ...(workerApp.value.finishProfiler === undefined
+            ? {}
+            : { finishProfiler: workerApp.value.finishProfiler }),
+        });
+        // The worker path returns a realm-local App before the browser bridge
+        // is installed. Tie the bridge to that App's existing lifecycle so a
+        // stopped worker cannot leave a reconnecting socket behind.
+        const workerExecutionApp = workerApp.value;
+        const stop = workerExecutionApp.stop;
+        return ok({
+          ...workerExecutionApp,
+          stop: () => {
+            const result = stop();
+            teardown();
+            return result;
+          },
+        });
+      }
+      return workerApp;
     }
     if (executionBootstrapUrl === undefined) {
       throw new Error('execution bootstrap URL was not normalized');
@@ -287,6 +390,18 @@ async function createAppFromCanvas(
     );
     if (!prepared.ok) return err(prepared.error);
     preparedExecutionBootstrap = prepared.value;
+    // The same structured diagnostics apply when the selected realm stays local.
+    const diagnostics = opts.execution.diagnostics;
+    if (diagnostics?.profiler === true && opts.profiler === undefined) {
+      opts = { ...opts, profiler: createProfiler() };
+    }
+    if (diagnostics?.gpuPassTiming !== undefined) {
+      opts = { ...opts, gpuPassTiming: diagnostics.gpuPassTiming };
+    }
+    const runtimeBinding = opts.execution?.assetCatalog?.runtimeBinding;
+    if (runtimeBinding !== undefined) {
+      bundler = { ...bundler, importTransport: createDevImportTransport(runtimeBinding) };
+    }
   }
 
   // Step 2: createRenderer try/catch -> Result.err(EngineEnvironmentError)
@@ -319,6 +434,17 @@ async function createAppFromCanvas(
   }
   if (opts?.rhiInstrumentation !== undefined) {
     Object.assign(rendererOpts, { rhiInstrumentation: opts.rhiInstrumentation });
+  }
+  if (opts?.gpuPassTiming !== undefined) {
+    Object.assign(rendererOpts, { gpuPassTiming: opts.gpuPassTiming });
+  }
+  if (opts?.captureReflectionFallbackReadback !== undefined) {
+    Object.assign(rendererOpts, {
+      captureReflectionFallbackReadback: opts.captureReflectionFallbackReadback,
+    });
+  }
+  if (opts?.ssrIdentity !== undefined) {
+    Object.assign(rendererOpts, { ssrIdentity: opts.ssrIdentity });
   }
 
   // FORGEAX_ENGINE_RHI_DEBUG=1 attaches the recorder at the Runtime backend
@@ -376,7 +502,7 @@ async function createAppFromCanvas(
     rhiDebugFlag === '1'
   ) {
     const realBackend = (hasWebGPU
-      ? await import('@forgeax/engine-rhi-webgpu')
+      ? rhiWebgpu
       : await import('@forgeax/engine-rhi-wgpu')) as unknown as Record<string, unknown>;
     if (!hasWebGPU && 'ensureReady' in realBackend) {
       await (realBackend.ensureReady as () => Promise<unknown>)();
@@ -388,6 +514,9 @@ async function createAppFromCanvas(
     const attached = attachRecorder({
       rhi: pack.rhi,
       createShaderModule: pack.createShaderModule,
+      ...(pack.createShaderModuleImmediate === undefined
+        ? {}
+        : { createShaderModuleImmediate: pack.createShaderModuleImmediate }),
     });
     if (!attached.ok) throw new Error(attached.error.hint);
     rhiAttachment = attached.value;
@@ -396,23 +525,34 @@ async function createAppFromCanvas(
     rhiDebugGlobal = { captureFrame: (options) => capture.captureFrame(options) };
     Object.assign(rendererOpts, {
       rhi: attached.value.backend.rhi,
-      rhiInstrumentation: createRhiInstrumentation(attached.value),
+      rhiInstrumentation: mergeRhiInstrumentation(
+        createRhiInstrumentation(attached.value),
+        rendererOpts.rhiInstrumentation,
+      ),
     });
     (globalThis as { __forgeax?: typeof rhiDebugGlobal }).__forgeax = rhiDebugGlobal;
+    markRendererBootstrapStage('rhi-debug-attached');
   }
 
   let renderer: Renderer;
   let rendererDebugDrawHost: RendererHostAssembly['debugDrawHost'];
   let rendererFeatureHost: RenderFeatureHost;
-  let assets: AssetRegistry;
+  let assets: AssetRegistry | undefined;
+  let assetAssembly: AssetRuntimeAssembly | undefined;
   try {
+    markRendererBootstrapStage('renderer-host-start');
     const constructed = await constructRuntimeRendererHost(canvas, rendererOpts, bundler);
     if (!constructed.ok) throw constructed.error;
     renderer = constructed.value.renderer;
+    await preparedExecutionBootstrap?.configureRenderer?.(renderer);
     rendererDebugDrawHost = constructed.value.debugDrawHost;
     rendererFeatureHost = createRenderFeatureHost(constructed.value.featureHost);
     assets = constructed.value.assets;
+    markRendererBootstrapStage('renderer-initialized');
   } catch (e: unknown) {
+    markRendererBootstrapStage('renderer-host-failed', {
+      message: e instanceof Error ? e.message : String(e),
+    });
     cleanupRhiDebugHost();
     if (e instanceof EngineEnvironmentError) return err(e);
     const detail = e instanceof Error ? e : new Error(String(e));
@@ -421,6 +561,42 @@ async function createAppFromCanvas(
         webgpuError: detail,
       }),
     );
+  }
+
+  const executionCatalog = opts?.execution?.assetCatalog;
+  const catalogSource =
+    opts?.assetCatalog ??
+    (executionCatalog === undefined
+      ? undefined
+      : createCatalogSource({
+          url: executionCatalog.url,
+          ...(executionCatalog.expectedScope === undefined
+            ? {}
+            : { expectedScope: executionCatalog.expectedScope }),
+        }));
+  const runtimeBinding = opts?.assetRuntimeBinding ?? executionCatalog?.runtimeBinding;
+  const assetAssemblyRequested =
+    assets !== undefined ||
+    opts?.assets !== undefined ||
+    catalogSource !== undefined ||
+    opts?.assetDecoders !== undefined ||
+    opts?.pluginPrograms !== undefined ||
+    opts?.runtimePacks !== undefined ||
+    runtimeBinding !== undefined;
+  if (assetAssemblyRequested) {
+    const assetAssemblyResult = createAssetRuntimeAssembly(assets, {
+      ...(opts?.assets === undefined ? {} : { registry: opts.assets }),
+      ...(catalogSource === undefined ? {} : { catalogSource }),
+      ...(opts?.assetDecoders === undefined ? {} : { decoderContributions: opts.assetDecoders }),
+      ...(runtimeBinding === undefined ? {} : { runtimeBinding }),
+    });
+    if (!assetAssemblyResult.ok) {
+      cleanupRhiDebugHost();
+      await renderer.dispose();
+      return err(assetAssemblyResult.error);
+    }
+    assetAssembly = assetAssemblyResult.value;
+    assets = assetAssembly.registry;
   }
 
   // Step 2.4 decision: resolve whether the remote eval server should start
@@ -440,6 +616,7 @@ async function createAppFromCanvas(
   // Step 3: new World() -- the canvas form owns world lifetime, in
   // contrast to the assemble form where the host owns it.
   const world = new World(opts?.time !== undefined ? { time: opts.time } : {});
+  const frameInspection = createFrameInspectionRef();
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
   //
@@ -467,6 +644,8 @@ async function createAppFromCanvas(
       ? (opts?.plugins ?? [])
       : [
           executionBootstrapHostPlugin({
+            canvas,
+            renderTargets: renderer,
             ...(opts?.execution?.bootstrapPort === undefined
               ? {}
               : { port: opts.execution.bootstrapPort }),
@@ -475,30 +654,73 @@ async function createAppFromCanvas(
           ...(preparedExecutionBootstrap.plugins ?? []),
         ];
   let pluginContext: Context;
+  const ownedAppFibers: Fiber[] = [];
+  const disposeAppContext = async (): Promise<void> => {
+    try {
+      if (opts?.context === undefined) {
+        await pluginContext.fiber.dispose();
+        return;
+      }
+      for (const fiber of ownedAppFibers.reverse()) await fiber.dispose();
+    } finally {
+      opts?.execution?.bootstrapPort?.close();
+    }
+  };
+  const installAppPlugin = async (plugin: Plugin): Promise<Fiber> => {
+    const fiber = await pluginContext.plugin(plugin);
+    if (opts?.context !== undefined) ownedAppFibers.push(fiber);
+    return fiber;
+  };
+  const localProfiler = opts?.profiler;
+  const pluginPrograms = preparedExecutionBootstrap?.pluginPrograms ?? opts?.pluginPrograms;
+  const runtimePacks = preparedExecutionBootstrap?.runtimePacks ?? opts?.runtimePacks;
+  const profile = mainEngineProfile({
+    renderer,
+    ...(assetAssembly === undefined ? {} : { assetAssembly }),
+    ...(pluginPrograms === undefined ? {} : { pluginPrograms }),
+    ...(runtimePacks === undefined ? {} : { runtimePacks }),
+    rendererDebugDrawHost,
+    rendererFeatureHost,
+    assets,
+    animationPayloads: createAnimationPayloadLookup(assets),
+    ...(inputBackend === undefined ? {} : { input: inputBackend }),
+    ...(inputHandle === undefined ? {} : { inputDispose: inputHandle.cleanup }),
+    ...(opts?.inputMap === undefined ? {} : { inputMap: opts.inputMap }),
+    onDebugDrawReady: (value) => {
+      debugDraw = value;
+    },
+    extensions: [
+      ...(localProfiler === undefined || opts?.context !== undefined
+        ? []
+        : [
+            {
+              name: 'app-profiler',
+              provide: 'profiler',
+              apply(ctx: Context) {
+                ctx.provide('profiler', localProfiler);
+              },
+            },
+          ]),
+      rhiDebugHostPlugin(cleanupRhiDebugHost),
+      ...userPlugins,
+      canvasAspectPlugin(canvas),
+    ],
+  });
   try {
-    pluginContext = await createWorldContext(
-      world,
-      mainEngineProfile({
-        renderer,
-        rendererDebugDrawHost,
-        rendererFeatureHost,
-        assets,
-        animationPayloads: createAnimationPayloadLookup(assets),
-        ...(inputBackend === undefined ? {} : { input: inputBackend }),
-        ...(inputHandle === undefined ? {} : { inputDispose: inputHandle.cleanup }),
-        ...(opts?.inputMap === undefined ? {} : { inputMap: opts.inputMap }),
-        onDebugDrawReady: (value) => {
-          debugDraw = value;
-        },
-        extensions: [
-          rhiDebugHostPlugin(cleanupRhiDebugHost),
-          ...userPlugins,
-          canvasAspectPlugin(canvas),
-        ],
-      }),
-    );
+    if (opts?.context === undefined) {
+      pluginContext = await createWorldContext(world, profile);
+    } else {
+      pluginContext = opts.context;
+      await installAppPlugin(worldPlugin(world));
+      for (const plugin of profile) await installAppPlugin(plugin);
+    }
   } catch (cause) {
+    opts?.execution?.bootstrapPort?.close();
     cleanupRhiDebugHost();
+    assetAssembly?.dispose();
+    if (opts?.context !== undefined) {
+      for (const fiber of ownedAppFibers.reverse()) await fiber.dispose();
+    }
     return err(
       makeAppError(
         'app-plugin-activation-failed',
@@ -508,15 +730,40 @@ async function createAppFromCanvas(
       ),
     );
   }
-  const audioBackend = pluginContext.audio;
+  if (preparedExecutionBootstrap?.root) {
+    try {
+      const root = await activateExecutionRoot(pluginContext, preparedExecutionBootstrap.root);
+      ownedAppFibers.push(root.fiber);
+    } catch (cause) {
+      let failure = cause;
+      try {
+        await disposeAppContext();
+      } catch (cleanup) {
+        failure = { activation: cause, cleanup };
+      }
+      return err(
+        makeAppError(
+          'app-plugin-activation-failed',
+          APP_EXPECTED['app-plugin-activation-failed'],
+          APP_ERROR_HINTS['app-plugin-activation-failed'],
+          { cause: failure },
+        ),
+      );
+    }
+  }
+  // A borrowed plugin scope need not inject this optional App capability.
+  const audioBackend = pluginContext.get('audio');
 
   const executionControl = createLocalExecutionControl(
     executionContext === undefined
       ? {
-          ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
-          actualTier: 'main-serial',
-          selectionReason: 'explicit-request',
-          sharedEvidencePassed: true,
+          ...createExecutionReport(
+            unavailableExecutionCapabilities('local assembly'),
+            selectExecutionWorkers({
+              workers: { engine: false },
+              capabilities: unavailableExecutionCapabilities('local assembly'),
+            }).unwrap(),
+          ),
           engine: { realm: 'host', health: 'idle' },
           world: {
             identity: world.identity,
@@ -526,11 +773,7 @@ async function createAppFromCanvas(
           },
         }
       : {
-          ...createExecutionReport(
-            opts?.execution?.tier ?? 'auto',
-            executionContext.capabilities,
-            executionContext.selection,
-          ),
+          ...createExecutionReport(executionContext.capabilities, executionContext.selection),
           engine: { realm: 'host', health: 'idle' },
           world: {
             identity: world.identity,
@@ -547,6 +790,7 @@ async function createAppFromCanvas(
         partialWrite: world.execution.fault?.partialWrite ?? false,
         retryable: world.execution.fault?.retryable ?? true,
       }),
+      frame: () => frameInspection.current(),
     },
   );
 
@@ -554,18 +798,39 @@ async function createAppFromCanvas(
   // World is available). Dynamic import keeps @forgeax/engine-app free
   // of static dep on @forgeax/engine-remote. Component reflection crosses
   // this boundary as JSON-safe host data; app does not own any component.
+  // The generated DevKit host mounts its project root after App creation.
+  // Keep one mutable projection reference so Remote can inspect the eventual
+  // live Fiber tree without introducing another lifecycle/state owner.
+  const pluginProjection = createPluginProjectionBridge();
+  (globalThis as { __forgeaxPluginProjection?: PluginProjectionBridge }).__forgeaxPluginProjection =
+    pluginProjection;
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(world, renderer, assets, rhiCapture, opts?.profiler, executionControl)
+    ? await startRemoteServer(
+        world,
+        renderer,
+        assets,
+        rhiCapture,
+        opts?.profiler,
+        executionControl,
+        pluginContext,
+        runtimePacks?.imports,
+        pluginProjection,
+      )
     : undefined;
-  if (remoteHandle !== undefined) await pluginContext.plugin(remoteServerPlugin(remoteHandle));
+  if (remoteHandle !== undefined) await installAppPlugin(remoteServerPlugin(remoteHandle));
 
   const buildArgs: BuildAppArgs = {
     renderer,
     assets,
     world,
     pluginContext,
+    disposePluginContext: disposeAppContext,
     executionControl,
-    onFrameSubmitted: (event) => publishBrowserFrameSubmitted(canvas, event),
+    frameInspection,
+    onFrameSubmitted: (event) =>
+      publishBrowserFrameSubmitted(canvas, { ...event, worldIdentity: world.identity }),
+    onFrameCompleted: (event) =>
+      publishBrowserFrameCompleted(canvas, { ...event, worldIdentity: world.identity }),
     ...(inputBackend !== undefined ? { inputBackend } : {}),
     ...(inputHandle === undefined
       ? {}
@@ -603,13 +868,28 @@ async function createAppFromCanvas(
   // The aspect-sync sidecar belongs to the canvas path because it owns the DOM
   // canvas. It runs as an Update system so it shares World scheduling semantics.
   resetBrowserFrameSubmitted(canvas);
+  await installAppPlugin({
+    name: 'forgeax:browser-frame-signal',
+    apply(ctx) {
+      ctx.effect(() => {
+        const unsubscribe = renderer.subscribe((event) => {
+          if (event.kind === 'error' && renderer.state() !== 'alive')
+            resetBrowserFrameSubmitted(canvas);
+        });
+        return () => {
+          unsubscribe();
+          resetBrowserFrameSubmitted(canvas);
+        };
+      });
+    },
+  });
   const built = await buildApp(buildArgs);
   if (!built.ok) {
-    await pluginContext.fiber.dispose();
+    await disposeAppContext();
     return built;
   }
   if (built.ok) {
-    // DEV-only browser remote bridge (remote-live). A browser cannot host the
+    // DEV-only browser execution bridge for the persistent DevKit owner. A browser cannot host the
     // Node WS server that @forgeax/engine-remote/server needs, so the running
     // engine would be unreachable from a CLI in a real dev browser. Instead the
     // page dials OUT to a loopback relay and runs the ws-free eval core against
@@ -633,29 +913,27 @@ async function createAppFromCanvas(
       const bridgePort =
         (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE_PORT?: string } }).env
           ?.VITE_FORGEAX_ENGINE_BRIDGE_PORT ?? '5733';
-      await pluginContext.plugin({
+      await installAppPlugin({
         name: 'browser-remote-bridge',
         inject: ['world', 'renderer', 'assets'],
         async apply(ctx) {
           if (ctx.renderer === undefined || ctx.assets === undefined) {
             throw new Error('browser remote bridge requires renderer and assets services');
           }
-          try {
-            const bridge = await import('./internal/browser-remote-bridge');
-            const teardown = await bridge.installBrowserRemoteBridge({
-              world: ctx.world,
-              renderer: ctx.renderer,
-              assets: ctx.assets,
-              runtimeModule: engineRuntimeModule,
-              ...(rhiCapture !== undefined ? { rhiCapture } : {}),
-              ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
-              execution: built.value.execution,
-              port: bridgePort,
-            });
-            ctx.effect(() => teardown, 'remote/browser-bridge');
-          } catch {
-            // The optional live bridge does not make App creation fail.
-          }
+          const bridge = await import('./internal/browser-remote-bridge');
+          const teardown = await bridge.installBrowserRemoteBridge({
+            world: ctx.world,
+            renderer: ctx.renderer,
+            assets: ctx.assets,
+            runtimeModule: engineRuntimeModule,
+            ...(rhiCapture !== undefined ? { rhiCapture } : {}),
+            plugins: pluginProjection,
+            simulation: built.value,
+            ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
+            execution: built.value.execution,
+            port: bridgePort,
+          });
+          ctx.effect(() => teardown, 'remote/browser-bridge');
         },
       });
     }
@@ -808,8 +1086,26 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
     // perspective discriminator is the numeric column value.
     if (r.value.autoAspect !== true) continue;
     if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+    if (r.value.aspect === Math.fround(aspect)) continue;
     world.set(entity, Camera, { aspect });
   }
+}
+
+interface PluginProjectionBridge {
+  current?: { readonly inspect: () => unknown };
+  readonly inspect: () => unknown;
+}
+
+function createPluginProjectionBridge(): PluginProjectionBridge {
+  const bridge: PluginProjectionBridge = {
+    inspect: () =>
+      bridge.current?.inspect() ?? {
+        desired: [],
+        live: [],
+        liveState: 'unavailable',
+      },
+  };
+  return bridge;
 }
 
 async function startRemoteServer(
@@ -819,6 +1115,9 @@ async function startRemoteServer(
   rhiCapture: RhiCapture | undefined,
   profiler: import('@forgeax/engine-profiler').Profiler | undefined,
   execution: ExecutionControl,
+  pluginContext: Context,
+  imports: RuntimePackOptions['imports'],
+  plugins?: unknown,
 ): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
   try {
     const remoteServerMod = (await import(
@@ -834,6 +1133,9 @@ async function startRemoteServer(
         introspection?: readonly unknown[];
         profiler?: unknown;
         execution?: unknown;
+        simulation?: unknown;
+        importModule?: (specifier: string) => Promise<unknown>;
+        plugins?: unknown;
       }) => Promise<{
         ok: boolean;
         value?: { port: number; close(): Promise<void> };
@@ -849,6 +1151,10 @@ async function startRemoteServer(
       ...(rhiCapture !== undefined ? { rhiCapture } : {}),
       ...(profiler !== undefined ? { profiler } : {}),
       execution,
+      simulation: { world, renderer, assets, pluginContext, rhiCapture, profiler, execution },
+      importModule: (specifier) =>
+        import(/* @vite-ignore */ imports?.[specifier]?.url ?? specifier),
+      ...(plugins !== undefined ? { plugins } : {}),
     });
     if (serverResult.ok && serverResult.value !== undefined) {
       return { port: serverResult.value.port, close: serverResult.value.close };
@@ -862,17 +1168,42 @@ async function startRemoteServer(
 async function createAppFromAssemble(
   args: AppAssembleArgs,
 ): Promise<Result<App, AssembleAppError>> {
+  const assetAssemblyRequested =
+    args.assets !== undefined ||
+    args.assetCatalog !== undefined ||
+    args.assetDecoders !== undefined ||
+    args.pluginPrograms !== undefined ||
+    args.runtimePacks !== undefined ||
+    args.assetRuntimeBinding !== undefined;
+  let assetAssembly: AssetRuntimeAssembly | undefined;
+  if (assetAssemblyRequested) {
+    const assetAssemblyResult = createAssetRuntimeAssembly(args.assets, {
+      ...(args.assets === undefined ? {} : { registry: args.assets }),
+      ...(args.assetCatalog === undefined ? {} : { catalogSource: args.assetCatalog }),
+      ...(args.assetDecoders === undefined ? {} : { decoderContributions: args.assetDecoders }),
+      ...(args.assetRuntimeBinding === undefined
+        ? {}
+        : { runtimeBinding: args.assetRuntimeBinding }),
+    });
+    if (!assetAssemblyResult.ok) return err(assetAssemblyResult.error);
+    assetAssembly = assetAssemblyResult.value;
+  }
+  const assets = assetAssembly?.registry ?? args.assets;
   let pluginContext: Context;
   try {
     pluginContext = await createWorldContext(
       args.world,
       assembledEngineProfile({
         renderer: args.renderer,
-        ...(args.assets === undefined ? {} : { assets: args.assets }),
+        ...(assets === undefined ? {} : { assets }),
+        ...(assetAssembly === undefined ? {} : { assetAssembly }),
+        ...(args.pluginPrograms === undefined ? {} : { pluginPrograms: args.pluginPrograms }),
+        ...(args.runtimePacks === undefined ? {} : { runtimePacks: args.runtimePacks }),
         extensions: args.plugins ?? [],
       }),
     );
   } catch (cause) {
+    assetAssembly?.dispose();
     return err(
       makeAppError(
         'app-plugin-activation-failed',
@@ -888,12 +1219,16 @@ async function createAppFromAssemble(
     (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
   );
   const assembledAudioBackend = pluginContext.audio;
+  const frameInspection = createFrameInspectionRef();
   const executionControl = createLocalExecutionControl(
     {
-      ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
-      actualTier: 'main-serial',
-      selectionReason: 'explicit-request',
-      sharedEvidencePassed: true,
+      ...createExecutionReport(
+        unavailableExecutionCapabilities('local assembly'),
+        selectExecutionWorkers({
+          workers: { engine: false },
+          capabilities: unavailableExecutionCapabilities('local assembly'),
+        }).unwrap(),
+      ),
       engine: { realm: 'host', health: 'idle' },
       world: {
         identity: args.world.identity,
@@ -912,25 +1247,30 @@ async function createAppFromAssemble(
         partialWrite: args.world.execution.fault?.partialWrite ?? false,
         retryable: args.world.execution.fault?.retryable ?? true,
       }),
+      frame: () => frameInspection.current(),
     },
   );
   const remoteHandle = shouldStartRemote
     ? await startRemoteServer(
         args.world,
         args.renderer,
-        args.assets,
+        assets,
         undefined,
         args.profiler,
         executionControl,
+        pluginContext,
+        args.runtimePacks?.imports,
       )
     : undefined;
   if (remoteHandle !== undefined) await pluginContext.plugin(remoteServerPlugin(remoteHandle));
 
   const buildArgs: BuildAppArgs = {
     renderer: args.renderer,
+    ...(assets === undefined ? {} : { assets }),
     world: args.world,
     pluginContext,
     executionControl,
+    frameInspection,
     ...(remoteHandle !== undefined ? { remoteHandle } : {}),
   };
 
@@ -965,6 +1305,7 @@ interface BuildAppArgs {
   readonly assets?: AssetRegistry;
   readonly world: World;
   readonly pluginContext: Context;
+  readonly disposePluginContext?: () => Promise<void>;
   readonly inputBackend?: InputBackend;
   /**
    * M2 D-4: callback that buildApp calls after creating the ErrorFanoutRegistry
@@ -997,10 +1338,23 @@ interface BuildAppArgs {
     | undefined;
   readonly profiler?: import('@forgeax/engine-profiler').Profiler;
   readonly executionControl?: import('./execution/control').LocalExecutionControl;
+  /** Mutable indirection lets the pre-loop execution control observe its owner. */
+  readonly frameInspection?: FrameInspectionRef;
   /** Canvas-form projection of the Renderer frame-submitted event. */
   readonly onFrameSubmitted?: (event: {
     readonly frameId: number;
     readonly deviceGeneration: number;
+    readonly graphGeneration?: number;
+    readonly receipt: FrameReceipt;
+    readonly barrelDistortion?: import('@forgeax/engine-render').BarrelDistortionMapping;
+    readonly worldIdentity?: string;
+  }) => void;
+  /** Canvas-form projection after the receipt's completion Result succeeds. */
+  readonly onFrameCompleted?: (event: {
+    readonly frameId: number;
+    readonly deviceGeneration: number;
+    readonly presentation: import('@forgeax/engine-render').FramePresentation;
+    readonly worldIdentity?: string;
   }) => void;
 }
 
@@ -1012,6 +1366,7 @@ interface BuildAppArgs {
 async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiError>> {
   const {
     renderer,
+    assets,
     world,
     pluginContext,
     inputBackend,
@@ -1022,6 +1377,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     remoteHandle,
     profiler,
   } = args;
+  const frameInspection = args.frameInspection ?? createFrameInspectionRef();
 
   // Physics is a Context service; the App exposes the active provider without
   // storing a second mutable slot.
@@ -1029,7 +1385,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     | import('@forgeax/engine-physics').PhysicsWorld
     | import('@forgeax/engine-physics').PhysicsWorld2D
     | undefined {
-    return pluginContext.physics;
+    return pluginContext.get('physics');
   }
   // M4 (w11): listener registry replaces the M3 inline Set so console.error
   // fallback + duplicate-add no-op + unsubscribe handle behaviour matches
@@ -1043,10 +1399,13 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     args.executionControl ??
     createLocalExecutionControl(
       {
-        ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
-        actualTier: 'main-serial',
-        selectionReason: 'explicit-request',
-        sharedEvidencePassed: true,
+        ...createExecutionReport(
+          unavailableExecutionCapabilities('local assembly'),
+          selectExecutionWorkers({
+            workers: { engine: false },
+            capabilities: unavailableExecutionCapabilities('local assembly'),
+          }).unwrap(),
+        ),
         engine: { realm: 'host', health: 'idle' },
         world: {
           identity: world.identity,
@@ -1063,6 +1422,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
           partialWrite: world.execution.fault?.partialWrite ?? false,
           retryable: world.execution.fault?.retryable ?? true,
         }),
+        frame: () => frameInspection.current(),
       },
     );
 
@@ -1079,11 +1439,44 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     args.wireOnLockErrorDispatch(dispatch);
   }
 
+  const observation = createAppObservation(world, renderer, execution);
   const loopOpts: Parameters<typeof createFrameLoop>[0] = {
     world,
     renderer,
     onError: dispatch,
+    beforeDraw: observation.prepareFrame,
   };
+  if (args.onFrameSubmitted !== undefined) {
+    Object.assign(loopOpts, {
+      onSubmitted: (receipt: FrameReceipt) =>
+        args.onFrameSubmitted?.({
+          frameId: receipt.frameId,
+          deviceGeneration: receipt.deviceGeneration,
+          ...(receipt.graphGeneration === undefined
+            ? {}
+            : { graphGeneration: receipt.graphGeneration }),
+          receipt,
+          ...(receipt.barrelDistortion === undefined
+            ? {}
+            : { barrelDistortion: receipt.barrelDistortion }),
+          worldIdentity: world.identity,
+        }),
+    });
+  }
+  if (args.onFrameCompleted !== undefined) {
+    Object.assign(loopOpts, {
+      onCompleted: (receipt: FrameReceipt) =>
+        args.onFrameCompleted?.({
+          frameId: receipt.frameId,
+          deviceGeneration: receipt.deviceGeneration,
+          // A receipt produced by the current Render contract always carries
+          // presentation. If a legacy adapter omits it, do not turn an
+          // unproven frame into startup success.
+          presentation: receipt.presentation ?? 'pending',
+          worldIdentity: world.identity,
+        }),
+    });
+  }
   // M2 / D-3: forward the optional draw-source pull into the frame-loop. Absent
   // => the loop keeps the allocation-free primary-World draw path.
   if (args.drawSource !== undefined) {
@@ -1093,6 +1486,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     Object.assign(loopOpts, { profiler });
   }
   const loop = createFrameLoop(loopOpts);
+  frameInspection.current = loop.inspect;
   if (rhiCapture !== undefined) {
     bindRhiCaptureFrameDriver(rhiCapture, {
       getState: () => loop.getState(),
@@ -1126,10 +1520,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       return;
     }
     rendererUnsubscribe = renderer.subscribe((event) => {
-      if (event.kind === 'frame-submitted') {
-        args.onFrameSubmitted?.(event);
-        return;
-      }
+      if (event.kind === 'frame-submitted') return;
       if (event.kind !== 'error') return;
       const e: RenderError = event.error;
       dispatch(e);
@@ -1145,9 +1536,10 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
 
   const stub: App = {
     renderer,
-    ...(args.assets === undefined ? {} : { assets: args.assets }),
+    ...(assets === undefined ? {} : { assets }),
     world,
     execution,
+    observation,
     async releaseSurfacePreserveWorld(): Promise<Result<void, RhiError | RenderError>> {
       if (loop.getState() === 'running') {
         const paused = loop.pause();
@@ -1167,6 +1559,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // current frame is still in progress. Let that frame reach renderer.draw
       // before unconfiguring the surface; pause() only cancels the next rAF.
       await Promise.resolve();
+      // A submitted frame may still use the presentation surface. Wait for its
+      // completion before unconfiguring that surface.
+      await loop.drainFrameReceipts();
       const released = renderer.releaseSurface();
       if (!released.ok && resumeAfterSurfaceRestore) {
         loop.resume();
@@ -1217,7 +1612,10 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     },
     stop(): Result<void, AppError> {
       const r = loop.stop();
-      if (r.ok) execution.setEngineHealth('stopped');
+      if (r.ok) {
+        observation.release();
+        execution.setEngineHealth('stopped');
+      }
       unsubscribeRendererErrors();
       return r;
     },
@@ -1225,7 +1623,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       const state = loop.getState();
       if (state === 'running' || state === 'paused') loop.stop();
       else if (state !== 'stopped') loop.setStopped();
-      await pluginContext.fiber.dispose();
+      await loop.drainFrameReceipts();
+      await (args.disposePluginContext?.() ?? pluginContext.fiber.dispose());
+      observation.release();
       unsubscribeRendererErrors();
       execution.setEngineHealth('stopped');
       return ok(undefined);

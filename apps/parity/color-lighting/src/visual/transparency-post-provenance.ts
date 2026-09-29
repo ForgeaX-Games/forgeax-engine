@@ -8,7 +8,7 @@ export interface TransparencyPostVisualArtifact {
   readonly kind: (typeof TRANSPARENCY_POST_VISUAL_ARTIFACTS)[number];
   readonly caseId: string;
   readonly adapterId: string;
-  readonly pipelineId: 'urp' | 'hdrp';
+  readonly pipelineId: 'standard';
   readonly frameId: number;
   readonly rawHash: string;
 }

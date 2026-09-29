@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/hello-ssr-evidence.schema.json",
+  "title": "hello-ssr paired evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "featureId", "status", "identity", "browser", "dawn", "visualEvidence", "falsifiers"],
+  "properties": {
+    "schemaVersion": { "const": "hello-ssr-evidence/1" },
+    "featureId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["pass", "blocked", "fail"] },
+    "identity": { "$ref": "#/$defs/identity" },
+    "browser": { "$ref": "#/$defs/lane" },
+    "dawn": { "$ref": "#/$defs/lane" },
+    "visualEvidence": {
+      "type": "array",
+      "minItems": 9,
+      "items": { "$ref": "#/$defs/visualExpectation" }
+    },
+    "falsifiers": {
+      "type": "array",
+      "minItems": 12,
+      "items": { "$ref": "#/$defs/falsifier" }
+    },
+    "performance": { "$ref": "#/$defs/performance" },
+    "errors": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceHead", "sourceTree", "lockSha256", "buildSha256"],
+      "properties": {
+        "sourceHead": { "type": "string", "minLength": 40, "maxLength": 40 },
+        "sourceTree": { "type": "string", "minLength": 40, "maxLength": 40 },
+        "lockSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "buildSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "url", "frames", "readbackHash", "passRoster", "ssr"],
+      "properties": {
+        "backend": { "enum": ["webgpu", "dawn"] },
+        "url": { "type": "string", "minLength": 1 },
+        "frames": { "const": 60 },
+        "readbackHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "passRoster": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "ssr": { "$ref": "#/$defs/ssr" }
+      }
+    },
+    "ssr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "fallbackSource", "historyBytes", "coverage", "passRoster"],
+      "properties": {
+        "status": { "enum": ["admitted", "fallback-only", "structural-only", "requested", "not-requested"] },
+        "fallbackSource": { "enum": ["probe", "skylight", "neutral"] },
+        "historyBytes": { "type": "integer", "minimum": 0 },
+        "coverage": { "type": "object", "additionalProperties": false, "required": ["hitCount", "fallbackCount", "excludedCount"], "properties": { "hitCount": { "type": "integer", "minimum": 0 }, "fallbackCount": { "type": "integer", "minimum": 0 }, "excludedCount": { "type": "integer", "minimum": 0 } } },
+        "passRoster": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "visualExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "observed", "verdict", "confidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "observed": {},
+        "verdict": { "enum": ["pass", "fail", "blocked"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "falsifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "stage", "detected", "manifestEligible"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "stage": { "type": "string", "minLength": 1 },
+        "detected": { "const": true },
+        "manifestEligible": { "const": false },
+        "detail": { "type": "string" }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolution", "descriptor", "timing"],
+      "properties": {
+        "resolution": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "const": 1920 }, "height": { "const": 1080 } } },
+        "descriptor": { "type": "object", "additionalProperties": false, "required": ["ssrOwnedBytes", "budgetBytes", "withinBudget", "matchesOwner"], "properties": { "ssrOwnedBytes": { "type": "integer", "minimum": 0 }, "budgetBytes": { "const": 45088768 }, "withinBudget": { "const": true }, "matchesOwner": { "const": true } } },
+        "timing": { "type": "object", "additionalProperties": false, "required": ["cpu", "gpu"], "properties": { "cpu": { "type": "object" }, "gpu": { "type": "object" } } }
+      }
+    }
+  }
+}

@@ -110,6 +110,9 @@ function importFailureCode(error: ImportError): SourcePackageErrorCode {
     case 'source-read-failed':
     case 'import-internal-error':
     case 'mesh-material-slot-topology-change':
+    case 'mesh-lod-contract-invalid':
+    case 'mesh-lod-topology-change':
+    case 'mesh-lod-authority-conflict':
     case 'unknown-source-key':
     case 'duplicate-source-key':
     case 'invalid-source-overrides':
@@ -118,10 +121,48 @@ function importFailureCode(error: ImportError): SourcePackageErrorCode {
   }
 }
 
+const IMPORT_ERROR_CODES = new Set([
+  'importer-not-registered',
+  'source-read-failed',
+  'import-produced-no-assets',
+  'guid-mismatch',
+  'mesh-material-slot-topology-change',
+  'mesh-lod-contract-invalid',
+  'mesh-lod-topology-change',
+  'mesh-lod-authority-conflict',
+  'import-internal-error',
+  'source-validation-failed',
+  'unknown-source-key',
+  'duplicate-source-key',
+  'invalid-source-overrides',
+  'invalid-source-override-payload',
+]);
+
+function findNormalizableCause(error: unknown, seen = new Set<unknown>()): unknown {
+  if (error === null || typeof error !== 'object' || seen.has(error)) return undefined;
+  seen.add(error);
+  if (isSourcePackageError(error) || isScriptablePackFailure(error) || isImportError(error)) {
+    return error;
+  }
+  const cause = (error as { readonly cause?: unknown }).cause;
+  return cause === undefined ? undefined : findNormalizableCause(cause, seen);
+}
+
+/** Return whether an error chain contains a source-package/import contract error. */
+export function containsSourcePackageError(error: unknown, seen = new Set<unknown>()): boolean {
+  if (error === null || typeof error !== 'object' || seen.has(error)) return false;
+  seen.add(error);
+  if (isSourcePackageError(error) || isImportError(error)) return true;
+  const cause = (error as { readonly cause?: unknown }).cause;
+  return cause !== undefined && containsSourcePackageError(cause, seen);
+}
+
 export function normalizeSourcePackageError(
   error: unknown,
   context: SourcePackageErrorContext,
 ): SourcePackageError {
+  const cause = findNormalizableCause(error);
+  if (cause !== undefined && cause !== error) return normalizeSourcePackageError(cause, context);
   if (isSourcePackageError(error)) return error;
   if (isScriptablePackFailure(error)) {
     return sourcePackageError('source-package-conversion-failed', context, {
@@ -174,6 +215,8 @@ function isImportError(error: unknown): error is ImportError {
     error !== null &&
     typeof error === 'object' &&
     'code' in error &&
+    typeof error.code === 'string' &&
+    IMPORT_ERROR_CODES.has(error.code) &&
     'expected' in error &&
     'hint' in error &&
     'detail' in error

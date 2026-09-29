@@ -71,7 +71,7 @@ test('public ScriptablePack documentation exposes progressive consumer recovery'
   }
 });
 
-test('catalog gate owns the complete 16-kind ScriptablePack documentation matrix', () => {
+test('catalog gate derives the complete ScriptablePack documentation matrix from its owner', () => {
   for (const token of [
     'checkScriptablePackMatrix',
     'SCRIPTABLE_PACK_ASSET_KINDS',

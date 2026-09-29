@@ -1,33 +1,39 @@
 import {
   decodeMeshBinHeader,
-  MESH_BIN_HEADER_V4_BYTES,
-  MESH_BIN_VERSION,
-  type MeshBinHeaderV4,
+  decodeMeshBinMorphs,
+  MESH_BIN_HEADER_BYTES,
+  type MeshBinHeader,
 } from '@forgeax/engine-pack';
 import type {
   AssetGuid,
   MeshAsset,
+  MeshCardLayout,
   MeshMaterialSlot,
   MorphTarget,
   Submesh,
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '../box';
+import { validateMeshCardLayout } from '../mesh-card-artifact';
 import {
+  deriveVertexLayoutProjection,
   deriveVertexLayoutProjectionFromMask,
   type VertexLayoutProjection,
 } from '../vertex-attribute-layout';
 
 interface PackedMesh {
-  readonly version: 4;
+  readonly version: 4 | 5;
   readonly vertices: Float32Array;
   readonly attributes?: VertexAttributeMap;
   readonly indices?: Uint16Array | Uint32Array;
   readonly submeshes?: readonly Record<string, unknown>[];
+  readonly cardLayout?: MeshCardLayout;
   readonly materialSlots?: readonly {
     readonly slotName: string;
     readonly sourceKey?: string;
     readonly defaultMaterialRef?: number;
+    /** Direct Pack JSON keeps the authoring GUID until the producer boundary. */
+    readonly defaultMaterial?: string;
   }[];
   readonly aabb?: Float32Array;
   readonly skinIndex?: Uint16Array;
@@ -99,7 +105,7 @@ function morphTargets(value: unknown): readonly MorphTarget[] | undefined {
 function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
   const headerResult = decodeMeshBinHeader(bytes);
   if (!headerResult.ok) return undefined;
-  const header: MeshBinHeaderV4 = headerResult.value;
+  const header: MeshBinHeader = headerResult.value;
   const projectionResult = deriveVertexLayoutProjectionFromMask(header.mask);
   if (!projectionResult.ok) return undefined;
   const projection = projectionResult.value;
@@ -110,14 +116,17 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
   ) {
     return undefined;
   }
-  const payloadBytes = header.vertexBytes + header.indexBytes + header.jsonBytes;
-  if (MESH_BIN_HEADER_V4_BYTES + payloadBytes !== bytes.byteLength) return undefined;
+  const payloadBytes =
+    header.vertexBytes + header.morphBytes + header.indexBytes + header.jsonBytes;
+  if (MESH_BIN_HEADER_BYTES + payloadBytes !== bytes.byteLength) return undefined;
 
-  let offset = MESH_BIN_HEADER_V4_BYTES;
+  let offset = MESH_BIN_HEADER_BYTES;
   const vertexBytes = bytes.subarray(offset, offset + header.vertexBytes);
   const vertices = new Float32Array(vertexBytes.byteLength / 4);
   new Uint8Array(vertices.buffer).set(vertexBytes);
   offset += header.vertexBytes;
+  const morphBytes = bytes.subarray(offset, offset + header.morphBytes);
+  offset += header.morphBytes;
   let indices: Uint16Array | Uint32Array | undefined;
   if (header.indexCount > 0) {
     const indexBytes = bytes.subarray(offset, offset + header.indexBytes);
@@ -135,10 +144,12 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
 
   let metadata: {
     readonly submeshes?: readonly Record<string, unknown>[];
+    readonly cardLayout?: MeshCardLayout;
     readonly materialSlots?: PackedMesh['materialSlots'];
     readonly aabb?: readonly number[];
     readonly morphTargets?: readonly Record<string, readonly number[]>[];
     readonly morphWeights?: readonly number[];
+    readonly morphTargetMasks?: unknown;
   };
   try {
     metadata = JSON.parse(
@@ -148,6 +159,9 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
     return undefined;
   }
   if (
+    metadata === null ||
+    typeof metadata !== 'object' ||
+    Array.isArray(metadata) ||
     metadata.submeshes === undefined ||
     metadata.submeshes.length === 0 ||
     metadata.materialSlots === undefined
@@ -180,7 +194,30 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
     }
     attributes[entry.key] = target;
   }
-  const decodedMorphTargets = morphTargets(metadata.morphTargets);
+  let decodedMorphTargets: readonly MorphTarget[] | undefined;
+  try {
+    if (header.version === 5) {
+      if (metadata.morphTargets !== undefined) return undefined;
+      decodedMorphTargets = decodeMeshBinMorphs(
+        morphBytes,
+        header.vertexCount,
+        metadata.morphTargetMasks,
+      );
+    } else {
+      if (metadata.morphTargetMasks !== undefined) return undefined;
+      decodedMorphTargets = morphTargets(metadata.morphTargets);
+    }
+  } catch {
+    return undefined;
+  }
+  if (
+    metadata.morphWeights !== undefined &&
+    (!Array.isArray(metadata.morphWeights) ||
+      !metadata.morphWeights.every(
+        (value) => typeof value === 'number' && Number.isFinite(Math.fround(value)),
+      ))
+  )
+    return undefined;
   const morphWeightValues =
     metadata.morphWeights === undefined ? undefined : new Float32Array(metadata.morphWeights);
   if (
@@ -191,12 +228,13 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
     return undefined;
   }
   return {
-    version: MESH_BIN_VERSION,
+    version: header.version,
     vertices,
     attributes: attributes as VertexAttributeMap,
     projection,
     ...(indices === undefined ? {} : { indices }),
     submeshes: metadata.submeshes,
+    ...(metadata.cardLayout === undefined ? {} : { cardLayout: metadata.cardLayout }),
     materialSlots: metadata.materialSlots,
     ...(metadata.aabb === undefined ? {} : { aabb: new Float32Array(metadata.aabb) }),
     // MeshAsset.vertices remains a Float32Array, so translate the wire stride
@@ -217,7 +255,7 @@ function materialSlotsFor(
     return submeshes.map((_submesh, index) => ({ slotName: `LegacySlot_${index}` }));
   return raw.map((slot, index) => {
     const reference =
-      slot.defaultMaterialRef === undefined ? undefined : refs[slot.defaultMaterialRef];
+      slot.defaultMaterialRef === undefined ? slot.defaultMaterial : refs[slot.defaultMaterialRef];
     const defaultMaterial = reference === undefined ? undefined : parseGuid(reference);
     return {
       slotName:
@@ -284,6 +322,7 @@ function meshFromParts(
     readonly attributes?: unknown;
     readonly aabb?: unknown;
     readonly submeshes?: readonly Record<string, unknown>[];
+    readonly cardLayout?: MeshCardLayout;
     readonly materialSlots?: PackedMesh['materialSlots'];
     readonly morphTargets?: unknown;
     readonly morphWeights?: unknown;
@@ -324,6 +363,15 @@ function meshFromParts(
   const stride = parts.floatsPerVertex ?? 0;
   const vertexCount = stride > 0 ? vertices.length / stride : vertices.length;
   const submeshes = submeshesFor(parts.submeshes, vertexCount, indices?.length ?? 0);
+  if (parts.submeshes?.some((section) => section.cardLayout !== undefined)) return undefined;
+  if (
+    parts.cardLayout !== undefined &&
+    (!validateMeshCardLayout(parts.cardLayout).ok ||
+      submeshes.some((section) => section.topology !== 'triangle-list') ||
+      parts.morphTargets !== undefined ||
+      attributes.skinIndex !== undefined)
+  )
+    return undefined;
   const materialSlots = materialSlotsFor(parts.materialSlots, submeshes, refs);
   const aabb = floatArray(parts.aabb) ?? deriveAabb(vertices, stride);
   if (aabb === undefined) return undefined;
@@ -356,6 +404,7 @@ function meshFromParts(
     attributes,
     aabb,
     submeshes,
+    ...(parts.cardLayout === undefined ? {} : { cardLayout: parts.cardLayout }),
     materialSlots,
     ...(morph === undefined ? {} : { morphTargets: morph }),
     ...(weights === undefined ? {} : { morphWeights: weights }),
@@ -371,6 +420,7 @@ export function decodeMeshBinary(
   return meshFromParts(
     {
       vertices: decoded.vertices,
+      ...(decoded.cardLayout === undefined ? {} : { cardLayout: decoded.cardLayout }),
       ...(decoded.attributes === undefined ? {} : { attributes: decoded.attributes }),
       ...(decoded.indices === undefined ? {} : { indices: decoded.indices }),
       ...(decoded.aabb === undefined ? {} : { aabb: decoded.aabb }),
@@ -400,9 +450,22 @@ export function normalizeMeshPayload(
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const source = payload as Record<string, unknown>;
   if (source.kind !== 'mesh') return undefined;
+  const sourceAttributes =
+    source.attributes !== null && typeof source.attributes === 'object'
+      ? (source.attributes as VertexAttributeMap)
+      : undefined;
+  const projection =
+    sourceAttributes === undefined ? undefined : deriveVertexLayoutProjection(sourceAttributes);
+  const floatsPerVertex =
+    projection === undefined || projection.attributes.length === 0
+      ? PROCEDURAL_FLOATS_PER_VERTEX
+      : projection.arrayStride / Float32Array.BYTES_PER_ELEMENT;
   return meshFromParts(
     {
       vertices: source.vertices,
+      ...(source.cardLayout === undefined
+        ? {}
+        : { cardLayout: source.cardLayout as MeshCardLayout }),
       ...(source.indices === undefined ? {} : { indices: source.indices }),
       ...(source.attributes === undefined ? {} : { attributes: source.attributes }),
       ...(source.aabb === undefined ? {} : { aabb: source.aabb }),
@@ -414,7 +477,7 @@ export function normalizeMeshPayload(
         : {}),
       ...(source.morphTargets === undefined ? {} : { morphTargets: source.morphTargets }),
       ...(source.morphWeights === undefined ? {} : { morphWeights: source.morphWeights }),
-      floatsPerVertex: PROCEDURAL_FLOATS_PER_VERTEX,
+      floatsPerVertex,
     },
     refs,
   );

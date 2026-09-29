@@ -14,6 +14,13 @@ const schema = JSON.parse(readFileSyncFromFs(SCHEMA_PATH, 'utf8'));
 const validator = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
 
 export const REQUIRED_CELL_IDS = ['scene-structure', 'dawn-shader', 'chromium-pack'];
+export const SURFACE_CELL_IDS = [
+  'default-base',
+  'custom-base',
+  'default-physical',
+  'custom-physical',
+];
+export const SURFACE_BACKENDS = ['browser-webgpu', 'dawn-native', 'webgl2'];
 export const REQUIRED_EVIDENCE_LAYERS = [
   'budget',
   'apiSnapshot',
@@ -93,6 +100,59 @@ export function verifyRequiredCells(manifest) {
   return { ok: errors.length === 0, errors };
 }
 
+function verifySurfaceBackend(record, cellId, manifest) {
+  const errors = [];
+  const prefix = `surface cell ${cellId} backend ${record.backend}`;
+  if (record.sourceSha !== manifest.sourceSha) errors.push(`${prefix} source identity mismatch`);
+  if (record.buildId !== manifest.build.id) errors.push(`${prefix} build identity mismatch`);
+  if (record.status === 'unavailable') {
+    if (record.blocker === undefined || record.blocker === '')
+      errors.push(`${prefix} unavailable record requires blocker`);
+    if (record.samples.length !== 0)
+      errors.push(`${prefix} unavailable record must not contain samples`);
+    if (record.verdict !== 'blocked') errors.push(`${prefix} unavailable record must be blocked`);
+    return errors;
+  }
+  if (record.samples.length === 0) errors.push(`${prefix} pass record requires readback samples`);
+  if (record.observed === null || record.observed === '')
+    errors.push(`${prefix} pass record requires observed`);
+  if (record.provenance === null) errors.push(`${prefix} pass record requires provenance`);
+  if (record.verdict !== 'pixel') errors.push(`${prefix} pass record requires pixel verdict`);
+  return errors;
+}
+
+export function verifySurfaceEvidence(manifest) {
+  const structural = validateManifest(manifest);
+  if (!structural.ok) return structural;
+  const errors = [];
+  if (manifest.surfaceEvidence.sourceSha !== manifest.sourceSha)
+    errors.push('surface evidence source identity mismatch');
+  if (manifest.surfaceEvidence.buildId !== manifest.build.id)
+    errors.push('surface evidence build identity mismatch');
+  if (manifest.surfaceEvidence.epsilon > 0.05)
+    errors.push(`surface evidence epsilon exceeds 0.05: ${manifest.surfaceEvidence.epsilon}`);
+  const seenCells = new Set();
+  for (const cell of manifest.surfaceEvidence.cells) {
+    if (seenCells.has(cell.id)) errors.push(`duplicate surface cell ${cell.id}`);
+    seenCells.add(cell.id);
+    if (!SURFACE_CELL_IDS.includes(cell.id)) errors.push(`unknown surface cell ${cell.id}`);
+    const seenBackends = new Set();
+    for (const record of cell.backends) {
+      if (seenBackends.has(record.backend))
+        errors.push(`duplicate surface backend ${cell.id}/${record.backend}`);
+      seenBackends.add(record.backend);
+      if (!SURFACE_BACKENDS.includes(record.backend))
+        errors.push(`unknown surface backend ${cell.id}/${record.backend}`);
+      errors.push(...verifySurfaceBackend(record, cell.id, manifest));
+    }
+    for (const backend of SURFACE_BACKENDS)
+      if (!seenBackends.has(backend)) errors.push(`missing surface backend ${cell.id}/${backend}`);
+  }
+  for (const cellId of SURFACE_CELL_IDS)
+    if (!seenCells.has(cellId)) errors.push(`missing surface cell ${cellId}`);
+  return { ok: errors.length === 0, errors };
+}
+
 export function verifyEvidenceLayers(manifest) {
   const structural = validateManifest(manifest);
   if (!structural.ok) return structural;
@@ -150,9 +210,10 @@ async function main() {
   }
   const requiredResult = verifyRequiredCells(manifest);
   const evidenceResult = verifyEvidenceLayers(manifest);
+  const surfaceResult = verifySurfaceEvidence(manifest);
   const result = {
-    ok: requiredResult.ok && evidenceResult.ok,
-    errors: [...requiredResult.errors, ...evidenceResult.errors],
+    ok: requiredResult.ok && evidenceResult.ok && surfaceResult.ok,
+    errors: [...requiredResult.errors, ...evidenceResult.errors, ...surfaceResult.errors],
   };
   if (options.sourceSha !== undefined && manifest.sourceSha !== options.sourceSha) {
     result.ok = false;
@@ -163,6 +224,7 @@ async function main() {
     sourceSha: manifest.sourceSha,
     requiredCells: manifest.requiredCells.length,
     visualRecords: manifest.visualRecords.length,
+    surfaceCells: manifest.surfaceEvidence.cells.length,
     verdict: result.ok ? 'complete' : 'blocked',
     errors: result.errors,
   };

@@ -1,8 +1,8 @@
 // shadow-fields-observable.dawn.test.ts
 // feat-20260621-merge-directionallightshadow-into-directionallight M6
 //
-// Observability gate: proves depthBias, normalBias, pcfKernelSize --
-// three merged DirectionalLight shadow fields -- produce real pixel A/B diffs.
+// Observability gate: proves depthBias, normalBias, and the directional filter
+// carrier -- three merged DirectionalLight shadow fields -- produce real pixel A/B diffs.
 //
 // Root cause of prior "0 diff everywhere" failure: (a) materials without
 // ShadowCaster pass (nothing written into shadow depth atlas), (b) floor
@@ -24,20 +24,86 @@ import {
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { validateDirectionalLightData } from '../../../render/src/components/light-helpers';
 import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
-const WIDTH = 256;
-const HEIGHT = 256;
+const LIGHTWEIGHT_DAWN = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+// The CI observability lane only needs enough settled frames to prove the
+// field-owned pixel/UBO deltas. Keep the full 60-frame, 256x256 window for
+// local and nightly runs, while the isolated PR process uses a bounded 12-frame
+// 128x128 target to avoid retaining a large lavapipe command backlog.
+const SHADOW_FIELDS_RENDER_FRAMES = LIGHTWEIGHT_DAWN ? 12 : 60;
+const WIDTH = LIGHTWEIGHT_DAWN ? 128 : 256;
+const HEIGHT = LIGHTWEIGHT_DAWN ? 128 : 256;
 const BPR = Math.ceil((WIDTH * 4) / 256) * 256;
+
+// Four fresh readbacks, or the 2048-square map's full 60 frames, retain a
+// bounded software-GPU budget. The lightweight map comparison keeps 60 seconds.
+const SHADOW_FIELDS_FULL_PIXEL_TIMEOUT_MS = 300_000;
 
 const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(
+  new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
+);
+afterAll(() => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
+
+describe('M3 Dawn candidate admission', () => {
+  it('requires accepted production candidate to preserve the requested PCSS profile', async () => {
+    const module = (await import('../../../render/src/render-pipeline')) as Record<string, unknown>;
+    const resolver = module.resolveDirectionalShadowBackendAdmission;
+    expect(typeof resolver).toBe('function');
+    const result = (
+      resolver as (input: {
+        backendKind: 'webgpu';
+        requested: 'pcssMedium' | 'pcssHigh';
+        candidate: 'accepted' | 'failed';
+      }) => { effective: string; status: string; pixelEvidence: string }
+    )({ backendKind: 'webgpu', requested: 'pcssHigh', candidate: 'accepted' });
+    expect(result).toMatchObject({
+      effective: 'pcssHigh',
+      status: 'accepted',
+      pixelEvidence: 'available',
+    });
+  });
+
+  it('requires the same bounded Directional inspection projection used by Dawn', async () => {
+    const module = (await import(
+      '../../../render/src/assembly/directional-shadow-inspection'
+    )) as Record<string, unknown>;
+    const project = module.projectDirectionalShadowInspection;
+    expect(typeof project).toBe('function');
+    const result = (project as (input: Record<string, unknown>) => Record<string, unknown>)({
+      admission: {
+        requested: 'pcssMedium',
+        effective: 'pcssMedium',
+        status: 'accepted',
+        pixelEvidence: 'available',
+      },
+      cascadeCount: 4,
+      mapSize: 1024,
+      shadowMapBytes: 16_777_216,
+      writerPasses: 4,
+      blockerTaps: 8,
+      filterTapUpperBound: 16,
+      seamTapUpperBound: 48,
+      deviceGeneration: 1,
+      graphGeneration: 3,
+    });
+    expect(result).toMatchObject({
+      requested: 'pcssMedium',
+      effective: 'pcssMedium',
+      blockerTaps: 8,
+      filterTapUpperBound: 16,
+      seamTapUpperBound: 48,
+    });
+    expect(Object.keys(result)).not.toContain('perPixel');
+  });
+});
 
 // Helper types
 interface WriteCapture {
@@ -169,10 +235,16 @@ function spawnScene(
       intensity: 1,
       castShadow,
       mapSize: mapSize ?? 1024,
+      // One cascade covers this field-comparison scene. Multi-cascade rebuilds
+      // are exercised by shadow-csm-runtime-vary.dawn.test.ts; repeating four
+      // 2048-square depth maps here hid the field assertions behind timeouts.
+      cascadeCount: 1,
       depthBias,
       normalBias,
       shadowDistance: 50,
-      pcfKernelSize: pcf,
+      shadowFilter: pcf === 1 ? 1 : pcf === 3 ? 2 : 3,
+      shadowAngularRadius: 0.00465,
+      maxPenumbraTexels: 32,
     },
   });
   world.spawn(
@@ -295,9 +367,13 @@ async function renderConfig(
     const w = new World();
     spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
     let de = 0;
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < SHADOW_FIELDS_RENDER_FRAMES; i++) {
       const r = drawPublished(renderer, w);
       if (!r.ok) de++;
+      // Keep the native Dawn carrier paced like a real frame loop. Without a
+      // bounded drain, a long shadow-map leg can retain an unbounded lavapipe
+      // command/resource backlog before the final fence below.
+      if (i % 16 === 15) await dev.queue.onSubmittedWorkDone();
     }
     if (de > 0) throw new Error(`draw errors: ${de}`);
     // rt is created lazily by the canvas configure()/getCurrentTexture path during
@@ -432,15 +508,15 @@ async function renderConfigWithSpy(
 
 describe('M6 shadow fields observability', () => {
   // --- Gate A: structural WGSL check ---
-  it('composed default-standard-pbr WGSL reads view.depthBias, view.normalBias, view.pcfKernelSize', () => {
+  it('composed default-standard-pbr WGSL reads view.depthBias, view.normalBias, and directionalShadowFilter', () => {
     const wgsl = composedStandardPbr();
     expect(wgsl).toContain('depthBias');
     expect(wgsl).toContain('normalBias');
-    expect(wgsl).toContain('pcfKernelSize');
+    expect(wgsl).toContain('directionalShadowFilter');
   });
 
-  // --- Gate B: UBO spy — slots [126]=depthBias, [127]=normalBias, [128]=pcfKernelSize ---
-  it('View UBO slots [126]=depthBias, [127]=normalBias, [128]=pcfKernelSize', async () => {
+  // --- Gate B: UBO spy — slots [126]=depthBias, [127]=normalBias, [128]=filter profile ---
+  it('View UBO slots [126]=depthBias, [127]=normalBias, [128]=filter profile', async () => {
     if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
     const { captured } = await renderConfigWithSpy(true, 0.123, 0.456, 3);
     const vw = captured.filter((c) => c.f32.length >= 148);
@@ -450,22 +526,22 @@ describe('M6 shadow fields observability', () => {
     const f32 = last.f32;
     expect(Math.abs((f32[126] ?? Number.NaN) - 0.123)).toBeLessThan(0.001);
     expect(Math.abs((f32[127] ?? Number.NaN) - 0.456)).toBeLessThan(0.001);
-    expect(f32[128]).toBe(3);
+    expect(f32[128]).toBe(2);
   }, 60000);
 
-  // --- Gate D: pcfKernelSize clamp (9 -> 5; cap matches WGSL MAX_PCF_HALF=2) ---
-  it('pcfKernelSize=9 clamped to 5 in View UBO[128]', async () => {
+  // --- Gate D: pcf5 maps to the accepted profile carrier ---
+  it('pcf5 maps to profile 3 in View UBO[128]', async () => {
     if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const { captured } = await renderConfigWithSpy(true, 0.005, 0.05, 9);
+    const { captured } = await renderConfigWithSpy(true, 0.005, 0.05, 5);
     const vw9 = captured.filter((c) => c.f32.length >= 148);
     expect(vw9.length).toBeGreaterThan(0);
     const last9 = vw9[vw9.length - 1];
     if (last9 === undefined) throw new Error('no view UBO write captured');
-    expect(last9.f32[128]).toBe(5);
+    expect(last9.f32[128]).toBe(3);
   }, 60000);
 
-  // --- Gate D: validate() rejections ---
-  it('validate() accepts pcfKernelSize=9 (odd), rejects 2 (even) and 0', () => {
+  // --- Gate D: Directional filter validation ---
+  it('validate() accepts pcf5 and rejects an unknown directional filter', () => {
     const valid = validateDirectionalLightData({
       direction: [0, -1, 0],
       castShadow: true,
@@ -474,7 +550,7 @@ describe('M6 shadow fields observability', () => {
       cascadeBlend: 0.2,
       mapSize: 2048,
       shadowDistance: 50,
-      pcfKernelSize: 9,
+      shadowFilter: 3,
     });
     expect(valid.ok).toBe(true);
 
@@ -486,7 +562,7 @@ describe('M6 shadow fields observability', () => {
       cascadeBlend: 0.2,
       mapSize: 2048,
       shadowDistance: 50,
-      pcfKernelSize: 2,
+      shadowFilter: 99,
     });
     expect(even.ok).toBe(false);
     if (!even.ok) expect(even.error.code).toBe('shadow-invalid-config');
@@ -499,7 +575,7 @@ describe('M6 shadow fields observability', () => {
       cascadeBlend: 0.2,
       mapSize: 2048,
       shadowDistance: 50,
-      pcfKernelSize: 0,
+      shadowFilter: 0,
     });
     expect(zero.ok).toBe(false);
     if (!zero.ok) expect(zero.error.code).toBe('shadow-invalid-config');
@@ -514,50 +590,28 @@ describe('M6 shadow fields observability', () => {
     expect(d.diff).toBeGreaterThan(0);
   }, 60000);
 
-  // --- Gate C: pixel A/B — depthBias 0.0 vs 0.5 ---
-  it('pixel A/B: depthBias 0.0 vs 0.5', async () => {
+  it('castShadow=false emits a zero directional cascade count in the View UBO', async () => {
     if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const pxA = await renderConfig(true, 0.0, 0.05, 3);
-    const pxB = await renderConfig(true, 0.5, 0.05, 3);
-    const d = diff(pxA, pxB);
-    expect(d.diff).toBeGreaterThan(0);
-  }, 60000);
-
-  // --- Gate C: pixel A/B — normalBias 0.0 vs 0.5 ---
-  it('pixel A/B: normalBias 0.0 vs 0.5', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const pxA = await renderConfig(true, 0.005, 0.0, 3);
-    const pxB = await renderConfig(true, 0.005, 0.5, 3);
-    const d = diff(pxA, pxB);
-    expect(d.diff).toBeGreaterThan(0);
-  }, 60000);
-
-  // --- Gate C: pixel A/B — pcfKernelSize 1 vs 5 (cap; MAX_PCF_HALF=2) ---
-  it('pixel A/B: pcfKernelSize 1 vs 5', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const pxA = await renderConfig(true, 0.005, 0.05, 1);
-    const pxB = await renderConfig(true, 0.005, 0.05, 5);
-    const d = diff(pxA, pxB);
-    expect(d.diff).toBeGreaterThan(0);
+    const { captured } = await renderConfigWithSpy(false, 0.005, 0.05, 3);
+    const viewWrites = captured.filter((capture) => capture.f32.length >= 148);
+    expect(viewWrites.length).toBeGreaterThan(0);
+    const last = viewWrites[viewWrites.length - 1];
+    if (last === undefined) throw new Error('no view UBO write captured');
+    expect(last.f32[124]).toBe(0);
   }, 60000);
 
   // --- Gate F: mapSize 256 vs 2048 (independent shadow proof) ---
-  it('pixel A/B: mapSize 256 vs 2048', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const pxA = await renderConfig(true, 0.005, 0.05, 3, 256);
-    const pxB = await renderConfig(true, 0.005, 0.05, 3, 2048);
-    const d = diff(pxA, pxB);
-    expect(d.diff).toBeGreaterThan(0);
-  }, 60000);
-
-  // --- Gate E: equal-control — same config twice => 0 diff ---
-  it('equal-control: same config twice = 0 byte diff', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const pxA = await renderConfig(true, 0.005, 0.05, 3);
-    const pxB = await renderConfig(true, 0.005, 0.05, 3);
-    const d = diff(pxA, pxB);
-    expect(d.diff).toBe(0);
-  }, 60000);
+  it(
+    'pixel A/B: mapSize 256 vs 2048',
+    async () => {
+      if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
+      const pxA = await renderConfig(true, 0.005, 0.05, 3, 256);
+      const pxB = await renderConfig(true, 0.005, 0.05, 3, 2048);
+      const d = diff(pxA, pxB);
+      expect(d.diff).toBeGreaterThan(0);
+    },
+    LIGHTWEIGHT_DAWN ? 60_000 : SHADOW_FIELDS_FULL_PIXEL_TIMEOUT_MS,
+  );
 
   // --- Gate G (AC-08): per-field falsification — discriminating-power proof ---
   //
@@ -582,45 +636,57 @@ describe('M6 shadow fields observability', () => {
   // (physically removing the UBO write), comment out the matching
   // `viewPayload[126|127|128] = ...` line in render-system-record.ts and re-run
   // the corresponding `varied` leg — its diff collapses to 0, matching `held`.
-  it('falsification: depthBias varied differs, held does not (signal attributable to the field)', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const varied = diff(
-      await renderConfig(true, 0.0, 0.05, 3),
-      await renderConfig(true, 0.5, 0.05, 3),
-    );
-    const held = diff(
-      await renderConfig(true, 0.0, 0.05, 3),
-      await renderConfig(true, 0.0, 0.05, 3),
-    );
-    expect(varied.diff).toBeGreaterThan(0);
-    expect(held.diff).toBe(0);
-  }, 90000);
+  it(
+    'falsification: depthBias varied differs, held does not (signal attributable to the field)',
+    async () => {
+      if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
+      const varied = diff(
+        await renderConfig(true, 0.0, 0.05, 3),
+        await renderConfig(true, 0.5, 0.05, 3),
+      );
+      const held = diff(
+        await renderConfig(true, 0.0, 0.05, 3),
+        await renderConfig(true, 0.0, 0.05, 3),
+      );
+      expect(varied.diff).toBeGreaterThan(0);
+      expect(held.diff).toBe(0);
+    },
+    SHADOW_FIELDS_FULL_PIXEL_TIMEOUT_MS,
+  );
 
-  it('falsification: normalBias varied differs, held does not', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const varied = diff(
-      await renderConfig(true, 0.005, 0.0, 3),
-      await renderConfig(true, 0.005, 0.5, 3),
-    );
-    const held = diff(
-      await renderConfig(true, 0.005, 0.0, 3),
-      await renderConfig(true, 0.005, 0.0, 3),
-    );
-    expect(varied.diff).toBeGreaterThan(0);
-    expect(held.diff).toBe(0);
-  }, 90000);
+  it(
+    'falsification: normalBias varied differs, held does not',
+    async () => {
+      if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
+      const varied = diff(
+        await renderConfig(true, 0.005, 0.0, 3),
+        await renderConfig(true, 0.005, 0.5, 3),
+      );
+      const held = diff(
+        await renderConfig(true, 0.005, 0.0, 3),
+        await renderConfig(true, 0.005, 0.0, 3),
+      );
+      expect(varied.diff).toBeGreaterThan(0);
+      expect(held.diff).toBe(0);
+    },
+    SHADOW_FIELDS_FULL_PIXEL_TIMEOUT_MS,
+  );
 
-  it('falsification: pcfKernelSize varied differs, held does not', async () => {
-    if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
-    const varied = diff(
-      await renderConfig(true, 0.005, 0.05, 1),
-      await renderConfig(true, 0.005, 0.05, 5),
-    );
-    const held = diff(
-      await renderConfig(true, 0.005, 0.05, 1),
-      await renderConfig(true, 0.005, 0.05, 1),
-    );
-    expect(varied.diff).toBeGreaterThan(0);
-    expect(held.diff).toBe(0);
-  }, 90000);
+  it(
+    'falsification: directional filter varied differs, held does not',
+    async () => {
+      if (typeof globalThis.navigator?.gpu?.requestAdapter !== 'function') return;
+      const varied = diff(
+        await renderConfig(true, 0.005, 0.05, 1),
+        await renderConfig(true, 0.005, 0.05, 5),
+      );
+      const held = diff(
+        await renderConfig(true, 0.005, 0.05, 1),
+        await renderConfig(true, 0.005, 0.05, 1),
+      );
+      expect(varied.diff).toBeGreaterThan(0);
+      expect(held.diff).toBe(0);
+    },
+    SHADOW_FIELDS_FULL_PIXEL_TIMEOUT_MS,
+  );
 });

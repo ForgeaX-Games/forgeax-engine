@@ -1,4 +1,5 @@
 import type { PointShape } from '../components/points';
+import type { LinesStyleInput } from './admission';
 
 export interface PointsLinesViewport {
   readonly width: number;
@@ -8,7 +9,7 @@ export interface PointsLinesViewport {
 
 export type PointsLinesStyle =
   | { readonly kind: 'points'; readonly sizePx: number; readonly shape: PointShape }
-  | { readonly kind: 'lines'; readonly widthPx: number };
+  | ({ readonly kind: 'lines'; readonly widthPx: number } & LinesStyleInput);
 
 export type PointsLinesInvalidation = 'none' | 'mesh' | 'material' | 'style' | 'view' | 'scene';
 
@@ -126,5 +127,12 @@ function sameValue(
   if (left.kind === 'points' && right.kind === 'points') {
     return left.sizePx === right.sizePx && left.shape === right.shape;
   }
-  return left.kind === 'lines' && right.kind === 'lines' && left.widthPx === right.widthPx;
+  return (
+    left.kind === 'lines' &&
+    right.kind === 'lines' &&
+    left.widthPx === right.widthPx &&
+    (left.dashSize ?? 1) === (right.dashSize ?? 1) &&
+    (left.gapSize ?? 0) === (right.gapSize ?? 0) &&
+    (left.dashOffset ?? 0) === (right.dashOffset ?? 0)
+  );
 }

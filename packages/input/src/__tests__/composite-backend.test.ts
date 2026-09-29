@@ -92,6 +92,24 @@ describe('CompositeInputBackend merge semantics', () => {
     expect(c.sample().downKeys.has('w')).toBe(true); // still held next frame
   });
 
+  it('accepts logical keys and physical codes for both keyboard projections', () => {
+    const inner = fakeInner();
+    const c = makeCompositeBackend(inner);
+    c.press('w');
+    let sample = c.sample();
+    expect(sample.downKeys.has('w')).toBe(true);
+    expect(sample.downCodes?.has('KeyW')).toBe(true);
+    c.release('w');
+    sample = c.sample();
+    expect(sample.upKeys.has('w')).toBe(true);
+    expect(sample.upCodes?.has('KeyW')).toBe(true);
+
+    c.press('KeyW');
+    sample = c.sample();
+    expect(sample.downKeys.has('w')).toBe(true);
+    expect(sample.downCodes?.has('KeyW')).toBe(true);
+  });
+
   it('release produces an up-edge that lives exactly ONE frame', () => {
     const inner = fakeInner();
     const c = makeCompositeBackend(inner);
@@ -255,6 +273,61 @@ describe('CompositeInputBackend merge semantics', () => {
     expect(s.downKeys.has('a')).toBe(false);
     expect(s.upKeys.has('w')).toBe(true); // clean release edge
     expect(s.upKeys.has('a')).toBe(true);
+  });
+
+  it('clearInjected drops pending press/release latches without ghost edges', () => {
+    const inner = fakeInner();
+    const c = makeCompositeBackend(inner);
+    c.press('w');
+    c.setButton(0, true);
+    c.release('w');
+    c.setButton(0, false);
+    c.clearInjected();
+
+    const sample = c.sample();
+    expect(sample.downKeys.size).toBe(0);
+    expect(sample.upKeys.size).toBe(0);
+    expect(sample.pressedKeys).toBeUndefined();
+    expect(sample.buttons).toEqual([false, false, false]);
+    expect(sample.pressedButtons).toBeUndefined();
+    expect(sample.releasedButtons).toBeUndefined();
+  });
+
+  it('revokeInjectedLease fences late injections until a new lease opens', () => {
+    const inner = fakeInner();
+    const c = makeCompositeBackend(inner);
+    c.press('w');
+    expect(c.sample().downCodes?.has('KeyW')).toBe(true);
+    c.revokeInjectedLease();
+    c.press('a');
+    expect(c.sample().downKeys.has('a')).toBe(false);
+    c.beginInjectedLease();
+    c.press('a');
+    expect(c.sample().downCodes?.has('KeyA')).toBe(true);
+  });
+
+  it('keeps an old execution lease read-only after a later lease opens', () => {
+    const inner = fakeInner();
+    const c = makeCompositeBackend(inner);
+    const oldLease = c.createInjectedLease();
+    oldLease.press('KeyW');
+    expect(c.sample().downCodes?.has('KeyW')).toBe(true);
+
+    const currentLease = c.createInjectedLease();
+    oldLease.revokeInjectedLease();
+    oldLease.press('KeyA');
+    oldLease.setButton(0, true);
+    oldLease.addMovement(10, 20);
+    oldLease.addWheel(3);
+    expect(c.sample().downKeys.has('a')).toBe(false);
+    expect(c.sample().buttons[0]).toBe(false);
+    expect(c.sample().movementX).toBe(0);
+    expect(c.sample().wheelDelta).toBe(0);
+
+    currentLease.press('KeyD');
+    const sample = c.sample();
+    expect(sample.downKeys.has('d')).toBe(true);
+    expect(sample.downKeys.has('a')).toBe(false);
   });
 
   it('forwards setPointerLockAllowed and detach to inner', () => {

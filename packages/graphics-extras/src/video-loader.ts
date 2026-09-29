@@ -3,7 +3,7 @@
 // Descriptor-only loader for the 'video' asset kind. VideoAsset is a pure
 // `{ url }` descriptor (no pixel decode, no import/cook pipeline — OOS-1);
 // the runtime resolves it into an HTMLVideoElement via the host-provided
-// `VideoElementProvider` World Resource (plan-strategy D-1).
+// `VideoSourceProvider` World Resource (plan-strategy D-1).
 //
 // The loader returns the payload as VideoAsset synchronously — no fetch or
 // decode. Audio differs because its renderer-injected catalog-entry loader
@@ -63,7 +63,7 @@ export const videoLoader: Loader<VideoAsset> = {
 
 export const videoContribution: AssetDecoderContribution<VideoAsset, 'video'> = {
   kind: { kind: 'video' } as AssetKind<VideoAsset, 'video'>,
-  consumer: 'VideoElementProvider',
+  consumer: 'VideoSourceProvider',
   decoder: {
     async decode({ envelope }) {
       const payload = envelope.payload;

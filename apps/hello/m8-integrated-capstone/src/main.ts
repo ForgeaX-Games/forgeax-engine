@@ -56,8 +56,7 @@ const scene = buildCapstoneScene(world);
 const pulseShaderId = 'my_game::pulse_material';
 const pulseTexture = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
   kind: 'texture',
-  width: 2,
-  height: 2,
+  shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
   format: 'rgba8unorm',
   data: new Uint8Array([
     255, 128, 64, 255,
@@ -66,7 +65,7 @@ const pulseTexture = world.allocSharedRef<'TextureAsset', TextureAsset>('Texture
     255, 128, 64, 255,
   ]),
   colorSpace: 'linear',
-  mipmap: false,
+  mips: { kind: 'none' },
 });
 const pulseParams: Record<string, number | number[]> = {
   baseColor: [0.2, 0.75, 1],

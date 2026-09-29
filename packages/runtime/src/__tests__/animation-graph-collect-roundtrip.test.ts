@@ -74,8 +74,10 @@ function registerGraph(
   return { handle, guid: AssetGuid.format(parsed.value) };
 }
 
-function apOf(scene: { entities: readonly unknown[] }): Record<string, unknown> | undefined {
-  for (const e of scene.entities) {
+function apOf(scene: {
+  entities: Readonly<Record<string, unknown>>;
+}): Record<string, unknown> | undefined {
+  for (const e of Object.values(scene.entities)) {
     const comps = (e as { components: Record<string, Record<string, unknown>> }).components;
     if (comps.AnimationPlayer !== undefined) return comps.AnimationPlayer;
   }

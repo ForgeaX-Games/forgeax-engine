@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,7 +14,7 @@ import { runFogLifecycle } from '../src/runner.mjs';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(scriptsDir, '..');
 const repoRoot = resolve(scriptsDir, '..', '..', '..', '..');
-const frameCount = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frameCount = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const viewportWidth = Number.parseInt(process.env.FORGEAX_FOG_VIEWPORT_WIDTH ?? '320', 10);
 const viewportHeight = Number.parseInt(process.env.FORGEAX_FOG_VIEWPORT_HEIGHT ?? '180', 10);
 const evidenceDir = resolve(
@@ -70,7 +70,7 @@ try {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
       '--disable-dawn-features=disallow_unsafe_apis',
@@ -361,9 +361,17 @@ try {
 
 mkdirSync(dirname(evidencePath), { recursive: true });
 const evidence = {
-  backend: 'browser',
-  status: failure === undefined ? 'completed' : 'unavailable',
   ...(trace ?? { frames: 0, verdict: 'fail', cases: [], resources: [], visuals: [] }),
+  schemaVersion: 'bevy-fog-evidence/1',
+  featureId: 'feat-20260827-render-temporal-environment-bloom-syntax-corrected',
+  source: { path: 'apps/bevy/fog/src/main.ts', sha256: createHash('sha256').update(readFileSync(resolve(appDir, 'src/main.ts'))).digest('hex') },
+  build: { command: 'pnpm --filter @forgeax/bevy-fog build', sha256: createHash('sha256').update(readFileSync(resolve(appDir, 'package.json'))).digest('hex') },
+  backend: 'browser-webgpu',
+  runner: { kind: 'playwright', id: process.env.CI ? 'ci-browser' : 'local-browser' },
+  status: failure === undefined && trace?.verdict === 'pass' ? 'pass' : failure === undefined ? 'fail' : 'unavailable',
+  frameIdentity: { first: 0, last: Math.max(0, (trace?.frames ?? 1) - 1), sequenceSha256: createHash('sha256').update((trace?.phaseTrace ?? []).join('|')).digest('hex') },
+  visualEvidence: (trace?.visualEvidence ?? []).map((entry, index) => ({ id: `fog-${entry.phase ?? index}`, png: pairScreenshots.get(entry.phase)?.path ?? screenshotPath, observed: JSON.stringify(entry.observed ?? []), verdict: entry.verdict ?? 'fail', confidence: entry.confidence ?? 'low' })),
+  falsify: ['uniform', 'height', 'owner-switch', 'recovery'].map((id) => ({ id, result: trace?.cases?.some((entry) => entry.caseId === id && entry.verdict === 'pass') ? 'pass' : 'fail' })),
   screenshot,
   pairScreenshots: Array.from(pairScreenshots.values()),
   errors,

@@ -1,28 +1,11 @@
-// instances-uniform-fallback.dawn.test.ts -- feat-20260604-instances-per-instance-transform-shader-group3-bin
-// M1 / w6.
-//
-// AC-07: storage-buffer path + uniform-fallback path both compile and render
-// correctly for <=128 instances.
-//
-// Primary path: dawn-node renders <=128 instances through the normal storage
-// buffer path (caps.storageBuffer===true on dawn) and asserts frames are
-// non-clear (proves the storage variant renders).
-//
-// Degraded path (research R-C partial): dawn-node always has
-// caps.storageBuffer===true, so we cannot force the uniform-fallback variant
-// at the GPU level. Instead, we verify that:
-//   (a) The uniform-fallback #else form `var<uniform> instances : array<InstanceData, 128>`
-//       is present in common.wgsl (source-level structural check).
-//   (b) The variant count stays at 2 (verified by w1 unit test).
-//   (c) A non-trivial Instances render (<=128) works on the storage path.
-//
-// This is the best-effort degraded path per research R-C: "if dawn cannot
-// construct caps.storageBuffer===false, fall back to a vitest unit that
-// asserts the #else uniform array<..,128> form compiles, with reason
-// recorded."
+import { shaderManifestUrl as createShaderManifestUrl } from '../shader-manifest-url.fixture';
+// World-authored Instances render through storage and uniform bindings on Dawn.
+// The restricted RHI advertises no storage buffers while retaining the real
+// WebGPU device, shader compiler, validation and pixel readback. This proves
+// the uniform lane and its 128-instance chunks, not WebGL2 backend parity.
 
 import type { MaterialAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { drawPublished } from '../draw-published';
 
 // Source-level structural check: common.wgsl must carry both the storage
@@ -45,7 +28,16 @@ const STORAGE_PATTERN =
 const UNIFORM_PATTERN =
   /@group\(3\)\s+@binding\(0\)\s+var<uniform>\s+instances\s*:\s*array<InstanceData,\s*128>/;
 
-describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () => {
+describe('World Instances storage and uniform submission', () => {
+  let ENGINE_MANIFEST_URL_W6: string;
+  beforeAll(async () => {
+    // Shader production is fixture setup; keep the render assertion's 30s
+    // deadline independent of a cold compiler/manifest build.
+    const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
+    const manifest = await buildEngineShaderManifest();
+    ENGINE_MANIFEST_URL_W6 = createShaderManifestUrl(manifest);
+  }, 180_000);
+
   it('(a) common.wgsl declares uniform-fallback array<InstanceData,128> under #else', async () => {
     const fsId = 'node:fs';
     const pathId = 'node:path';
@@ -88,39 +80,41 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     expect(commonSrc).toMatch(/localFromInstance\s*:\s*mat4x4<f32>/);
   });
 
-  // (b) deg-path rationale: dawn-node always has caps.storageBuffer===true, so
-  // the uniform-fallback path cannot be exercised at the GPU level in this
-  // dawn test. The uniform-fallback variant is structurally verified via:
-  //   - w1 source-level variant=2 unit test (AC-11)
-  //   - w6 (a) source-level uniform array<..,128> form check above
-  //   - naga_oil compiles both variants at build-time (vite-plugin-shader)
-  // Restore as a real `it()` if a dawn-side uniform-fallback path becomes
-  // reachable (feat-20260608-ci-time-cut converted from `expect(true)`).
-  it.todo('(b) deg-path rationale recorded: dawn-node always storageBuffer=true');
-
-  it('(c) storage path renders Instances (dawn smoke integration)', async () => {
+  it.each([
+    { storage: true, grid: 8 },
+    { storage: false, grid: 8 },
+    { storage: false, grid: 12 },
+  ])('renders $grid x $grid instances with storage=$storage', async ({ storage, grid }) => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable) {
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
     }
 
-    // Render <=128 instances on the storage path and assert non-clear output.
-    // This proves the storage-buffer variant of @group(3) instances works
-    // end-to-end on dawn.
-
     const { World } = await import('@forgeax/engine-ecs');
+    const { rhi } = await import('@forgeax/engine-rhi-webgpu');
+    const restrictedRhi: typeof rhi = {
+      ...rhi,
+      async requestAdapter(...args) {
+        const adapter = await rhi.requestAdapter(...args);
+        if (!adapter.ok) return adapter;
+        const requestDevice = adapter.value.requestDevice.bind(adapter.value);
+        adapter.value.requestDevice = async (options) => {
+          const result = await requestDevice(options);
+          if (result.ok && !storage)
+            Object.defineProperty(result.value, 'caps', {
+              value: { ...result.value.caps, storageBuffer: false, compute: false },
+            });
+          return result;
+        };
+        return adapter;
+      },
+    };
     const { AssetRegistry, HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
     const { Camera, MeshRenderer } = await import('@forgeax/engine-render');
     const { Instances } = await import('@forgeax/engine-render');
     const { constructRuntimeRendererHost } = await import('../../renderer-host');
     const { MeshFilter } = await import('@forgeax/engine-render');
     const { Transform } = await import('@forgeax/engine-scene');
-    const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
-    const ENGINE_MANIFEST_W6 = await buildEngineShaderManifest();
-    const ENGINE_MANIFEST_URL_W6 = `data:application/json,${encodeURIComponent(
-      JSON.stringify(ENGINE_MANIFEST_W6),
-    )}`;
-
     const W6_WIDTH = 256;
     const W6_HEIGHT = 256;
 
@@ -132,15 +126,20 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       const originalRequestDevice = rawAdapter.requestDevice.bind(rawAdapter);
       rawAdapter.requestDevice = async (desc) => {
         const dev = await originalRequestDevice(desc);
-        if (sharedDevice === undefined) sharedDevice = dev;
+        if (sharedDevice === undefined) {
+          sharedDevice = dev;
+          dev.pushErrorScope('validation');
+        }
         return dev;
       };
       return rawAdapter;
     };
 
     let renderTarget: GPUTexture | undefined;
+    let targetFormat: GPUTextureFormat = 'rgba8unorm';
     const ensureTarget = (device: GPUDevice, format: GPUTextureFormat): GPUTexture => {
       if (renderTarget !== undefined) return renderTarget;
+      targetFormat = format;
       renderTarget = device.createTexture({
         size: { width: W6_WIDTH, height: W6_HEIGHT, depthOrArrayLayers: 1 },
         format,
@@ -177,15 +176,18 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     try {
       host = await constructRuntimeRendererHost(
         mockCanvas,
-        {},
+        { rhi: restrictedRhi },
         { shaderManifestUrl: ENGINE_MANIFEST_URL_W6 },
       );
     } finally {
       globalThis.navigator.gpu.requestAdapter = origReq;
     }
-    expect(host.ok).toBe(true);
     if (!host.ok) throw host.error;
     const { renderer, assets } = host.value;
+    const errors: string[] = [];
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') errors.push(JSON.stringify(event.error));
+    });
     expect(renderer.inspect().state).toBe('alive');
     expect(assets).toBeInstanceOf(AssetRegistry);
 
@@ -201,9 +203,8 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       values: { baseColor: [0.9, 0.2, 0.2, 1], metallic: 0, roughness: 0.5 },
     } as MaterialAsset;
 
-    // Build ~60 instances (well under 128 uniform cap), 2D grid
-    const GRID = 8;
-    const COUNT = GRID * GRID; // 64
+    const GRID = grid;
+    const COUNT = GRID * GRID;
     const SP = 3.0;
     const transforms = new Float32Array(COUNT * 16);
     let idx = 0;
@@ -295,18 +296,45 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     readbackBuf.unmap();
     readbackBuf.destroy();
 
-    // Sample multiple positions — the 8x8 grid should fill a substantial
-    // portion of the frame. Center should NOT be clear-color.
-    const cx = W6_WIDTH >> 1;
-    const cy = W6_HEIGHT >> 1;
-    const readPixel = (px: number, py: number): [number, number, number] => {
-      const off = py * bytesPerRow + px * 4;
-      return [bytes[off + 2] ?? 0, bytes[off + 1] ?? 0, bytes[off + 0] ?? 0];
-    };
-    const [cr, cg, cb] = readPixel(cx, cy);
-    // Clear color is ~(13, 13, 20) in sRGB bytes. Center should be
-    // significantly different (red cubes).
-    const distFromClear = Math.sqrt((cr - 13) ** 2 + (cg - 13) ** 2 + (cb - 20) ** 2);
-    expect(distFromClear).toBeGreaterThan(30);
+    expect(errors).toEqual([]);
+    expect((await device.popErrorScope())?.message).toBeUndefined();
+
+    // Count actual red material pixels; comparing against guessed clear bytes
+    // could pass an empty frame because the target applies sRGB conversion.
+    let redPixels = 0;
+    for (let y = 0; y < W6_HEIGHT; y++) {
+      for (let x = 0; x < W6_WIDTH; x++) {
+        const offset = y * bytesPerRow + x * 4;
+        const r = bytes[offset + (targetFormat.startsWith('bgra') ? 2 : 0)] ?? 0;
+        const g = bytes[offset + 1] ?? 0;
+        const b = bytes[offset + (targetFormat.startsWith('bgra') ? 0 : 2)] ?? 0;
+        if (r > g + 30 && r > b + 30) redPixels++;
+      }
+    }
+    expect(redPixels).toBeGreaterThan(COUNT * 2);
+    // The last row crosses the 128-instance boundary for the 12x12 case.
+    // Verify its last matrix reaches a distinct screen location, not a
+    // duplicate of the first chunk or merely some non-clear geometry.
+    const edge = ((GRID - 1) / 2) * SP * 0.3;
+    const ndcEdge = edge / (25 * Math.tan(Math.PI / 8));
+    const lastX = Math.round(((1 + ndcEdge) * W6_WIDTH) / 2);
+    const lastY = Math.round(((1 - ndcEdge) * W6_HEIGHT) / 2);
+    let lastInstancePixels = 0;
+    for (let y = lastY - 3; y <= lastY + 3; y++) {
+      for (let x = lastX - 3; x <= lastX + 3; x++) {
+        const offset = y * bytesPerRow + x * 4;
+        const r = bytes[offset + (targetFormat.startsWith('bgra') ? 2 : 0)] ?? 0;
+        const g = bytes[offset + 1] ?? 0;
+        const b = bytes[offset + (targetFormat.startsWith('bgra') ? 0 : 2)] ?? 0;
+        if (r > g + 30 && r > b + 30) lastInstancePixels++;
+      }
+    }
+    expect(lastInstancePixels).toBeGreaterThan(0);
+    if (!storage) {
+      const residency = renderer.inspect().instanceCollections[0];
+      expect(residency?.lane).toBe(COUNT > 128 ? 'chunked-uniform' : 'direct-uniform');
+      expect(residency?.uploadedBytes).toBe(0);
+    }
+    await renderer.dispose();
   });
 });

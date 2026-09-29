@@ -16,20 +16,17 @@ export type {
   GameProjectErrorDetail,
 } from './errors.js';
 export { GameProjectError } from './errors.js';
-export type { ResolvedScene } from './loader.js';
 // ── Top tier: primary entry points ──────────────────────────────────────────
 export {
   loadGameProject,
   loadGameProjectSync,
-  resolveDefaultScene,
 } from './loader.js';
 // ── Bottom tier: constants + error types ────────────────────────────────────
 export { FORGE_JSON } from './paths.js';
-export type { GameProject, GameProjectPluginEntry } from './schema.js';
+export type { GameProject, GameProjectRoots } from './schema.js';
 // ── Middle tier: schema self-introspection + types ──────────────────────────
 export {
-  GameProjectPluginEntrySchema,
-  GameProjectPluginsSchema,
+  GameProjectRootsSchema,
   GameProjectSchema,
   PluginRealmSchema,
 } from './schema.js';

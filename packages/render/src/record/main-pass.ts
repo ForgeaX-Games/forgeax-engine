@@ -1,45 +1,190 @@
-import type { World } from '@forgeax/engine-ecs';
 import { probeVideoHighPerfUpload } from '@forgeax/engine-graphics-extras';
+import type { GraphResourceResolver } from '@forgeax/engine-render-graph';
 import {
   type BindGroup,
   RhiError,
   type RhiRenderPassEncoder,
   type TextureView,
 } from '@forgeax/engine-rhi';
-import type { Handle, PassKind, PassSelector } from '@forgeax/engine-types';
-import { createHdrpUnifiedBindGroup, getOrCreateHdrpBuffers } from '../hdrp-buffers';
+import { err, ok, type PassKind, type PassSelector } from '@forgeax/engine-types';
+import {
+  createGpuDrivenLightingBindGroup,
+  createHdrpSkinUnifiedBindGroup,
+  createHdrpUnifiedBindGroup,
+  getOrCreateHdrpBuffers,
+  type SsaoBindOptions,
+} from '../hdrp-buffers';
 import { getOrCreateIblCache } from '../ibl/IblPipelineCache';
-import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
+import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
+import { buildBeginRenderPassDescriptor, standardTopologyBindGroupReady } from '../pipeline-spec';
 import { POINTS_LINES_MATERIAL_SHADER_ID } from '../points-lines/record';
+import type { RenderResourceScope } from '../publication/resource-scope';
+import type { ReflectionProbeSelectionResult } from '../reflection/projection';
 import type { RenderRecordPhase } from '../render-contract';
+import type {
+  GpuDrivenDrawPhase,
+  GpuDrivenStandardPbrFrameResources,
+  RenderPipelineGpuDrivenFilter,
+  RenderPipelineGpuDrivenProjection,
+} from '../render-pipeline';
 import type { MaterialSnapshot } from '../render-system-extract';
+import { resolveReflectionProbeBinding } from './frame-lighting';
+import { getOpaqueResourceIdentity, worldEntityKey } from './frame-snapshot';
 import { recordGeometryDraws } from './main-pass-geometry';
 import {
-  applyMaterialTextureUvScales,
-  applyParamSnapshotToUbo,
   buildPerSubmeshMaterialBg as buildPerSubmeshMaterialBgImpl,
-  detectNineSliceScaleTooSmall,
   type PerSubmeshMaterialBgDeps,
-  residentTextureView,
-  writePbrMaterialUboPayload,
+  prepareMaterialSkylight,
 } from './main-pass-material';
 import { recordSpritePass } from './main-pass-sprite-draws';
+import { getOrCreateFromChainResult } from './mesh-ssbo';
 import type { _InternalRenderPipelineContext } from './render-context';
-import { MATERIAL_PER_ENTITY_STRIDE, STANDARD_PBR_UBO_SIZE } from './render-context';
+import { MATERIAL_UNIFORM_BYTES } from './render-context';
 import {
   buildMatchedMaterialHandlesByRenderable,
   buildMatchedRenderableIndices,
+  filterDispatchBySelector,
 } from './shadow-pass';
 
-const ZERO_SKYLIGHT_PAYLOAD = new Float32Array([0, 0, 0, 0, 0, 0, 0, 1]);
+/** Chain key standing in for the SSAO view when group(2) binds the fallback. */
+const NO_SSAO_VIEW = {};
+
+export function standardReflectionProbeIndex(
+  selection: ReflectionProbeSelectionResult,
+): number | undefined {
+  return resolveReflectionProbeBinding(selection).probeIndex;
+}
+
+function materialDiagnosticsEnabled(): boolean {
+  if (typeof globalThis !== 'object' || globalThis === null || !('process' in globalThis)) {
+    return false;
+  }
+  const processValue = (
+    globalThis as {
+      readonly process?: { readonly env?: Record<string, string | undefined> };
+    }
+  ).process;
+  return processValue?.env?.FORGEAX_MATERIAL_DIAGNOSTICS === '1';
+}
 
 export type MainPassOptions = {
+  readonly selection?: { readonly worldId: number; readonly entities: readonly number[] };
   readonly colorViews?: readonly (TextureView | null)[];
   readonly colorFormats?: readonly GPUTextureFormat[];
   readonly depthView?: TextureView | null;
   readonly passKind?: PassKind;
   readonly clearColor?: readonly [number, number, number, number];
+  readonly recordMode?:
+    | 'opaque'
+    | 'transmission'
+    | 'transparent'
+    | 'oit-accumulate'
+    | 'oit-residual'
+    | 'single-layer-medium-nearest-layer'
+    | 'single-layer-medium-color';
+  readonly gpuDrivenFilter?: RenderPipelineGpuDrivenFilter;
+  /** Write transparent fragment depth for depth-bounded medium transport. */
+  readonly transparentDepthWrite?: boolean;
+  /** Exclude material/pass pairs already consumed by an earlier graph lane. */
+  readonly excludeSelector?: PassSelector;
+  readonly transmissionBackdropView?: TextureView | null;
+  /** Independent sampled raw depth produced before the medium passes. */
+  readonly surfaceRawDepthView?: TextureView | null;
+  /** Nearest-layer color produced by the preceding medium pass. */
+  readonly surfaceNearestLayerView?: TextureView | null;
+  /** Nearest-layer depth produced by the preceding medium pass. */
+  readonly surfaceNearestDepthView?: TextureView | null;
+  /** Surface shader fragment entry selected by the typed pass owner. */
+  readonly fragmentEntryPoint?: string;
+  /** Select the material temporal entry's binary coverage output. */
+  readonly coverageOnly?: boolean;
+  readonly gpuDriven?: {
+    readonly projection: RenderPipelineGpuDrivenProjection;
+    readonly resources: GraphResourceResolver;
+    /** `late` re-enters the pass for HZB-revealed GPU items only. */
+    readonly phase?: GpuDrivenDrawPhase;
+  };
 };
+
+function isTransmissionMaterial(material: MaterialSnapshot): boolean {
+  return (
+    material.materialShaderId === 'forgeax::default-standard-pbr' &&
+    typeof material.paramSnapshot?.transmission === 'number' &&
+    material.paramSnapshot.transmission > 0
+  );
+}
+
+function matchesRecordMode(
+  material: MaterialSnapshot,
+  mode:
+    | 'opaque'
+    | 'transmission'
+    | 'transparent'
+    | 'oit-accumulate'
+    | 'oit-residual'
+    | 'single-layer-medium-nearest-layer'
+    | 'single-layer-medium-color',
+): boolean {
+  const medium =
+    material.surfaceModel === 'single-layer-medium' ||
+    material.materialShaderId === 'forgeax::single-layer-medium';
+  if (mode === 'single-layer-medium-nearest-layer' || mode === 'single-layer-medium-color') {
+    return medium;
+  }
+  const transmission = isTransmissionMaterial(material);
+  if (mode === 'transmission') return transmission;
+  if (mode === 'transparent' || mode === 'oit-accumulate' || mode === 'oit-residual') {
+    return material.transparent === true && !transmission && !medium;
+  }
+  return !transmission && material.transparent !== true && !medium;
+}
+
+/** Membership of the Standard transparent set (sorted or weighted blended). */
+export function isTransparentLaneMaterial(material: MaterialSnapshot): boolean {
+  return matchesRecordMode(material, 'transparent');
+}
+
+function matchedMaterialsForRecordMode(
+  c: _InternalRenderPipelineContext,
+  matchedMaterials: ReadonlyMap<number, ReadonlySet<number>> | null,
+  mode:
+    | 'opaque'
+    | 'transmission'
+    | 'transparent'
+    | 'oit-accumulate'
+    | 'oit-residual'
+    | 'single-layer-medium-nearest-layer'
+    | 'single-layer-medium-color'
+    | undefined,
+): ReadonlyMap<number, ReadonlySet<number>> | null {
+  if (mode === undefined) return matchedMaterials;
+  const surfaceMode =
+    mode === 'single-layer-medium-nearest-layer' || mode === 'single-layer-medium-color';
+  const filtered = new Map<number, ReadonlySet<number>>();
+  for (const entry of c.validatedOrdered) {
+    const dispatchHandles = matchedMaterials?.get(entry.renderableIndex);
+    // Surface graph membership is owned by the resolved surface model. A
+    // Surface-authored pass does not need to duplicate the generic Forward
+    // LightMode tag: its prepared direct program already carries the pass
+    // specialization selected by the material producer.
+    if (!surfaceMode && matchedMaterials !== null && dispatchHandles === undefined) continue;
+    const candidateHandles = surfaceMode
+      ? entry.source.materials.map((material) => material.materialHandle ?? 0)
+      : (dispatchHandles ??
+        (mode === 'transmission'
+          ? []
+          : entry.source.materials.map((material) => material.materialHandle ?? 0)));
+    const handles = new Set<number>();
+    for (const handle of candidateHandles) {
+      const material =
+        entry.source.materials.find((candidate) => (candidate.materialHandle ?? 0) === handle) ??
+        entry.source.material;
+      if (matchesRecordMode(material, mode)) handles.add(handle);
+    }
+    if (handles.size > 0) filtered.set(entry.renderableIndex, handles);
+  }
+  return filtered;
+}
 
 /**
  * feat-20260529-rendergraph-pass-abstraction M4 / w13b: main forward
@@ -53,7 +198,7 @@ export function recordMainPass(
   selector?: PassSelector,
   options?: MainPassOptions,
   graphPass?: RhiRenderPassEncoder,
-): void {
+): GpuDrivenStandardPbrFrameResources | undefined {
   const {
     runtime,
     world,
@@ -65,11 +210,10 @@ export function recordMainPass(
     geometryDepthView,
     validatedOrdered,
     viewBindGroup,
+    viewBindGroupDynamicOffset = 0,
     meshBindGroup,
     frameState,
     bindGroupCounts,
-    skylight,
-    skylightCount,
     skyboxActive,
     splitLdrSprite,
     msaaActive,
@@ -80,6 +224,8 @@ export function recordMainPass(
     materialSlots,
     materialSlotOwners,
     materialSlotCount,
+    gpuDrivenStandardPbrFrameResources,
+    gpuDrivenSceneMaterialBuffer,
   } = c;
   // bug-20260615 M3 / m3-1: sampleCount is threaded through every
   // getMaterialShaderPipeline call site so the cache key / builder
@@ -87,9 +233,28 @@ export function recordMainPass(
   // msaaActive boolean (already on the context).
   const sampleCount = msaaActive ? 4 : 1;
   const passKind = options?.passKind ?? 'forward';
+  const recordMode = options?.recordMode;
+  const transmissionBackdropView = options?.transmissionBackdropView;
+  const surfaceRawDepthView = options?.surfaceRawDepthView;
+  const surfaceNearestLayerView = options?.surfaceNearestLayerView;
+  const surfaceNearestDepthView = options?.surfaceNearestDepthView;
+  if (
+    (recordMode === 'transmission' ||
+      recordMode === 'single-layer-medium-nearest-layer' ||
+      recordMode === 'single-layer-medium-color') &&
+    transmissionBackdropView == null
+  ) {
+    throw new RhiError({
+      code: 'webgpu-runtime-error',
+      expected: 'transmissionBackdropView != null for a backdrop-consuming record mode',
+      hint: 'the typed Standard backdrop pass must resolve its graph-paired color view',
+    });
+  }
   const colorViews = options?.colorViews ?? [geometryColorView];
   const colorFormats = options?.colorFormats ?? [
-    (c.tonemapActive ? 'rgba16float' : pipelineState.colorAttachmentFormat) as GPUTextureFormat,
+    (c.tonemapActive || c.transparentColorFormat === 'rgba16float'
+      ? 'rgba16float'
+      : pipelineState.colorAttachmentFormat) as GPUTextureFormat,
   ];
   const targetDepthView = options?.depthView ?? geometryDepthView;
   const clearColor = options?.clearColor ?? clear;
@@ -101,14 +266,26 @@ export function recordMainPass(
   // copyExternalImageToTexture path (w16) is the sole route. The branch exists
   // so the AC-09 two-path reserved hook is code-review-verifiable, not a TODO.
   const videoHighPerfAvailable = probeVideoHighPerfUpload(runtime.device);
-  // feat-20260609-hdrp-cluster-fragment-ggx M4 / w16: HDRP active swaps the
+  // The prepared Standard topology is the frame authority. Do not infer the
+  // shader lane from a resource that may be absent after a failed rebuild: a
+  // clustered frame with no unified group must fail closed, never fall back to
+  // a direct-lighting shader with an incompatible group(2) contract.
+  const clusteredLighting = c.standardLighting?.kind === 'clustered';
+  // A clustered topology still needs the unified group for every actual
+  // material draw.  A camera-only/clear frame has no group(2) consumer yet;
+  // treating that harmless absence as a frame error would make the full
+  // clustered ABI incompatible with valid zero-renderable frames.
+  const clusteredBindGroupMissing =
+    validatedOrdered.length > 0 &&
+    !standardTopologyBindGroupReady(c.standardLighting, hdrpClusterBindGroup);
+  // Standard clustered lighting swaps the
   // group(2) bindGroup for the unified 7-entry layout (mesh SSBO at binding 0
   // + cluster 4 buffer at bindings 3..6). The dynamic offset
   // (`i * MESH_PER_ENTITY_STRIDE`) stays valid because the unified BGL binds
   // the SAME mesh SSBO at binding 0; the cluster-forward shader reads the
   // cluster bindings off the rest of the layout. Plan D-1 (URP path zero
-  // change) is preserved — when `!isHdrpActive` the URP `meshBindGroup`
-  // path runs verbatim.
+  // change) is preserved — when clustered lighting is not selected the
+  // ordinary mesh bind group path runs verbatim.
   // feat-20260612-hdrp-ssao wiring fix: when the HDRP forward pass resolved a
   // real `ssaoBlurred` view (stashed on ctx by the pass execute closure), build
   // the unified group(2) bind group with that view at binding 7 so fs_main reads
@@ -117,16 +294,11 @@ export function recordMainPass(
   // fallback because the transient SSAO texture does not exist that early.
   // Built per frame (the SSAO target is a graph transient, so no cross-frame
   // cache); HDRP-only and SSAO-only, so URP and SSAO-off paths are untouched.
+  const hdrpBuffers = clusteredLighting
+    ? getOrCreateHdrpBuffers(runtime, frameState.installedPipelineConfig?.clusterGrid)
+    : null;
   let hdrpSsaoBindGroup: BindGroup | null = null;
-  if (
-    frameState.isHdrpActive &&
-    hdrpClusterBindGroup !== null &&
-    c.hdrpSsaoBlurredView !== undefined
-  ) {
-    const hdrpBuffers = getOrCreateHdrpBuffers(
-      runtime,
-      frameState.installedPipelineConfig?.clusterGrid,
-    );
+  if (hdrpClusterBindGroup !== null && c.hdrpSsaoBlurredView !== undefined) {
     if (hdrpBuffers !== null) {
       hdrpSsaoBindGroup = createHdrpUnifiedBindGroup(
         runtime,
@@ -136,10 +308,81 @@ export function recordMainPass(
       );
     }
   }
-  const meshGroup2: BindGroup | null =
-    frameState.isHdrpActive && hdrpClusterBindGroup !== null
-      ? (hdrpSsaoBindGroup ?? hdrpClusterBindGroup)
-      : meshBindGroup;
+  const meshGroup2: BindGroup | null = clusteredLighting
+    ? (hdrpSsaoBindGroup ?? hdrpClusterBindGroup)
+    : meshBindGroup;
+  if (gpuDrivenStandardPbrFrameResources !== undefined) {
+    // The GPU-driven owner prepares before transient graph resources exist;
+    // publish the actual Standard group(2) here, at the existing main-pass
+    // binding seam, immediately before indirect encoding.
+    gpuDrivenStandardPbrFrameResources.clusterBindGroup =
+      clusteredLighting && meshGroup2 !== null ? meshGroup2 : undefined;
+    if (hdrpBuffers === null) {
+      gpuDrivenStandardPbrFrameResources.clusterBindGroupForMesh = undefined;
+      gpuDrivenStandardPbrFrameResources.clusterBindGroupForSkin = undefined;
+    } else {
+      // Device-scoped chain keyed on every bound handle: an unchanged batch
+      // re-emits the identical group(2), so its render bundle segment stays
+      // reusable instead of mismatching on a per-frame bind group identity.
+      const ssaoView = c.hdrpSsaoBlurredView;
+      const ssao: SsaoBindOptions =
+        ssaoView === undefined ? { enabled: false } : { enabled: true, ssaoBlurredView: ssaoView };
+      const lighting = [
+        hdrpBuffers.lightDataBuffer,
+        hdrpBuffers.clusterGridBuffer,
+        hdrpBuffers.lightIndexListBuffer,
+        hdrpBuffers.clusterUniformBuffer,
+        ssaoView ?? NO_SSAO_VIEW,
+      ];
+      const cachedGroup = (
+        handles: readonly object[],
+        variant: string,
+        create: () => BindGroup | null,
+      ): BindGroup | undefined => {
+        const result = getOrCreateFromChainResult(
+          frameState.meshBindGroupCache,
+          handles,
+          variant,
+          () => {
+            const created = create();
+            return created === null ? err(undefined) : ok(created);
+          },
+          bindGroupCounts,
+        );
+        return result.ok ? result.value : undefined;
+      };
+      gpuDrivenStandardPbrFrameResources.clusterBindGroupForMesh = (meshBuffer, bindingBytes) =>
+        cachedGroup(
+          [meshBuffer, hdrpBuffers.unifiedBindGroupLayout, ...lighting],
+          `gpu-driven-hdrp:${bindingBytes}`,
+          () => createHdrpUnifiedBindGroup(runtime, hdrpBuffers, meshBuffer, ssao, bindingBytes),
+        );
+      gpuDrivenStandardPbrFrameResources.clusterBindGroupForSkin = (
+        meshBuffer,
+        meshBindingBytes,
+        paletteBuffer,
+        paletteBindingWindowBytes,
+      ) => {
+        const skinLayout = pipelineState.hdrpSkinMeshBindGroupLayout;
+        if (skinLayout === null) return undefined;
+        return cachedGroup(
+          [meshBuffer, paletteBuffer, skinLayout, ...lighting],
+          `gpu-driven-hdrp-skin:${meshBindingBytes}:${paletteBindingWindowBytes}`,
+          () =>
+            createHdrpSkinUnifiedBindGroup(
+              runtime,
+              hdrpBuffers,
+              skinLayout,
+              meshBuffer,
+              paletteBuffer,
+              paletteBindingWindowBytes,
+              ssao,
+              meshBindingBytes,
+            ),
+        );
+      };
+    }
+  }
   // ── Geometry (main colour) pass ──────────────────────────────────
   // D-2: tracks whether the geometry pass was explicitly ended inside
   // the `if (validatedOrdered.length > 0)` block (sprite split path),
@@ -162,7 +405,7 @@ export function recordMainPass(
   // LDR-only, so under HDR the main pass always resolves.
   const mainPassResolves =
     passKind === 'forward' && msaaActive && geometryColorResolveView !== null && !splitLdrSprite;
-  // forward main pass: depth24plus-stencil8 auto-emits stencil ops via the
+  // forward main pass: depth32float-stencil8 auto-emits stencil ops via the
   // helper's stencil-op gate (plan-strategy M4 R3/R5 stencil-op SSOT).
   // mainColorLoadOp toggles between 'clear' and 'load' (skyboxActive case).
   const pass: RhiRenderPassEncoder =
@@ -171,7 +414,7 @@ export function recordMainPass(
       buildBeginRenderPassDescriptor(
         {
           colorFormats,
-          depthFormat: 'depth24plus-stencil8',
+          depthFormat: 'depth32float-stencil8',
           sampleCount: msaaActive ? 4 : 1,
         },
         {
@@ -196,20 +439,71 @@ export function recordMainPass(
   // material uploads + drawIndexed.
 
   // feat-20260609 M2: filter entities by pass selector.
-  const matchedIndices =
+  let matchedIndices =
     selector !== undefined ? buildMatchedRenderableIndices(dispatch, selector) : null;
-  const matchedMaterials =
-    selector !== undefined ? buildMatchedMaterialHandlesByRenderable(dispatch, selector) : null;
+  const selectorMatchedMaterials =
+    selector !== undefined
+      ? buildMatchedMaterialHandlesByRenderable(dispatch, selector, options?.excludeSelector)
+      : null;
+  let matchedMaterials = matchedMaterialsForRecordMode(c, selectorMatchedMaterials, recordMode);
+  if (options?.selection !== undefined) {
+    const selection = options.selection;
+    const entities = new Set(selection.entities);
+    const selected = new Map<number, ReadonlySet<number>>();
+    for (const entry of validatedOrdered) {
+      if (entry.source.worldId !== selection.worldId || !entities.has(entry.source.entityKey))
+        continue;
+      const handles = matchedMaterials?.get(entry.renderableIndex);
+      if (matchedMaterials !== null && handles === undefined) continue;
+      selected.set(
+        entry.renderableIndex,
+        handles ?? new Set(entry.source.materials.map((material) => material.materialHandle ?? 0)),
+      );
+    }
+    matchedMaterials = selected;
+    matchedIndices = new Set(selected.keys());
+  }
+  const selectedDispatch =
+    dispatch.length === 0
+      ? undefined
+      : filterDispatchBySelector(
+          dispatch,
+          selector ?? { LightMode: [passKind === 'deferred' ? 'Deferred' : 'Forward'] },
+        );
+  const blendedRecordMode =
+    recordMode === 'transparent' ||
+    recordMode === 'oit-accumulate' ||
+    recordMode === 'oit-residual';
+  const recordContext =
+    recordMode === undefined
+      ? c
+      : {
+          ...c,
+          // Blended writers of the display view fog themselves at their own
+          // depth; auxiliary captures keep their own unfogged slot.
+          translucentFog: blendedRecordMode && viewBindGroupDynamicOffset === 0,
+          splitLdrSprite: blendedRecordMode ? false : c.splitLdrSprite,
+        };
 
-  if (validatedOrdered.length > 0) {
+  if (clusteredBindGroupMissing) {
+    runtime.errorRegistry.fire(
+      new RhiError({
+        code: 'webgpu-runtime-error',
+        expected: 'clustered Standard frame has a unified group(2) BindGroup',
+        hint: 'repair the clustered buffer/layout admission before retrying the frame; direct URP fallback is unsafe',
+      }),
+    );
+  }
+
+  if (validatedOrdered.length > 0 && !clusteredBindGroupMissing) {
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.10 (D-4 + D-9 +
     // AC-07 std140): per-entity material slice grew from 32 B (legacy
     // baseColor:vec4 + metallic + roughness + 8B padding) to 48 B
     // mirroring the post-w22.10 `Material` WGSL struct field-for-field
-    // (see STANDARD_PBR_UBO_SIZE JSDoc in render-system.ts). The dynamic-
+    // (see MATERIAL_UNIFORM_BYTES JSDoc in render-system.ts). The dynamic-
     // offset stride is MATERIAL_PER_ENTITY_STRIDE; the BindGroup entry's
     // `size` remains the derived material payload size.
-    const MATERIAL_SLICE = STANDARD_PBR_UBO_SIZE;
+    const MATERIAL_SLICE = MATERIAL_UNIFORM_BYTES;
     // feat-20260515 M3 / T-M3-05 (research F-6 fix): materialBindGroup now
     // carries 3 entries -- the per-entity material UBO (binding 0,
     // dynamic-offset retained from D-P9), the default sampler (binding 1,
@@ -249,78 +543,69 @@ export function recordMainPass(
     // (single `skylightResources` resolved once below); only the first 7
     // material entries are rebuilt per-entity with the correct
     // per-entity textureView at binding=2.
-    const skylightFallback = pipelineState.skylightFallback;
-    if (skylightFallback === null) {
-      throw new RhiError({
-        code: 'webgpu-runtime-error',
-        expected: 'pipelineState.skylightFallback != null when PBR pipeline is active',
-        hint: 'createRenderer must allocate skylightFallback alongside the PBR pipeline (D-5 round-4)',
-      });
+    const { skylightResources, activeViews } = prepareMaterialSkylight(c);
+    if (materialDiagnosticsEnabled()) {
+      const activeCache =
+        activeViews === undefined ? undefined : getOrCreateIblCache(runtime.deviceScope);
+      const prefilterViewMipCount =
+        activeCache?.prefilterFaceViewsByMip?.length ?? (activeViews === undefined ? 1 : 0);
+      frameState.iblBindingInspection = {
+        status: 'binding-chain-consistent',
+        frameId: frameState.frameNumber,
+        deviceGeneration: runtime.deviceScope.generation,
+        active: activeViews === undefined ? 'fallback' : 'active',
+        cache: {
+          identity: getOpaqueResourceIdentity(
+            (activeCache ?? pipelineState.skylightFallback) as object,
+          ),
+          generation: runtime.deviceScope.generation,
+          prefilterMipCount: prefilterViewMipCount,
+          prefilterViewMipCount,
+        },
+        sampler: {
+          expected: {
+            magFilter: 'linear',
+            minFilter: 'linear',
+            mipmapFilter: 'linear',
+            addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+            addressModeW: 'clamp-to-edge',
+          },
+          identities: [
+            getOpaqueResourceIdentity(skylightResources.irradianceSampler as object),
+            getOpaqueResourceIdentity(skylightResources.prefilterSampler as object),
+            getOpaqueResourceIdentity(skylightResources.irradianceSampler as object),
+          ],
+        },
+        resources: {
+          irradiance: {
+            viewIdentity: getOpaqueResourceIdentity(skylightResources.irradianceView as object),
+            samplerIdentity: getOpaqueResourceIdentity(
+              skylightResources.irradianceSampler as object,
+            ),
+            deviceGeneration: runtime.deviceScope.generation,
+          },
+          prefilter: {
+            viewIdentity: getOpaqueResourceIdentity(skylightResources.prefilterView as object),
+            samplerIdentity: getOpaqueResourceIdentity(
+              skylightResources.prefilterSampler as object,
+            ),
+            deviceGeneration: runtime.deviceScope.generation,
+          },
+          brdfLut: {
+            viewIdentity: getOpaqueResourceIdentity(skylightResources.brdfLutView as object),
+            samplerIdentity: getOpaqueResourceIdentity(
+              skylightResources.irradianceSampler as object,
+            ),
+            deviceGeneration: runtime.deviceScope.generation,
+          },
+          intensityBufferIdentity: getOpaqueResourceIdentity(
+            skylightResources.intensityBuffer as object,
+          ),
+        },
+        errors: [],
+      };
     }
-    // feat-20260520-skylight-ibl-cubemap M4 round-4 / t60 (D-5 round-4):
-    // select active vs fallback Skylight resources by `skylightCount` from
-    // the extract stage. Active path reaches into the per-device
-    // `IblPipelineCache` slots (irradianceView / prefilterView / brdfLutView)
-    // populated by the internal equirect-to-cubemap projection; fallback uses the
-    // 1x1-zero identity bundle that converges ambient to 0 (D-4 physical
-    // convergence -- no `if (hasSkylight)` shader branch).
-    // The samplers are reused from `skylightFallback.sampler` for both
-    // paths (linear / clamp-to-edge is correct for IBL cube + 2D LUT
-    // sampling either way). The intensity uniform is rewritten per-frame
-    // when active so `sampleIblSpecular * intensity` carries the user's
-    // Skylight.intensity value; fallback keeps intensity=0 (createSkylightFallback
-    // seed) so ambient = 0 even when the same buffer is shared.
-    let activeViews: { irr: TextureView; pref: TextureView; brdf: TextureView } | undefined;
-    // Per-frame Skylight uniform: std140 32 B = [intensity, colorR, colorG,
-    // colorB, rotation quaternion]. Default to all-zero so a transition from "has Skylight" ->
-    // "no Skylight" does not leak the prior frame's ambient (intensity 0
-    // muzzles everything, including the white fallback irradiance cube).
-    runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, ZERO_SKYLIGHT_PAYLOAD);
-    if (skylight !== undefined && skylightCount >= 1) {
-      // A Skylight exists. Write its intensity + color regardless of whether
-      // a cubemap is bound: with a cubemap the IBL views below light the
-      // ambient; WITHOUT one, the white fallback irradiance cube + this color
-      // give an instant solid-color ambient (downstream integration #4) with
-      // no async precompute. The white fallback only contributes when a
-      // Skylight is present because the zero-payload above sets intensity 0
-      // when no Skylight exists.
-      const [cr, cg, cb] = skylight.color;
-      const [qx, qy, qz, qw] = skylight.rotation;
-      const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb, qx, qy, qz, qw]);
-      runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, uniformPayload);
-      const cache = getOrCreateIblCache(runtime.deviceScope);
-      if (
-        cache.irradianceView !== undefined &&
-        cache.prefilterView !== undefined &&
-        cache.brdfLutView !== undefined
-      ) {
-        activeViews = {
-          irr: cache.irradianceView,
-          pref: cache.prefilterView,
-          brdf: cache.brdfLutView,
-        };
-      }
-    }
-    const skylightResources =
-      activeViews !== undefined
-        ? {
-            irradianceView: activeViews.irr,
-            irradianceSampler: skylightFallback.sampler,
-            prefilterView: activeViews.pref,
-            prefilterSampler: skylightFallback.sampler,
-            brdfLutView: activeViews.brdf,
-            brdfLutSampler: skylightFallback.sampler,
-            intensityBuffer: skylightFallback.intensityBuffer,
-          }
-        : {
-            irradianceView: skylightFallback.irradianceView,
-            irradianceSampler: skylightFallback.sampler,
-            prefilterView: skylightFallback.prefilterView,
-            prefilterSampler: skylightFallback.sampler,
-            brdfLutView: skylightFallback.brdfLutView,
-            brdfLutSampler: skylightFallback.sampler,
-            intensityBuffer: skylightFallback.intensityBuffer,
-          };
     // Per-entity material uploads (D-P9 retained path).
     // feat-20260613 fix-issue-1 (D-8 channelMap split): the payload mirrors
     // the post-split sidecar paramSchema for default-standard-pbr (14 entries
@@ -352,6 +637,13 @@ export function recordMainPass(
     // which cannot render a PBR decal). Captures only frame-stable closure
     // state; the caller passes the per-submesh material snapshot + entityKey
     // (for video texture routing) and sets the dynamic UBO offset itself.
+    // Selection keys use the extracted frame index, never RenderResourceScope.identity.
+    const hasProbeBindings = (c.reflectionProbes?.table.rows.length ?? 0) > 0;
+    const worldIndices = hasProbeBindings
+      ? new Map(
+          validatedOrdered.map((entry) => [entry.world ?? world, entry.source.worldId] as const),
+        )
+      : undefined;
     const perSubmeshMaterialBgDeps: PerSubmeshMaterialBgDeps = {
       runtime,
       pipelineState,
@@ -360,159 +652,70 @@ export function recordMainPass(
       materialSlice: MATERIAL_SLICE,
       videoHighPerfAvailable,
       skylightResources,
+      resolveRenderTargetTextureSource: runtime.resolveRenderTargetTextureSource,
+      resolveReflectionProbeResources: (materialWorld, entityKey) => {
+        const reflectionProbes = c.reflectionProbes;
+        if (reflectionProbes === undefined || !hasProbeBindings) return undefined;
+        const selection = reflectionProbes.selections.get(
+          `${worldIndices?.get(materialWorld)}:${entityKey}`,
+        );
+        if (selection === undefined) return undefined;
+        const binding = resolveReflectionProbeBinding(selection, reflectionProbes.table);
+        if (binding.useSkylight || binding.probeIndex === undefined) return undefined;
+        const row = reflectionProbes.table.rows.find(
+          (candidate) => candidate.index === binding.probeIndex,
+        );
+        if (
+          row?.filteredView === undefined ||
+          row.sampler === undefined ||
+          row.uniformBuffer === undefined
+        ) {
+          return undefined;
+        }
+        const probeResources: SkylightBindGroupResources = {
+          irradianceView: skylightResources.irradianceView,
+          irradianceSampler: skylightResources.irradianceSampler,
+          prefilterView: row.filteredView,
+          skylightPrefilterView: skylightResources.prefilterView,
+          prefilterSampler: row.sampler,
+          brdfLutView: skylightResources.brdfLutView,
+          intensityBuffer: row.uniformBuffer,
+        };
+        return { resources: probeResources, probeIndex: row.index };
+      },
+      ...(c.planarReflectionView === undefined
+        ? {}
+        : { planarReflectionView: c.planarReflectionView }),
       materialBgShared: frameState.materialBgShared,
       materialBgAssemblyCache: c.materialBgAssemblyCache,
+      frameState,
       bindGroupCounts,
+      ...(gpuDrivenStandardPbrFrameResources?.sceneMaterialBuffer === undefined &&
+      gpuDrivenSceneMaterialBuffer === undefined
+        ? {}
+        : {
+            sceneMaterialBuffer:
+              gpuDrivenStandardPbrFrameResources?.sceneMaterialBuffer ??
+              gpuDrivenSceneMaterialBuffer,
+          }),
+      ...(transmissionBackdropView === undefined ? {} : { transmissionBackdropView }),
+      ...(surfaceRawDepthView === undefined ? {} : { surfaceRawDepthView }),
+      ...(surfaceNearestLayerView === undefined ? {} : { surfaceNearestLayerView }),
+      ...(surfaceNearestDepthView === undefined ? {} : { surfaceNearestDepthView }),
     };
     const buildPerSubmeshMaterialBg = (
       submeshMaterial: MaterialSnapshot,
       entityKey: number,
-      materialWorld: World = world,
+      materialWorld: RenderResourceScope = world,
+      materialShaderId: string | undefined = submeshMaterial.materialShaderId,
     ): BindGroup =>
       buildPerSubmeshMaterialBgImpl(
         perSubmeshMaterialBgDeps,
         submeshMaterial,
         entityKey,
         materialWorld,
+        materialShaderId,
       );
-
-    const cachedMaterialUboPayload = c.materialUboPayloadCache;
-    let materialUboPayload: Uint8Array;
-    if (
-      cachedMaterialUboPayload?.materialSlots === materialSlots &&
-      cachedMaterialUboPayload.materialSlotCount === materialSlotCount
-    ) {
-      materialUboPayload = cachedMaterialUboPayload.payload;
-    } else {
-      materialUboPayload = new Uint8Array(materialSlotCount * MATERIAL_PER_ENTITY_STRIDE);
-      const slotPayload = new Uint8Array(STANDARD_PBR_UBO_SIZE);
-      const slotPayloadF32 = new Float32Array(
-        slotPayload.buffer,
-        slotPayload.byteOffset,
-        slotPayload.byteLength / 4,
-      );
-      for (let materialSlot = 0; materialSlot < materialSlots.length; materialSlot += 1) {
-        const mat = materialSlots[materialSlot];
-        const entry = validatedOrdered[materialSlotOwners[materialSlot] ?? -1];
-        if (mat === undefined || entry === undefined) continue;
-
-        // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-2):
-        // single unified Material UBO write path. Sprite materials now flow
-        // through the same `buildPbrMaterialUboPayload` baseline +
-        // `applyParamSnapshotToUbo` generic std140 overlay every other
-        // paramSchema-driven material uses. Extract folds the sprite-specific
-        // user inputs into the UBO-aligned paramSnapshot vec4 entries
-        // (colorTint / region / pivotAndSize / slicesAndMode); the writer
-        // walks `derive(paramSchema).uboLayout.entries` and writes each at
-        // its std140 offset. The legacy sprite-specific UBO builder + the
-        // sprite-vs-PBR branch are gone (AC-03).
-        writePbrMaterialUboPayload(slotPayloadF32, mat);
-        // Schema-driven paramSnapshot overlay generalised in feat-20260625
-        // M1 / w3: the writer walks `derive(paramSchema).uboLayout.entries`
-        // and writes each numeric field at its std140 offset (plan-strategy
-        // section 2 D-2). The engine's stock PBR material ships
-        // `paramSnapshot: undefined`, so this is a no-op on the default
-        // PBR path -- the explicit field writes in buildPbrMaterialUboPayload
-        // already cover every byte. User shaders carrying a paramSnapshot
-        // (including the post-ablation sprite path) get their fields
-        // written at the derive-computed offsets; R-H gate keeps the
-        // helper snapshot-only, no asset get.
-        const materialShaderId = mat.materialShaderId;
-        const schema =
-          mat.materialParamSchema ??
-          (materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined);
-        applyParamSnapshotToUbo(slotPayloadF32, schema, mat.paramSnapshot);
-        applyMaterialTextureUvScales(slotPayloadF32, mat, world);
-        // Missing-texture detection: structural debug-pink fallback overrides
-        // the baseColor/colorTint slot when a bound baseColorTexture handle
-        // resolves to no GPU view. Runs for every textured material path
-        // (sprite / sprite-lit / standard-pbr / pbr-skin / unlit) — the bound
-        // texture would otherwise silently fall back to the 1x1 white view in
-        // the per-submesh BG (main-pass-material.ts), rendering flat with no
-        // warn / RhiError. Mirroring the telemetry here makes a missing/failed
-        // GLB texture immediately diagnosable instead of a silent flat render
-        // (feat-future-pbr-missing-texture-fallback-explicit; feedback
-        // 2026-07-04-glb-pbr-textures-not-applied-flat-render).
-        //
-        // Reads only `mat.baseColorTexture` + the GPU view registry (plan R-H
-        // gate: no asset.get<MaterialAsset> reach-back). The debug-pink write
-        // lands on f32[0..2], which is baseColor.rgb for the PBR/skin UBO and
-        // colorTint.rgb for the sprite UBO — same offset, so one override
-        // covers both.
-        {
-          const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
-          if (matHandleRaw !== undefined) {
-            const view = residentTextureView(entry.world ?? world, store, runtime, matHandleRaw);
-            if (view === undefined) {
-              const rawId: number = matHandleRaw;
-              if (!frameState.warnedMissingBaseColorTextureHandles.has(rawId)) {
-                frameState.warnedMissingBaseColorTextureHandles.add(rawId);
-                console.warn(
-                  `[forgeax] baseColor texture ${rawId} missing GPU view, rendering debug pink (shader=${materialShaderId ?? '<none>'} entityIndex=${entry.renderableIndex})`,
-                );
-              }
-              runtime.errorRegistry.fire(
-                new RhiError({
-                  code: 'asset-not-registered',
-                  expected: 'material baseColor TextureAsset uploaded to GPU',
-                  hint: 'register + uploadTexture the baseColor texture before draw([world], { cameraOwner: 0, resourceOwner: 0 }); rendering falls back to debug pink until then',
-                  detail: { assetHandle: rawId },
-                }),
-              );
-              // Debug pink override on slot 0 baseColor/colorTint.rgb (alpha preserved).
-              slotPayloadF32[0] = 1.0;
-              slotPayloadF32[1] = 0.4;
-              slotPayloadF32[2] = 0.7;
-            }
-          }
-        }
-
-        materialUboPayload.set(slotPayload, materialSlot * MATERIAL_PER_ENTITY_STRIDE);
-      }
-
-      // Material UBO slots can share one snapshot identity, but nine-slice
-      // validity depends on each entity's transform. Preserve diagnostics per
-      // renderable instead of inheriting the first owner of a shared slot.
-      for (const entry of validatedOrdered) {
-        const mat = entry.source.material;
-        const materialShaderId = mat.materialShaderId;
-        if (materialShaderId !== 'forgeax::sprite' && materialShaderId !== 'forgeax::sprite-lit')
-          continue;
-        const slicesAndMode = mat.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
-        if (slicesAndMode === undefined || slicesAndMode.length < 4) continue;
-        const slicesArr: readonly [number, number, number, number] = [
-          slicesAndMode[0] ?? 0,
-          slicesAndMode[1] ?? 0,
-          slicesAndMode[2] ?? 0,
-          slicesAndMode[3] ?? 0,
-        ];
-        if (slicesArr[0] === 0 && slicesArr[1] === 0 && slicesArr[2] === 0 && slicesArr[3] === 0)
-          continue;
-        detectNineSliceScaleTooSmall(
-          entry.source.transform.world,
-          slicesArr,
-          entry.renderableIndex,
-          frameState.warnedNineSliceScaleEntities,
-          runtime.metrics,
-        );
-      }
-      c.materialUboPayloadCache = {
-        materialSlots,
-        materialSlotCount,
-        payload: materialUboPayload,
-      };
-    }
-
-    // All material slots are staged before the first geometry draw. One
-    // stride-shaped upload preserves every dynamic offset while avoiding one
-    // queue call per material; the RHI still validates alignment and bounds at
-    // this single owner-level write boundary.
-    const materialUboUpload = runtime.device.queue.writeBuffer(
-      pipelineState.materialUniformBuffer.buffer,
-      0,
-      materialUboPayload,
-    );
-    if (!materialUboUpload.ok) throw materialUboUpload.error;
     // Static material resources are a property of the frame-local material
     // slot, not of each submesh draw. Resolve them once here so the geometry
     // loop only selects a prepared binding. Video fields remain entity-bound:
@@ -522,7 +725,13 @@ export function recordMainPass(
     for (let materialSlot = 0; materialSlot < materialSlotCount; materialSlot += 1) {
       const material = materialSlots[materialSlot];
       if (material === undefined || (material.videoTextureFields?.size ?? 0) > 0) continue;
-      const owner = validatedOrdered[materialSlotOwners[materialSlot] ?? -1];
+      // A graph scene pass owns only the materials selected by its record
+      // mode. In particular, the opaque pass runs before the raw-depth
+      // producer and must not assemble medium bindings with resources that do
+      // not exist until the later nearest-layer/color passes. Keep holes for
+      // the other lanes; the GPU encoder validates the exact slot it consumes.
+      if (recordMode !== undefined && !matchesRecordMode(material, recordMode)) continue;
+      const owner = materialSlotOwners[materialSlot];
       if (owner === undefined) continue;
       preparedMaterialBindGroups[materialSlot] = buildPerSubmeshMaterialBg(
         material,
@@ -530,18 +739,108 @@ export function recordMainPass(
         owner.world ?? world,
       );
     }
+    if (gpuDrivenStandardPbrFrameResources !== undefined) {
+      gpuDrivenStandardPbrFrameResources.resolveClusteredMeshBindGroup = (binding) => {
+        const buffers = getOrCreateHdrpBuffers(
+          runtime,
+          frameState.installedPipelineConfig?.clusterGrid,
+        );
+        const layout =
+          binding.paletteBuffer === undefined
+            ? pipelineState.hdrpMeshBindGroupLayout
+            : pipelineState.hdrpSkinMeshBindGroupLayout;
+        const group =
+          buffers === null || layout == null
+            ? null
+            : createGpuDrivenLightingBindGroup(
+                runtime,
+                buffers,
+                layout,
+                binding,
+                c.hdrpSsaoBlurredView,
+              );
+        if (group === null)
+          throw new RhiError({
+            code: 'rhi-not-available',
+            expected: 'scene-index clustered lighting binding',
+            hint: 'publish scene rows and the current lighting/AO resources before indirect drawing',
+          });
+        return group;
+      };
+      gpuDrivenStandardPbrFrameResources.materialBindGroups.length = 0;
+      gpuDrivenStandardPbrFrameResources.materialBindGroups.push(...preparedMaterialBindGroups);
+      gpuDrivenStandardPbrFrameResources.colorFormats = colorFormats;
+      const selectedMaterialSlots = new Set<number>();
+      if (matchedMaterials === null)
+        delete gpuDrivenStandardPbrFrameResources.selectedMaterialSlots;
+      else gpuDrivenStandardPbrFrameResources.selectedMaterialSlots = selectedMaterialSlots;
+      gpuDrivenStandardPbrFrameResources.materialSlotIndicesByEntity.clear();
+      for (let index = 0; index < validatedOrdered.length; index += 1) {
+        const entry = validatedOrdered[index];
+        if (entry === undefined) continue;
+        const selected = matchedMaterials?.get(entry.renderableIndex);
+        const materials =
+          entry.source.materials.length > 0 ? entry.source.materials : [entry.source.material];
+        for (let slot = 0; slot < materials.length; slot += 1) {
+          const handle = materials[slot]?.materialHandle ?? -1;
+          const globalSlot = materialSlotIndices[index]?.[slot];
+          if (globalSlot !== undefined && selected?.has(handle))
+            selectedMaterialSlots.add(globalSlot);
+        }
+        gpuDrivenStandardPbrFrameResources.materialSlotIndicesByEntity.set(
+          worldEntityKey(entry.source.worldId, entry.source.entityKey),
+          materialSlotIndices[index] ?? [],
+        );
+      }
+    }
     const resolveMaterialBindGroup = (
       materialSlot: number,
       material: MaterialSnapshot,
       entityKey: number,
-      materialWorld: World = world,
+      materialWorld: RenderResourceScope = world,
+      materialShaderId: string | undefined = material.materialShaderId,
     ): BindGroup =>
-      material.materialShaderId !== POINTS_LINES_MATERIAL_SHADER_ID
+      !hasProbeBindings &&
+      materialShaderId === material.materialShaderId &&
+      materialShaderId !== POINTS_LINES_MATERIAL_SHADER_ID
         ? (preparedMaterialBindGroups[materialSlot] ??
-          buildPerSubmeshMaterialBg(material, entityKey, materialWorld))
-        : buildPerSubmeshMaterialBg(material, entityKey, materialWorld);
+          buildPerSubmeshMaterialBg(material, entityKey, materialWorld, materialShaderId))
+        : buildPerSubmeshMaterialBg(material, entityKey, materialWorld, materialShaderId);
 
-    pass.setBindGroup(0, viewBindGroup as BindGroup, [0]);
+    // GPU-driven batches carry only opaque queues, so they encode before the
+    // CPU list: a later-queue CPU draw (e.g. depthCompare 'always' x-ray) must
+    // land after the opaque geometry it is meant to overdraw.
+    if (options?.gpuDriven !== undefined) {
+      if (viewBindGroup === null) {
+        throw new RhiError({
+          code: 'rhi-not-available',
+          expected: 'main-pass Standard PBR view bind group for GPU-driven encode',
+          hint: 'publish the current frame view/light/shadow bind group before GPU raster',
+        });
+      }
+      if (
+        gpuDrivenStandardPbrFrameResources === undefined ||
+        gpuDrivenStandardPbrFrameResources.materialBindGroups.length === 0
+      ) {
+        throw new RhiError({
+          code: 'rhi-not-available',
+          expected: 'complete main-pass Standard PBR material bind-group receipt',
+          hint: 'finish frame material producer assembly before GPU-driven encode',
+        });
+      }
+      options.gpuDriven.projection.encode(
+        viewBindGroup,
+        pass,
+        options.gpuDriven.resources,
+        gpuDrivenStandardPbrFrameResources,
+        options.gpuDrivenFilter,
+        options?.fragmentEntryPoint,
+        options?.coverageOnly ?? false,
+        options.gpuDriven.phase ?? 'all',
+      );
+    }
+
+    pass.setBindGroup(0, viewBindGroup as BindGroup, [viewBindGroupDynamicOffset, 0]);
 
     // Track which (mesh-vertex-buffer, mesh-index-buffer, pipeline) combo
     // was last bound so consecutive entities sharing the same combo skip
@@ -551,7 +850,7 @@ export function recordMainPass(
     // M-3 / w12: vertexBuffer/indexBuffer state locals migrate to GpuBuffer.
     const recordGeometry = (): void => {
       recordGeometryDraws(
-        c,
+        recordContext,
         pass,
         matchedMaterials,
         materialSlotIndices,
@@ -560,11 +859,29 @@ export function recordMainPass(
         meshBindGroup,
         resolveMaterialBindGroup,
         passKind,
+        selectedDispatch,
+        colorFormats,
+        options?.coverageOnly ?? false,
+        options?.fragmentEntryPoint,
+        recordMode === 'single-layer-medium-nearest-layer'
+          ? 'nearest-layer'
+          : recordMode === 'single-layer-medium-color'
+            ? 'color'
+            : undefined,
+        options?.transparentDepthWrite ?? false,
+        recordMode === 'oit-accumulate'
+          ? 'accumulate'
+          : recordMode === 'oit-residual'
+            ? 'residual'
+            : undefined,
       );
     };
-    if (c.profilePhase === undefined) {
+    // The late occlusion pass only adds GPU items the HZB revealed; the CPU
+    // lane already drew its complete set in the early pass.
+    const cpuGeometry = options?.gpuDriven?.phase !== 'late';
+    if (cpuGeometry && c.profilePhase === undefined) {
       recordGeometry();
-    } else {
+    } else if (cpuGeometry && c.profilePhase !== undefined) {
       const passName = passKind === 'deferred' ? 'g-buffer' : 'forward';
       c.profilePhase(
         `record/graph-execute/${passName}/geometry-loop` as RenderRecordPhase,
@@ -581,7 +898,7 @@ export function recordMainPass(
     // already-encoded geometry pixels. Depth is loaded from the geometry
     // pass so sprite-vs-mesh occlusion (depthCompare=less-equal) is
     // preserved (plan-strategy §2 D-2 + §4 R-4).
-    if (passKind === 'forward') {
+    if (passKind === 'forward' && recordMode === undefined) {
       geometryPassEnded = recordSpritePass(
         c,
         pass,
@@ -589,8 +906,8 @@ export function recordMainPass(
         materialSlotIndices,
         sampleCount,
         resolveMaterialBindGroup,
-        skylightResources,
         graphPass,
+        selectedDispatch,
       );
     }
   } // end if (validatedOrdered.length > 0) -- Case E falls through to pass.end()
@@ -598,6 +915,7 @@ export function recordMainPass(
   if (!geometryPassEnded && graphPass === undefined) {
     pass.end();
   }
+  return gpuDrivenStandardPbrFrameResources;
 }
 
 export function encodeMainPass(
@@ -605,6 +923,6 @@ export function encodeMainPass(
   pass: RhiRenderPassEncoder,
   selector?: PassSelector,
   options?: MainPassOptions,
-): void {
-  recordMainPass(c, selector, options, pass);
+): GpuDrivenStandardPbrFrameResources | undefined {
+  return recordMainPass(c, selector, options, pass);
 }

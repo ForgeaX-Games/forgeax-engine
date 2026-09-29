@@ -1,7 +1,13 @@
 import { type EntityHandle, Update, World } from '@forgeax/engine-ecs';
 import { MeshFilter } from '@forgeax/engine-render';
 import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
-import { ChildOf, Children, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  Children,
+  GlobalTransform,
+  registerPropagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { tilemapChunkExtractSystem } from '../../../render/src/tilemap-chunk-extract-system';
 import { registerRuntimeComponents } from './helpers/register-runtime-components';
@@ -65,12 +71,12 @@ describe('tilemap derivation and Transform publication order', () => {
     const children = world.get(layer, Children).unwrap();
     const derived = children.entities[0] as EntityHandle | undefined;
     expect(derived).toBeDefined();
-    const transform = derived === undefined ? undefined : world.get(derived, Transform);
+    const transform = derived === undefined ? undefined : world.get(derived, GlobalTransform);
     const matrix = transform?.ok ? transform.value.world : undefined;
     expect({
       derived: matrix?.[12],
-      layer: world.get(layer, Transform).unwrap().world[12],
-      map: world.get(map, Transform).unwrap().world[12],
+      layer: world.get(layer, GlobalTransform).unwrap().world[12],
+      map: world.get(map, GlobalTransform).unwrap().world[12],
       entityCount: world.inspect().entityCount,
     }).toEqual({ derived: 5, layer: 4, map: 4, entityCount: expect.any(Number) });
     expect(matrix?.[13]).toBeCloseTo(1);

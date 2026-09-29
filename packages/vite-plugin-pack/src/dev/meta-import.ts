@@ -1,5 +1,6 @@
 import { semanticBuildKey } from '@forgeax/engine-ddc';
 import {
+  canonicalScriptableSourcePath,
   finalizeSourcePackage,
   IMPORT_ERROR_HINTS,
   ImportError,
@@ -19,6 +20,7 @@ import {
   createRuntimePackPublication,
   finalizePackageTransportSource,
 } from '@forgeax/engine-pack/build';
+import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import type { PackIndexEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
 
 export interface MetaImportContext {
@@ -33,6 +35,7 @@ export interface MetaImportContext {
     { readonly bytes: Uint8Array; readonly mimeType: string }
   >;
   readonly importerRegistry: ImporterRegistry;
+  readonly cookers?: readonly NativeCooker[] | undefined;
   readonly fsForImport: ImportRunnerFs;
   readonly publishCatalogDelta:
     | ((delta: import('@forgeax/engine-types').CatalogDelta) => void)
@@ -73,13 +76,38 @@ export async function startMetaImport(
       detail: { reason: `missing import declaration: ${metaPath}` },
     });
   }
-  const runResult = await runImport(meta, context.importerRegistry, context.fsForImport);
+  const cookers = new NativeCookerRegistry();
+  for (const cooker of context.cookers ?? []) cookers.register(cooker);
+  const runResult = await runImport(meta, context.importerRegistry, context.fsForImport, cookers);
   assertImportOpen(context, metaPath);
   if (!runResult.ok) throw runResult.error;
   if ('skipped' in runResult.value) return [];
 
   const routeSubGuid = meta.subAssets[0]?.guid?.toLowerCase();
-  const finalizedProduct = finalizeSourcePackage(
+  // Catalog rows own the stable source identity (the imported file), while
+  // `metaPath` is only the sidecar declaration used to drive this import.
+  // Publication fences must use the same source path as that row or a save
+  // racing the Catalog handoff can persist one tuple and reopen against
+  // another (`*.glb` versus `*.glb.meta.json`).
+  const catalogSourcePath =
+    routeSubGuid === undefined
+      ? undefined
+      : catalog.find((entry) => entry.guid.toLowerCase() === routeSubGuid)?.sourcePath;
+  // The inventory may be rooted outside the process cwd (standalone games are
+  // commonly temporary directories), so its raw relative path can contain
+  // `../../.../sample/assets`. Runtime consumers use game-relative `assets/...`
+  // coordinates; canonicalize both the row and publication before exposing
+  // this generation to the Catalog replica.
+  const publicationSourcePath = canonicalScriptableSourcePath(catalogSourcePath ?? meta.source);
+  const firstSubGuid = meta.subAssets[0]?.guid?.toLowerCase();
+  const packUrl =
+    firstSubGuid === undefined ? undefined : `${DEV_PACK_PREFIX}${firstSubGuid}.pack.json`;
+  // Capture the accepted body before the transport finalizer stages the new
+  // candidate into the live projection. If persistence later fails, this is
+  // the LKG body that must be restored; reading it after finalization would
+  // capture the failed candidate and make the broken revision look accepted.
+  const previousPackBody = packUrl === undefined ? undefined : context.metaPackBodies.get(packUrl);
+  const finalizedProduct = await finalizeSourcePackage(
     runResult.value.product,
     routeSubGuid === undefined ? undefined : context.importerRegistry.get(meta.importer)?.finalize,
     (artifact) =>
@@ -108,26 +136,11 @@ export async function startMetaImport(
       ? undefined
       : await finalizePackageTransportSource(logicalPackage, {
           base: '/',
-          packagePath: `${DEV_PACK_PREFIX.replace(/^\/+/, '')}${routeSubGuid}.pack.json`,
+          packagePath: `${DEV_PACK_PREFIX.replace(/^\/+/, '')}${firstSubGuid ?? routeSubGuid}.pack.json`,
           artifactPath: (guid, key) => `${guid}/${key}.bin`,
-          sink: (path, bytes) => {
-            if (context.signal?.aborted) return;
-            const cleanPath = path.replace(/^\/+/, '');
-            if (cleanPath.endsWith('.pack.json')) {
-              context.metaPackBodies.set(`/${cleanPath}`, new TextDecoder().decode(bytes));
-              return;
-            }
-            context.devArtifactBodies.set(`${DEV_PACK_PREFIX}${cleanPath}`, {
-              bytes,
-              mimeType: 'application/octet-stream',
-            });
-          },
         });
   assertImportOpen(context, metaPath);
 
-  const firstSubGuid = meta.subAssets[0]?.guid?.toLowerCase();
-  const packUrl =
-    firstSubGuid === undefined ? undefined : `${DEV_PACK_PREFIX}${firstSubGuid}.pack.json`;
   const cookedDigest = runResult.value.cookProducts
     .map((product) => `${product.guid.toLowerCase()}=${product.digest}`)
     .sort()
@@ -138,9 +151,24 @@ export async function startMetaImport(
       : semanticBuildKey({
           schemaVersion: '2.0.0',
           importerVersion: meta.importer,
-          codecVersion: 'pack-v2',
+          codecVersion: 'pack-v2-runtime-publication',
           sourceDependencies: [{ path: meta.source, digest: cookedDigest }],
-          settings: meta.importSettings ?? {},
+          // This entry stores the runtime Pack envelope, not only CookProduct
+          // bytes. A relocated source can keep identical artifacts while its
+          // publication generation changes; those envelopes must not share an
+          // immutable DDC key. Keep old entries intact and key all envelope inputs.
+          settings: {
+            importSettings: meta.importSettings ?? {},
+            publication: {
+              scopeId: context.runtimeBinding?.scopeId ?? 'asset-runtime',
+              sourceRevision: runResult.value.product.sourceRevision,
+              digest: finalizedRoute?.digest ?? null,
+              sourceKeys: meta.subAssets.map((sub) => ({
+                guid: sub.guid.toLowerCase(),
+                sourceKey: sub.sourceKey ?? sub.guid,
+              })),
+            },
+          },
           declaredGuids: meta.subAssets.map((sub) => sub.guid),
           cookProfile: 'dev',
           ...(meta.sourceOverrides === undefined ? {} : { sourceOverrides: meta.sourceOverrides }),
@@ -174,7 +202,7 @@ export async function startMetaImport(
       : createRuntimePackPublication({
           pack: finalizedRoute?.pack ?? projectImportProductForBuild(transportProduct),
           scopeId: context.runtimeBinding?.scopeId ?? 'asset-runtime',
-          sourcePath: metaPath,
+          sourcePath: publicationSourcePath,
           sourceRevision: runResult.value.product.sourceRevision,
           packageUrl: packUrl,
           inputFingerprint: desiredKey,
@@ -186,7 +214,6 @@ export async function startMetaImport(
     finalizedRoute?.pack ??
     projectImportProductForBuild(transportProduct);
   const allEntries: PackIndexEntry[] = [];
-  const previousPackBody = packUrl === undefined ? undefined : context.metaPackBodies.get(packUrl);
   if (packUrl !== undefined) context.metaPackBodies.set(packUrl, JSON.stringify(pack));
 
   const productByGuid = new Map(
@@ -207,6 +234,7 @@ export async function startMetaImport(
     const importedAsset = productByGuid.get(guidLower);
     const importedRow: PackIndexEntry = {
       ...currentRaw,
+      sourcePath: publicationSourcePath,
       ...currentSourceOverrides,
       ...(packUrl === undefined ? {} : { packageUrl: packUrl, ...context.cookedProjection }),
       ...(runtimePublication === undefined ? {} : { publication: runtimePublication.publication }),
@@ -232,6 +260,15 @@ export async function startMetaImport(
       transport: {
         path: `${context.ddcRoot(process.cwd(), context.runtimeBinding)}/${firstSubGuid}.pack.json`,
         body: JSON.stringify(pack),
+        ...(finalizedRoute === undefined
+          ? {}
+          : {
+              artifacts: finalizedRoute.artifacts.map(({ path, mediaType, bytes }) => ({
+                path,
+                mediaType,
+                bytes,
+              })),
+            }),
       },
     };
     const staged =
@@ -275,6 +312,12 @@ export async function startMetaImport(
         expected: publication.error.expected,
         hint: publication.error.hint,
         detail: { reason: publication.error.detail },
+      });
+    }
+    for (const artifact of finalizedRoute?.artifacts ?? []) {
+      context.devArtifactBodies.set(`${DEV_PACK_PREFIX}${artifact.path}`, {
+        bytes: artifact.bytes,
+        mimeType: artifact.mediaType,
       });
     }
     const delta = calculateCatalogDelta(previousCatalog, publication.catalog);

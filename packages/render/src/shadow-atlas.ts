@@ -3,8 +3,8 @@
 // feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-1 (plan-strategy §D-1).
 //
 // Lazy-allocated `texture_depth_cube_array` (depth32float) + per-face 2D
-// TextureView cache. One layer per shadow-casting PointLight (cap = 4 enforced
-// by the PointLightShadow ECS component cardinality). Total texel footprint at
+// TextureView cache. One layer per admitted shadow-casting PointLight; the
+// renderer owns the bounded atlas admission policy. Total texel footprint at
 // the 512x512 default = 4 layers x 6 faces x 512 x 512 x 4 B = 24 MiB.
 //
 // Why a separate module (vs inlining into createRenderer / pipelineState):
@@ -45,7 +45,10 @@ import {
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
 } from './errors/render';
-import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-texture-usage';
+import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+} from './gpu-texture-usage';
 
 /**
  * Construction options for {@link ShadowAtlas}.
@@ -53,19 +56,19 @@ import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-t
 export interface ShadowAtlasOptions {
   /** Per-face square size in pixels. Default 512 (PointLightShadow.mapSize default). */
   readonly faceSize?: number;
-  /** Number of cube layers. Default 4 (= PointLightShadow cardinality cap). */
+  /** Number of cube layers. Default is the renderer atlas admission capacity. */
   readonly layers?: number;
 }
 
 /** Default per-face square size in pixels. Mirrors PointLightShadow.mapSize default. */
 export const SHADOW_ATLAS_DEFAULT_FACE_SIZE = 512;
-/** Default cube layer count. Mirrors PointLightShadow cardinality cap. */
+/** Default cube layer count. Renderer-owned point-shadow admission capacity. */
 export const SHADOW_ATLAS_DEFAULT_LAYERS = 4;
 
 /**
  * Cube-array depth atlas for point-light shadows.
  *
- * Shape: `texture_depth_cube_array` (depth32float) with `layers = 4` and per-
+ * Shape: `texture_depth_cube_array` (depth32float) with `layers` and per-
  * face size `faceSize x faceSize`. The cube_array sampling view feeds
  * `@group(0) @binding(5)` in URP shaders; the per-face 2D view feeds the
  * shadow-caster render pass attachment for one (layer, face) at a time
@@ -136,7 +139,9 @@ export class ShadowAtlas {
    */
   ensure(): void {
     if (this.texture !== null) return;
-    const usage = GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING;
+    // Faces receive their retained static caster layer by copy.
+    const usage =
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST;
     const texDesc = cubeArrayDepthDescriptor(this.faceSize, this.layers, usage);
     const texRes = this.device.createTexture(texDesc);
     if (!texRes.ok) throw texRes.error;
@@ -158,7 +163,10 @@ export class ShadowAtlas {
     }
     this.cubeArrayView = viewRes.value;
 
-    const sampRes = this.device.createSampler(comparisonSamplerDescriptor());
+    const sampRes = this.device.createSampler({
+      ...comparisonSamplerDescriptor(),
+      compare: 'greater',
+    });
     if (!sampRes.ok) {
       this.device.destroyTexture(this.texture);
       this.texture = null;
@@ -178,7 +186,7 @@ export class ShadowAtlas {
   }
 
   /**
-   * Comparison sampler (`compare: 'less'`) for cube_array depth sampling.
+   * Comparison sampler (`compare: 'greater'`) for cube_array depth sampling.
    * Returns `null` if the atlas is not yet allocated.
    */
   getComparisonSampler(): Sampler | null {

@@ -35,6 +35,33 @@ function requiredNumber(asset: Record<string, unknown>, field: string): number |
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function authoredMipCount(
+  asset: Record<string, unknown>,
+  shapeDimensions: readonly (number | undefined)[] | undefined,
+): number | undefined {
+  const mips = isRecord(asset.mips) ? asset.mips : undefined;
+  if (mips?.kind === 'packed') {
+    const levels = requiredNumber(mips, 'levelCount');
+    return levels !== undefined && Number.isInteger(levels) && levels > 0 ? levels : undefined;
+  }
+  if (mips?.kind !== 'generate') return mips?.kind === 'none' ? 1 : undefined;
+  const [width, height] = shapeDimensions ?? [undefined, undefined];
+  if (width === undefined || height === undefined) return undefined;
+  const shape = isRecord(asset.shape) ? asset.shape : undefined;
+  const extent = shape !== undefined && isRecord(shape.extent) ? shape.extent : undefined;
+  const depth =
+    shape?.viewDimension === '3d' && extent !== undefined
+      ? (requiredNumber(extent, 'depth') ?? 1)
+      : 1;
+  let largest = Math.max(width, height, depth);
+  let levels = 1;
+  while (largest > 1) {
+    largest = Math.max(1, Math.floor(largest / 2));
+    levels += 1;
+  }
+  return levels;
+}
+
 function isTexturePayloadClass(value: unknown): value is TextureSubjectInspection['payloadClass'] {
   return (
     value === 'black' || value === 'transparent' || value === 'single-channel' || value === 'color'
@@ -52,11 +79,17 @@ function classifyPayload(
         ? data
         : undefined;
   if (bytes === undefined || bytes.length === 0) return undefined;
-  const channels = format?.startsWith('r') && !format.startsWith('rg') ? 1 : 4;
+  const normalizedFormat = format?.toLowerCase() ?? '';
+  const singleChannel = normalizedFormat.startsWith('r') && !normalizedFormat.startsWith('rg');
   if (bytes.every((value) => value === 0)) return 'black';
-  if (channels === 1) return 'single-channel';
-  const alpha = bytes.filter((_, index) => (index + 1) % channels === 0);
-  if (alpha.length > 0 && alpha.every((value) => value === 0)) return 'transparent';
+  if (singleChannel) return 'single-channel';
+  // RG carries two color/data channels and has no alpha lane.  Only the
+  // explicitly four-channel formats below permit a transparent classification;
+  // compressed and packed formats remain an opaque color observation here.
+  if (normalizedFormat.startsWith('rgba') || normalizedFormat.startsWith('bgra')) {
+    const alpha = bytes.filter((_, index) => (index + 1) % 4 === 0);
+    if (alpha.length > 0 && alpha.every((value) => value === 0)) return 'transparent';
+  }
   return 'color';
 }
 
@@ -113,11 +146,38 @@ export function inspectTextureSubject(input: {
   const format = readString('format');
   const colorSpace = readString('colorSpace');
   const filter = readString('filter');
+  const shape = isRecord(asset.shape) ? asset.shape : undefined;
+  const extent = shape !== undefined && isRecord(shape.extent) ? shape.extent : undefined;
+  const shapeDimensions =
+    extent !== undefined
+      ? [requiredNumber(extent, 'width'), requiredNumber(extent, 'height')]
+      : undefined;
   const dimensionsValue = asset.dimensions;
   const dimensions = Array.isArray(dimensionsValue)
     ? dimensionsValue
-    : [requiredNumber(asset, 'width'), requiredNumber(asset, 'height')];
-  const mipCount = requiredNumber(asset, 'mipCount') ?? requiredNumber(asset, 'mipLevelCount') ?? 1;
+    : shapeDimensions?.[0] !== undefined && shapeDimensions[1] !== undefined
+      ? shapeDimensions
+      : [requiredNumber(asset, 'width'), requiredNumber(asset, 'height')];
+  const authoredMips = isRecord(asset.mips) ? asset.mips : undefined;
+  const packedLevelCount =
+    authoredMips?.kind === 'packed' ? requiredNumber(authoredMips, 'levelCount') : undefined;
+  if (
+    authoredMips?.kind === 'packed' &&
+    (packedLevelCount === undefined || !Number.isInteger(packedLevelCount) || packedLevelCount <= 0)
+  ) {
+    return subjectFailure('resource-preview-subject-invalid', 'TextureAsset packed mip metadata', {
+      phase: 'subject',
+      guid: input.guid,
+      field: 'mips.levelCount',
+    });
+  }
+  const mipCount =
+    authoredMipCount(asset, shapeDimensions) ??
+    requiredNumber(asset, 'mipCount') ??
+    requiredNumber(asset, 'mipLevelCount') ??
+    requiredNumber(ownerFacts ?? {}, 'mipCount') ??
+    requiredNumber(ownerFacts ?? {}, 'mipLevelCount') ??
+    1;
   const payloadClass =
     readString('payloadClass') ?? classifyPayload(asset.data, format) ?? undefined;
   if (
@@ -220,6 +280,13 @@ export async function executeTexturePreview(
       'resource-preview-oracle-failed',
       'the rendered texture observation to classify the actual payload',
       { phase: 'renderer-observation', runId: input.runId },
+    );
+  }
+  if (observation.rendererTextureResident !== true) {
+    return subjectFailure(
+      'resource-preview-oracle-failed',
+      'the Renderer to report a resident texture binding for the preview draw',
+      { phase: 'renderer-texture-binding', runId: input.runId },
     );
   }
   const observed: TextureOracleInput['observed'] = {

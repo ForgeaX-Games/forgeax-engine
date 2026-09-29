@@ -1,8 +1,8 @@
+import type { SessionId } from '../src/index';
 import { expectTypeOf, test } from 'vitest';
 import type {
   ReplicationPacket,
   ReplicationPacketKind,
-  SessionId,
 } from '../src/replication/protocol';
 
 type ExpectedPacketKind =
@@ -40,7 +40,7 @@ test('ReplicationPacket is the single closed protocol-v2 manifest', () => {
   };
 
   expectTypeOf(describe).returns.toEqualTypeOf<string>();
-  expectTypeOf(packet.sessionId).toEqualTypeOf(sessionId);
+  expectTypeOf(packet.sessionId).toEqualTypeOf<SessionId>();
 });
 
 test('packet identity and payload fields remain safe and explicit', () => {

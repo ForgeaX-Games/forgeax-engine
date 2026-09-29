@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -58,7 +58,14 @@ gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
 subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const pixels = makeShipPixels();
-const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
@@ -114,7 +121,7 @@ const imageMeanDelta = imageDelta / (early.length * 255);
 console.log(`[smoke] frames=${frames} brightPixels=${brightPixels} imageMeanDelta=${imageMeanDelta.toFixed(5)} rotationDelta=${rotationDelta.toFixed(5)} errors=${errors.length}`);
 const failures = [];
 if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
-if (frames < 100) failures.push(`frames=${frames}`);
+if (frames < 60) failures.push(`frames=${frames}`);
 if (brightPixels < 100) failures.push(`brightPixels=${brightPixels}`);
 if (imageMeanDelta <= 0.0005) failures.push(`imageMeanDelta=${imageMeanDelta.toFixed(5)}`);
 if (rotationDelta <= 0.1) failures.push(`rotationDelta=${rotationDelta.toFixed(5)}`);

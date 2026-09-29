@@ -32,6 +32,10 @@ export interface RecorderSession {
 
 const PHASE_RECORD_KIND = 1;
 const SKIP_RECORD_KIND = 2;
+// Keep the hot capture path out of repeated sparse-array growth while still
+// bounding the up-front reservation for callers that choose a very large
+// event limit. The recorder grows beyond this reserve on demand.
+const INITIAL_RECORD_CAPACITY = 65_536;
 
 interface RetainedRecordStore {
   readonly kinds: number[];
@@ -266,6 +270,7 @@ export function createRecorder(
 ): ProfilerResult<RecorderSession> {
   const validLimits = validateRecorderLimits(limits);
   if (!validLimits.ok) return validLimits;
+  const initialRecordCapacity = Math.min(limits.eventLimit, INITIAL_RECORD_CAPACITY);
   const state: RecorderState = {
     limits,
     phaseCatalog,
@@ -278,15 +283,15 @@ export function createRecorder(
       render: new Set(phaseCatalog.render),
     },
     recordStore: {
-      kinds: [],
-      sources: [],
-      phases: [],
-      frameIds: [],
-      parentSources: [],
-      parentPhases: [],
-      startMicros: [],
-      endMicros: [],
-      reasons: [],
+      kinds: new Array(initialRecordCapacity),
+      sources: new Array(initialRecordCapacity),
+      phases: new Array(initialRecordCapacity),
+      frameIds: new Array(initialRecordCapacity),
+      parentSources: new Array(initialRecordCapacity),
+      parentPhases: new Array(initialRecordCapacity),
+      startMicros: new Array(initialRecordCapacity),
+      endMicros: new Array(initialRecordCapacity),
+      reasons: new Array(initialRecordCapacity),
       count: 0,
     },
     captureId,

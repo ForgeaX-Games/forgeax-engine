@@ -63,7 +63,7 @@ if (!repoRoot) {
 // Sponza demo issues `loadByGuid<SceneAsset>` against `createDevImportTransport`,
 // which dispatches POST /__import; under vitest browser preview no dev
 // server is available and runtime fails fast with `asset-not-imported`.
-// The sibling dawn-node smoke (smoke-dawn.mjs, 300-frame Sponza walk-through)
+// The sibling dawn-node smoke (smoke-dawn.mjs, 60-frame Sponza walk-through)
 // covers the same surface; surfacing the dev-only AssetError as an
 // onerror-gate violation would force a workaround inside the demo, which
 // AGENTS.md "Demo failures route to engine fixes" forbids. Sibling
@@ -76,13 +76,13 @@ const EXEMPT_DEMOS = [
     demoDir: 'apps/learn-render/3.model-loading/1.model-loading',
     siblingSmoke: 'scripts/smoke-dawn.mjs',
     reason:
-      'onerror-gate browser test requires vite dev server for POST /__import; covered by sibling smoke-dawn.mjs (Sponza 300-frame end-to-end)',
+      'onerror-gate browser test requires vite dev server for POST /__import; covered by sibling smoke-dawn.mjs (Sponza 60-frame end-to-end)',
   },
   {
     demoDir: 'apps/learn-render/4.advanced-opengl/9.instancing',
     siblingSmoke: 'scripts/smoke-dawn.mjs',
     reason:
-      'the browser tripwire duplicated the asset/import path through an unbounded dev-server bootstrap; the CI-owned sibling smoke exercises all four assets, WebGPU instancing, 300 frames, pixel evidence, and the RHI error contract deterministically',
+      'the browser tripwire duplicated the asset/import path through an unbounded dev-server bootstrap; the CI-owned sibling smoke exercises all four assets, WebGPU instancing, 60 frames, pixel evidence, and the RHI error contract deterministically',
   },
 ];
 

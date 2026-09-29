@@ -41,10 +41,18 @@ const materialPackages = [];
 for (const directory of [join(root, 'apps'), join(root, 'packages')]) {
   for (const path of await collectMaterialPackages(directory)) {
     const pack = JSON.parse(await readFile(path, 'utf8'));
-    if (pack.kind !== 'internal-text-package' || !Array.isArray(pack.assets)) continue;
-    const materialAssets = pack.assets.filter(
-      (asset) => asset?.kind === 'material' && typeof asset.sourceKey === 'string',
-    );
+    const materialAssets =
+      pack.schemaVersion === '3.0.0' && pack.assets && !Array.isArray(pack.assets)
+        ? Object.entries(pack.assets)
+            .filter(
+              ([sourceKey, asset]) => sourceKey.endsWith('.wgsl') && asset?.kind === 'material',
+            )
+            .map(([sourceKey, asset]) => ({ ...asset, sourceKey, guid: null }))
+        : pack.kind === 'internal-text-package' && Array.isArray(pack.assets)
+          ? pack.assets.filter(
+              (asset) => asset?.kind === 'material' && typeof asset.sourceKey === 'string',
+            )
+          : [];
     if (materialAssets.length === 0) continue;
     if (materialAssets.length !== 1) {
       throw new Error(`material pack must contain exactly one material asset: ${path}`);
@@ -53,16 +61,26 @@ for (const directory of [join(root, 'apps'), join(root, 'packages')]) {
     if (typeof asset.sourceKey !== 'string' || asset.sourceKey.length === 0) {
       throw new Error(`material pack material asset must declare sourceKey: ${path}`);
     }
+    // sourceKey is producer identity, not necessarily a filesystem path.
+    // Runtime packs such as gltf:material:TransmissionSphere have no sibling
+    // WGSL source; their payload and manifest remain the authoritative checks.
     const sourcePath = resolve(path, '..', asset.sourceKey);
-    const source = await readFile(sourcePath, 'utf8');
-    const moduleIds = [...source.matchAll(/^\s*#define_import_path\s+([^\s]+)\s*$/gm)].map(
-      (match) => match[1],
-    );
+    let moduleIds = [];
+    let sourceRelative = null;
+    try {
+      const source = await readFile(sourcePath, 'utf8');
+      moduleIds = [...source.matchAll(/^\s*#define_import_path\s+([^\s]+)\s*$/gm)].map(
+        (match) => match[1],
+      );
+      sourceRelative = relative(root, sourcePath);
+    } catch (error) {
+      if (!asset.sourceKey.includes(':') || error?.code !== 'ENOENT') throw error;
+    }
     const passes = asset.payload?.passes ?? [];
     materialPackages.push({
       path: relative(root, path),
       guid: asset.guid,
-      source: relative(root, sourcePath),
+      source: sourceRelative,
       modules: passes.map((pass) => pass.program?.module),
       sourceModules: moduleIds,
     });
@@ -77,11 +95,26 @@ const unexpectedPackages = materialPackages.filter((record) => !packagePaths.has
 const missingPackages = [...packagePaths].filter(
   (path) => !materialPackages.some((record) => record.path === path),
 );
+// A material Pack may publish an authored alias while reusing the engine-owned
+// Standard template. The alias is the package/catalog identity; the template
+// remains the source-of-truth WGSL. Keep the identity check strict for every
+// other source/module pair.
+const isAuthoredStandardAlias = (record) =>
+  record.modules.length === 1 &&
+  record.sourceModules.length === 1 &&
+  record.modules[0] !== undefined &&
+  record.sourceModules[0] !== undefined &&
+  record.modules[0] !== record.sourceModules[0] &&
+  !record.modules[0].startsWith('forgeax::') &&
+  (record.sourceModules[0] === 'forgeax_material::standard' ||
+    record.sourceModules[0] === 'forgeax_material::pbr-skin');
 const identityMismatches = materialPackages.filter(
   (record) =>
-    record.modules.length !== 1 ||
-    record.sourceModules.length !== 1 ||
-    record.modules[0] !== record.sourceModules[0],
+    record.source !== null &&
+    !isAuthoredStandardAlias(record) &&
+    (record.modules.length !== 1 ||
+      record.sourceModules.length !== 1 ||
+      record.modules[0] !== record.sourceModules[0]),
 );
 const duplicateIdentifiers = new Map();
 for (const record of records) {

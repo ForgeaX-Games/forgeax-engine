@@ -30,6 +30,7 @@ export type ViteProviderError =
         | 'capture-run-id-invalid'
         | 'capture-mime-invalid'
         | 'capture-tape-invalid'
+        | 'capture-upload-incomplete'
         | 'capture-artifact-write-failed';
       readonly hint: string;
     };
@@ -159,6 +160,7 @@ interface MiddlewareRequest extends AsyncIterable<Uint8Array> {
 }
 
 interface MiddlewareResponse {
+  readonly destroyed?: boolean;
   statusCode: number;
   setHeader(name: string, value: string): void;
   end(chunk?: string | Uint8Array): void;
@@ -231,7 +233,20 @@ export function vitePluginRhiDebug(options: RhiDebugPluginOptions = {}): Plugin 
         }
 
         const runId = url.searchParams.get('runId') ?? '';
-        const bytes = await readRawBody(req);
+        let bytes: Uint8Array;
+        try {
+          bytes = await readRawBody(req);
+        } catch {
+          // Connect does not await an async middleware. A cancelled browser
+          // upload must not escape as an unhandled rejection and kill Vite.
+          if (!res.destroyed) {
+            sendJson(res, 400, {
+              code: 'capture-upload-incomplete',
+              hint: 'the upload ended before the complete tape arrived; preserve the local tape and retry',
+            } satisfies ViteProviderError);
+          }
+          return;
+        }
         const result = await provider.accept({ runId, contentType: contentType(req), bytes });
         if (!result.ok) {
           sendJson(

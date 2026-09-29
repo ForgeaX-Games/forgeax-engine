@@ -1,14 +1,22 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import type { MaterialAsset } from '@forgeax/engine-types';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
+import {
+  type MaterialAsset,
+  STANDARD_MATERIAL_PARAM_SCHEMA,
+  standardMaterialParameters,
+  standardSurfaceParameters,
+} from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { cookMaterialAsset } from '../material/cook.js';
 import { createMaterialPackCooker } from '../material/pack-cooker.js';
 import { buildMaterialSourceCatalog } from '../material/source-catalog.js';
-import { createMaterialSpecializationKey } from '../material/specialization-key.js';
 
 const source = `#define_import_path game::pulse
+@vertex
+fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 @fragment
 fn fs_main() -> @location(0) vec4<f32> {
   let sample = textureSample(baseColorTexture, baseColorTexture_sampler, vec2<f32>(0.5));
@@ -32,22 +40,8 @@ ${body}
 `;
 }
 
-function packRecord(value: unknown): {
-  readonly specializationKey: string;
-  readonly receipt: {
-    readonly identity: { readonly sourceClosureDigest: string };
-  };
-} {
-  const record = value as {
-    readonly specializationKey?: unknown;
-    readonly receipt?: { readonly identity?: { readonly sourceClosureDigest?: unknown } };
-  };
-  const specializationKey = record.specializationKey;
-  const sourceClosureDigest = record.receipt?.identity?.sourceClosureDigest;
-  if (typeof specializationKey !== 'string' || typeof sourceClosureDigest !== 'string') {
-    throw new Error('material pack fixture did not produce canonical specialization identity');
-  }
-  return { specializationKey, receipt: { identity: { sourceClosureDigest } } };
+function packRecord(value: unknown) {
+  return validateCookedMaterialRecord(value).unwrap();
 }
 
 function cookedPayload(value: { readonly payload: unknown }): unknown {
@@ -58,12 +52,200 @@ function cookedPayload(value: { readonly payload: unknown }): unknown {
 }
 
 describe('cookMaterialAsset', () => {
+  it('publishes a shared ray-hit derivative of the ordinary Standard material', async () => {
+    const source: MaterialAsset = {
+      kind: 'material',
+      parameters: standardSurfaceParameters(
+        standardMaterialParameters(
+          new Set(['baseColor', 'metallic', 'roughness', 'alphaCutoff', 'baseColorTexture']),
+        ),
+      ),
+      passes: [{ name: 'Forward', program: { module: 'forgeax_material::standard' } }],
+      values: {
+        baseColor: [0.7, 0.3, 0.1, 1],
+        metallic: 0,
+        roughness: 0.6,
+        alphaCutoff: 0.5,
+        baseColorTexture: {
+          texture: '12345678-1234-1234-1234-123456789abc',
+          coordinates: { set: 1 },
+        },
+      },
+    };
+    const cooker = createMaterialPackCooker();
+    const output = await cooker.cook({ guid: 'shared-ray-material', source });
+    const record = packRecord(cookedPayload(output));
+    const ray = record.programs.filter((program) =>
+      program.selections.some((selection) => selection.context.pipeline === 'ray'),
+    );
+    expect(ray).toHaveLength(1);
+    expect(ray[0]?.selections).toEqual([
+      {
+        pass: 'Forward',
+        entry: 'cs_surface',
+        context: {
+          backend: 'webgpu',
+          capability: 'storage-buffer',
+          pipeline: 'ray',
+          geometry: 'mesh',
+          pass: 'ray-hit',
+          profile: 'forgeax-material-ray-v1',
+          toolchain: 'naga-oil',
+          instrumentation: 'none',
+        },
+      },
+    ]);
+    expect(record.resolved.passes.map((pass) => pass.name)).not.toContain('ray-hit');
+    expect(new TextDecoder().decode(ray[0]?.artifact.bytes)).toMatch(/fn cs_surface\(/);
+    expect(record.sourceClosure).toContain('forgeax_material::ray_surface');
+    const artifact = ray[0]?.artifact;
+    if (artifact === undefined) throw new Error('missing derivative artifact');
+    expect(output.artifacts[artifact.path]?.bytes).toEqual(artifact.bytes);
+    const edited = packRecord(
+      cookedPayload(
+        await cooker.cook({
+          guid: 'shared-ray-material',
+          source: { ...source, values: { ...source.values, roughness: 0.2 } },
+        }),
+      ),
+    );
+    const editedRay = edited.programs.find((program) =>
+      program.selections.some((selection) => selection.context.pipeline === 'ray'),
+    );
+    expect(editedRay?.specializationKey).toBe(ray[0]?.specializationKey);
+    expect(edited.receipt.identity.materialPublicationIdentity).not.toBe(
+      record.receipt.identity.materialPublicationIdentity,
+    );
+  });
+
+  it('does not infer Standard physical defines for a custom program', async () => {
+    const conditionalSource = `#define_import_path game::conditional-clearcoat
+#pragma variant_axis CLEARCOAT_AVAILABLE
+struct Material {
+  baseColor : vec4<f32>,
+#ifdef CLEARCOAT_AVAILABLE
+  clearcoat : f32,
+  clearcoatRoughness : f32,
+#endif
+};
+@group(1) @binding(0) var<uniform> material : Material;
+@vertex
+fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+@fragment
+fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }
+`;
+    const catalog = buildMaterialSourceCatalog({
+      engine: [],
+      project: [{ path: 'conditional-clearcoat.wgsl', source: conditionalSource }],
+    });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+
+    const cook = (parameters: NonNullable<MaterialAsset['parameters']>) =>
+      cookMaterialAsset({
+        material: 'root',
+        table: {
+          root: {
+            kind: 'material',
+            passes: [{ name: 'Forward', program: { module: 'game::conditional-clearcoat' } }],
+            parameters,
+          },
+        },
+        sources: catalog.value,
+      });
+
+    const base = await cook([{ name: 'baseColor', type: 'color' }]);
+    const physical = await cook([
+      { name: 'baseColor', type: 'color' },
+      { name: 'clearcoat', type: 'f32' },
+      { name: 'clearcoatRoughness', type: 'f32' },
+    ]);
+
+    expect(base.ok, base.ok ? '' : base.error.message).toBe(true);
+    expect(physical).toMatchObject({
+      ok: false,
+      error: { code: 'material-derived-interface-mismatch' },
+    });
+  });
+
+  it('keeps a custom physical-named texture in the root resource layout', async () => {
+    const catalog = buildMaterialSourceCatalog({
+      engine: [],
+      project: [
+        { path: 'custom.wgsl', source: source.replaceAll('baseColorTexture', 'clearcoatTexture') },
+      ],
+    }).unwrap();
+    const custom: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'Forward', program: { module: 'game::pulse' } }],
+      parameters: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'clearcoatTexture', type: 'texture' },
+      ],
+    };
+    const result = await cookMaterialAsset({
+      material: 'root',
+      table: { root: custom },
+      sources: catalog,
+    });
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.passes[0]?.compile.reflection.boundGlobals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ group: 1, binding: 2, resourceKind: 'texture' }),
+      ]),
+    );
+  });
+
+  it('does not infer Standard transmission defines for a custom program', async () => {
+    const transmissionSource = `#define_import_path game::transmission
+#pragma variant_axis TRANSMISSION_AVAILABLE
+#import forgeax_material::parameters::{material, transmissionTexture, transmissionTexture_sampler}
+#ifdef TRANSMISSION_AVAILABLE
+fn readTransmission() -> f32 {
+  return textureSample(transmissionTexture, transmissionTexture_sampler, vec2<f32>(0.5)).r;
+}
+#else
+fn readTransmission() -> f32 { return 0.0; }
+#endif
+@vertex
+fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(material.transmission + readTransmission());
+}`;
+    const catalog = buildMaterialSourceCatalog({
+      engine: [],
+      project: [{ path: 'transmission.wgsl', source: transmissionSource }],
+    });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+    const result = await cookMaterialAsset({
+      material: 'transmission-root',
+      table: {
+        'transmission-root': {
+          kind: 'material',
+          passes: [{ name: 'Forward', program: { module: 'game::transmission' } }],
+          parameters: [
+            { name: 'transmission', type: 'f32' },
+            { name: 'transmissionTexture', type: 'texture' },
+          ],
+        },
+      },
+      sources: catalog.value,
+    });
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.passes[0]?.compile.manifestEntry.wgsl).not.toContain('textureSample(');
+    expect(result.value.passes[0]?.parameters).toHaveLength(2);
+  });
+
   it('exposes the Pack cooker from the shader compiler owner', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-material-pack-cooker-'));
     const sourcePath = resolve(root, 'pulse.wgsl');
     await writeFile(
       sourcePath,
-      '#define_import_path game::pack\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n',
+      '#define_import_path game::pack\n@vertex\nfn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n',
     );
     try {
       const draft = await createMaterialPackCooker([root]).cook({
@@ -77,12 +259,53 @@ describe('cookMaterialAsset', () => {
         refs: [],
       });
       expect(draft.payload).toMatchObject({
+        passes: [{ renderState: { tags: { LightMode: 'Forward' } } }],
         cooked: {
-          schemaVersion: 'material-cook/3',
+          schemaVersion: 'material-cook/4',
+          authored: { passes: [{ renderState: { tags: { LightMode: 'Forward' } } }] },
+          resolved: { passes: [{ renderState: { tags: { LightMode: 'Forward' } } }] },
           receipt: { identity: { sourceClosureDigest: expect.any(String) } },
         },
       });
-      expect(Object.keys(draft.artifacts)).toEqual(['materials/material-pack-test/shader.wgsl']);
+      expect(Object.keys(draft.artifacts)).toEqual([
+        expect.stringMatching(/^materials\/programs\/[a-f0-9]{64}\.wgsl$/),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('projects an engine-owned Standard source into a Pack-owned material alias', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-material-standard-alias-'));
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const engineRoot = resolve(packageRoot, '../shader/src');
+    const sourcePath = resolve(root, 'material-alias.pack.json');
+    await writeFile(sourcePath, '{}');
+    try {
+      const draft = await createMaterialPackCooker([engineRoot]).cook({
+        guid: 'material-standard-alias-test',
+        source: {
+          kind: 'material',
+          parameters: standardMaterialParameters(
+            new Set(STANDARD_MATERIAL_PARAM_SCHEMA.map((entry) => entry.name)),
+          ),
+          passes: [{ name: 'Forward', program: { module: 'game::standard-alias' } }],
+        },
+        sourceKey: relative(root, resolve(engineRoot, 'default-standard-pbr.wgsl')),
+        sourcePath,
+        refs: [],
+      });
+      const artifact = Object.values(draft.artifacts)[0];
+      expect(artifact).toBeDefined();
+      if (artifact === undefined) return;
+      expect(draft.payload).toMatchObject({
+        cooked: {
+          refs: { modules: ['forgeax_material::standard'] },
+          resolved: {
+            passes: [{ program: { module: 'forgeax_material::standard' } }],
+          },
+        },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -96,7 +319,7 @@ describe('cookMaterialAsset', () => {
       sourcePath,
       packShader(
         'game::pack-key',
-        '#pragma material_slot lighting\n#import forgeax_material::slot::lighting::{shade}\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(material.value + shade(), 0.0, 0.0, 1.0); }',
+        '#pragma material_slot lighting\n#import forgeax_material::slot::lighting::{shade}\n@vertex\nfn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(material.value + shade(), 0.0, 0.0, 1.0); }',
       ),
     );
     await writeFile(slotPath, packShader('game::lighting', 'fn shade() -> f32 { return 0.0; }'));
@@ -143,25 +366,11 @@ describe('cookMaterialAsset', () => {
       });
       const firstRecord = packRecord(cookedPayload(first));
       const secondRecord = packRecord(cookedPayload(second));
-      const expected = createMaterialSpecializationKey({
-        contractHash: JSON.stringify(sourceMaterial.parameters),
-        passes: [
-          {
-            name: 'Forward',
-            module: 'game::pack-key',
-            entries: { vertex: '', fragment: 'fs_main' },
-            sourceClosure: { digest: firstRecord.receipt.identity.sourceClosureDigest },
-            moduleSlots: { lighting: 'game::lighting' },
-          },
-        ],
-        vertexInputs: [],
-        versions: {
-          profile: 'webgpu/v1',
-          adapter: 'generic',
-          compiler: 'forgeax-material-cooker/1',
-        },
-      });
-      expect(firstRecord.specializationKey).toBe(expected.digest);
+      expect(firstRecord.programs).toHaveLength(1);
+      expect(secondRecord.programs).toEqual(firstRecord.programs);
+      expect(secondRecord.receipt.identity.materialPublicationIdentity).not.toBe(
+        firstRecord.receipt.identity.materialPublicationIdentity,
+      );
       expect(secondRecord.specializationKey).toBe(firstRecord.specializationKey);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -177,7 +386,7 @@ describe('cookMaterialAsset', () => {
         path,
         packShader(
           module,
-          `@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(${value}.0); }`,
+          `@vertex\nfn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(${value}.0); }`,
         ),
       );
     };
@@ -268,6 +477,8 @@ struct Material {
   baseColor : vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> material : Material;
+@vertex
+fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 @fragment
 fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
     const catalog = buildMaterialSourceCatalog({
@@ -292,7 +503,7 @@ fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
 
   it('keeps the generated module out of disk lookup while closing transitive imports', async () => {
     const helper = `#define_import_path game::helper\n#import forgeax_material::parameters::{material}\nfn tint(value: vec4<f32>) -> vec4<f32> { return value * material.baseColor; }`;
-    const root = `#define_import_path game::root\n#import game::helper::{tint}\n#import forgeax_material::parameters::{material}\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return tint(material.baseColor); }`;
+    const root = `#define_import_path game::root\n#import game::helper::{tint}\n#import forgeax_material::parameters::{material}\n@vertex\nfn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return tint(material.baseColor); }`;
     const catalog = buildMaterialSourceCatalog({
       engine: [],
       project: [
@@ -323,7 +534,7 @@ fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
   });
 
   it('accepts an unused schema-derived interface injected into the composed shader', async () => {
-    const unusedSource = `#define_import_path game::unused\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }`;
+    const unusedSource = `#define_import_path game::unused\n@vertex\nfn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }\n@fragment\nfn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }`;
     const catalog = buildMaterialSourceCatalog({
       engine: [],
       project: [{ path: 'unused.wgsl', source: unusedSource }],
@@ -348,7 +559,10 @@ fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
 
   it('cooks every pass instead of silently truncating the material', async () => {
     const sourceA = source.replace('game::pulse', 'game::first');
-    const sourceB = source.replace('game::pulse', 'game::second');
+    const sourceB = source
+      .replace('game::pulse', 'game::second')
+      .replace('vs_main', 'shadow_vs')
+      .replace('fs_main', 'shadow_fs');
     const catalog = buildMaterialSourceCatalog({
       engine: [],
       project: [
@@ -392,7 +606,14 @@ fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
   it('preserves pass identity when passes share a module', async () => {
     const catalog = buildMaterialSourceCatalog({
       engine: [],
-      project: [{ path: 'shared.wgsl', source: source.replace('game::pulse', 'game::shared') }],
+      project: [
+        {
+          path: 'shared.wgsl',
+          source:
+            source.replace('game::pulse', 'game::shared') +
+            '\n@fragment fn overlay_fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }',
+        },
+      ],
     });
     expect(catalog.ok).toBe(true);
     if (!catalog.ok) return;
@@ -442,6 +663,8 @@ fn fs_main() -> @location(0) vec4<f32> { return material.baseColor; }`;
     const entry = `#define_import_path game::slot-entry
 #pragma material_slot lighting
 #import forgeax_material::slot::lighting::{lighting_color}
+@vertex
+fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 @fragment
 fn fs_main() -> @location(0) vec4<f32> { return lighting_color(); }`;
     const first = `#define_import_path game::lighting_a

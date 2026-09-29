@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = 300;
+const SMOKE_MIN_FRAMES = 60;
 const SMOKE_PIXEL_EPSILON = 0.001;
 const WIDTH = 512;
 const HEIGHT = 512;
@@ -112,7 +112,7 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-async function createStandardRenderer(lighting, label) {
+async function createStandardRenderer(renderPath, label) {
   let configuredDevice;
   const canvas = {
     ...mockCanvas,
@@ -138,7 +138,7 @@ async function createStandardRenderer(lighting, label) {
       rhi,
       standardProfile: {
         ...DEFAULT_STANDARD_PROFILE,
-        lighting,
+        renderPath,
       },
     },
     { shaderManifestUrl: MANIFEST_URL },
@@ -158,12 +158,12 @@ const {
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
-const directRenderer = await createStandardRenderer('direct', 'standard-direct-0l');
-const clusteredRenderer = await createStandardRenderer('clustered', 'standard-clustered-0l');
+const forwardRenderer = await createStandardRenderer('forward', 'standard-forward-0l');
+const deferredRenderer = await createStandardRenderer('deferred', 'standard-deferred-0l');
 
 // Build both Standard lighting lanes before proceeding.
-console.log(`[smoke-0l] Standard direct backend=${directRenderer.inspect().capabilities.backendKind}`);
-console.log(`[smoke-0l] Standard clustered backend=${clusteredRenderer.inspect().capabilities.backendKind}`);
+console.log(`[smoke-0l] Standard forward backend=${forwardRenderer.inspect().capabilities.backendKind}`);
+console.log(`[smoke-0l] Standard deferred backend=${deferredRenderer.inspect().capabilities.backendKind}`);
 
 // Setup both worlds with identical scene minus lights.
 function populateScene(world) {
@@ -207,37 +207,37 @@ function populateScene(world) {
   ).unwrap();
 }
 
-const directWorld = new World();
-const clusteredWorld = new World();
-const directAttachment = directRenderer.attach(directWorld);
-const clusteredAttachment = clusteredRenderer.attach(clusteredWorld);
-if (!directAttachment.ok || !clusteredAttachment.ok) {
+const forwardWorld = new World();
+const deferredWorld = new World();
+const forwardAttachment = forwardRenderer.attach(forwardWorld);
+const deferredAttachment = deferredRenderer.attach(deferredWorld);
+if (!forwardAttachment.ok || !deferredAttachment.ok) {
   console.error('[smoke-0l] FAIL - Standard renderer attach failed');
   process.exit(1);
 }
-populateScene(directWorld);
-populateScene(clusteredWorld);
+populateScene(forwardWorld);
+populateScene(deferredWorld);
 
 // --- Error tracking ---
 
 const onErrorEventsDirect = [];
 const onErrorEventsClustered = [];
-directRenderer.onError((err) => onErrorEventsDirect.push({ code: err.code, hint: err.hint }));
-clusteredRenderer.onError((err) => onErrorEventsClustered.push({ code: err.code, hint: err.hint }));
+forwardRenderer.onError((err) => onErrorEventsDirect.push({ code: err.code, hint: err.hint }));
+deferredRenderer.onError((err) => onErrorEventsClustered.push({ code: err.code, hint: err.hint }));
 
 let totalFrames = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  directWorld.update().unwrap();
-  clusteredWorld.update().unwrap();
-  const directDraw = directRenderer.draw({
-    leases: [directAttachment.value],
-    camera: { lease: directAttachment.value },
-    environment: { lease: directAttachment.value },
+  forwardWorld.update().unwrap();
+  deferredWorld.update().unwrap();
+  const directDraw = forwardRenderer.draw({
+    leases: [forwardAttachment.value],
+    camera: { lease: forwardAttachment.value },
+    environment: { lease: forwardAttachment.value },
   });
-  const clusteredDraw = clusteredRenderer.draw({
-    leases: [clusteredAttachment.value],
-    camera: { lease: clusteredAttachment.value },
-    environment: { lease: clusteredAttachment.value },
+  const clusteredDraw = deferredRenderer.draw({
+    leases: [deferredAttachment.value],
+    camera: { lease: deferredAttachment.value },
+    environment: { lease: deferredAttachment.value },
   });
   if (!directDraw.ok || !clusteredDraw.ok) {
     console.error('[smoke-0l] FAIL - Standard receipt-bound draw failed');

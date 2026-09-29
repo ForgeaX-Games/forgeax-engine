@@ -1,15 +1,98 @@
 ---
 name: forgeax-engine-rhi-debug
 description: >-
-  ForgeaX deterministic RHI capture, replay, and per-work inspection. Use when diagnosing
-  black frames, wrong bindings, draw divergence, or backend-specific GPU behavior.
+  ForgeaX first-line capture, replay, and per-work diagnosis for difficult rendering failures.
+  Use when output is black, missing, incorrectly lit or shadowed, flickering, divergent across backends, or unexplained.
 ---
 
 # forgeax-engine-rhi-debug
 
-Use this skill when a render issue needs a self-contained capture, deterministic
-replay, or offline per-work inspection. The package contract is the SSOT:
-[`packages/rhi-debug/README.md`](../../packages/rhi-debug/README.md).
+> [!IMPORTANT]
+> Start difficult or unexplained rendering investigations here, before speculative
+> shader/material edits or broad instrumentation. Capture the real failing frame
+> and use GPU work and resource evidence to choose the repair owner. A concrete
+> startup, asset, or schema error can go directly to its named owner.
+
+The package contract is [`packages/rhi-debug/README.md`](../../packages/rhi-debug/README.md).
+In an installed game, read `node_modules/@forgeax/engine-rhi-debug/README.md`
+or the SDK's `source/engine/packages/rhi-debug/README.md`.
+
+## Diagnose and prove the repair
+
+1. Reproduce the symptom in its actual browser/backend and scene state. Preserve
+   the screenshot, errors, and reproduction command; browser-only failures need
+   the browser path even when Dawn smokes pass.
+2. Capture a bounded failing frame using the host path below. Keep its tape,
+   digest, and reproduction inputs unchanged as failure evidence.
+3. Derive `FrameModel`, choose the relevant `workIndex`, and inspect pipeline,
+   bindings, resource descriptors/data, and supported render-target readback.
+   For ray/compute records, use the producer layout with `rhi.inspect`'s `buffer` input or `inspectBufferRecords`; follow the [bounded buffer contract](../../packages/rhi-debug/README.md#structured-compute-and-ray-query-buffers).
+   Trace the first incorrect producer or consumer through resource lineage.
+   If the expected draw/dispatch is absent, follow extraction, culling, or asset
+   readiness upstream; an absent work item is evidence too.
+4. Encode the failing path as the smallest useful regression gate and confirm
+   it fails, then fix the subsystem identified by those facts. Load material,
+   shader, render-pipeline, assets, or RHI skills as the evidence requires. Keep generic
+   RHI Debug free of workload-specific lighting, shadow, or post-effect policy;
+   repair capture/replay itself only when its contract is the demonstrated fault.
+5. Run the regression gate, capture again after the fix, and verify the same
+   scene/backend and original visible symptom.
+   Keep before/after artifacts explicit; replay evidence supplements the required
+   browser, Dawn, and smoke gates for the changed implementation.
+
+If capture, replay, or readback is blocked, preserve the attempted command,
+structured failure, and capability result. Follow structured recovery below and
+continue with available structural evidence and targeted browser/live checks.
+Record what remains unverified; do not replace missing GPU evidence with a
+successful mock or hide an Engine gap in game/demo code.
+
+## Game CLI entry
+
+From the game root, discover the installed command contract:
+
+```bash
+pnpm exec forgeax help debug rhi --tree --json
+pnpm exec forgeax help dev start --json
+pnpm exec forgeax dev start --rhi-capture true --json
+pnpm exec forgeax debug rhi capture --json
+```
+
+If a live owner already exists, stop it before changing its capture options.
+Preserve the failing backend and execution tier, reproduce the target state, then
+capture. The CLI calls the live host's recorder and persists one `.rhitape`;
+retain its returned path and digest. Capture requires a ready recorder-enabled
+App; it does not start one automatically. For an embedded host, use the
+[CLI live bridge](../forgeax-engine-cli/SKILL.md#rhicapture-single-frame-capture) and persist
+`capture.value.bytes` with its digest; a digest-only result cannot be inspected.
+
+Use the returned path and select `summary.works[].workIndex`:
+
+```bash
+pnpm exec forgeax debug rhi summary --artifact <path> --json
+pnpm exec forgeax debug rhi inspect --artifact <path> --work-index <workIndex> --json
+```
+
+Summary, inspection, and the read-only Viewer consume the same `ArtifactRef`;
+they do not recapture or infer an input pair. Discover optional inspection fields
+through CLI help; precise operation contracts live in
+[DevKit](../../packages/devkit/README.md#rhi-debug-operations).
+
+Select `summary.works[].workIndex`; the compact summary omits repeated shader
+source. The CLI computes SHA-256 from the file; optional `--digest sha256:...`
+checks the expected bytes and rejects a mismatch before replay. Recorder and
+CLI share the same `tapeDigest` implementation.
+
+Inspect `summary.unseededResources` (or `FrameModel.unseededResources`) before
+trusting pixels. These retained buffers/textures have no captured initial
+bytes and replay begins at zero. Confirm the captured frame initializes them
+before reading, or recapture the producer. Empty diagnostics do not replace a
+live/replay image comparison. `depth32float` seeds include all layers and mips;
+other depth/stencil and multisampled contents still require producing work.
+
+For resource release checks, use `FrameModel.resourceLifecycle` and
+`resources[].destroyEventIndex`; bootstrap resources have a null creation index.
+Locate bound consumers through each work's bindings and attachments. Descriptor
+bytes and recorded destruction do not prove driver allocation or retirement timing.
 
 ## Mental model
 
@@ -38,12 +121,28 @@ const captured = await app.rhiCapture?.captureFrame();
 if (!captured?.ok) return captured;
 const tape = decodeTape(captured.value.bytes);
 if (!tape.ok) return tape;
-const model = buildFrameModel(tape.value.tape);
-const replay = await openReplay(tape.value.tape, createFreshBackend);
+const model = buildFrameModel(tape.value);
+const replay = await openReplay(tape.value, await createFreshBackend(tape.value));
 if (!replay.ok) return replay;
-const result = await replay.value.inspectWork(model.works[0].workIndex);
-replay.value.dispose();
+try {
+  return await replay.value.inspectWork(model.works[0].workIndex, ['pipeline', 'bindings', 'pixels']);
+} finally {
+  await replay.value.dispose();
+}
 ```
+
+Each `works[].bindings` row carries its static `bufferOffset` and the
+`setBindGroup` `dynamicOffset` in effect for that draw (`null` when static). The
+effective offset of a buffer binding is `(bufferOffset ?? 0) + (dynamicOffset ?? 0)`;
+use it to prove which uniform slot a draw read, such as a per-composition View copy.
+
+Multisampled passes: read the 1x targets named by
+`works[i].attachments.colorResolveViewHandleIds` (attachment order, `null` when
+single-sample) instead of the 4x color views. Weighted blended OIT shows up as
+`fs_oit`/`fs_oit_premultiplied` accumulate works followed by one
+`fs_oit_composite` work; `readResourceAtWork` on the accum (rgba16float) and
+weight (r16float) ids at the last accumulate work, and on scene color before and
+after the composite, separates an accumulation fault from a composite fault.
 
 ## Protocol and lifecycle rules
 
@@ -65,6 +164,8 @@ message text to decide control flow.
 
 | Failure | First action |
 |:--|:--|
+| `capture-unavailable` | Enable the recorder on the real live host and invoke its `rhiCapture` root; retain startup errors if no frame can run. |
+| `capture-snapshot-failed` / `capture-timeout` | Preserve the original cause and `detail.progress`; distinguish queue drain from the named resource readback before choosing a repair owner. |
 | `tape-invalid` | Preserve the original bytes and capture again if the source is stale. |
 | `tape-version-unsupported` | Use a producer that emits v7; older formats are not compatibility inputs. |
 | `replay-capability-mismatch` | Create a fresh backend with the recorded capabilities or record again. |

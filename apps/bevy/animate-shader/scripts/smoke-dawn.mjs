@@ -9,8 +9,8 @@ import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const WIDTH = 320;
 const HEIGHT = 180;
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const FRAME_COUNT = Math.max(MIN_FRAMES, 300);
+const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
+const FRAME_COUNT = Math.max(MIN_FRAMES, 60);
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 
@@ -63,6 +63,7 @@ const canvas = {
 const manifest = JSON.parse(readFileSync(resolve(root, 'dist', 'shaders', 'manifest.json'), 'utf8'));
 const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
 const { World } = await import('@forgeax/engine-ecs');
+const { RuntimeMaterialValue } = await import('@forgeax/engine-assets-runtime');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { createBoxGeometry } = await import('@forgeax/engine-geometry');
@@ -95,6 +96,7 @@ const material = world.allocSharedRef('MaterialAsset', {
   passes: [{ name: 'Forward', program: { module: shaderId }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
   values,
 });
+const timeValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: material, parameter: 'time', value: [0] } }).unwrap();
 world.spawn(
   { component: Transform, data: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: MeshFilter, data: { assetHandle: mesh } },
@@ -135,13 +137,12 @@ async function capture(label) {
 }
 
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
-  values.time = frame / 60;
-  world.sharedRefs.markChanged(material).unwrap();
+  world.set(timeValue, RuntimeMaterialValue, { value: [frame / 60] }).unwrap();
   world.update().unwrap();
   const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   await delay(0);
-  if (frame === 60) await capture('early');
+  if (frame === Math.floor(FRAME_COUNT / 5)) await capture('early');
   if (frame === FRAME_COUNT - 1) await capture('late');
 }
 

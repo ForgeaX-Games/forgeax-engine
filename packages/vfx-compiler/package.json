@@ -31,7 +31,9 @@
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@webgpu/types": "^0.1.71"
+  },
   "forgeax": {
     "metrics": {
       "bundle-size": {

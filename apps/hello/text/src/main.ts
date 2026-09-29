@@ -144,7 +144,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .unwrap();
 
   // Camera with HDR tonemap + bloom enabled so scene (c)'s >1.0 text feeds the
-  // bloom bright-pass (AC-12).
+  // Bloom extraction (AC-12).
   world
     .spawn(
       { component: Transform, data: { pos: [0, 0, 8]} },
@@ -156,7 +156,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           bloom: BLOOM_ENABLED,
           bloomThreshold: 1.0,
           bloomIntensity: 1.0,
-          bloomBlurRadius: 4.0,
+          bloomSoftKnee: 0.5,
+          bloomScatter: 0.7,
         },
       },
     )

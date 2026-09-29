@@ -1,0 +1,83 @@
+{
+  "generator": "reference-environment-generator.mjs",
+  "source": "forgeax-engine-assets/learn-opengl/textures/newport_loft.hdr",
+  "sourceSha256": "f521688ab09b3e748341921d0c8c114d1256e6ca9e94c6e6783b9952b0042c44",
+  "width": 1600,
+  "height": 800,
+  "convention": "u=atan2(z,x)/(2*pi)+0.5; v=asin(y)/pi+0.5",
+  "metric": "diffuse-irradiance-divided-by-pi",
+  "directions": [
+    {
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "value": [
+        0.375223753884,
+        0.27881494174,
+        0.222590045321
+      ]
+    },
+    {
+      "normal": [
+        -1,
+        0,
+        0
+      ],
+      "value": [
+        0.435165096685,
+        0.455659826577,
+        0.499982234594
+      ]
+    },
+    {
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "value": [
+        0.455998126383,
+        0.244368034487,
+        0.116071047413
+      ]
+    },
+    {
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "value": [
+        0.226696294219,
+        0.19551327416,
+        0.187933220921
+      ]
+    },
+    {
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "value": [
+        0.547408542763,
+        0.351722852028,
+        0.240727532793
+      ]
+    },
+    {
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "value": [
+        0.201657574383,
+        0.154025827663,
+        0.1244143907
+      ]
+    }
+  ]
+}

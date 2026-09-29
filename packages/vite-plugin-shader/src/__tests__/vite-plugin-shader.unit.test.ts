@@ -25,20 +25,92 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
   DEFAULT_UNLIT_PARAM_SCHEMA,
+  type MaterialShaderArtifactReceipt,
+  PARTICLE_MESH_SURFACE_PARAM_SCHEMA,
+  STANDARD_PIPELINE_PARAM_SCHEMA,
 } from '@forgeax/engine-shader';
-import { compileFailed, compileShader } from '@forgeax/engine-shader-compiler';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { loadEngineImportsMap } from '../engine-imports-map.js';
-import { buildEngineShaderManifest, forgeaxShader } from '../index.js';
 import {
+  compileFailed,
+  compileShader,
+  generateParameterModule,
+} from '@forgeax/engine-shader-compiler';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { readShaderManifestPublication } from '../../../shader/src/manifest-publication.js';
+import { loadEngineImportsMap } from '../engine-imports-map.js';
+import { loadEngineShaderEntries } from '../engine-inputs/load-engine-shader-entries.js';
+import { buildEngineShaderManifest, forgeaxShader } from '../index.js';
+import { publishShaderManifest } from '../manifest-publication.js';
+import {
+  loadPackagedEngineShaderInputs,
   loadSharedEngineShaderManifest,
   mergeSharedEngineShaderEntries,
+  projectOptionalEngineEntries,
   projectShaderManifestEntries,
 } from '../shared-engine-inputs.js';
 import { toRollupLog } from '../wrap.js';
 
+// Manifest composition runs the build-time shader compiler for every engine
+// entry. The COVERAGE_ONLY axis doubles the Standard-PBR variant product.
+// Under three concurrent coverage children on eight vCPUs, PR #3381 measured
+// 607 seconds for this assertion; an isolated run without coverage took 140
+// seconds. Keep it instrumented with a bounded allowance below the 45-minute
+// coverage job cap, alongside the runner's new two-child concurrency limit.
+const SHADER_MANIFEST_TEST_TIMEOUT_MS = 900_000;
+
+// Direct compiler coverage must exercise the same fully-defined boolean ABI as
+// the production engine-entry producer. Keeping omitted axes at false mirrors
+// the renderer's explicit capability fallback while each test can override the
+// lane it is asserting.
+const ENGINE_SHADER_DEFAULT_DEFINES: Record<string, boolean> = {
+  PER_INSTANCE_REGION: false,
+  STORAGE_BUFFER_AVAILABLE: true,
+  CLUSTER_FORWARD_AVAILABLE: false,
+  VERTEX_COLOR_AVAILABLE: false,
+  PROBE_BLEND_AVAILABLE: false,
+  EXTENDED_LIGHTING_AVAILABLE: false,
+  TRANSMISSION_AVAILABLE: false,
+  DIRECTIONAL_PCSS_AVAILABLE: false,
+  PROJECTOR_AVAILABLE: false,
+  GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+  REFLECTION_FALLBACK_AVAILABLE: false,
+  POINT_SHADOW_AVAILABLE: false,
+};
+
+const STANDARD_NON_CLUSTER_VARIANT_KEY =
+  'CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
+const STANDARD_EXTENDED_LIGHTING_OFF_VARIANT_KEY =
+  'CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=false+REFLECTION_FALLBACK_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=false+VISIBLE_SURFACE_AVAILABLE=false';
+const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
+  'CLUSTER_FORWARD_AVAILABLE=true+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=true+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
+
 {
   describe('shared-engine-inputs.test.ts', () => {
+    it('keeps the packaged loader disabled for explicit source validation', () => {
+      const previous = process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+      process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
+      try {
+        expect(loadPackagedEngineShaderInputs(true, false)).toBeNull();
+      } finally {
+        if (previous === undefined) delete process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+        else process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = previous;
+      }
+    });
+
+    it('projects SSAO independently while preserving material and unrelated utility entries', () => {
+      const entries = [
+        { hash: 'material', wgsl: 'fn material() {}', bindings: 'material bindings' },
+        {
+          hash: 'ssao',
+          wgsl: 'fn fs_ssao_calc() {} fn fs_ssao_blur() {}',
+          bindings: 'ssao bindings',
+        },
+        { hash: 'utility', wgsl: 'fn unrelated() {}', bindings: 'utility bindings' },
+      ];
+      expect(projectOptionalEngineEntries(entries, true)).toEqual(entries);
+      expect(projectOptionalEngineEntries(entries, false)).toEqual([entries[0], entries[2]]);
+      expect(entries).toHaveLength(3);
+    });
+
     it('merges producer engine entries without consuming them for a custom-only app', () => {
       const custom = new Map([
         ['app/custom.wgsl', { hash: 'custom', wgsl: 'custom', bindings: '[]' }],
@@ -61,7 +133,7 @@ import { toRollupLog } from '../wrap.js';
       ]);
     });
 
-    it('loads material shader metadata with the shared entries', () => {
+    it('loads a compact shared publication before reusing its entries', async () => {
       const root = mkdtempSync(join(tmpdir(), 'shared-engine-inputs-'));
       try {
         mkdirSync(join(root, 'shared-app-inputs', 'shaders'), { recursive: true });
@@ -73,29 +145,101 @@ import { toRollupLog } from '../wrap.js';
         );
         writeFileSync(
           join(root, 'shared-app-inputs', 'shaders', 'manifest.json'),
-          JSON.stringify({
-            entries: [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }],
-            materialShaders: [
-              {
-                identifier: 'forgeax::default-unlit',
-                sourcePath: '/engine/unlit.wgsl',
-                composedWgsl: 'engine',
-                paramSchema: '[]',
-                variants: [],
-              },
-            ],
-          }),
+          JSON.stringify(
+            publishShaderManifest(
+              [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }],
+              [
+                {
+                  identifier: 'forgeax::default-unlit',
+                  sourcePath: '/engine/unlit.wgsl',
+                  composedWgsl: 'engine',
+                  paramSchema: '[]',
+                  variants: [],
+                },
+              ],
+            ),
+          ),
         );
         expect(
-          loadSharedEngineShaderManifest(join(root, 'shared-app-inputs', 'manifest.json')),
+          await loadSharedEngineShaderManifest(join(root, 'shared-app-inputs', 'manifest.json')),
         ).toMatchObject({
-          entries: [{ hash: 'engine' }],
+          entries: [{ hash: 'engine', wgsl: 'engine' }],
           materialShaders: [{ identifier: 'forgeax::default-unlit' }],
         });
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    it(
+      'keeps shared material rows idempotent across repeated buildStart hooks',
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), 'shared-engine-inputs-repeat-'));
+        const sharedManifest = join(root, 'shared-app-inputs', 'manifest.json');
+        try {
+          mkdirSync(join(root, 'shared-app-inputs', 'shaders'), { recursive: true });
+          writeFileSync(
+            sharedManifest,
+            JSON.stringify({
+              payload: { engineShaderManifest: 'shared-app-inputs/shaders/manifest.json' },
+            }),
+          );
+          writeFileSync(
+            join(root, 'shared-app-inputs', 'shaders', 'manifest.json'),
+            JSON.stringify({
+              entries: [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }],
+              materialShaders: [
+                {
+                  identifier: 'forgeax::default-standard-pbr',
+                  sourcePath: '/engine/default-standard-pbr.wgsl',
+                  composedWgsl: 'engine',
+                  paramSchema: '[]',
+                  variants: [],
+                },
+              ],
+            }),
+          );
+          const previous = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+          process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = sharedManifest;
+          try {
+            const plugin = forgeaxShader();
+            const emitted: Array<{ type: 'asset'; fileName: string; source: string }> = [];
+            const context = {
+              emitted,
+              error(message: unknown): never {
+                throw new Error(String(message));
+              },
+              emitFile(asset: { type: 'asset'; fileName: string; source: string }): string {
+                emitted.push(asset);
+                return asset.fileName;
+              },
+            };
+            await plugin.buildStart?.call(context as never);
+            await plugin.buildStart?.call(context as never);
+            plugin.generateBundle?.call(context as never);
+            const asset = context.emitted.find(
+              (entry) => entry.fileName === 'shaders/manifest.json',
+            );
+            expect(asset).toBeDefined();
+            if (asset === undefined) return;
+            const manifest = JSON.parse(asset.source) as {
+              materialShaders: Array<{ identifier: string }>;
+            };
+            expect(
+              manifest.materialShaders.filter(
+                (entry) => entry.identifier === 'forgeax::default-standard-pbr',
+              ),
+            ).toHaveLength(1);
+          } finally {
+            if (previous === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+            else process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = previous;
+          }
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
   });
 }
 
@@ -253,6 +397,27 @@ import { toRollupLog } from '../wrap.js';
   }
 
   describe('configureServer: dev-path manifest middleware (D-P2 / II-A)', () => {
+    it('releases retired shader payloads and repopulates a restarted plugin', async () => {
+      const plugin = forgeaxShader({ engineEntries: false });
+      const context = createMockPluginContext();
+      const manifest = () => {
+        context.emitted.length = 0;
+        plugin.generateBundle.call(context);
+        const asset = context.emitted.find((asset) => asset.fileName === 'shaders/manifest.json');
+        if (!asset) throw new Error('Manifest missing');
+        return JSON.parse(asset.source);
+      };
+      await plugin.transform.call(context, VALID_WGSL, '/retired.wgsl');
+      const original = manifest();
+      expect(original.entries).toHaveLength(1);
+      await plugin.closeBundle();
+      expect(manifest().entries).toEqual([]);
+      await plugin.buildStart.call(context);
+      await plugin.transform.call(context, VALID_WGSL, '/replacement.wgsl');
+      expect(manifest()).toEqual(original);
+      await plugin.closeBundle();
+    });
+
     it('plugin exposes a configureServer hook (5th hook beyond the existing 4)', () => {
       const plugin = forgeaxShader() as unknown as PluginShape;
       expect(plugin).toHaveProperty('configureServer');
@@ -931,6 +1096,94 @@ import { toRollupLog } from '../wrap.js';
       expect(typeof plugin.handleHotUpdate).toBe('function');
     });
 
+    it('disables duplicate compressed-size work only for an explicit fleet build', () => {
+      const previous = process.env.FORGEAX_VITE_REPORT_COMPRESSED_SIZE;
+      try {
+        delete process.env.FORGEAX_VITE_REPORT_COMPRESSED_SIZE;
+        const defaultConfig = forgeaxShader().config;
+        expect(typeof defaultConfig).toBe('function');
+        if (typeof defaultConfig !== 'function') return;
+        expect(
+          defaultConfig.call({} as never, {}, { command: 'build', mode: 'production' } as never),
+        ).toBeUndefined();
+
+        process.env.FORGEAX_VITE_REPORT_COMPRESSED_SIZE = '0';
+        const plugin = forgeaxShader();
+        const config = plugin.config;
+        expect(typeof config).toBe('function');
+        if (typeof config !== 'function') return;
+        expect(
+          config.call({} as never, {}, { command: 'build', mode: 'production' } as never),
+        ).toEqual({ build: { reportCompressedSize: false } });
+      } finally {
+        if (previous === undefined) delete process.env.FORGEAX_VITE_REPORT_COMPRESSED_SIZE;
+        else process.env.FORGEAX_VITE_REPORT_COMPRESSED_SIZE = previous;
+      }
+    });
+
+    it('publishes only app-local shader rows for an app-shard transfer', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'forgeax-app-shard-shader-delta-'));
+      const sharedRoot = join(root, 'shared-app-inputs');
+      const manifestPath = join(sharedRoot, 'manifest.json');
+      const previousShared = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      const previousDelta = process.env.FORGEAX_APP_SHARD_SHADER_DELTA;
+      try {
+        mkdirSync(join(sharedRoot, 'shaders'), { recursive: true });
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({
+            schemaVersion: 2,
+            producer: 'repo-build-inputs',
+            inputFingerprint: 'test-fingerprint',
+            inventory: ['shared-app-inputs/shaders/manifest.json'],
+            payload: { engineShaderManifest: 'shared-app-inputs/shaders/manifest.json' },
+          }),
+        );
+        writeFileSync(
+          join(sharedRoot, 'shaders', 'manifest.json'),
+          JSON.stringify({
+            entries: [{ hash: 'shared', wgsl: 'shared', bindings: '[]' }],
+            materialShaders: [
+              'forgeax::default-standard-pbr',
+              'forgeax::pbr-skin',
+              'forgeax::default-shadow-caster',
+            ].map((identifier) => ({
+              identifier,
+              sourcePath: `${identifier}.wgsl`,
+              composedWgsl: `// ${identifier}`,
+              paramSchema: '[]',
+              variants: [],
+            })),
+          }),
+        );
+        process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = manifestPath;
+        process.env.FORGEAX_APP_SHARD_SHADER_DELTA = '1';
+        const plugin = forgeaxShader();
+        const emitted: Array<{ type: 'asset'; fileName: string; source: string }> = [];
+        const context = {
+          error(message: unknown): never {
+            throw new Error(String(message));
+          },
+          emitFile(asset: { type: 'asset'; fileName: string; source: string }): string {
+            emitted.push(asset);
+            return asset.fileName;
+          },
+        };
+        await plugin.buildStart.call(context);
+        plugin.generateBundle.call(context);
+        const asset = emitted.find((entry) => entry.fileName === 'shaders/manifest.json');
+        expect(asset).toBeDefined();
+        expect(JSON.parse(asset?.source ?? '{}').entries).toEqual([]);
+        expect(JSON.parse(asset?.source ?? '{}').materialShaders).toEqual([]);
+      } finally {
+        if (previousShared === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+        else process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = previousShared;
+        if (previousDelta === undefined) delete process.env.FORGEAX_APP_SHARD_SHADER_DELTA;
+        else process.env.FORGEAX_APP_SHARD_SHADER_DELTA = previousDelta;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it('all 4 hooks mounted simultaneously (grep gate: a single construction lists the 4 fields)', () => {
       const plugin = forgeaxShader() as unknown as Record<string, unknown>;
       const hooks = ['load', 'transform', 'generateBundle', 'handleHotUpdate'] as const;
@@ -948,9 +1201,10 @@ import { toRollupLog } from '../wrap.js';
   //
   // AC dimensions:
   //   (a) Golden-file manifest materialShaders[] comparison: build produces
-  //       5 engine material-shader entries with paramSchema matching sidecar SSOT.
+  //       20 engine material-shader entries with paramSchema matching sidecar SSOT.
   //   (b) Engine entry missing sidecar -> build fail-fast with file path in error.
-  //   (c) Utility shaders absent from materialShaders[] (only pbr/pbr-skin/unlit/sprite/msdf-text).
+  //   (c) Utility shaders absent from materialShaders[] (analytic fog is a
+  //       material entry; tonemap/IBL/post-process shaders stay absent).
 
   interface EmittedAsset {
     type: 'asset';
@@ -988,29 +1242,69 @@ import { toRollupLog } from '../wrap.js';
     paramSchema: string;
     composedWgsl: string;
     variants?: Array<{ definesKey: string; composedWgsl: string }>;
+    receipt?: MaterialShaderArtifactReceipt;
+  }
+
+  const particleMeshSurfaceSchema = PARTICLE_MESH_SURFACE_PARAM_SCHEMA;
+
+  type SourceEngineManifest = {
+    entries: Array<{ wgsl: string }>;
+    materialShaders: MaterialShaderEntry[];
+  };
+
+  // The source producer is intentionally expensive: one full point-shadow or
+  // HDRP SSAO build composes the complete builtin shader fleet. Keep one real
+  // source-built matrix as the integration fixture and let the marker/schema
+  // assertions below inspect that same emitted manifest. This preserves the
+  // production buildStart path while avoiding three independent full compiles
+  // in this file.
+  let sourceEngineManifestPromise: Promise<SourceEngineManifest> | undefined;
+
+  function sourceEngineManifest(): Promise<SourceEngineManifest> {
+    if (sourceEngineManifestPromise !== undefined) return sourceEngineManifestPromise;
+    sourceEngineManifestPromise = (async () => {
+      const previousSourceBuild = process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+      process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
+      try {
+        const plugin = forgeaxShader({
+          engineEntries: { pointShadows: true, hdrpSsao: true },
+        });
+        const ctx = createMockContext();
+        await plugin.buildStart?.call(ctx as never);
+        plugin.generateBundle?.call(ctx as never);
+
+        const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
+        if (manifestAsset === undefined) {
+          throw new Error('source shader fixture did not emit shaders/manifest.json');
+        }
+        return (await readShaderManifestPublication(
+          JSON.parse(manifestAsset.source),
+        )) as SourceEngineManifest;
+      } finally {
+        if (previousSourceBuild === undefined)
+          delete process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+        else process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = previousSourceBuild;
+      }
+    })();
+    return sourceEngineManifestPromise;
   }
 
   describe('materialShaders[] manifest (w9)', () => {
-    it('(a) buildStart + generateBundle produces manifest with 13 materialShaders and correct paramSchema', async () => {
-      const plugin = forgeaxShader({ engineEntries: true });
-      const ctx = createMockContext();
-      await plugin.buildStart?.call(ctx as never);
-      plugin.generateBundle?.call(ctx as never);
-
-      const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
-      expect(manifestAsset, 'shaders/manifest.json must be emitted').toBeDefined();
-      if (!manifestAsset) return;
-
-      const manifest = JSON.parse(manifestAsset.source) as {
-        entries: unknown[];
-        materialShaders: MaterialShaderEntry[];
-      };
+    // biome-ignore format: keep the long manifest test call compact
+    it('(a) buildStart + generateBundle produces manifest with 23 materialShaders and correct paramSchema', async () => {
+      const manifest = await sourceEngineManifest();
 
       expect(Array.isArray(manifest.materialShaders)).toBe(true);
+      expect(
+        manifest.materialShaders.every(
+          (entry) => !entry.sourcePath.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(entry.sourcePath),
+        ),
+        'material shader source identities must be checkout-independent in shipped manifests',
+      ).toBe(true);
       // feat-20260609 T-018 fixup: shadow_caster joined materialShaders[] as
-      // 6th engine entry (vertex-only depth-only PSO,
-      // `forgeax::default-shadow-caster`). paramSchema is intentionally empty
-      // (no per-material params for the shadow pass).
+      // 6th engine entry (Surface-aware depth-only PSO,
+      // `forgeax::default-shadow-caster`). Its generated schema follows the
+      // shared Standard pipeline contract.
       // bug-20260610 walked the variant_axis channel: shadow_caster.wgsl
       // declares `#pragma variant_axis STORAGE_BUFFER_AVAILABLE` and the
       // STORAGE_BUFFER_AVAILABLE=false variant is surfaced on the same
@@ -1018,13 +1312,19 @@ import { toRollupLog } from '../wrap.js';
       // engine identifier needed now that shadow_caster is a material shader).
       expect(
         manifest.materialShaders.length,
-        'materialShaders[] must contain exactly 13 engine material-shader entries',
-      ).toBe(13);
+        'materialShaders[] must contain exactly 23 named engine shader entries',
+      ).toBe(23);
 
       const standardPbr = manifest.materialShaders.find(
         (entry) => entry.identifier === 'forgeax::default-standard-pbr',
       );
       expect(standardPbr).toBeDefined();
+      expect(standardPbr?.receipt).toMatchObject({
+        directEntry: 'vs_main',
+        sceneIndexEntry: 'vs_scene_index',
+        reflection: { layoutIdentity: expect.any(String) },
+      });
+      expect(standardPbr).not.toHaveProperty('directEntry');
       const pointsLines = manifest.materialShaders.find(
         (entry) => entry.identifier === 'forgeax::points-lines',
       );
@@ -1035,7 +1335,7 @@ import { toRollupLog } from '../wrap.js';
         standardPbr?.variants?.find(
           (variant) =>
             variant.definesKey ===
-            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
+            STANDARD_NON_CLUSTER_VARIANT_KEY,
         ),
         'the URP standard-PBR variant must be present',
       ).toBeDefined();
@@ -1043,70 +1343,90 @@ import { toRollupLog } from '../wrap.js';
         standardPbr?.variants?.find(
           (variant) =>
             variant.definesKey ===
-            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
+            STANDARD_NON_CLUSTER_VARIANT_KEY,
         )?.composedWgsl,
-        'the default manifest must stay valid on software WebGPU profiles without cube-array shader support',
+        'the non-cluster Standard variant must stay valid on software WebGPU profiles without cube-array shader support',
       ).not.toContain('evalPointShadowed');
       expect(
         standardPbr?.variants?.find(
           (variant) =>
             variant.definesKey ===
-            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
+            STANDARD_NON_CLUSTER_VARIANT_KEY,
         )?.composedWgsl,
-        'the default manifest must omit the cube-array binding on software WebGPU profiles',
+        'the non-cluster Standard variant must omit the cube-array binding on software WebGPU profiles',
       ).not.toContain('texture_depth_cube_array');
-
-      const pointShadowPlugin = forgeaxShader({ engineEntries: { pointShadows: true } });
-      const pointShadowContext = createMockContext();
-      await pointShadowPlugin.buildStart?.call(pointShadowContext as never);
-      pointShadowPlugin.generateBundle?.call(pointShadowContext as never);
-      const pointShadowManifestAsset = pointShadowContext.emitted.find(
-        (asset) => asset.fileName === 'shaders/manifest.json',
-      );
-      expect(pointShadowManifestAsset).toBeDefined();
-      if (!pointShadowManifestAsset) return;
-      const pointShadowManifest = JSON.parse(pointShadowManifestAsset.source) as {
-        materialShaders: MaterialShaderEntry[];
-      };
+      const extendedLightingOffWgsl = standardPbr?.variants?.find(
+        (variant) =>
+          variant.definesKey ===
+          STANDARD_EXTENDED_LIGHTING_OFF_VARIANT_KEY,
+      )?.composedWgsl;
       expect(
-        pointShadowManifest.materialShaders
+        extendedLightingOffWgsl,
+        'an extended-lighting-off variant must not retain optional view resources from imported common.wgsl',
+      ).not.toContain('@group(0) @binding(9)');
+      expect(extendedLightingOffWgsl).not.toContain('@group(0) @binding(11)');
+      expect(extendedLightingOffWgsl).not.toContain('@group(0) @binding(15)');
+
+      expect(
+        manifest.materialShaders
           .find((entry) => entry.identifier === 'forgeax::default-standard-pbr')
           ?.variants?.find(
             (variant) =>
               variant.definesKey ===
-              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
+              STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY,
           )?.composedWgsl,
-        'the point-shadow demo must opt into point-shadow evaluation explicitly',
+        'the clustered point-shadow variant must opt into point-shadow evaluation',
       ).toContain('evalPointShadowed');
       expect(
-        pointShadowManifest.materialShaders
+        manifest.materialShaders
           .find((entry) => entry.identifier === 'forgeax::default-standard-pbr')
           ?.variants?.find(
             (variant) =>
               variant.definesKey ===
-              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
+              STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY,
           )?.composedWgsl,
-        'the point-shadow demo must opt into the cube-array binding explicitly',
+        'the clustered point-shadow variant must expose the cube-array binding',
       ).toContain('texture_depth_cube_array');
+
+      // Package-owned VFX material entries use the same clustered forward
+      // topology. Regressing the package loop to the built-in call shape would
+      // silently drop the point-shadow capability only for mesh particles,
+      // even though Standard still passes the checks above.
+      const pointVfxMesh = manifest.materialShaders.find(
+        (entry) => entry.identifier === 'forgeax::vfx-render.particles.mesh',
+      );
+      expect(pointVfxMesh?.variants?.some((variant) => variant.composedWgsl.includes('evalPointShadowed'))).toBe(
+        true,
+      );
 
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
+        'forgeax::analytic-fog',
         'forgeax::default-shadow-caster',
         'forgeax::default-standard-pbr',
         'forgeax::default-unlit',
+        'forgeax::engine-decal-apply',
+        'forgeax::engine-decal-project',
+        'forgeax::engine-standard-deferred-lighting',
         'forgeax::msdf-text',
         'forgeax::pbr-skin',
         'forgeax::points-lines',
         'forgeax::sprite',
         'forgeax::sprite-lit',
         'forgeax::vfx-render.particles.beam',
+        'forgeax::vfx-render.particles.beam-inputs',
         'forgeax::vfx-render.particles.billboard',
+        'forgeax::vfx-render.particles.billboard-inputs',
         'forgeax::vfx-render.particles.mesh',
+        'forgeax::vfx-render.particles.mesh-inputs',
+        'forgeax::vfx-render.particles.mesh-shadow',
         'forgeax::vfx-render.particles.ribbon',
+        'forgeax::vfx-render.particles.ribbon-inputs',
         'forgeax::vfx-render.particles.trail',
+        'forgeax::vfx-render.particles.trail-inputs',
       ]);
 
-      // Each entry must have a paramSchema array; shadow-caster legitimately empty
+      // Each entry must have a paramSchema array; shadow-caster shares Standard
       for (const ms of manifest.materialShaders) {
         const parsed = JSON.parse(ms.paramSchema) as unknown;
         expect(Array.isArray(parsed), `paramSchema for '${ms.identifier}' must be array`).toBe(
@@ -1114,15 +1434,24 @@ import { toRollupLog } from '../wrap.js';
         );
       }
 
-      // Standard PBR and skinned PBR share the engine shader contract; MSDF
-      // has its own WGSL UBO shape and must be reflected into the runtime BGL.
+      // Standard PBR, skinned PBR, and mesh particles share the engine
+      // Standard Surface contract; MSDF has its own WGSL UBO shape and must
+      // be reflected into the runtime BGL. Billboard/topology particle
+      // shaders remain zero-binding material entries because they do not
+      // import the Standard Surface.
       for (const ms of manifest.materialShaders) {
         const parsed = JSON.parse(ms.paramSchema) as Array<{ name: string; type: string }>;
         if (
           ms.identifier === 'forgeax::default-standard-pbr' ||
-          ms.identifier === 'forgeax::pbr-skin'
+          ms.identifier === 'forgeax::pbr-skin' ||
+          ms.identifier === 'forgeax::default-shadow-caster'
         ) {
-          expect(parsed).toEqual(DEFAULT_STANDARD_PBR_PARAM_SCHEMA);
+          expect(parsed).toEqual(STANDARD_PIPELINE_PARAM_SCHEMA);
+        } else if (
+          ms.identifier === 'forgeax::vfx-render.particles.mesh' ||
+          ms.identifier === 'forgeax::vfx-render.particles.mesh-inputs'
+        ) {
+          expect(parsed).toEqual(particleMeshSurfaceSchema);
         } else if (ms.identifier === 'forgeax::msdf-text') {
           expect(parsed).toEqual([
             { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
@@ -1137,90 +1466,97 @@ import { toRollupLog } from '../wrap.js';
           expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
         }
       }
-    }, 15_000);
+    }, SHADER_MANIFEST_TEST_TIMEOUT_MS);
 
-    it('(b) engine entry missing sidecar causes buildStart fail-fast with file path', async () => {
-      const plugin = forgeaxShader({ engineEntries: true });
-      // forgeaxShader with a custom engineShaderRoots pointing to a temp dir
-      // that has a .wgsl but no .material.json sidecar. However, the engine
-      // entries are loaded from the built-in @forgeax/engine-shader package
-      // by loadEngineShaderEntries, which is internal. We test the fail-fast
-      // by constructing a scenario: the buildStart function already reads
-      // sidecars for entries with reservedIdentifier. If a sidecar is missing,
-      // the buildStart throws.
-      //
-      // Since we can't easily create a temp dir with custom sidecars in a
-      // unit test without filesystem mocking, we validate the fail-fast
-      // behavior structurally: the buildStart hook is correctly mounted
-      // and the compileEngineEntry function's sidecar-read logic is already
-      // exercised by test (a). The missing-sidecar error message contract
-      // is verified below by checking the error message pattern exists in
-      // the source.
-      //
-      // For a true integration test of this path, we would need to:
-      // 1. Create a temp dir with .wgsl file having reservedIdentifier
-      // 2. No .material.json sidecar
-      // 3. Run buildStart -> expect throw with path
-      //
-      // This is deferred to the smoke suite. The unit-level verification
-      // confirms the plugin structure is correct.
-      expect(typeof plugin.buildStart).toBe('function');
-      expect(typeof plugin.generateBundle).toBe('function');
-    });
+    it(
+      '(b) engine entry missing sidecar causes buildStart fail-fast with file path',
+      async () => {
+        const plugin = forgeaxShader({ engineEntries: true });
+        // forgeaxShader with a custom engineShaderRoots pointing to a temp dir
+        // that has a .wgsl but no .material.json sidecar. However, the engine
+        // entries are loaded from the built-in @forgeax/engine-shader package
+        // by loadEngineShaderEntries, which is internal. We test the fail-fast
+        // by constructing a scenario: the buildStart function already reads
+        // sidecars for entries with reservedIdentifier. If a sidecar is missing,
+        // the buildStart throws.
+        //
+        // Since we can't easily create a temp dir with custom sidecars in a
+        // unit test without filesystem mocking, we validate the fail-fast
+        // behavior structurally: the buildStart hook is correctly mounted
+        // and the compileEngineEntry function's sidecar-read logic is already
+        // exercised by test (a). The missing-sidecar error message contract
+        // is verified below by checking the error message pattern exists in
+        // the source.
+        //
+        // For a true integration test of this path, we would need to:
+        // 1. Create a temp dir with .wgsl file having reservedIdentifier
+        // 2. No .material.json sidecar
+        // 3. Run buildStart -> expect throw with path
+        //
+        // This is deferred to the smoke suite. The unit-level verification
+        // confirms the plugin structure is correct.
+        expect(typeof plugin.buildStart).toBe('function');
+        expect(typeof plugin.generateBundle).toBe('function');
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
-    it('(c) utility shaders stay absent from the complete engine material roster', async () => {
-      const plugin = forgeaxShader({ engineEntries: true });
-      const ctx = createMockContext();
-      await plugin.buildStart?.call(ctx as never);
-      plugin.generateBundle?.call(ctx as never);
+    it(
+      '(c) the named shader roster includes the deferred utility and excludes anonymous utilities',
+      async () => {
+        const manifest = await sourceEngineManifest();
 
-      const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
-      expect(manifestAsset).toBeDefined();
-      if (!manifestAsset) return;
-
-      const manifest = JSON.parse(manifestAsset.source) as {
-        entries: unknown[];
-        materialShaders: MaterialShaderEntry[];
-      };
-
-      // Utility shaders (tonemap, 4 IBL) must NOT appear in materialShaders[].
-      // feat-20260609 T-018 fixup: shadow_caster IS now in materialShaders[]
-      // as `forgeax::default-shadow-caster` (vertex-only depth-only PSO;
-      // removed from utilityKeywords). bug-20260610 adds its
-      // STORAGE_BUFFER_AVAILABLE=false variant on the same material entry
-      // for the WebGL2 fallback path — no separate synthetic engine entry.
-      const utilityKeywords = ['tonemap', 'ibl', 'equirect', 'irradiance', 'prefilter', 'brdf'];
-      for (const ms of manifest.materialShaders) {
-        const lowerId = ms.identifier.toLowerCase();
-        for (const kw of utilityKeywords) {
-          expect(
-            lowerId,
-            `materialShaders[] must not contain utility entry with keyword '${kw}': got '${ms.identifier}'`,
-          ).not.toContain(kw);
+        // Utility shaders (tonemap, 4 IBL, and post-process passes) must NOT
+        // appear in materialShaders[]. Analytic fog is a material entry.
+        // feat-20260609 T-018 fixup: shadow_caster IS now in materialShaders[]
+        // as `forgeax::default-shadow-caster` (vertex-only depth-only PSO;
+        // removed from utilityKeywords). bug-20260610 adds its
+        // STORAGE_BUFFER_AVAILABLE=false variant on the same material entry
+        // for the WebGL2 fallback path — no separate synthetic engine entry.
+        const utilityKeywords = ['tonemap', 'ibl', 'equirect', 'irradiance', 'prefilter', 'brdf'];
+        for (const ms of manifest.materialShaders) {
+          const lowerId = ms.identifier.toLowerCase();
+          for (const kw of utilityKeywords) {
+            expect(
+              lowerId,
+              `materialShaders[] must not contain utility entry with keyword '${kw}': got '${ms.identifier}'`,
+            ).not.toContain(kw);
+          }
         }
-      }
 
-      // The entries[] array should still contain all compiled shaders (utility + material)
-      expect(manifest.entries.length).toBeGreaterThanOrEqual(4);
+        // The entries[] array should still contain all compiled shaders (utility + material)
+        expect(manifest.entries.length).toBeGreaterThanOrEqual(4);
 
-      // Verify the exact identifiers in materialShaders[] (8 engine entries + 5 particle entries)
-      const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
-      expect(ids).toEqual([
-        'forgeax::default-shadow-caster',
-        'forgeax::default-standard-pbr',
-        'forgeax::default-unlit',
-        'forgeax::msdf-text',
-        'forgeax::pbr-skin',
-        'forgeax::points-lines',
-        'forgeax::sprite',
-        'forgeax::sprite-lit',
-        'forgeax::vfx-render.particles.beam',
-        'forgeax::vfx-render.particles.billboard',
-        'forgeax::vfx-render.particles.mesh',
-        'forgeax::vfx-render.particles.ribbon',
-        'forgeax::vfx-render.particles.trail',
-      ]);
-    }, 15_000);
+        // Reserved utility identities share the named manifest roster but are not material publications.
+        const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
+        expect(ids).toEqual([
+          'forgeax::analytic-fog',
+          'forgeax::default-shadow-caster',
+          'forgeax::default-standard-pbr',
+          'forgeax::default-unlit',
+          'forgeax::engine-decal-apply',
+          'forgeax::engine-decal-project',
+          'forgeax::engine-standard-deferred-lighting',
+          'forgeax::msdf-text',
+          'forgeax::pbr-skin',
+          'forgeax::points-lines',
+          'forgeax::sprite',
+          'forgeax::sprite-lit',
+          'forgeax::vfx-render.particles.beam',
+          'forgeax::vfx-render.particles.beam-inputs',
+          'forgeax::vfx-render.particles.billboard',
+          'forgeax::vfx-render.particles.billboard-inputs',
+          'forgeax::vfx-render.particles.mesh',
+          'forgeax::vfx-render.particles.mesh-inputs',
+          'forgeax::vfx-render.particles.mesh-shadow',
+          'forgeax::vfx-render.particles.ribbon',
+          'forgeax::vfx-render.particles.ribbon-inputs',
+          'forgeax::vfx-render.particles.trail',
+          'forgeax::vfx-render.particles.trail-inputs',
+        ]);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
     // feat-20260531-skybox-env-background M4 regression: buildEngineShaderManifest()
     // is the standalone runtime manifest helper consumed by the dawn-node smoke
@@ -1230,57 +1566,116 @@ import { toRollupLog } from '../wrap.js';
     // pass early-returned while skyboxActive stayed true, leaving main pass on
     // loadOp:'load' over an uncleared HDR transient (pure-black background).
     // Lock the skybox entry into the helper so the gap cannot reappear.
-    it('buildEngineShaderManifest() includes the skybox fullscreen-cubemap entry', async () => {
-      const manifest = await buildEngineShaderManifest();
-      const hasSkybox = manifest.entries.some((e) => e.wgsl.includes('skybox_fs'));
-      expect(
-        hasSkybox,
-        'entries[] must carry the composed skybox shader (skybox_fs fragment marker)',
-      ).toBe(true);
-      // The skybox is a utility pass shader, not a material shader -- it must
-      // not leak into materialShaders[] (same classification as tonemap/fxaa).
-      const skyboxAsMaterial = manifest.materialShaders.some((ms) =>
-        ms.identifier.toLowerCase().includes('skybox'),
-      );
-      expect(skyboxAsMaterial, 'skybox must not appear in materialShaders[]').toBe(false);
-    });
+    it(
+      'buildEngineShaderManifest() includes the skybox fullscreen-cubemap entry',
+      async () => {
+        const manifest = await buildEngineShaderManifest();
+        const hasSkybox = manifest.entries.some((e) => e.wgsl.includes('skybox_fs'));
+        expect(
+          hasSkybox,
+          'entries[] must carry the composed skybox shader (skybox_fs fragment marker)',
+        ).toBe(true);
+        // The skybox is a utility pass shader, not a material shader -- it must
+        // not leak into materialShaders[] (same classification as tonemap/fxaa).
+        const skyboxAsMaterial = manifest.materialShaders.some((ms) =>
+          ms.identifier.toLowerCase().includes('skybox'),
+        );
+        expect(skyboxAsMaterial, 'skybox must not appear in materialShaders[]').toBe(false);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
     // bug-20260625 regression: createRenderer identifies the 3 bloom post-
-    // process entries by the uniform-struct-name markers BloomBrightParams /
-    // BloomBlurParams / BloomCompositeParams. The original triage used `//`
-    // content-marker COMMENTS (bloomBrightExtract / bloomBlurDir /
+    // process entries by the uniform-struct-name markers BloomDownsampleParams /
+    // BloomUpsampleParams / BloomCompositeParams. The original triage used `//`
+    // content-marker COMMENTS (bloomExtract / bloomUpsample /
     // bloomComposite) which naga_oil's WGSL writeback strips (comments are not
     // naga IR), so the markers vanished from the composed entry.wgsl, the
     // triage never matched, bloom resources stayed null, and bloom silently
     // never rendered. Worse, buildEngineShaderManifest() (the dawn-smoke path)
     // omitted the bloom entries entirely, so no smoke could catch it. This
     // test locks BOTH the dawn-path presence AND the survives-naga property.
-    it('buildEngineShaderManifest() includes the 3 bloom entries with code-marker structs', async () => {
-      const manifest = await buildEngineShaderManifest();
-      // Each bloom struct name must appear in exactly one composed entry, and
-      // must appear as a real WGSL `struct` declaration (naga IR survivor) --
-      // NOT merely inside a comment that naga would drop.
-      for (const struct of ['BloomBrightParams', 'BloomBlurParams', 'BloomCompositeParams']) {
-        const hits = manifest.entries.filter((e) => e.wgsl.includes(struct));
-        expect(hits, `exactly one composed entry must carry ${struct}`).toHaveLength(1);
-        const wgsl = hits[0]?.wgsl ?? '';
+    it(
+      'buildEngineShaderManifest() includes the 3 bloom entries with code-marker structs',
+      async () => {
+        const manifest = await buildEngineShaderManifest();
+        // Each bloom struct name must appear in exactly one composed entry, and
+        // must appear as a real WGSL `struct` declaration (naga IR survivor) --
+        // NOT merely inside a comment that naga would drop.
+        for (const struct of [
+          'BloomDownsampleParams',
+          'BloomUpsampleParams',
+          'BloomCompositeParams',
+        ]) {
+          const hits = manifest.entries.filter((e) => e.wgsl.includes(struct));
+          expect(hits, `exactly one composed entry must carry ${struct}`).toHaveLength(1);
+          const wgsl = hits[0]?.wgsl ?? '';
+          expect(
+            wgsl,
+            `${struct} must survive naga_oil as a struct decl, not a stripped comment`,
+          ).toMatch(new RegExp(`struct\\s+${struct}\\b`));
+          // Guard the actual bug: the old comment markers must NOT be relied on
+          // (they are gone after composition). Their absence is expected.
+          expect(
+            wgsl.includes('// bloom'),
+            `${struct} entry must not depend on comment markers`,
+          ).toBe(false);
+        }
+        // Bloom entries are utility post-process shaders, not material shaders.
+        const bloomAsMaterial = manifest.materialShaders.some((ms) =>
+          ms.identifier.toLowerCase().includes('bloom'),
+        );
+        expect(bloomAsMaterial, 'bloom must not appear in materialShaders[]').toBe(false);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
+
+    it(
+      'buildEngineShaderManifest() includes temporal fullscreen entries by code markers',
+      async () => {
+        const sourceEntries = await loadEngineShaderEntries();
+        expect(sourceEntries.motionBlur.id).toMatch(/[\\/]src[\\/]motion-blur\.wgsl$/);
+        expect(sourceEntries.motionBlur.source).toContain(
+          '#define_import_path forgeax_view::motion_blur',
+        );
+        const manifest = await buildEngineShaderManifest();
+        const motionBlurEntries = manifest.entries.filter((entry) =>
+          entry.wgsl.includes('MotionBlurParams'),
+        );
+        const taaResolveEntries = manifest.entries.filter((entry) =>
+          entry.wgsl.includes('TaaResolveParams'),
+        );
+
+        expect(motionBlurEntries, 'manifest must publish the motion blur entry').toHaveLength(1);
+        expect(taaResolveEntries, 'manifest must publish the TAA resolve entry').toHaveLength(1);
+        expect(motionBlurEntries[0]?.wgsl).toContain('unpackSceneTemporalV1');
+        expect(taaResolveEntries[0]?.wgsl).toContain('closestCurrentTemporal');
+        expect(taaResolveEntries[0]?.wgsl).toContain('textureLoad(currentTemporal');
         expect(
-          wgsl,
-          `${struct} must survive naga_oil as a struct decl, not a stripped comment`,
-        ).toMatch(new RegExp(`struct\\s+${struct}\\b`));
-        // Guard the actual bug: the old comment markers must NOT be relied on
-        // (they are gone after composition). Their absence is expected.
-        expect(
-          wgsl.includes('// bloom'),
-          `${struct} entry must not depend on comment markers`,
+          manifest.materialShaders.some((shader) => shader.identifier.includes('motion-blur')),
+          'motion blur must remain a utility entry, not a material shader',
         ).toBe(false);
-      }
-      // Bloom entries are utility post-process shaders, not material shaders.
-      const bloomAsMaterial = manifest.materialShaders.some((ms) =>
-        ms.identifier.toLowerCase().includes('bloom'),
-      );
-      expect(bloomAsMaterial, 'bloom must not appear in materialShaders[]').toBe(false);
-    });
+        expect(
+          manifest.materialShaders.some((shader) => shader.identifier.includes('taa-resolve')),
+          'TAA resolve must remain a utility entry, not a material shader',
+        ).toBe(false);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
+
+    it(
+      'forgeaxShader buildStart publishes temporal fullscreen entries',
+      async () => {
+        const manifest = await sourceEngineManifest();
+        expect(
+          manifest.entries.filter((entry) => entry.wgsl.includes('MotionBlurParams')),
+        ).toHaveLength(1);
+        expect(
+          manifest.entries.filter((entry) => entry.wgsl.includes('TaaResolveParams')),
+        ).toHaveLength(1);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
     async function manifestForPlugin(
       plugin: ReturnType<typeof forgeaxShader>,
@@ -1292,42 +1687,54 @@ import { toRollupLog } from '../wrap.js';
       const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
       expect(manifestAsset).toBeDefined();
       if (!manifestAsset) return { entries: [] };
-      return JSON.parse(manifestAsset.source) as { entries: Array<{ wgsl: string }> };
+      return (await readShaderManifestPublication(JSON.parse(manifestAsset.source))) as {
+        entries: Array<{ wgsl: string }>;
+      };
     }
 
-    it('forgeaxShader default keeps optional SSAO out of generic manifests', async () => {
-      const manifest = await manifestForPlugin(forgeaxShader());
-      const ssao = manifest.entries.filter(
-        (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
-      );
-      expect(ssao, 'generic Vite manifests must not eagerly build optional SSAO').toHaveLength(0);
-    });
+    it(
+      'forgeaxShader default supports runtime Standard SSAO configuration',
+      async () => {
+        const manifest = await manifestForPlugin(forgeaxShader());
+        const ssao = manifest.entries.filter(
+          (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
+        );
+        expect(ssao, 'generic Vite manifests must support the public SSAO profile').toHaveLength(1);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
-    it('forgeaxShader opt-in includes the SSAO fullscreen entry', async () => {
-      const manifest = await manifestForPlugin(
-        forgeaxShader({ engineEntries: { hdrpSsao: true } }),
-      );
-      const ssao = manifest.entries.filter(
-        (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
-      );
-      expect(ssao, 'Vite manifest must carry both SSAO fragment entry points').toHaveLength(1);
-    }, 15_000);
+    it(
+      'forgeaxShader opt-in includes the SSAO fullscreen entry',
+      async () => {
+        const manifest = await sourceEngineManifest();
+        const ssao = manifest.entries.filter(
+          (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
+        );
+        expect(ssao, 'Vite manifest must carry both SSAO fragment entry points').toHaveLength(1);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
 
-    it('buildEngineShaderManifest() preserves sprite instance-region variants', async () => {
-      const manifest = await buildEngineShaderManifest();
-      const sprite = manifest.materialShaders.find(
-        (entry) => entry.identifier === 'forgeax::sprite',
-      );
-      expect(sprite, 'sprite must be registered as a material shader').toBeDefined();
-      expect(sprite?.variants.some((variant) => variant.definesKey === '')).toBe(true);
-      expect(
-        sprite?.variants.some(
-          (variant) =>
-            variant.defines.PER_INSTANCE_REGION === false &&
-            variant.defines.STORAGE_BUFFER_AVAILABLE === true,
-        ),
-      ).toBe(true);
-    });
+    it(
+      'buildEngineShaderManifest() preserves sprite instance-region variants',
+      async () => {
+        const manifest = await buildEngineShaderManifest();
+        const sprite = manifest.materialShaders.find(
+          (entry) => entry.identifier === 'forgeax::sprite',
+        );
+        expect(sprite, 'sprite must be registered as a material shader').toBeDefined();
+        expect(sprite?.variants.some((variant) => variant.definesKey === '')).toBe(true);
+        expect(
+          sprite?.variants.some(
+            (variant) =>
+              variant.defines.PER_INSTANCE_REGION === false &&
+              variant.defines.STORAGE_BUFFER_AVAILABLE === true,
+          ),
+        ).toBe(true);
+      },
+      SHADER_MANIFEST_TEST_TIMEOUT_MS,
+    );
   });
 }
 
@@ -1416,7 +1823,7 @@ import { toRollupLog } from '../wrap.js';
       ).toBe(true);
     });
 
-    it('each entry shape matches @forgeax/engine-types.ManifestEntry: {hash, wgsl, glsl, bindings}', async () => {
+    it('decoded entries match @forgeax/engine-types.ManifestEntry: {hash, wgsl, glsl, bindings}', async () => {
       const plugin = forgeaxShader();
       const ctx = createMockContext();
 
@@ -1425,7 +1832,9 @@ import { toRollupLog } from '../wrap.js';
 
       const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
       if (!manifestAsset) throw new Error('manifest not emitted');
-      const parsed = JSON.parse(manifestAsset.source) as { entries: unknown[] };
+      const parsed = (await readShaderManifestPublication(JSON.parse(manifestAsset.source))) as {
+        entries: unknown[];
+      };
       expect(parsed.entries.length, 'one .wgsl input → one entry').toBe(1);
 
       const entry = parsed.entries[0] as Record<string, unknown>;
@@ -1441,7 +1850,7 @@ import { toRollupLog } from '../wrap.js';
       ).toBe(true);
     });
 
-    it('entry.wgsl is a literal WGSL source string (not a shaders/<hash>.wgsl path)', async () => {
+    it('decoded entry.wgsl is literal WGSL source (not a shaders/<hash>.wgsl path)', async () => {
       const plugin = forgeaxShader();
       const ctx = createMockContext();
 
@@ -1450,7 +1859,7 @@ import { toRollupLog } from '../wrap.js';
 
       const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
       if (!manifestAsset) throw new Error('manifest not emitted');
-      const parsed = JSON.parse(manifestAsset.source) as {
+      const parsed = (await readShaderManifestPublication(JSON.parse(manifestAsset.source))) as {
         entries: Array<Record<string, unknown>>;
       };
       const entry = parsed.entries[0];
@@ -1770,6 +2179,7 @@ ${MINIMAL_WGSL.trim()}
     options: {
       id: string;
       imports: Record<string, string>;
+      generatedParameters?: string;
       defines?: Record<string, boolean>;
     },
   ) => Promise<CompileResult>;
@@ -1778,7 +2188,7 @@ ${MINIMAL_WGSL.trim()}
   let readSrc!: (file: string) => string;
   let IMPORTS!: Record<string, string>;
 
-  const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
+  const PRAGMA_RE = /^\s*#pragma\s+variant_axis\s+\w+\s*$/gm;
   function stripPragmas(source: string): string {
     return source.replace(PRAGMA_RE, '');
   }
@@ -1796,42 +2206,75 @@ ${MINIMAL_WGSL.trim()}
     compileShader = mod.compileShader;
 
     const COMMON = readSrc('common.wgsl');
+    const SCENE_TEMPORAL = readSrc('scene-temporal.wgsl');
     const BRDF = readSrc('brdf.wgsl');
     const PBR_TEMPORAL = readSrc('pbr-temporal.wgsl');
     const TBN = readSrc('tbn.wgsl');
     const LIGHTING_DIRECTIONAL = readSrc('lighting-directional.wgsl');
     const LIGHTING_PUNCTUAL = readSrc('lighting-punctual.wgsl');
+    const LIGHTING_ATTENUATION = readSrc('lighting-attenuation.wgsl');
     const IBL_SAMPLING = readSrc('ibl-sampling.wgsl');
     const IBL_SHARED = readSrc('ibl-shared.wgsl');
 
     const SHADOW_PCF = readSrc('shadow-pcf.wgsl');
+    const STANDARD_CLUSTER = readSrc('standard-cluster.wgsl');
+    const DEFAULT_SURFACE = readSrc('default_standard_surface.wgsl');
+    const SURFACE_SLOT = DEFAULT_SURFACE.replace(
+      /^\s*#define_import_path\s+[^\n]+/m,
+      '#define_import_path forgeax_material::slot::surface',
+    );
 
     IMPORTS = {
+      'forgeax_clipping::planes': readSrc('clipping.wgsl'),
       'forgeax_view::common': COMMON,
+      forgeax_scene_temporal: SCENE_TEMPORAL,
       'forgeax_view::fog': readSrc('fog.wgsl'),
       'forgeax_pbr::brdf': BRDF,
+      'forgeax_pbr::specular_aa': readSrc('specular-aa.wgsl'),
+      'forgeax_material::alpha_hash': readSrc('alpha-hash.wgsl'),
+      'forgeax_material::oit': readSrc('oit.wgsl'),
+      'forgeax_material::displacement': readSrc('standard-displacement.wgsl'),
+      'forgeax_shadow::surface': readSrc('shadow-surface.wgsl'),
       'forgeax_pbr::temporal': PBR_TEMPORAL,
       'forgeax_pbr::ibl_shared': IBL_SHARED,
       'forgeax_pbr::ibl_sampling': IBL_SAMPLING,
+      'forgeax_pbr::lighting_probe': readSrc('lighting-probe.wgsl'),
+      'forgeax_pbr::standard_lighting': readSrc('standard-lighting.wgsl'),
+      'forgeax_pbr::gbuffer': readSrc('standard-gbuffer.wgsl'),
+      'forgeax_pbr::gbuffer_output': readSrc('standard-gbuffer-output.wgsl'),
       'forgeax_pbr::tbn': TBN,
       'forgeax_pbr::lighting_directional': LIGHTING_DIRECTIONAL,
       'forgeax_pbr::lighting_punctual': LIGHTING_PUNCTUAL,
-      'forgeax_hdrp::cluster_forward': readSrc('hdrp-cluster-forward.wgsl'),
+      'forgeax_pbr::lighting_spot_modifiers': readSrc('lighting-spot-modifiers.wgsl'),
+      'forgeax_pbr::lighting_rect_area': readSrc('lighting-rect-area.wgsl'),
+      'forgeax_pbr::lighting_attenuation': LIGHTING_ATTENUATION,
+      'forgeax_pbr::lighting_spot_projector': readSrc('lighting-spot-projector.wgsl'),
+      'forgeax_cloud::layer': readSrc('cloud.wgsl'),
+      'forgeax_standard::cluster': STANDARD_CLUSTER,
       'forgeax_pbr::shadow_pcf': SHADOW_PCF,
+      'forgeax_pbr::clearcoat': readSrc('material/physical/clearcoat.wgsl'),
+      'forgeax_pbr::anisotropy': readSrc('material/physical/anisotropy.wgsl'),
+      'forgeax_pbr::sheen': readSrc('material/physical/sheen.wgsl'),
+      'forgeax_pbr::iridescence': readSrc('material/physical/iridescence.wgsl'),
+      'forgeax_material::surface_v1': readSrc('surface_v1.wgsl'),
+      'forgeax_material::surface_sampling': readSrc('surface-sampling.wgsl'),
+      'forgeax_material::default_standard_surface': DEFAULT_SURFACE,
+      'forgeax_material::slot::surface': SURFACE_SLOT,
     };
   });
 
   function compileEntry(file: string, id: string, defines: Record<string, boolean>) {
     const entry = stripPragmas(readSrc(file));
-    // feat-20260625 M2: common.wgsl uses `#if PER_INSTANCE_REGION == true`
-    // for the InstanceData region field; entries that don't declare this
-    // axis must inject `PER_INSTANCE_REGION: false` to satisfy naga_oil's
-    // `Unknown shader def` check. Mirrors the production injection path
-    // in packages/vite-plugin-shader/src/index.ts compileEngineEntry.
+    // Keep this helper aligned with compileEngineEntry: naga_oil requires every
+    // simple boolean `#if` used by the source to be explicitly defined.
     return compileShader(entry, {
       id,
       imports: IMPORTS,
-      defines: { PER_INSTANCE_REGION: false, ...defines },
+      generatedParameters: generateParameterModule(
+        file.includes('unlit') ? DEFAULT_UNLIT_PARAM_SCHEMA : DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+        { includeResources: false },
+      ),
+      defines: { ...ENGINE_SHADER_DEFAULT_DEFINES, ...defines },
     });
   }
 
@@ -1916,14 +2359,9 @@ ${MINIMAL_WGSL.trim()}
     }
 
     it('(a) CLUSTER_FORWARD_AVAILABLE=true compiles without error', async () => {
-      const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
-        id: 'pbr#cfw-true',
-        imports: IMPORTS,
-        defines: {
-          PER_INSTANCE_REGION: false,
-          STORAGE_BUFFER_AVAILABLE: true,
-          CLUSTER_FORWARD_AVAILABLE: true,
-        },
+      const r = await compileEntry('default-standard-pbr.wgsl', 'pbr#cfw-true', {
+        STORAGE_BUFFER_AVAILABLE: true,
+        CLUSTER_FORWARD_AVAILABLE: true,
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
@@ -1933,10 +2371,16 @@ ${MINIMAL_WGSL.trim()}
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-uniform-downlevel',
         imports: IMPORTS,
+        generatedParameters: generateParameterModule(DEFAULT_STANDARD_PBR_PARAM_SCHEMA, {
+          includeResources: false,
+        }),
         defines: {
           PER_INSTANCE_REGION: false,
+          PROJECTOR_AVAILABLE: false,
+          VERTEX_COLOR_AVAILABLE: false,
           STORAGE_BUFFER_AVAILABLE: false,
           CLUSTER_FORWARD_AVAILABLE: true,
+          GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
         },
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
@@ -1944,28 +2388,18 @@ ${MINIMAL_WGSL.trim()}
     });
 
     it('(b) CLUSTER_FORWARD_AVAILABLE=false compiles without error', async () => {
-      const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
-        id: 'pbr#cfw-false',
-        imports: IMPORTS,
-        defines: {
-          PER_INSTANCE_REGION: false,
-          STORAGE_BUFFER_AVAILABLE: true,
-          CLUSTER_FORWARD_AVAILABLE: false,
-        },
+      const r = await compileEntry('default-standard-pbr.wgsl', 'pbr#cfw-false', {
+        STORAGE_BUFFER_AVAILABLE: true,
+        CLUSTER_FORWARD_AVAILABLE: false,
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
     });
 
     it('(c) true variant compiled bindingLayout has @group(2) @binding(3,4,5,6) cluster entries', async () => {
-      const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
-        id: 'pbr#cfw-true-binding',
-        imports: IMPORTS,
-        defines: {
-          PER_INSTANCE_REGION: false,
-          STORAGE_BUFFER_AVAILABLE: true,
-          CLUSTER_FORWARD_AVAILABLE: true,
-        },
+      const r = await compileEntry('default-standard-pbr.wgsl', 'pbr#cfw-true-binding', {
+        STORAGE_BUFFER_AVAILABLE: true,
+        CLUSTER_FORWARD_AVAILABLE: true,
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (!r.ok) return;
@@ -1976,43 +2410,20 @@ ${MINIMAL_WGSL.trim()}
       expect(bindings).toContain(6);
     });
 
-    it('(d) false variant: naga_oil reflection still surfaces cluster bindings -- runtime gates via per-variant PipelineLayout (M4.5)', async () => {
-      // M1 / w1 originally asserted that with CLUSTER_FORWARD_AVAILABLE=false
-      // the compiled bindingLayout would NOT contain @group(2) @binding(3..6).
-      // Discovery via M4 + M4.5: naga_oil composer pre-resolves all #import
-      // directives (including those wrapped in #ifdef CLUSTER_FORWARD_AVAILABLE)
-      // BEFORE evaluating #ifdef culling, so the reflection layer surfaces every
-      // binding declaration in the import-graph union, not the per-variant
-      // active subset. This is a documented naga_oil characteristic, not an
-      // engine bug. The runtime gating happens one layer up:
-      //   - M4 (w30..w34): runtime resolves the per-variant WGSL text from
-      //     manifest.variants[].variantWgsl; URP variant manifest entry contains
-      //     ZERO cluster bindings in its WGSL body.
-      //   - M4.5 (w35..w42): boot-time hdrpPbrPipelineLayout (5-slot) is
-      //     selected only when frameState.isHdrpActive=true; URP path uses
-      //     pbrPipelineLayout (1-slot) which does NOT advertise group(2)
-      //     bindings 3..6 on the GPU side.
-      // So the contract this test originally guarded is upheld at the runtime
-      // layer, not at the naga_oil compile-time reflection layer. Lock in the
-      // observed reflection behaviour so future readers don't chase the same
-      // red herring; the defense-in-depth grep gate (G-14 / G-13) prevents
-      // accidental fallback to URP layout when HDRP is active.
-      // See memory: hdrp-active-must-not-fallback-to-urp-pipeline.
-      const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
-        id: 'pbr#cfw-false-binding',
-        imports: IMPORTS,
-        defines: {
-          PER_INSTANCE_REGION: false,
-          STORAGE_BUFFER_AVAILABLE: true,
-          CLUSTER_FORWARD_AVAILABLE: false,
-        },
+    it('(d) false variant: imported conditional bindings are projected before reflection', async () => {
+      // The compiler must project the same false branch through imported
+      // modules before naga_oil reflects bindings. This keeps the composed WGSL
+      // and the runtime per-variant PipelineLayout on one capability contract;
+      // the old import-graph union behavior caused false variants to advertise
+      // bindings that their view BGL did not create.
+      const r = await compileEntry('default-standard-pbr.wgsl', 'pbr#cfw-false-binding', {
+        STORAGE_BUFFER_AVAILABLE: true,
+        CLUSTER_FORWARD_AVAILABLE: false,
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (!r.ok) return;
       const bindings = group2Bindings(r.value.bindings ?? []);
-      // Lock in observed naga_oil behaviour: cluster bindings are present
-      // post-compose because imports are resolved before #ifdef culling.
-      expect(bindings).toEqual(expect.arrayContaining([3, 4, 5, 6]));
+      expect(bindings).not.toEqual(expect.arrayContaining([3, 4, 5, 6]));
     });
   });
 }

@@ -1,22 +1,22 @@
 // feat-20260709-editor-world-partition-editorworld-super-composite / M2 / w9
 // (RED — impl lands in w12). Contract test: a world injected through drawSource
 // MUST be world.update(1 / 60).unwrap()'d by the frame-loop in the SAME frame it is drawn, so
-// the renderer reads a freshly-propagated Transform.world mat4 — never a stale
+// the renderer reads a freshly-propagated GlobalTransform.world mat4 — never a stale
 // one.
 //
 // Why this matters (Strategist D-3, not covered by research): the renderer's
-// extract stage reads the DERIVED `Transform.world` column, whose sole writer is
+// extract stage reads the DERIVED `GlobalTransform.world` column, whose sole writer is
 // the propagateTransforms system (plugin-factories.ts / systems/propagate-
 // transforms.ts). That writer only runs inside `world.update(1 / 60).unwrap()`. If drawSource
 // merely fed injected worlds into `renderer.draw(worlds, ...)` WITHOUT the
 // frame-loop running `world.update(1 / 60).unwrap()` on them first, the renderer would read the
-// injected world's Transform.world at its previous (or default identity) value —
+// injected world's GlobalTransform.world at its previous (or default identity) value —
 // a stale-matrix bug that renders the injected world one frame behind (or at the
 // origin on the first frame).
 //
 // This test spawns an entity in the injected world with a DISTINGUISHING
 // non-identity translation and never calls world.update(1 / 60).unwrap() on that world itself.
-// The spy renderer reads `Transform.world` at draw time. A frame-loop that
+// The spy renderer reads `GlobalTransform.world` at draw time. A frame-loop that
 // updates injected worlds surfaces the translation in the mat4's column-major
 // [12]/[13]/[14] slots; a draw-only frame-loop surfaces the identity default
 // (0/0/0), which fails the assertion. So the test has genuine discriminating
@@ -30,13 +30,13 @@
 //   plan-strategy §2 D-3 (frame-loop MUST update injected worlds — transform
 //     propagation — before draw; not draw-only)
 //   research F1 (frame-loop is the world.update -> renderer.draw driver)
-//   AGENTS.md invariant 6 (Transform.world is the round-trip fidelity seam)
+//   AGENTS.md invariant 6 (GlobalTransform.world is the derived fidelity seam)
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import type { Renderer } from '@forgeax/engine-render';
-import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createFrameLoop, type FrameLoopOptions } from '../internal/frame-loop';
 
@@ -84,15 +84,15 @@ const createFrameLoopWithDrawSource = createFrameLoop as unknown as (
 ) => ReturnType<typeof createFrameLoop>;
 
 describe('drawSource injected worlds are updated same-frame (w9, stale-matrix regression)', () => {
-  it('renderer reads a freshly-propagated Transform.world for the injected world at draw time', () => {
+  it('renderer reads a freshly-propagated GlobalTransform.world for the injected world at draw time', () => {
     // The loop's OWN world — the single-world identity path. Never carries the
     // injected entity, so it cannot mask a stale read on the injected world.
     const loopWorld = new World();
 
-    // The injected world: register propagateTransforms (the sole Transform.world
+    // The injected world: register propagateTransforms (the sole GlobalTransform.world
     // writer) and spawn an entity with a distinguishing non-identity translation.
     // We deliberately do NOT call injectedWorld.update() here — the frame-loop
-    // must run it for the translation to reach Transform.world.
+    // must run it for the translation to reach GlobalTransform.world.
     const injectedWorld = new World();
     registerPropagateTransforms(injectedWorld);
     const spawned = injectedWorld
@@ -107,10 +107,10 @@ describe('drawSource injected worlds are updated same-frame (w9, stale-matrix re
       .unwrap();
     const entity = spawned as unknown as EntityHandle;
 
-    // Sanity: BEFORE any frame, Transform.world is still the identity default
+    // Sanity: BEFORE any frame, GlobalTransform.world is still the identity default
     // (translation columns are 0). This proves the assertion below measures the
     // frame-loop's update, not a pre-propagated value.
-    const before = injectedWorld.get(entity, Transform);
+    const before = injectedWorld.get(entity, GlobalTransform);
     expect(before.ok).toBe(true);
     if (before.ok) {
       const w = before.value.world as unknown as ArrayLike<number>;
@@ -119,14 +119,15 @@ describe('drawSource injected worlds are updated same-frame (w9, stale-matrix re
       expect(w[14]).toBe(0);
     }
 
-    // Spy renderer: at draw time, read the injected world's Transform.world and
+    // Spy renderer: at draw time, read the injected world's GlobalTransform.world and
     // record the translation columns. This is the exact read the real extract
-    // stage performs (Transform.world is the extract SSOT).
+    // stage performs (GlobalTransform.world is the extract SSOT).
     const observed: Array<[number, number, number]> = [];
     const renderer = {
+      state: () => 'alive' as const,
       attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
       draw(): { ok: true; value: undefined } {
-        const r = injectedWorld.get(entity, Transform);
+        const r = injectedWorld.get(entity, GlobalTransform);
         if (r.ok) {
           const m = r.value.world as unknown as ArrayLike<number>;
           observed.push([m[12] as number, m[13] as number, m[14] as number]);

@@ -9,20 +9,21 @@ import type {
 } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 
-// Type-only tests. Verify the 8-member ImageErrorCode closed union compiles
+// Type-only tests. Verify the 9-member ImageErrorCode closed union compiles
 // an exhaustive switch without a default arm (charter P4 explicit failure).
 // Verifies the discriminated ImageErrorDetail narrowing per .code (charter
 // P3 machine-readable union > prose; AGENTS.md Error model row pattern).
 //
 // feat-20260521-sprite-atlas-animation M1 T-03 update: union grew from 5 to
 // 8 with the atlas-* triplet (atlas-empty-input / atlas-size-exceeded /
-// atlas-region-mismatch). The exact-member assertion + exhaustive switch
+// atlas-region-mismatch); the 9th arm is the image-owned PixelSurface
+// authoring error. The exact-member assertion + exhaustive switch
 // arms below mirror the SSOT in @forgeax/engine-types ImageErrorCode +
 // ImageErrorDetail so a future minor add still fails this file at compile
 // time until the new arm + .expected + .hint rows are supplied.
 
 describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () => {
-  it('ImageErrorCode is the exact 8-member union literal set', () => {
+  it('ImageErrorCode is the exact 9-member union literal set', () => {
     expectTypeOf<ImageErrorCode>().toEqualTypeOf<
       | 'image-decode-failed'
       | 'image-format-unsupported'
@@ -32,6 +33,7 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
       | 'atlas-empty-input'
       | 'atlas-size-exceeded'
       | 'atlas-region-mismatch'
+      | 'image-surface-invalid'
     >();
   });
 
@@ -45,15 +47,17 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
         case 'image-dimension-out-of-bounds':
           return 'downscale source under device caps maxDimension';
         case 'image-meta-missing':
-          return 'run forgeax-engine-remote-asset import <path>';
+          return 'run forgeax asset import <path> --root <project>';
         case 'image-hdr-decode-failed':
           return 'verify Radiance RGBE header and FORMAT=32-bit_rle_rgbe field';
         case 'atlas-empty-input':
-          return 'verify forgeax-engine-remote-asset atlas --input glob matches at least 1 PNG';
+          return 'verify forgeax asset atlas --input glob matches at least 1 PNG';
         case 'atlas-size-exceeded':
           return 'downscale source or split atlas under maxAtlasSize cap';
         case 'atlas-region-mismatch':
           return 'shelfPack regions exceed atlas footprint -- packer safety net';
+        case 'image-surface-invalid':
+          return 'repair PixelSurface authoring input';
       }
     }
     expectTypeOf(recover).toBeFunction();
@@ -78,6 +82,8 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
           return `atlas-size:${detail.name}:${detail.width}x${detail.height}>${detail.maxAtlasSize}`;
         case 'atlas-region-mismatch':
           return `atlas-region:${detail.name}:${detail.regionsTotalPixels}>${detail.atlasPixels}`;
+        case 'image-surface-invalid':
+          return `surface:${detail.operation}:${detail.field}`;
       }
     }
     expectTypeOf(describe_).toBeFunction();
@@ -102,6 +108,8 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
           return `${error.detail.name}:${error.detail.maxAtlasSize}`;
         case 'atlas-region-mismatch':
           return `${error.detail.name}:${error.detail.atlasPixels}`;
+        case 'image-surface-invalid':
+          return `${error.detail.operation}:${error.detail.field}`;
       }
     }
 

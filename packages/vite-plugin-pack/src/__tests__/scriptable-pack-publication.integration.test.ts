@@ -5,7 +5,10 @@ import {
 } from '@forgeax/engine-ddc';
 import type { AssetPublicationEnvelope } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { preserveAcceptedPublicationGeneration } from '../dev/authored-pack-publication.js';
+import {
+  preserveAcceptedPublicationGeneration,
+  selectAuthoredPublicationGeneration,
+} from '../dev/authored-pack-publication.js';
 
 function publication(generation: number): AssetPublicationEnvelope {
   const outputs = [
@@ -81,6 +84,27 @@ describe('ScriptablePack publication integration', () => {
     });
     expect(preserved.digest).toBe(candidate.digest);
     expect(preserved.outputSetDigest).toBe(candidate.outputSetDigest);
+  });
+
+  it('does not advance an unchanged bystander during a generation-neutral probe', () => {
+    const accepted = publication(7);
+    const probe: AssetPublicationEnvelope = {
+      ...accepted,
+      generation: 7,
+    };
+
+    expect(selectAuthoredPublicationGeneration(accepted, probe)).toBe(7);
+    expect(
+      selectAuthoredPublicationGeneration(accepted, { ...probe, sourceRevision: 'source-changed' }),
+    ).toBe(8);
+    expect(
+      selectAuthoredPublicationGeneration(publication(1), {
+        ...publication(1),
+        generation: 1,
+        digest: 'sha256:probe',
+        receipt: { ...publication(1).receipt, outputDigest: 'sha256:probe' },
+      }),
+    ).toBe(2);
   });
 
   it('installs only one complete publication tuple and keeps the previous LKG on route failure', async () => {

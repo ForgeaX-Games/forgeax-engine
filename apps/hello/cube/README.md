@@ -17,7 +17,7 @@ AI users discover via `@forgeax/engine-runtime`:
 four criteria (D-S10 / D-S6 / D-S7):
 
 - (a) `[hello-cube] backend=webgpu` console literal observed.
-- (b) frames observed >= `SMOKE_MIN_FRAMES` (default 300).
+- (b) frames observed >= `SMOKE_MIN_FRAMES` (default 60).
 - (c) NDC center pixel distance to black `[0, 0, 0]` > `SMOKE_PIXEL_THRESHOLD`
       (default 0.05); cube `MeshRenderer.baseColor = [0.8, 0.4, 0.2]` keeps
       the contrast comfortable (Euclidean distance ~0.93).
@@ -25,7 +25,7 @@ four criteria (D-S10 / D-S6 / D-S7):
       RenderSystem error codes from D-S6 / D-S7 stay silent on the happy path).
 
 ENV knobs match `hello-triangle/scripts/smoke-dawn.mjs`:
-`SMOKE_DURATION_MS=5000` / `SMOKE_MIN_FRAMES=300` / `SMOKE_PIXEL_THRESHOLD=0.05`.
+`SMOKE_DURATION_MS=5000` / `SMOKE_MIN_FRAMES=60` / `SMOKE_PIXEL_THRESHOLD=0.05`.
 
 ## SSOT (AC-12b self-contained)
 

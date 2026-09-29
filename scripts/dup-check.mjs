@@ -30,19 +30,19 @@
 //                                   in this code path too.
 //   --allow-pair <a::b>             repeated; in-test injection of
 //                                   filePairIgnore unordered pairs (T-009
-//                                   surface; the .jscpd.json#filePairIgnore
+//                                   surface; the config/jscpd.json#filePairIgnore
 //                                   field still feeds the wrapper through
 //                                   the loadAllowList() helper).
 //
-// Configuration SSOT: .jscpd.json at repo root (T-004). The wrapper does
+// Configuration SSOT: config/jscpd.json. The wrapper does
 // not duplicate jscpd configuration; it only consumes the JSON report
-// jscpd writes per .jscpd.json#output + .jscpd.json#reporters, and the
-// custom .jscpd.json#filePairIgnore field that wrapper post-process owns
+// jscpd writes per config/jscpd.json#output + config/jscpd.json#reporters, and the
+// custom config/jscpd.json#filePairIgnore field that wrapper post-process owns
 // (D-P1 - jscpd 4.x ignore is glob-only, no native file-pair support).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // === module-level constants ====================================================
@@ -187,7 +187,7 @@ export function filterByAllowList(clones, allowList) {
 }
 
 /**
- * Load the wrapper-owned .jscpd.json#filePairIgnore custom field. Two
+ * Load the wrapper-owned config/jscpd.json#filePairIgnore custom field. Two
  * entry shapes are accepted (both yield the same [pathA, pathB] tuple
  * downstream):
  *
@@ -206,7 +206,7 @@ export function filterByAllowList(clones, allowList) {
  * field / non-array values collapse to []; malformed entries are silently
  * dropped (the schema is AI-user-authored, not third-party).
  *
- * @param {string} configPath absolute path to .jscpd.json
+ * @param {string} configPath absolute path to config/jscpd.json
  * @returns {[string, string][]}
  */
 export function loadFilePairIgnore(configPath) {
@@ -269,7 +269,7 @@ export function formatViolation(kept) {
 
 function spawnJscpd(configPaths) {
   const jscpdBin = join(REPO_ROOT, 'node_modules', '.bin', 'jscpd');
-  return spawnSync(jscpdBin, configPaths, {
+  return spawnSync(jscpdBin, ['--config', 'config/jscpd.json', ...configPaths], {
     cwd: REPO_ROOT,
     stdio: 'inherit',
     shell: false,
@@ -277,10 +277,12 @@ function spawnJscpd(configPaths) {
 }
 
 function loadConfigPaths() {
-  const configPath = resolve(REPO_ROOT, '.jscpd.json');
+  const configPath = resolve(REPO_ROOT, 'config/jscpd.json');
   if (!existsSync(configPath)) return [];
   const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
-  return Array.isArray(cfg.path) ? cfg.path : [];
+  return Array.isArray(cfg.path)
+    ? cfg.path.map((path) => relative(REPO_ROOT, resolve(dirname(configPath), path)))
+    : [];
 }
 
 // === main entry ===============================================================
@@ -325,14 +327,14 @@ export async function main(argv) {
   const reportPath = resolve(REPO_ROOT, args.reportPath);
 
   // Step 3: spawn jscpd unless --skip-jscpd. The configuration SSOT is
-  // .jscpd.json (research F-1 / F-5 / F-6); jscpd 4.1.1 reads .path via
+  // config/jscpd.json (research F-1 / F-5 / F-6); jscpd 4.1.1 reads .path via
   // the wrapper's positional argv forwarding (research F-1 ingest gap).
   if (!args.skipJscpd) {
     let configPaths;
     try {
       configPaths = loadConfigPaths();
     } catch (e) {
-      emitInternalError(`cannot parse .jscpd.json: ${e.message}`);
+      emitInternalError(`cannot parse config/jscpd.json: ${e.message}`);
       return { exitCode: 2 };
     }
     const spawn = spawnJscpd(configPaths);
@@ -351,11 +353,11 @@ export async function main(argv) {
   }
 
   // Step 5: post-process clones[] - apply file-pair allow-list. Two
-  // sources merged: .jscpd.json#filePairIgnore (the SSOT for repo-level
+  // sources merged: config/jscpd.json#filePairIgnore (the SSOT for repo-level
   // RHI mirror exemptions) plus --allow-pair CLI args (in-test
   // injection). Both feed the same unordered-pair set semantics so the
   // wrapper does not branch on source.
-  const configFilePairs = loadFilePairIgnore(resolve(REPO_ROOT, '.jscpd.json'));
+  const configFilePairs = loadFilePairIgnore(resolve(REPO_ROOT, 'config/jscpd.json'));
   const allAllowPairs = configFilePairs.concat(args.allowPairs);
   const { kept } = filterByAllowList(parsed.value.duplicates, allAllowPairs);
 
@@ -391,7 +393,7 @@ export async function main(argv) {
     `\n[reason] dup-check: ${kept.length} clone(s) detected (lines>=30, tokens>=50)\n` +
       `[rerun]  pnpm dup-check\n` +
       `[hint]   extract shared helper at <suggested-path> ` +
-      `OR add file-pair to .jscpd.json#filePairIgnore with rationale ` +
+      `OR add file-pair to config/jscpd.json#filePairIgnore with rationale ` +
       `OR raise minLines (PR description must justify per OOS-07/D-4)\n`,
   );
   return { exitCode: 1 };

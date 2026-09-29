@@ -7,7 +7,6 @@ import {
   Update,
   World,
   defineComponent,
-  ok,
 } from '@forgeax/engine-ecs';
 import {
   INPUT_MAP_KEY,
@@ -15,6 +14,7 @@ import {
   inputBackendPlugin,
 } from '@forgeax/engine-input';
 import { vec3 } from '@forgeax/engine-math';
+import { ok } from '@forgeax/engine-types';
 import { ChildOf } from '@forgeax/engine-scene';
 import {
   addOnEnter,
@@ -62,9 +62,15 @@ function makeRenderer(drawCalls) {
   return {
     backend: 'webgpu',
     ready: Promise.resolve({ ok: true, value: undefined }),
-    draw(worlds, owners) {
-      drawCalls.push({ worldCount: worlds.length, cameraOwner: owners.cameraOwner, resourceOwner: owners.resourceOwner });
+    state() {
+      return 'alive';
+    },
+    draw(input) {
+      drawCalls.push({ worldCount: input.leases.length });
       return ok(undefined);
+    },
+    subscribe() {
+      return () => {};
     },
     onError() {
       return () => {};
@@ -73,7 +79,7 @@ function makeRenderer(drawCalls) {
       return () => {};
     },
     attach() {
-      return ok(undefined);
+      return ok({ dispose() {} });
     },
     detachWorld() {},
     dispose() {},
@@ -357,9 +363,11 @@ async function main() {
     clock = firstTimestamp + 400;
     pendingFrames.shift()(firstTimestamp + 400);
     assert.equal(faultThrown, true);
-    assert.equal(errors.filter((error) => error.code === 'app-system-update-failed').length, 1);
+    // The poisoned World retry is fanned out as a second App update failure.
+    assert.equal(errors.filter((error) => error.code === 'app-system-update-failed').length, 2);
     assert.equal(secondaryFixedTicks, 6);
-    assert.equal(drawCalls.length, 2);
+    // The secondary World remains renderable on both poisoned-primary retries.
+    assert.equal(drawCalls.length, 3);
     assertResult(app.stop(), 'app stop');
     console.log('[m1-composition] App error fan-out and same-process recovery: PASS');
   } finally {

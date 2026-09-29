@@ -13,14 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "assets": {
-      "roots": [
-        "./assets",
-        "../../../../forgeax-engine-assets/learn-opengl/meshes"
-      ]
-    },
-    "smokeInvocation": "",
-    "_smokeInvocationReason": "OOS-10 / D-7: smoke gate subset is textures + camera only; 1.6 coordinate-systems covered by vitest browser e2e in M10 milestone.",
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-1-getting-started-6-coordinate-systems smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -35,8 +28,8 @@
         "reason": "pixel-parity bench drives parity-forgeax vs parity-threejs; learn-render entries land as bench:pixel-parity 7-entry placeholders only"
       },
       "gate": {
-        "enabled": false,
-        "reason": "smoke gate subset = 4.textures + 7.camera only (D-7); 1.6 coordinate-systems covered by vitest browser e2e (AC-05) in M10 milestone"
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/app-learn-render-1-getting-started-6-coordinate-systems smoke"
       },
       "spike-report": {
         "enabled": false,
@@ -61,7 +54,7 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "@webgpu/types": "^0.1.71"
   }
 }

@@ -43,7 +43,8 @@ const { createApp } = await import('@forgeax/engine-app');
 const { buildCapstoneScene } = await import(resolve(root, 'apps/hello/m8-integrated-capstone/src/scene.ts'));
 const { physicsPlugin } = await import('@forgeax/engine-physics');
 const manifestPath = resolve(root, 'apps/hello/m8-integrated-capstone/dist/shaders/manifest.json');
-const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
+const manifestUrl = URL.createObjectURL(new Blob([readFileSync(manifestPath)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(manifestUrl));
 const result = await createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }, { shaderManifestUrl: manifestUrl });
 if (!result.ok) throw new Error(`M8 Dawn createApp failed: ${result.error.code}`);
 const app = result.value;
@@ -53,25 +54,44 @@ const { FixedUpdate } = await import('@forgeax/engine-ecs');
 app.world.addSystem(FixedUpdate, { name: 'm8-dawn-fixed-oracle', queries: [], fn: () => { fixedTicks.value += 1; } }).unwrap();
 const errors = [];
 app.onError((error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
-const originalNow = globalThis.performance.now.bind(globalThis.performance);
-let fakeNow = 0;
-globalThis.performance.now = () => fakeNow;
 const started = app.start();
 if (!started.ok) throw new Error(`M8 Dawn app.start failed: ${started.error.code}`);
-for (let i = 0; i < 120; i++) {
-  const frame = rafQueue.shift();
-  if (!frame) break;
-  fakeNow += 16.67;
-  frame.callback(fakeNow);
+const paused = app.pause();
+if (!paused.ok) throw new Error(`M8 Dawn app.pause failed: ${paused.error.code}`);
+const frameCount = Math.max(60, Number(process.env.SMOKE_MIN_FRAMES ?? 60));
+const receiptWaitDeadlineMs = 30_000;
+const waitForReceiptCredit = async () => {
+  const deadline = Date.now() + receiptWaitDeadlineMs;
+  while (app.execution.report().frame.inFlight !== 0) {
+    if (Date.now() >= deadline) {
+      throw new Error(`M8 frame receipt did not settle within ${receiptWaitDeadlineMs}ms`);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
+let submissions = 0;
+for (; submissions < frameCount; ) {
+  const stepped = app.stepFrame(1 / 60);
+  if (!stepped.ok) {
+    if (
+      stepped.error.code === 'app-frame-step-invalid' &&
+      stepped.error.detail.reason === 'credit'
+    ) {
+      await waitForReceiptCredit();
+      continue;
+    }
+    throw new Error(`M8 deterministic frame ${submissions} failed: ${stepped.error.code}`);
+  }
+  submissions += 1;
+  await waitForReceiptCredit();
 }
-globalThis.performance.now = originalNow;
 const actor = app.world.get(scene.actor, (await import('@forgeax/engine-scene')).Transform);
 const entities = app.world.inspect().entityCount;
 if (!actor.ok || fixedTicks.value < 30 || entities < 6 || errors.length > 0) {
-  throw new Error(`M8 Dawn shared-scene oracle failed: ${JSON.stringify({ fixedTicks: fixedTicks.value, entities, actorY: actor.ok ? actor.value.pos[1] : null, errors })}`);
+  throw new Error(`M8 Dawn shared-scene oracle failed: ${JSON.stringify({ submissions, fixedTicks: fixedTicks.value, entities, actorY: actor.ok ? actor.value.pos[1] : null, errors })}`);
 }
 const stopped = app.stop();
 if (!stopped.ok) throw new Error(`M8 Dawn app.stop failed: ${stopped.error.code}`);
-console.log(`[m8-capstone] Dawn shared-scene journey: PASS entities=${entities} fixed=${fixedTicks.value} actorY=${actor.value.pos[1]}`);
+console.log(`[m8-capstone] Dawn shared-scene journey: PASS submissions=${submissions} entities=${entities} fixed=${fixedTicks.value} actorY=${actor.value.pos[1]}`);
 delete globalThis.navigator.gpu;
 process.exit(0);

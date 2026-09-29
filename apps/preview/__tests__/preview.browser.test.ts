@@ -1,43 +1,29 @@
-// preview.browser.test.ts -- e2e gate for the apps/preview host + the
-// templates/game-default Cordis gameplay plugin it loads. Runs in the vitest `browser`
-// project (chrome-beta + lavapipe, real WebGPU), so it covers the
-// browser-only path that dawn-node smokes cannot: createApp's canvas form,
-// the gameplay plugin's scene load by GUID (forge.json.defaultScene ->
-// loadByGuid<SceneAsset>) through the pluginPack dev-server middleware (which
-// indexes assets/scene.pack.json), and N frames of real draw.
-//
-// What it asserts (charter P3 explicit failure -- every gate is a hard
-// expect, no silent skip):
-//   - createApp(canvas) -> Result.ok(App)          (host wiring alive)
-//   - the template bootstrap resolves without throw (scene pack loads)
-//   - a Camera entity exists                        (dynamic layer ran)
-//   - entityCount >= 21 (the pack's node count)     (scene pack instantiated,
-//                                                     not the fallback path)
-//   - zero renderer errors across N frames          (no WebGPU validation /
-//                                                     device error)
-//
-// This mirrors apps/preview/src/main.ts's plugin mount, minus the two Vite
-// build-time couplings a test runner cannot evaluate: `virtual:forgeax/
-// bundler` (createApp works without it -- see thin-wrapper.browser.test.ts)
-// and `import.meta.glob` (the template module is imported directly here, and
-// its default export is mounted into the App-owned Context).
+// Browser contract for the capability-lab root asset: real Pack transport,
+// native activation, scene ownership, UI/audio, and rendered frames.
+// Vitest compiles the single known program through its normal module graph;
+// the runtime definition/configuration comes from the published Pack.
 
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
-import { createApp, gameHostPlugin } from '@forgeax/engine-app';
+import { activateExecutionRoot, createApp, gameHostPlugin, type App } from '@forgeax/engine-app';
 import type { GameHost } from '@forgeax/engine-app';
 import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
 import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import type { PluginProgramEntry, PluginPrograms } from '@forgeax/engine-plugin';
+import { defineToolCommandContract, type ToolCommandContract } from '@forgeax/engine-tool-runtime';
+import type { EntityHandle } from '@forgeax/engine-ecs';
+import type { PluginAssetDefinition } from '@forgeax/engine-types';
 import type { InputBackend, InputSnapshot } from '@forgeax/engine-input';
-import { physicsPlugin } from '@forgeax/engine-physics';
 import { Camera, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { sceneEntity, Transform, worldResolveSceneEntity } from '@forgeax/engine-scene';
+import { skinningPlugin } from '@forgeax/engine-skinning';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import gameplay from '../../../templates/game-default/main';
-import { HUD_UI_GUID } from '../../../templates/game-default/assets/plugins/hud';
-import { SETTINGS_UI_GUID } from '../../../templates/game-default/assets/plugins/settings';
+import gameplay from '../../../apps/game-capability-lab/main';
+import project from '../../../apps/game-capability-lab/forge.json';
+import { HUD_UI_GUID } from '../../../apps/game-capability-lab/assets/plugins/hud';
+import { SETTINGS_UI_GUID } from '../../../apps/game-capability-lab/assets/plugins/settings';
 
 const runtimeBinding = createStandaloneRuntimeAssetBinding(
   import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview',
@@ -47,10 +33,22 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-describe('apps/preview e2e -- templates/game-default loads + renders error-free', () => {
+describe('apps/preview e2e -- apps/game-capability-lab loads + renders error-free', () => {
   let canvas: HTMLCanvasElement;
   let viewport: HTMLDivElement;
-  let activeApp: { dispose(): Promise<unknown> } | undefined;
+  let activeApp: App | undefined;
+
+  // Production of the complete browser fixture catalog is build preparation.
+  // Keep it outside the unchanged 120 s gameplay budget, within the 420 s group budget.
+  beforeAll(async () => {
+    const response = await fetch(runtimeBinding.catalogUrl, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(320_000),
+    });
+    if (!response.ok)
+      throw new Error(`preview Pack preparation failed: ${response.status} ${await response.text()}`);
+    await response.arrayBuffer();
+  }, 330_000);
 
   beforeEach(() => {
     // The template reads `document.querySelector('#app')` and its
@@ -91,18 +89,26 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       }),
       detach: () => {},
     };
+    const definitions = new Map<string, PluginAssetDefinition['evidence']>();
+    const programEntries = new Map<string, PluginProgramEntry>();
+    const tools = new Map<string, ToolCommandContract>();
+    const pluginPrograms: PluginPrograms = {
+      sessionId: 'preview-browser', contextId: 'preview-engine', sessionGeneration: 1,
+      target: 'engine', definitions, programs: programEntries, tools,
+    };
     const appRes = await createApp(
       canvas,
       {
         input: inputBackend,
-        plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
+        pluginPrograms,
+        plugins: [webAudioPlugin(), audioPlugin(), skinningPlugin()],
       },
       { importTransport: createDevImportTransport(runtimeBinding) },
     );
-    expect(appRes.ok).toBe(true);
-    if (!appRes.ok) return;
+    if (!appRes.ok) throw appRes.error;
     const app = appRes.value;
     activeApp = app;
+    expect(app.world.components.resolve('SceneInstance')).toBe(SceneInstance);
 
     const errors: string[] = [];
     const uiFailures: string[] = [];
@@ -120,6 +126,8 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     if (assets === undefined) throw new Error('preview App did not expose its asset registry');
     assets.configureRuntimeBinding(runtimeBinding);
 
+    expect(await assets.refreshCatalog(), 'prepared Pack catalog must be authoritative').toBe(true);
+
     const uiRoot = document.createElement('div');
     uiRoot.dataset.testUiRoot = 'preview-bootstrap';
     viewport.appendChild(uiRoot);
@@ -128,7 +136,15 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     // The native plugin awaits scene load and owns its contributions as effects.
     try {
       await app.pluginContext.plugin(gameHostPlugin(ctx));
-      await app.pluginContext.plugin(gameplay);
+      expect(app.pluginContext.world).toBe(app.world);
+      expect(app.pluginContext.world.components.resolve('SceneInstance')).toBe(SceneInstance);
+      const definition = await assets.readPluginDefinition(project.roots.engine);
+      if (!definition.ok) throw definition.error;
+      definitions.set(project.roots.engine, definition.value.evidence);
+      programEntries.set(definition.value.asset.program, { load: async () => gameplay });
+      tools.set(project.roots.engine, defineToolCommandContract([]));
+      expect(app.pluginContext.pluginPrograms).toBe(pluginPrograms);
+      await activateExecutionRoot(app.pluginContext, { guid: project.roots.engine });
     } finally {
       console.error = originalError;
     }
@@ -150,7 +166,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     expect(settingsShadow?.querySelector('[data-ui-setting="music"]')).not.toBeNull();
     expect(settingsShadow?.querySelector('[data-ui-setting="high-contrast"]')).not.toBeNull();
     expect(settingsShadow?.querySelector('[data-ui-setting="antialias"]')).not.toBeNull();
-    const audioEntities: number[] = [];
+    const audioEntities: EntityHandle[] = [];
     for (const row of app.world.query({ with: [AudioSource] }).unwrap()) audioEntities.push(row.entity);
     expect(audioEntities.length, 'gameplay must attach a player-owned AudioSource').toBeGreaterThan(0);
     expect(app.renderer, 'runtime shader catalog must remain Host-owned').not.toHaveProperty('shader');
@@ -219,7 +235,6 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       await nextFrame();
     }
     activeApp?.stop();
-    activeApp = undefined;
 
     // Camera => the dynamic layer (camera + gameplay) executed.
     let cameraCount = 0;
@@ -241,18 +256,23 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       `only ${entityCount} entities -- scene pack failed to instantiate (fallback path)`,
     ).toBeGreaterThanOrEqual(21);
 
-    // The authored scene also mounts the reusable NestedTarget prefab into
-    // localId 24. Verify the mount window and its field override survived the
-    // public loadByGuid -> instantiate path, rather than only counting entities.
-    const sceneRoots: number[] = [];
+    // The authored scene also mounts the reusable NestedTarget prefab. Verify
+    // the keyed nested address and its field override survived the public
+    // loadByGuid -> instantiate path, rather than only counting entities.
+    const sceneRoots: EntityHandle[] = [];
     for (const row of app.world.query({ with: [SceneInstance] }).unwrap()) sceneRoots.push(row.entity);
     expect(sceneRoots.length, 'default scene must expose a SceneInstance root').toBeGreaterThan(0);
     const sceneInstance = app.world.get(sceneRoots[0]!, SceneInstance);
     expect(sceneInstance.ok).toBe(true);
     if (sceneInstance.ok) {
-      const nestedEntity = sceneInstance.value.mapping[24];
-      expect(nestedEntity, 'nested prefab member localId 24 must be live').not.toBe(0xffffffff);
-      if (nestedEntity !== undefined && nestedEntity !== 0xffffffff) {
+      const nestedResult = worldResolveSceneEntity(
+        app.world,
+        sceneRoots[0]!,
+        sceneEntity('scene/main', ['instance-23', 'nestedtarget']),
+      );
+      expect(nestedResult.ok, 'nested prefab member address must be live').toBe(true);
+      if (nestedResult.ok) {
+        const nestedEntity = nestedResult.value;
         expect(app.world.get(nestedEntity, MeshRenderer).ok).toBe(true);
         const nestedTransform = app.world.get(nestedEntity, Transform);
         expect(nestedTransform.ok).toBe(true);

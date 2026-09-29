@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const ARTIFACT_DIR = resolve(process.env.FORGEAX_MESH_HANDLE_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/mesh-handle-swap'));
+const ARTIFACT_DIR = resolve(process.env.FORGEAX_MESH_HANDLE_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/mesh-handle-swap'));
 const PORT = Number.parseInt(process.env.FORGEAX_MESH_HANDLE_PORT ?? '5190', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 

@@ -29,6 +29,14 @@ export default defineConfig({
   server: {
     port: 5176,
     strictPort: true,
+    // The shared-input HMR probe deliberately runs against a disposable dev
+    // server.  macOS FSEvents can miss a single atomic WGSL replacement in a
+    // cold temporary worktree (Node 26 + Vite 8), so that probe opts into the
+    // deterministic watcher path without changing normal app development.
+    watch:
+      process.env.FORGEAX_SHARED_INPUTS_HMR_POLLING === '1'
+        ? { usePolling: true, interval: 100 }
+        : undefined,
     fs: {
       allow: [monorepoRoot],
     },

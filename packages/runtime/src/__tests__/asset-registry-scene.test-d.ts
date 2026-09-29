@@ -22,7 +22,7 @@
 import type { Asset } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 
-describe('AssetUnion exhaustive switch covers all 15 members (feat-20260608 M0 baseline rebuild + feat-20260623-world-space-video-asset M1)', () => {
+describe('Asset union covers all engine-known kinds', () => {
   it('Asset union is the closed type-level discriminator for engine-known assets', () => {
     // Asset is the SSOT for engine-known asset types; exhaustiveness is
     // enforced by TypeScript's closed-union narrowing. A missing member
@@ -44,6 +44,8 @@ describe('AssetUnion exhaustive switch covers all 15 members (feat-20260608 M0 b
       | 'tileset'
       | 'video'
       | 'particle-effect'
+      | 'ies-profile'
+      | 'plugin'
     >();
   });
 });

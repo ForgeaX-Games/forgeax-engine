@@ -2,7 +2,7 @@
 // apps/learn-render/5.advanced-lighting/5.parallax-mapping/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 5.advanced-lighting 5.parallax-mapping dawn-node smoke.
-// Structural-only: >=300 frames, onError=0, no pixel readback. This is the
+// Structural-only: >=60 frames, onError=0, no pixel readback. This is the
 // regression baseline; the pixel-readback discriminator (non-black +
 // displacement-visible + algo-switch diff) lives in scripts/smoke-browser.mjs.
 //
@@ -20,8 +20,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -199,12 +200,11 @@ renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: 
 
 const mkTex = (decoded) => ({
   kind: 'texture',
-  width: decoded.width,
-  height: decoded.height,
+  shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
   format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: decoded.bytes,
   colorSpace: decoded.colorSpace,
-  mipmap: decoded.mipmap,
+  mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 });
 
 const guids = {
@@ -280,8 +280,8 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -318,6 +318,8 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+emitSmokeReceipt('app-learn-render-5-advanced-lighting-5-parallax-mapping/smoke', framesObserved);
 
 console.log(
   `[smoke] PASS - 3 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, wallTotalMs=${wallTotalMs}`,

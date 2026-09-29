@@ -41,7 +41,7 @@ export type {
 //   - vector family vec2 / vec3 / vec4
 //   - matrix family mat3 / mat4
 //   - rotation quat / euler
-//   - color (sRGB↔linear + hex parse/format)
+//   - color (sRGB↔linear + hex/CSS parse/format)
 //   - easing (scalar S-curve time remaps)
 //   - noise (Perlin noise, growable home for further variants)
 

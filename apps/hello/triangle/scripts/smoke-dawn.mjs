@@ -31,6 +31,7 @@ import {
   setupGpuShim,
   SMOKE_HELPERS_DEFAULTS,
 } from './smoke-helpers.mjs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? String(DEFAULTS.SMOKE_DURATION_MS), 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? String(DEFAULTS.SMOKE_MIN_FRAMES), 10);
@@ -86,7 +87,7 @@ const { renderer, errors } = await bootRenderer({
 const attachment = renderer.attach(world);
 if (!attachment.ok) throw attachment.error;
 
-// Frame loop + readback (deterministic; ~60fps * 5000ms = 300 frames default).
+// Frame loop + readback: the requested frame count owns rendering work.
 // Use the lease-bound frame request; the public Renderer returns a FrameReceipt.
 const { framesObserved, pixelSamples, device } = await runFrameLoopAndReadback({
   draw: () => {
@@ -110,6 +111,8 @@ const verdict = evaluateSmokeCriteria(
   { backendLine: 'webgpu', framesObserved, pixelSamples },
   { minFrames: SMOKE_MIN_FRAMES, pixelThreshold: SMOKE_PIXEL_THRESHOLD },
 );
+
+if (verdict.pass && errors.length === 0) emitSmokeReceipt('hello-triangle/smoke', framesObserved);
 
 await evaluateAndExit({
   delay,

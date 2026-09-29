@@ -17,6 +17,8 @@ export interface DdcReceipt {
   readonly producer: string;
   readonly inputFingerprint: string;
   readonly outputDigest: string;
+  /** Optional publication tuple metadata kept outside immutable Pack payloads. */
+  readonly publicationGeneration?: number;
 }
 
 export interface DdcEntry {
@@ -106,9 +108,14 @@ function existingResult(
   candidate: DdcEntry,
   key: string,
 ): PublishDdcEntryResult {
-  return canonicalDdcJson(existing) === canonicalDdcJson(candidate)
-    ? { result: 'existing', key }
-    : { result: 'conflict', key };
+  const { publicationGeneration: _existingGeneration, ...existingReceipt } = existing.receipt;
+  const { publicationGeneration: _candidateGeneration, ...candidateReceipt } = candidate.receipt;
+  const sameImmutableContent =
+    existing.key === candidate.key &&
+    existing.guid === candidate.guid &&
+    ddcOutputDigest(existing) === ddcOutputDigest(candidate) &&
+    canonicalDdcJson(existingReceipt) === canonicalDdcJson(candidateReceipt);
+  return sameImmutableContent ? { result: 'existing', key } : { result: 'conflict', key };
 }
 
 function entryShape(entry: DdcEntry): Record<string, unknown> {

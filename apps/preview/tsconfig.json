@@ -14,8 +14,9 @@
   },
   "include": [
     "src/**/*",
-    "../../templates/game-default/**/*.ts",
-    "../../templates/game-brotato-3d/**/*.ts",
-    "../../templates/game-empty/**/*.ts"
+    "__tests__/**/*.browser.test.ts",
+    "../../apps/game-capability-lab/**/*.ts",
+    "../../apps/showcase/brotato-3d/**/*.ts",
+    "../../templates/empty/**/*.ts"
   ]
 }

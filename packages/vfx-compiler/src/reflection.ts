@@ -1,17 +1,26 @@
 import { createHash } from 'node:crypto';
+import type { MaterialParticleInput } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type {
-  ParticleRendererSource,
+  ParticleRendererSortingV3,
+  ParticleRendererSourceV3,
   VfxDataInterfaceRequirement,
   VfxEffectReflection,
+  VfxGpuRendererReflectionV3,
   VfxReflectedField,
   VfxReflectedStruct,
   VfxValue,
   VfxValueType,
 } from '@forgeax/engine-vfx';
+import {
+  defaultParticleRendererAttributes,
+  deriveVfxCustomLayout,
+  PARTICLE_RENDERER_SEMANTICS,
+  VFX_PARTICLE_CORE_LAYOUT,
+} from '@forgeax/engine-vfx';
 
 export interface ParticleRendererReflection {
-  readonly topology: ParticleRendererSource['kind'];
+  readonly topology: ParticleRendererSourceV3['kind'];
   readonly resource: string;
   readonly capacity: number;
   readonly overflow: 'drop-newest' | 'drop-oldest';
@@ -25,7 +34,7 @@ export interface ParticleRendererReflection {
   };
   readonly pivot?: readonly [number, number];
   readonly softParticle?: { readonly fadeDistance: number; readonly requiresDepth: true };
-  readonly sorting?: 'none' | 'emitter' | 'back-to-front';
+  readonly sorting?: ParticleRendererSortingV3;
   readonly stripKey?: 'alive-index';
   readonly historyLength?: number;
   readonly endpointField?: 'velocity';
@@ -54,6 +63,7 @@ export interface VfxReflectionError {
     | 'vfx-reflection-unknown-field'
     | 'vfx-reflection-layout-overflow'
     | 'vfx-reflection-invalid-default'
+    | 'vfx-reflection-custom-budget'
     | 'vfx-reflection-unknown-data-interface'
     | 'vfx-reflection-duplicate-data-interface'
     | 'vfx-renderer-invalid';
@@ -97,33 +107,28 @@ const TYPE_LAYOUT: Readonly<Record<VfxValueType, { alignment: number; size: numb
   'vec4<f32>': { alignment: 16, size: 16 },
 };
 const MAX_PACKED_SIZE = 64 * 1024;
-const DATA_INTERFACE_DEFINITIONS: readonly VfxDataInterfaceRequirement[] = [
+/** Program v3 allocates reflected external resources after managed event bindings (8/9). */
+const DATA_INTERFACE_DEFINITIONS_V3: readonly VfxDataInterfaceRequirement[] = [
   {
     token: 'vfx:camera',
     kind: 'camera',
-    binding: 8,
+    binding: 12,
     bindingType: 'uniform',
     lifetime: 'generation',
   },
   {
     token: 'vfx:scene-depth',
     kind: 'scene-depth',
-    binding: 9,
+    binding: 13,
     bindingType: 'sampled-depth',
     lifetime: 'generation',
+    sampleCount: 1,
   },
   {
     token: 'vfx:noise',
     kind: 'noise',
-    binding: 10,
+    binding: 14,
     bindingType: 'sampled-float',
-    lifetime: 'generation',
-  },
-  {
-    token: 'vfx:channel',
-    kind: 'channel',
-    binding: 11,
-    bindingType: 'storage-read',
     lifetime: 'generation',
   },
 ];
@@ -291,11 +296,14 @@ function buildStruct(
   name: string,
   fields: readonly ParsedField[],
   source: string,
+  includeUnused = false,
 ): Result<VfxReflectedStruct, VfxReflectionError> {
-  const used = usedFields(source, fields);
-  const selected = fields
-    .filter((field) => used.has(field.name))
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const used = includeUnused
+    ? new Set(fields.map((field) => field.name))
+    : usedFields(source, fields);
+  // These offsets describe the authored WGSL struct. Sorting members changes
+  // its ABI even though the set of field names remains identical.
+  const selected = fields.filter((field) => used.has(field.name));
   let offset = 0;
   let alignment = 1;
   const reflected: VfxReflectedField[] = [];
@@ -336,6 +344,7 @@ function emptyStruct(name: string): VfxReflectedStruct {
 
 function reflectDataInterfaces(
   modules: readonly { readonly name: string; readonly source: string }[],
+  definitions: readonly VfxDataInterfaceRequirement[] = DATA_INTERFACE_DEFINITIONS_V3,
 ): Result<readonly VfxDataInterfaceRequirement[], VfxReflectionError> {
   const imported = new Set<string>();
   for (const module of modules) {
@@ -344,13 +353,13 @@ function reflectDataInterfaces(
       const names = match[1]?.split(',').map((name) => name.trim()) ?? [match[2] ?? ''];
       for (const name of names) {
         if (name.length === 0) continue;
-        const definition = DATA_INTERFACE_DEFINITIONS.find(
+        const definition = definitions.find(
           (candidate) => candidate.token === `vfx:${name.replaceAll('_', '-')}`,
         );
         if (definition === undefined) {
           return failure(
             'vfx-reflection-unknown-data-interface',
-            'camera, scene_depth, noise, or channel Data Interface imports',
+            'camera, scene_depth, or noise Data Interface imports',
             `replace forgeax_vfx::data::${name} with a supported Data Interface import`,
             { path: `${module.name}:forgeax_vfx::data::${name}`, module: module.name },
           );
@@ -367,14 +376,10 @@ function reflectDataInterfaces(
       }
     }
   }
-  return ok(
-    Object.freeze(
-      DATA_INTERFACE_DEFINITIONS.filter((definition) => imported.has(definition.token)),
-    ),
-  );
+  return ok(Object.freeze(definitions.filter((definition) => imported.has(definition.token))));
 }
 
-export function reflectVfxLayout(
+function reflectVfxLayoutInternal(
   input: VfxReflectionInput,
 ): Result<VfxEffectReflection, VfxReflectionError> {
   const modules = [
@@ -410,7 +415,7 @@ export function reflectVfxLayout(
     }
   }
 
-  const dataInterfaces = reflectDataInterfaces(modules);
+  const dataInterfaces = reflectDataInterfaces(modules, DATA_INTERFACE_DEFINITIONS_V3);
   if (!dataInterfaces.ok) return dataInterfaces;
 
   const parameterStruct = parsed.find((struct) => struct.name === 'VfxParameters');
@@ -424,6 +429,7 @@ export function reflectVfxLayout(
           'VfxParameters',
           parameterStruct.fields,
           modules.map((module) => module.source).join('\n'),
+          true,
         );
   if (!parameters.ok) return parameters;
   const custom =
@@ -433,15 +439,42 @@ export function reflectVfxLayout(
           'VfxCustom',
           customStruct.fields,
           modules.map((module) => module.source).join('\n'),
+          true,
         );
   if (!custom.ok) return custom;
+  let customLayout: ReturnType<typeof deriveVfxCustomLayout>;
+  try {
+    customLayout = deriveVfxCustomLayout({ ...custom.value, name: 'VfxCustom' });
+  } catch (error) {
+    return failure(
+      'vfx-reflection-custom-budget',
+      'VfxCustom no larger than four vec4-equivalent lanes',
+      error instanceof Error ? error.message : 'reduce VfxCustom fields and recook',
+      { path: 'VfxCustom' },
+    );
+  }
   const fingerprintInput = {
-    version: 1 as const,
+    version: 3 as const,
     parameters: parameters.value,
     custom: custom.value,
+    core: VFX_PARTICLE_CORE_LAYOUT,
+    customLayout,
   };
   const fingerprint = `sha256:${createHash('sha256').update(canonical(fingerprintInput)).digest('hex')}`;
   return ok({ ...fingerprintInput, dataInterfaces: dataInterfaces.value, fingerprint });
+}
+
+export function reflectVfxLayout(
+  input: VfxReflectionInput,
+): Result<VfxEffectReflection, VfxReflectionError> {
+  return reflectVfxLayoutInternal(input);
+}
+
+/** Reflect the canonical Program v3 scope. All Custom fields are persistent. */
+export function reflectVfxLayoutV3(
+  input: VfxReflectionInput,
+): Result<VfxEffectReflection, VfxReflectionError> {
+  return reflectVfxLayoutInternal(input);
 }
 
 /** Derive executable renderer resources and shader inputs from the authored renderer union. */
@@ -456,7 +489,7 @@ export function reflectVfxRenderer(
         'repair the renderer declaration and recook',
         `renderers[${index}]`,
       );
-    const renderer = candidate as ParticleRendererSource;
+    const renderer = candidate as ParticleRendererSourceV3;
     const capacity =
       renderer.kind === 'billboard' || renderer.kind === 'mesh'
         ? renderer.kind === 'billboard'
@@ -538,11 +571,13 @@ export function reflectVfxRenderer(
       if (
         renderer.sorting !== undefined &&
         renderer.sorting !== 'none' &&
-        renderer.sorting !== 'emitter' &&
-        renderer.sorting !== 'back-to-front'
+        renderer.sorting !== 'view-depth' &&
+        renderer.sorting !== 'view-distance' &&
+        renderer.sorting !== 'custom-ascending' &&
+        renderer.sorting !== 'custom-descending'
       )
         return rendererFailure(
-          'none, emitter, or back-to-front sorting',
+          'none, view-depth, view-distance, or an explicitly dispatched custom sort',
           'repair the billboard sorting mode and recook',
           `renderers[${index}].sorting`,
         );
@@ -607,5 +642,196 @@ export function reflectVfxRenderer(
     }
     reflected.push({ ...base, shaderInputs: Object.freeze(['mesh']) });
   }
+  return ok(Object.freeze(reflected));
+}
+
+function semanticTypes(semantic: string): readonly string[] {
+  switch (semantic) {
+    case 'position':
+    case 'endpoint':
+    case 'scale':
+      return ['vec3<f32>'];
+    case 'color':
+      return ['vec4<f32>'];
+    case 'size':
+      return ['vec2<f32>'];
+    case 'orientation':
+      return ['vec4<f32>'];
+    case 'visibility':
+      return ['u32', 'f32'];
+    case 'age':
+    case 'rotation':
+    case 'subImage':
+    case 'sort':
+    case 'width':
+    case 'taper':
+      return ['f32', 'i32', 'u32'];
+  }
+  return [];
+}
+
+/** Convert a reflected particle field expression to a material input type. */
+export function materialInputSourceExpression(
+  expression: string,
+  fieldType: string,
+  inputType: MaterialParticleInput['type'],
+): string | undefined {
+  if (fieldType === inputType) return expression;
+  if (inputType === 'f32' && (fieldType === 'i32' || fieldType === 'u32')) {
+    return `f32(${expression})`;
+  }
+  return undefined;
+}
+
+export function isMaterialInputCompatible(
+  fieldType: string,
+  inputType: MaterialParticleInput['type'],
+): boolean {
+  return materialInputSourceExpression('value', fieldType, inputType) !== undefined;
+}
+
+/** Reflection projection for Program v3 renderer semantics and Standard Mesh flags. */
+export function reflectVfxRendererV3(
+  renderers: readonly ParticleRendererSourceV3[],
+  materials?: Readonly<Record<string, readonly MaterialParticleInput[]>>,
+  layout?: VfxEffectReflection,
+): Result<readonly VfxGpuRendererReflectionV3[], VfxReflectionError> {
+  const baseReflections = reflectVfxRenderer(renderers);
+  if (!baseReflections.ok) return baseReflections;
+  for (const [index, renderer] of renderers.entries()) {
+    const names = renderer.materialInputs ?? [];
+    if (names.length === 0) continue;
+    const definitions = materials?.[renderer.material];
+    if (definitions === undefined) {
+      return rendererFailure(
+        'a material artifact with particleInputs metadata',
+        `load or cook material ${renderer.material} before the VFX program`,
+        `renderers[${index}].materialInputs`,
+      );
+    }
+    for (const [inputIndex, name] of names.entries()) {
+      const input = definitions.find((candidate) => candidate.name === name);
+      if (input === undefined) {
+        return rendererFailure(
+          `material ${renderer.material} declares particle input ${name}`,
+          `add ${name} to the material particleInputs declaration and recook`,
+          `renderers[${index}].materialInputs[${inputIndex}]`,
+        );
+      }
+      const customField = layout?.customLayout?.fields.find((field) => field.name === name);
+      const coreField = VFX_PARTICLE_CORE_LAYOUT.fields.find((field) => field.name === name);
+      const field = customField ?? coreField;
+      if (field === undefined) {
+        return rendererFailure(
+          `a Core or Custom particle field named ${name}`,
+          `declare ${name} in VfxCustom or map the material input to an existing Core field before cooking`,
+          `renderers[${index}].materialInputs[${inputIndex}]`,
+        );
+      }
+      if (!isMaterialInputCompatible(field.type, input.type)) {
+        return rendererFailure(
+          `${name} to use a ${input.type} source-compatible particle field`,
+          `change ${name} to match ${field.type} or change the material particle input type and recook`,
+          `renderers[${index}].materialInputs[${inputIndex}]`,
+        );
+      }
+    }
+  }
+  const customSortFields = new Set<string>();
+  for (const [index, renderer] of renderers.entries()) {
+    const attributes = {
+      ...defaultParticleRendererAttributes(renderer.kind),
+      ...(renderer.attributes ?? {}),
+    };
+    if (
+      (renderer.kind === 'billboard' || renderer.kind === 'mesh') &&
+      (renderer.sorting === 'custom-ascending' || renderer.sorting === 'custom-descending')
+    ) {
+      const sort = attributes.sort;
+      if (sort?.source !== 'custom') {
+        return rendererFailure(
+          'custom sorting to reference one reflected VfxCustom scalar sort attribute',
+          'map renderer.attributes.sort to a VfxCustom field before cooking custom sorting',
+          `renderers[${index}].attributes.sort`,
+        );
+      }
+      customSortFields.add(sort.name);
+    }
+    for (const [semantic, reference] of Object.entries(attributes)) {
+      if (reference === undefined) continue;
+      const supportedSemantics = PARTICLE_RENDERER_SEMANTICS[renderer.kind] as readonly string[];
+      if (!supportedSemantics.includes(semantic)) {
+        return rendererFailure(
+          `a semantic supported by the ${renderer.kind} renderer topology`,
+          `remove the unknown renderer attribute ${semantic} and recook`,
+          `renderers[${index}].attributes.${semantic}`,
+        );
+      }
+      const reflected =
+        reference.source === 'core'
+          ? VFX_PARTICLE_CORE_LAYOUT.fields.find((field) => field.name === reference.name)
+          : layout?.customLayout?.fields.find((field) => field.name === reference.name);
+      if (reflected === undefined) {
+        return rendererFailure(
+          `a declared ${reference.source} particle attribute ${reference.name}`,
+          `declare ${reference.name} in the effect ${reference.source} schema before mapping ${semantic}`,
+          `renderers[${index}].attributes.${semantic}`,
+        );
+      }
+      const accepted = semanticTypes(semantic);
+      if (accepted.length > 0 && !accepted.includes(reflected.type)) {
+        return rendererFailure(
+          `${semantic} mapped to one of ${accepted.join(', ')}`,
+          `map ${semantic} to a compatible typed particle attribute and recook`,
+          `renderers[${index}].attributes.${semantic}`,
+        );
+      }
+    }
+  }
+  if (customSortFields.size > 1) {
+    return rendererFailure(
+      'all custom-sorted renderers in one emitter to share one VfxCustom sort field',
+      'use one reflected custom sort key so the managed alive-index dispatch has one deterministic order',
+      'renderers[*].attributes.sort',
+    );
+  }
+  const reflected = renderers.map((renderer, index) => {
+    const base = baseReflections.value[index];
+    if (base === undefined) throw new Error(`renderer reflection missing index ${index}`);
+    const { sorting: _baseSorting, ...baseWithoutSorting } = base;
+    const attributes = Object.freeze({
+      ...defaultParticleRendererAttributes(renderer.kind),
+      ...(renderer.attributes ?? {}),
+    });
+    const materialInputs = Object.freeze([...(renderer.materialInputs ?? [])]);
+    const materialInputDefinitions =
+      materials === undefined || materialInputs.length === 0
+        ? undefined
+        : materials[renderer.material];
+    return Object.freeze({
+      ...baseWithoutSorting,
+      shaderInputs: Object.freeze([
+        ...base.shaderInputs,
+        ...Object.keys(attributes).sort(),
+        ...materialInputs.map((name) => `material.${name}`),
+      ]),
+      attributes,
+      materialInputs,
+      ...(materialInputDefinitions === undefined
+        ? {}
+        : { materialInputDefinitions: Object.freeze([...materialInputDefinitions]) }),
+      ...((renderer.kind === 'billboard' || renderer.kind === 'mesh') &&
+      renderer.sorting !== undefined
+        ? { sorting: renderer.sorting }
+        : {}),
+      ...(renderer.kind === 'mesh'
+        ? {
+            lighting: renderer.lighting ?? 'standard',
+            castShadows: renderer.castShadows ?? false,
+            receiveShadows: renderer.receiveShadows ?? true,
+          }
+        : { castShadows: false, receiveShadows: false }),
+    });
+  });
   return ok(Object.freeze(reflected));
 }

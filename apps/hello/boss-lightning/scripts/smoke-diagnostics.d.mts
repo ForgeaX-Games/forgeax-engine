@@ -1,5 +1,13 @@
 export const READINESS_FRAME_LIMIT: number;
 
+export function normalizeReadbackRgba(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  bytesPerRow: number,
+  format: string,
+): Uint8Array;
+
 export function classifyDawnErrors(
   errors: readonly {
     code: string;

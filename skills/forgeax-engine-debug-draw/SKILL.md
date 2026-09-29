@@ -7,32 +7,32 @@ description: >-
 
 # forgeax-engine-debug-draw
 
-> **debug-draw 是 gameplay 调试可视化层** -- 一行 `app.debugDraw.line(a, b, RED)` 在最终渲染帧上画线框，不需要创建 ECS entity / component / system。GPU 帧回放与 RHI 调用录制走 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) + [`forgeax-engine-cli`](../forgeax-engine-cli/SKILL.md)（rhi-debug 包）。本 skill 面向**所有 forgeax AI 用户**：写 demo、调物理参数、调相机、可视化音频半径时随时用。
+> debug-draw visualizes gameplay facts: `app.debugDraw.line(a, b, RED)` draws wire geometry in the final frame without ECS entities/components/systems. GPU recording and frame analysis use [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md). Use debug-draw for demos, physics tuning, cameras, and audio radii.
 
-## 心智模型
+## Mental model
 
-`@forgeax/engine-debug-draw` 是 **immediate-mode** 的 RHI 便利封装：
+`@forgeax/engine-debug-draw` is an immediate-mode RHI convenience layer:
 
-- 每帧调用 shape API（`line` / `sphere` / `aabb` / `frustum` / `arrow` / `axes`）**累积顶点**到 CPU staging（`arrow`=body+4 线箭头,`tipLength` 缺省 `|end-start|/10`;`axes(worldMat,length)`=沿变换 local X/Y/Z 的 3 支 R/G/B 箭头,对标 Bevy `gizmos.axes`)
-- frame end 时 `flush(encoder, view, viewProj)` 将 CPU staging 上传到 GPU，起一次 draw call，然后**清空缓存**为下一帧准备
-- 无持久存储：上帧画的线框不会"留在"下一帧 -- 不调就不画
-- 不依赖 ECS / render-graph / shader-registry -- 包内自行编译 WGSL、自行建 PSO
+- Shape calls (`line` / `sphere` / `aabb` / `frustum` / `arrow` / `axes`) accumulate vertices in CPU staging. `arrow` uses a body and four tip lines, with default `tipLength = |end-start|/10`; `axes(worldMat,length)` draws RGB arrows along local XYZ, like Bevy `gizmos.axes`.
+- At frame end, `flush(encoder, view, viewProj)` uploads staging, issues one draw, and clears staging for the next frame.
+- Nothing persists: omitting a shape call removes it from the next frame.
+- No ECS/render-graph/shader-registry dependency; the package compiles its own WGSL and creates its PSO.
 
-runtime 用户（99%）走 `app.debugDraw.*` 自动路径；底层用户（手写 RHI 录帧脚本）走 `createDebugDraw(...)` + 手动 `flush(...)`。
+Runtime users use automatic `app.debugDraw.*`; low-level RHI scripts use `createDebugDraw(...)` and explicit `flush(...)`.
 
-### 与 engine-math 同层级
+### Dependency level alongside engine-math
 
-| 包 | 依赖 | 用途 |
+| Package | Dependencies | Purpose |
 |:--|:--|:--|
-| `engine-math` | 零 forgeax 依赖 | Vec / Mat / Quat / Color / frustum 反推 |
-| `engine-debug-draw` | rhi + math + types（仅三包） | 线框 overlay 收集 + GPU flush |
-| `engine-runtime` | debug-draw (thin glue) | createApp 时自动挂 `app.debugDraw` |
+| `engine-math` | No ForgeaX dependencies | Vec / Mat / Quat / Color / frustum reconstruction. |
+| `engine-debug-draw` | rhi + math + types | Wire overlay collection and GPU flush. |
+| `engine-runtime` | debug-draw (thin glue) | Attach `app.debugDraw` during createApp. |
 
-runtime 的 wiring 住在 `packages/runtime/src/debug-draw-glue.ts`（反向依赖 debug-draw），debug-draw 包本身**不含** runtime / ECS / render-graph / shader 依赖。
+Runtime wiring lives in `packages/runtime/src/debug-draw-glue.ts`; debug-draw itself does not depend on runtime, ECS, render-graph, or shader.
 
-## 两条接入路径
+## Integration paths
 
-### Runtime path（零配置，推荐）
+### Runtime path (automatic, recommended)
 
 ```ts
 import { createApp } from '@forgeax/engine-runtime';
@@ -51,11 +51,11 @@ app.debugDraw.axes(transform.world, 1);                     // local frame: X=re
 // URP/HDRP render graph (after tonemap), and auto-flushes every frame.
 ```
 
-- `app.debugDraw` 在 `createApp` 内自动挂载（`debug-draw-glue.ts` 钩子）
-- 在任意 update system / 任意时刻调 shape API -- vertex 积累，frame end 自动清空
-- 不需要 `flush()` / `destroy()` -- runtime 管生命周期
+- `createApp` attaches `app.debugDraw` through the `debug-draw-glue.ts` hook.
+- Call shapes from update systems or other code; vertices accumulate and clear automatically at frame end.
+- Runtime owns flush and destruction.
 
-### Low path（手写 RHI + 自定义 graph）
+### Low-level path (custom RHI and graph)
 
 ```ts
 import { createDebugDraw } from '@forgeax/engine-debug-draw';
@@ -79,69 +79,69 @@ dd.flush(encoder, swapChainView, cameraViewProj);
 dd.destroy();
 ```
 
-- 你负责提供 `device` / `queue` / `createShaderModule`（注入的 WGSL 编译工厂，import from `@forgeax/engine-rhi-webgpu`）
-- 你负责在自定义 render graph 末端或录帧脚本中调用 `flush(encoder, view, viewProj)`
-- `destroy()` 释放 GPU 资源；后续 shape 调用 = no-op（单次 console.warn）+ flush 返回 `Result.err`
+- Supply `device`, `queue`, and the injected WGSL compilation factory `createShaderModule` from `@forgeax/engine-rhi-webgpu`.
+- Call `flush(encoder, view, viewProj)` at the end of the custom render graph or capture script.
+- `destroy()` releases GPU resources; subsequent shape calls are no-ops with one console warning, and flush returns `Result.err`.
 
-## 核心 API 速查
+## Core API quick reference
 
-| API | 形态 | 顶点数 |
+| API | Form | Vertex count |
 |:--|:--|:--|
 | `dd.line(a, b, color)` | `a: Vec3, b: Vec3, color: ColorLike => void` | 2 |
-| `dd.sphere(center, radius, color, segments?)` | `center: Vec3, radius: number, color: ColorLike, segments?: number => void` | $3 \times 2 \times \text{segments}$（default `segments=16`: 96） |
+| `dd.sphere(center, radius, color, segments?)` | `center: Vec3, radius: number, color: ColorLike, segments?: number => void` | $3 \times 2 \times \text{segments}$ (default `segments=16`: 96) |
 | `dd.aabb(min, max, color)` | `min: Vec3, max: Vec3, color: ColorLike => void` | 24 (12 edges) |
 | `dd.frustum(viewProj, color)` | `viewProj: Mat4, color: ColorLike => void` | 24 (12 edges) |
 | `dd.flush(encoder, view, viewProj)` | `encoder: RhiCommandEncoder, view: TextureView, viewProj: Mat4 => Result<void, DebugDrawError>` | -- |
 | `dd.destroy()` | `() => void` | -- |
 
-> `ColorLike` 接受 `[r, g, b, a?]` (plain tuple)、`Float32Array`、或 branded `Color` from `@forgeax/engine-math`。不需要 `as Vec4` 断言。
+> `ColorLike` accepts plain `[r, g, b, a?]` tuples, `Float32Array`, or branded `Color` from `@forgeax/engine-math`; no `as Vec4` assertion is needed.
 
 ### Depth mode
 
-| Mode | 行为 |
+| Mode | Behavior |
 |:--|:--|
-| `'always'`（默认） | overlay 始终在 scene 之上（无视深度；editor 风格） |
-| `'less-equal'` | overlay 被前景物体遮挡（与场景正确 depth 关系） |
+| `'always'` (default) | Draw overlays above the scene, ignoring depth. |
+| `'less-equal'` | Foreground geometry occludes the overlay using scene depth. |
 
-`createDebugDraw({ depthMode: 'less-equal', depthFormat: 'depth24plus' })` 时需要提供 `depthFormat`。每实例编译一条 PSO（按 `depthMode` 入参决定），运行时不切换。同帧两模式 → 创两个实例（`AC-06` demo 路径）。
+`createDebugDraw({ depthMode: 'less-equal', depthFormat: 'depth24plus' })` requires `depthFormat`. Each instance compiles one PSO for its fixed depth mode. To use both modes in one frame, create two instances (AC-06 demo).
 
 ### Capacity resize + truncation
 
-| 触发条件 | 行为 |
+| Trigger | Behavior |
 |:--|:--|
-| 累积顶点超过当前容量但未达 `MAX_VERTEX_CAPACITY` (1M) | 容量翻倍 resize + `console.warn` 一行（含旧 / 新容量） |
-| 累积顶点超过 `MAX_VERTEX_CAPACITY` | 上限内正常 flush + 超出丢弃 + `console.warn`（每帧至多一次） |
+| Vertices exceed capacity but remain below `MAX_VERTEX_CAPACITY` (1M) | Double capacity and log old/new sizes once. |
+| Vertices exceed `MAX_VERTEX_CAPACITY` | Flush within the limit, discard overflow, and warn at most once per frame. |
 
-三个常量可 import：`INITIAL_VERTEX_CAPACITY` (1024) / `MAX_VERTEX_CAPACITY` (1_000_000) / `VERTEX_STRIDE_BYTES` (16)。
+Exported constants: `INITIAL_VERTEX_CAPACITY` (1024), `MAX_VERTEX_CAPACITY` (1_000_000), `VERTEX_STRIDE_BYTES` (16).
 
-## 错误模型
+## Error model
 
-`DebugDrawErrorCode` 是 **封闭 union**（4 成员），每成员携带 `.code` / `.expected` / `.hint` / `.detail` 四字段（per AGENTS.md Error model）：
+`DebugDrawErrorCode` is a closed union. Each member carries `.code` / `.expected` / `.hint` / `.detail`, following AGENTS.md:
 
-| `err.code` | 触发 | `.hint` 可执行 fix |
+| `err.code` | Trigger | Actionable `.hint` |
 |:--|:--|:--|
-| `'pipeline-create-failed'` | PSO 或 shader 编译失败 | `Pipeline creation failed: <rhiError>. Check WGSL syntax, vertex layout, and depth-stencil state.` |
-| `'buffer-allocation-failed'` | GPU buffer 分配失败 | `Buffer allocation failed: <rhiError>. Check available device memory and buffer usage flags.` |
-| `'flushed-after-destroy'` | destroy 后调 flush | `DebugDraw was destroyed; create a new instance via createDebugDraw().` |
-| `'viewProj-required'` | flush 缺 viewProj | `Pass a viewProj Mat4 to flush(encoder, view, viewProj).` |
+| `'pipeline-create-failed'` | PSO or shader compilation failure | `Pipeline creation failed: <rhiError>. Check WGSL syntax, vertex layout, and depth-stencil state.` |
+| `'buffer-allocation-failed'` | GPU buffer allocation failure | `Buffer allocation failed: <rhiError>. Check available device memory and buffer usage flags.` |
+| `'flushed-after-destroy'` | Flush after destruction | `DebugDraw was destroyed; create a new instance via createDebugDraw().` |
+| `'viewProj-required'` | Missing viewProj at flush | `Pass a viewProj Mat4 to flush(encoder, view, viewProj).` |
 
-`switch (err.code)` 穷尽四分支，无需 default。错误全表 SSOT 在 `packages/debug-draw/src/errors.ts`。
+Handle `err.code` exhaustively without default. `packages/debug-draw/src/errors.ts` owns the complete error contract.
 
-## 踩坑
+## Pitfalls
 
-- **在 demo 中创建 ECS entity (MeshFilter + MeshRenderer) 代替 `dd.line()`**：debug-draw 是 immediate-mode -- 不调就消失，不用 component 注册。用 mesh entity 顶替 = 把引擎缺口冻进 demo（违反 AGENTS.md 原则），且 ECS entity 的生命周期比单帧长，下次跑 demo 会残留。
-- **忘记 import `createShaderModule` 就从 `rhi-webgpu` 传**：`createDebugDraw` 的 `createShaderModule` 参数是注入式 WGSL 编译工厂；必须从 `@forgeax/engine-rhi-webgpu` import。缺它 → 包无法建 PSO。
-- **在 `less-equal` 深度模式下不给 `depthFormat`**：`depthMode: 'less-equal'` 时 PSO descriptor 需要 `depthStencil.format`；未提供 → PSO 创建失败（`pipeline-create-failed`）。给 `depthFormat: 'depth24plus'` 即可。
-- **认为 debug-draw 是 `rhi-debug` 的替代品**：两者正交 -- `debug-draw` 画线框到屏幕（游戏调试），`rhi-debug` 录制 GPU 调用到 tape（帧分析）。见 `packages/debug-draw/README.md` Distinction from engine-rhi-debug 段。
-- **在 `destroy()` 后调 shape API 期望抛错**：destroy 后 shape 调用 = **no-op**（不抛 exception，不写 staging）。首次调用会 `console.warn` 一次（不刷屏）。错误状态集中在下一次 `flush()` → `Result.err({ code: 'flushed-after-destroy' })`。
-- **忘记 `flush` 是 idempotent 操作**：空 staging（本帧未调任何 shape API）→ `flush` 返回 `ok(undefined)` 且**不调 beginRenderPass** -- 无 GPU 副作用。同帧两连 flush（第一次 flush 后 staging 已重置）→ 第二次返回 `ok(undefined)`，不重画。
-- **大量 sphere 的 segments 值开得太高**：`segments=10000` → 60,000 顶点；可能触发 capacity resize（warn 一行），但不会崩帧。默认 16 是视觉上圆滑的折中（96 顶点）。
+- **Creating ECS mesh entities instead of `dd.line()`**: debug-draw is immediate-mode and needs no component registration. Mesh entities outlive a frame, can leave stale debug geometry, and freeze engine gaps into demos.
+- **Missing `createShaderModule` injection**: import the WGSL factory from `@forgeax/engine-rhi-webgpu`; without it the package cannot create its PSO.
+- **Missing `depthFormat` with `less-equal`**: the PSO needs `depthStencil.format`; supply `depthFormat: 'depth24plus'` to avoid `pipeline-create-failed`.
+- **Confusing debug-draw and rhi-debug**: debug-draw draws gameplay wire overlays; rhi-debug records GPU calls for frame analysis. See the package README's distinction table.
+- **Expecting shape calls to throw after destroy**: they are no-ops, write no staging, and warn only once. The next flush reports `Result.err({ code: 'flushed-after-destroy' })`.
+- **Forgetting flush is idempotent**: empty staging returns `ok(undefined)` without `beginRenderPass` or GPU effects. A second flush in the same frame does not redraw.
+- **Excessive sphere segments**: 10,000 segments produce 60,000 vertices and may trigger a capacity warning, but do not crash the frame. Default 16 segments yields 96 vertices.
 
-## 深入
+## Further reading
 
-- 四个 shape 完整签名 + depth mode 表 + capacity 行为 + 4 error code 全表：`packages/debug-draw/README.md`（SSOT）
-- `DebugDrawErrorCode` 封闭 union + discriminated `.detail`：`packages/debug-draw/src/errors.ts`
-- `DebugDraw` class + `createDebugDraw` factory + GPU resource lifecycle：`packages/debug-draw/src/debug-draw.ts`
-- Runtime wiring glue（`createApp` 自动挂 `app.debugDraw` + graph 末端 pass）：`packages/runtime/src/debug-draw-glue.ts`
-- Hello demo（5 modes: runtime / low / depth / hdrp-tonemap / empty）：`apps/hello/debug-draw/src/main.ts`
-- 与 `@forgeax/engine-rhi-debug` 区分：`packages/debug-draw/README.md` 对照表
+- Shape signatures, depth modes, capacity behavior, and errors: `packages/debug-draw/README.md`.
+- Closed error union and discriminated details: `packages/debug-draw/src/errors.ts`.
+- `DebugDraw` class + `createDebugDraw` factory + GPU resource lifecycle: `packages/debug-draw/src/debug-draw.ts`
+- Runtime attachment and final graph pass: `packages/runtime/src/debug-draw-glue.ts`.
+- Hello demo (5 modes: runtime / low / depth / hdrp-tonemap / empty): `apps/hello/debug-draw/src/main.ts`
+- Comparison with rhi-debug: `packages/debug-draw/README.md`.

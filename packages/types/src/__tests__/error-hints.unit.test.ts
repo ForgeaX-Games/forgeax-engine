@@ -1,14 +1,11 @@
 // error-hints.unit.test.ts — PackErrorCode completeness assertions (M1 / w2)
 //
 // Coverage:
-//   - PackErrorCode union member count === 15
-//   - PACK_ERROR_HINTS Record has non-empty entries for the two new codes
-//   - PackErrorDetail discriminated union narrows to pack-unknown-path /
-//     pack-malformed-path-ref via Extract
-//   - New hints do not contain stale "forgeax-engine-console asset" sub-command form
+//   - PackErrorCode union member count === 13
+//   - New hints do not contain stale "forgeax asset" sub-command form
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { ImportErrorDetail, PackErrorCode, PackErrorDetail } from '../index';
+import type { ImportErrorDetail, PackErrorCode } from '../index';
 import {
   ASSET_EVIDENCE_ERROR_HINTS,
   ASSET_STAGE_ERROR_HINTS,
@@ -16,12 +13,10 @@ import {
   PACK_ERROR_HINTS,
 } from '../index';
 
-type DetailFor<Code extends string> = Extract<PackErrorDetail, { readonly code: Code }>;
-
-describe('PackErrorCode member count = 15', () => {
-  it('PACK_ERROR_HINTS has exactly 15 keys', () => {
+describe('PackErrorCode member count = 13', () => {
+  it('PACK_ERROR_HINTS has exactly 13 keys', () => {
     const keys = Object.keys(PACK_ERROR_HINTS) as PackErrorCode[];
-    expect(keys.length).toBe(15);
+    expect(keys.length).toBe(13);
   });
 
   // Compile-time guard: PACK_ERROR_HINTS is Record<PackErrorCode, string>,
@@ -44,26 +39,6 @@ describe('AssetEvidence error hints', () => {
     for (const hint of Object.values(ASSET_EVIDENCE_ERROR_HINTS)) {
       expect(hint.length).toBeGreaterThan(0);
     }
-  });
-});
-
-describe('PACK_ERROR_HINTS new entries (w1)', () => {
-  it("'pack-unknown-path' hint is non-empty and uses binary-form phrasing", () => {
-    const hint = PACK_ERROR_HINTS['pack-unknown-path'];
-    expect(hint).toBeDefined();
-    expect(hint.length).toBeGreaterThan(0);
-    expect(hint).toContain('@name');
-    expect(hint).toContain('package.json#forgeax.assets.paths');
-    expect(hint).not.toContain('forgeax-engine-console asset');
-  });
-
-  it("'pack-malformed-path-ref' hint is non-empty and uses binary-form phrasing", () => {
-    const hint = PACK_ERROR_HINTS['pack-malformed-path-ref'];
-    expect(hint).toBeDefined();
-    expect(hint.length).toBeGreaterThan(0);
-    expect(hint).toContain('@<name>/<rest>');
-    expect(hint).toContain('package.json#forgeax.assets.paths');
-    expect(hint).not.toContain('forgeax-engine-console asset');
   });
 });
 
@@ -117,6 +92,9 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
       | 'import-produced-no-assets'
       | 'guid-mismatch'
       | 'mesh-material-slot-topology-change'
+      | 'mesh-lod-contract-invalid'
+      | 'mesh-lod-topology-change'
+      | 'mesh-lod-authority-conflict'
       | 'import-internal-error'
       | 'source-validation-failed'
       | 'unknown-source-key'
@@ -124,22 +102,6 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
       | 'invalid-source-overrides'
       | 'invalid-source-override-payload'
     >();
-  });
-});
-
-describe('PackErrorDetail new variants narrowable (w1)', () => {
-  it('pack-unknown-path narrows to { code, pathName, knownNames }', () => {
-    type D = DetailFor<'pack-unknown-path'>;
-    expectTypeOf<D['code']>().toEqualTypeOf<'pack-unknown-path'>();
-    expectTypeOf<D['pathName']>().toEqualTypeOf<string>();
-    expectTypeOf<D['knownNames']>().toEqualTypeOf<readonly string[]>();
-  });
-
-  it('pack-malformed-path-ref narrows to { code, rawSource, expectedFormat }', () => {
-    type D = DetailFor<'pack-malformed-path-ref'>;
-    expectTypeOf<D['code']>().toEqualTypeOf<'pack-malformed-path-ref'>();
-    expectTypeOf<D['rawSource']>().toEqualTypeOf<string>();
-    expectTypeOf<D['expectedFormat']>().toEqualTypeOf<string>();
   });
 });
 

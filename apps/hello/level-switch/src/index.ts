@@ -102,17 +102,16 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   if (!tutorialGuid.ok) throw new Error('tutorial GUID parse failed');
   assets.catalog(tutorialGuid.value, {
     kind: 'scene',
-    entities: [
-      {
-        localId: 0,
+    entities: {
+      floor: {
         components: {
           Transform: FLOOR_TRANSFORM,
           MeshFilter: { assetHandle: HANDLE_CUBE },
           MeshRenderer: { materials: [Number(unlitMatHandle)] },
         },
       },
-    ],
-  } as unknown as SceneAsset);
+    },
+  } satisfies SceneAsset);
   const tutorialSceneRes = await assets.loadByGuid<SceneAsset>(tutorialGuid.value);
   if (!tutorialSceneRes.ok) throw new Error(`tutorial loadByGuid failed: ${tutorialSceneRes.error.code}`);
 
@@ -120,17 +119,16 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   if (!streetGuid.ok) throw new Error('street-a GUID parse failed');
   assets.catalog(streetGuid.value, {
     kind: 'scene',
-    entities: [
-      {
-        localId: 0,
+    entities: {
+      floor: {
         components: {
           Transform: FLOOR_TRANSFORM,
           MeshFilter: { assetHandle: HANDLE_CUBE },
           MeshRenderer: { materials: [Number(stdMatHandle)] },
         },
       },
-    ],
-  } as unknown as SceneAsset);
+    },
+  } satisfies SceneAsset);
   const streetSceneRes = await assets.loadByGuid<SceneAsset>(streetGuid.value);
   if (!streetSceneRes.ok) throw new Error(`street-a loadByGuid failed: ${streetSceneRes.error.code}`);
 
@@ -264,15 +262,13 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   window.addEventListener('keydown', onKeyDown);
 
   // M29 real-consumer probe. It stays behind a narrow app-local diagnostic
-  // surface so the browser smoke can drive public state requests through the
-  // same App/World/page without rebuilding any runtime object.
+  // surface so the browser smoke can drive the public App/World error path.
+  // A thrown state callback poisons this World; recovery requires the owning
+  // execution layer to rebuild a fresh World before any later frame.
   const m29Errors: Array<{ code: string; causeMatches: boolean }> = [];
   let m29Fault: Error | undefined;
   let m29LastCause: unknown;
   let m29FaultUnsubscribe: (() => void) | undefined;
-  let m29RepairRuns = 0;
-  let m29RepairScope: EntityHandle | undefined;
-  let m29RepairUnsubscribe: (() => void) | undefined;
   let m29MainMenuExit: EntityHandle | undefined;
   let m29TutorialEnter: EntityHandle | undefined;
   const m41NextStateKey = `__nextState__${LevelId.name}`;
@@ -284,13 +280,31 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   let m41Unsubscribe: (() => void) | undefined;
   let m41Cleaned = false;
 
+  function m29CauseMatches(cause: unknown, depth = 0): boolean {
+    if (cause === m29Fault) return true;
+    if (depth > 4 || m29Fault === undefined || cause === null || typeof cause !== 'object') {
+      return false;
+    }
+    const candidate = cause as {
+      readonly name?: unknown;
+      readonly message?: unknown;
+      readonly cause?: unknown;
+      readonly detail?: { readonly cause?: unknown };
+    };
+    if (candidate.name === m29Fault.name && candidate.message === m29Fault.message) return true;
+    return (
+      m29CauseMatches(candidate.cause, depth + 1) ||
+      m29CauseMatches(candidate.detail?.cause, depth + 1)
+    );
+  }
+
   app.onError((error) => {
     if (error.code === 'app-system-update-failed') {
       m29LastCause = error.detail.cause;
     }
     m29Errors.push({
       code: error.code,
-      causeMatches: error.code === 'app-system-update-failed' && error.detail.cause === m29Fault,
+      causeMatches: error.code === 'app-system-update-failed' && m29CauseMatches(error.detail.cause),
     });
   });
 
@@ -325,12 +339,11 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       previousSession: m29Previous(SessionPhase),
       mainMenuExitAlive: m29Alive(m29MainMenuExit),
       tutorialEnterAlive: m29Alive(m29TutorialEnter),
-      repairedScopeAlive: m29Alive(m29RepairScope),
-      repairedCallbackRuns: m29RepairRuns,
       meshEntityCount: m29MeshCount(),
+      worldHealth: world.execution.health,
       appErrorCount: m29Errors.length,
       lastAppErrorCode: m29Errors.at(-1)?.code ?? null,
-      lastCauseMatches: m29LastCause === m29Fault,
+      lastCauseMatches: m29CauseMatches(m29LastCause),
     };
   }
 
@@ -500,35 +513,16 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     };
   }
 
-  function m29RepairAndRetry(): Record<string, unknown> {
-    if (m29FaultUnsubscribe === undefined || m29Fault === undefined) {
-      return { ok: false, reason: 'fault-not-installed', snapshot: m29Snapshot() };
+  function m29RecoveryRequired(): Record<string, unknown> {
+    if (m29FaultUnsubscribe !== undefined) {
+      m29FaultUnsubscribe();
+      m29FaultUnsubscribe = undefined;
     }
-    m29FaultUnsubscribe();
-    m29FaultUnsubscribe = undefined;
-    m29RepairRuns = 0;
-    m29RepairUnsubscribe = addOnEnter(LevelId, 'tutorial', (w) => {
-      m29RepairRuns += 1;
-      const repairScope = w.spawn().unwrap();
-      m29RepairScope = repairScope;
-      despawnOnExit(w, repairScope, LevelId, 'tutorial');
-    });
-
-    // The stale non-forced request is a no-op for the already-committed first
-    // token, while the later token consumes its still-pending request.
-    const staleFrame = app.stepFrame(1 / 60);
-    const forcedRequest = setNextStateForce(world, LevelId, 'tutorial');
-    const retryFrame = app.stepFrame(1 / 60);
-    const removeRepair = m29RepairUnsubscribe;
-    if (removeRepair !== undefined) removeRepair();
-    m29RepairUnsubscribe = undefined;
-    const resumed = app.resume();
+    const snapshot = m29Snapshot();
     return {
-      ok: staleFrame.ok && forcedRequest.ok && retryFrame.ok && resumed.ok,
-      staleFrameCode: staleFrame.ok ? null : staleFrame.error.code,
-      retryFrameCode: retryFrame.ok ? null : retryFrame.error.code,
-      resumeCode: resumed.ok ? null : resumed.error.code,
-      snapshot: m29Snapshot(),
+      ok: snapshot.worldHealth === 'poisoned',
+      recovery: 'fresh-world-required',
+      snapshot,
     };
   }
 
@@ -536,7 +530,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     __forgeax_level_switch__: {
       m29: {
         runFault: m29RunFault,
-        repairAndRetry: m29RepairAndRetry,
+        recoveryRequired: m29RecoveryRequired,
         snapshot: m29Snapshot,
       },
       m41: {

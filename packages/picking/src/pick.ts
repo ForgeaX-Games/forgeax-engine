@@ -22,11 +22,11 @@
 // `PickError` where they cannot guarantee the camera entity is well-formed.
 //
 // Transform source (feat-20260601 D-3): per entity (camera + candidates) read the
-// single resolved `Transform.world` mat4 written by `propagateTransforms` -- the
+// single resolved `GlobalTransform.world` mat4 written by `propagateTransforms` -- the
 // GlobalTransform/Transform fallback double-track is retired (the world column
 // always exists on a Transform-bearing entity). The camera view is
-// `mat4.invert(Transform.world)`; the candidate AABB is the local AABB
-// transformed by `Transform.world` directly. The world mat4 is read through the
+// `mat4.invert(GlobalTransform.world)`; the candidate AABB is the local AABB
+// transformed by `GlobalTransform.world` directly. The world mat4 is read through the
 // M1 row-level access, zero `{}` materialization.
 //
 // Related: requirements in-scope #5/#6/#7 + AC-05..AC-11; plan-strategy D-3 / D-6 / 5.3;
@@ -36,10 +36,10 @@ import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { box3, ray, type Vec3Like, vec3 } from '@forgeax/engine-math';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import { computeScreenRay, readWorldMatrix } from './pick-core';
+import { computeScreenRay, readWorldMatrix, type ScreenRay } from './pick-core';
 
 /**
  * Result of a successful screen-to-entity pick.
@@ -82,7 +82,7 @@ export function pick(
 ): PickHit | undefined {
   // --- camera validation + view/projection + screen->world ray (pick-core skeleton) ---
   // Throws PickError('camera-component-missing') when cameraEntity has no Camera;
-  // returns undefined when the camera has no resolvable Transform.world (degenerate miss).
+  // returns undefined when the camera has no resolvable GlobalTransform.world (degenerate miss).
   const screenRay = computeScreenRay(
     world,
     cameraEntity,
@@ -92,9 +92,16 @@ export function pick(
     viewportHeight,
   );
   if (screenRay === undefined) return undefined;
+  return pickWithScreenRay(world, screenRay);
+}
+
+/** Raycast using a receipt-bound screen ray from the accepted render frame. */
+export function pickWithScreenRay(world: World, screenRay: ScreenRay): PickHit | undefined {
   const r = screenRay.ray;
 
-  const query = world.query({ read: [Transform, MeshFilter, MeshRenderer] }).unwrap();
+  const query = world
+    .query({ read: [Transform, GlobalTransform, MeshFilter, MeshRenderer] })
+    .unwrap();
 
   const worldAabb = box3.create();
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -114,7 +121,7 @@ export function pick(
     // column (`self` field); the column exists on every archetype.
     const entity = row.entity;
 
-    // local AABB -> world AABB using the resolved Transform.world mat4
+    // local AABB -> world AABB using the resolved GlobalTransform.world mat4
     // directly (feat-20260601 D-3: no compose from decomposed TRS).
     const entityWorld = readWorldMatrix(world, entity);
     if (entityWorld === undefined) continue;

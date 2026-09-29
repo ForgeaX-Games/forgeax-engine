@@ -10,7 +10,7 @@ description: >-
 
 ## First five minutes: understand before authoring
 
-SDK `init` and project `new` print three local files under `onboarding.read`. Read them in order: root `AGENTS.md` for workflow constraints, this skill for selection, then [the scanned capability catalog](references/feature-catalog.md) when the task needs a broader inventory. Start that catalog at its `sdk-v0.1.4 → sdk-v0.1.6` version-delta section before using the current snapshot: it records the Engine commits, consumer-visible changes, and migration boundaries that a flat feature list would hide. The catalog records the exact Engine commit and scan time; it is the public, versioned replacement for the former Harness-only feature list.
+SDK `init` and project `new` print three local files under `onboarding.read`. Read them in order: root `AGENTS.md` for workflow constraints, this skill for selection, then [the capability catalog](references/feature-catalog.md) when the task needs a broader inventory. The catalog is a compact discovery snapshot whose header records a historical audit baseline, not the current Engine HEAD; recheck the caller's exact commit and matching gate receipt before relying on an entry. It is not an enablement list. For a selected capability, continue to the focused skill and owning package README.
 
 > [!IMPORTANT]
 > Available is not enabled. A package in the SDK means the capability can be selected; a game enables it only through its `forge.json`, plugin composition, ECS components, assets, renderer features, or build configuration. Do not install or register every capability.
@@ -37,6 +37,16 @@ Defer: <available capabilities not needed now>
 | Black frame, wrong binding, GPU divergence | `forgeax-engine-rhi-debug`; use `forgeax-engine-debug` for symptom routing | One capture artifact, inspect/replay or paired differential |
 | Create, inspect, develop, build, preview, package | `forgeax-engine-cli` | Structured command result and final HTTP-served package |
 
+Create a game only after selecting its template: `forgeax project new <dir> --template game-3d` for every
+3D game; use `--template empty` otherwise. Missing selection is `sdk-template-required`.
+
+> [!IMPORTANT]
+> `game-3d` is a runnable, contentful third-person reference, not an empty 3D scene. It copies
+> authored scene/physics, character/animation, material/mesh, and UI examples into the new project;
+> those examples affect visible composition, collision space, and asset closure. After creation,
+> read the generated project's `README.md` and keep, adjust, replace, or remove starter content by
+> game goal; update scene, runtime, and pack references together when removing it.
+
 Use [the full capability catalog](references/feature-catalog.md) for less common areas such as animation/skinning, UI/font/video, picking, networking, intelligence, profiler, Remote, custom RenderGraph/RHI work, and source-mode Engine development. Then read only the focused skill and owning package README. The catalog is a discovery index, not a substitute for those precise contracts.
 
 For browser-compositor screenshots, software/hardware backend selection, Engine frame readiness, repeated play-test checkpoints, and local Engine binding, use [the browser capture and local-Engine guide](references/browser-capture-and-local-engine.md).
@@ -54,7 +64,7 @@ flowchart LR
   G --> H[Build, preview, package]
 ```
 
-Run `forgeax list --json`, then `forgeax describe <operation-id> --json`, before guessing authoring-operation inputs. Use the CLI skill for the command boundary. Start the seven-stage ForgeaX closed loop only when the user explicitly authorizes it for the current task.
+Run `forgeax help --tree --json`, then `forgeax help <command-path> --json`, before guessing authoring-operation inputs. Use the CLI skill for the command boundary. Start the seven-stage ForgeaX closed loop only when the user explicitly authorizes it for the current task.
 
 Successful `new` also performs a two-second, best-effort check of the configured npm registry's `@forgeax/engine-sdk` `latest` tag. Only a strictly newer semantic version produces a text warning; JSON always records `sdkUpdate` as `available`, `current`, `skipped`, or `unavailable`. Offline mode and `FORGEAX_DISABLE_UPDATE_CHECK=1` skip the query, and registry failure never rolls back a created game. Treat the warning as information, not migration authority: install the newer SDK in another directory, read its release notes, then migrate and test each existing game explicitly. Games remain pinned and are never rewritten by SDK discovery.
 
@@ -87,7 +97,64 @@ pnpm sdk:build -- --version 1.2.3
 pnpm sdk:verify -- --archive artifacts/sdk/forgeax-sdk-v1.2.3.zip
 ```
 
+`pnpm build:engine` (and the CI package-artifact lane) scans every built public package's JavaScript imports and fails if an `@forgeax/engine-*` runtime import is absent from `dependencies`, `optionalDependencies`, or `peerDependencies`. Treat that check as part of SDK production, not as a consumer-side workaround.
+
 Read `artifacts/sdk/sdk-build-result.json` and `artifacts/sdk/sdk-verify-result.json`. Both must contain `"ok": true`; the `engineCommit` values must equal `git rev-parse HEAD`, and the verify result must list all seven commands: `new`, `skill.verify`, `doctor`, `test`, `build`, `dev`, and `preview`.
+
+## Allocate an official release
+
+> [!IMPORTANT]
+> Do not create or push `sdk-v{version}` before verification. A formal tag is an immutable published identity, not a release-candidate trigger. The old quick/unverified route is retired.
+
+Create a sealed Candidate from current `main`:
+
+```bash
+gh workflow run sdk-release-candidate.yml \
+  --ref main \
+  -f version=1.2.3
+```
+
+To recover a previously CI-verified main commit after a Candidate gate fix has
+landed, pin that full ancestor SHA while dispatching from current `main`:
+
+```bash
+gh workflow run sdk-release-candidate.yml \
+  --ref main \
+  -f version=1.2.3 \
+  -f source_sha=<40-character-main-ancestor-sha>
+```
+
+The source checkout, SDK ZIP, npm tarballs, and source snapshot all use the
+pinned SHA. The collision gate may run the current workflow commit's Preview
+smoke script as its witness; its source commit, witness commit, and script blob
+are recorded in the gate report. This repairs a test timeout without changing
+the release bytes. Both commits must be on current main, and the source still
+needs its own successful push CI baseline.
+
+The Candidate workflow binds the current `origin/main` commit and its CI baseline, builds the SDK seed once, runs npm-consumer and exact archive/browser gates against it while the reproducibility and collision lanes rebuild the same commit in parallel, compares their evidence with the exact seed (npm-tree byte inventory, version/tag collision) in `seal`, then seals `sdk-candidate.json` with per-file SHA-256 and npm integrity. The normal baseline is a successful `ci.yml` `push` run for that exact main SHA; when an admin merge is intentionally tree-empty, the workflow may instead reuse a successful `ci.yml` `push` run for the merge commit's first parent, but only after proving the two commit trees are byte-identical and recording that basis in the run summary. A PR check, a non-empty merge, or an unrelated SHA is never interchangeable. If neither baseline exists, Candidate remains fail-closed and must not be promoted. The reproducibility lane keeps full Git history because `sdk:build` validates the feature-catalog baseline ancestry; a depth-1 checkout can falsely reject a valid main commit. Record the successful workflow run ID; only a sealed Candidate is promotable.
+
+The collision lane's `game-3d` Preview smoke reuses the exact
+`shared-build-inputs/manifest.json` produced by `pnpm build:engine` and selects
+only the template-owned Pack closure. This keeps Vite startup bounded by the
+collision scene instead of recompiling unrelated Preview materials and fixture
+roots; a missing shared manifest is a preparation failure, not a reason to
+increase the startup timeout.
+
+Failed or cancelled Candidate runs delete their seed artifacts. After fixing the
+failed gate, dispatch a new Candidate run; do not use a failed-job rerun against
+the deleted seed or rebuild different bytes under its old identity. Successful
+sealed Candidates retain their artifacts for Promotion retries until expiry.
+
+Promote that exact Candidate:
+
+```bash
+gh workflow run sdk-release-promote.yml \
+  --ref main \
+  -f candidate_run_id=123456789 \
+  -f version=1.2.3
+```
+
+Promotion downloads the sealed artifact, revalidates every byte and identity, publishes the existing tarballs without rebuilding, waits for npm metadata/dist-tag/tarball visibility, and creates or completes the GitHub Release idempotently. Re-running Promotion with the same Candidate is the recovery path for propagation or Release transport failures; a changed source needs a new Candidate. A same-version different-integrity response is terminal and must never be overwritten.
 
 ## Archive surfaces
 
@@ -95,9 +162,9 @@ Every SDK archive contains both of these surfaces:
 
 | Surface | Archive path | Contract |
 |:--|:--|:--|
-| Built use (full ZIP) | `bin/`, bare `packages/`, `templates/`, `skills/`, `store/pnpm/` | The CLI defaults to the empty template, installs project-local Engine skills, can select game-3d, and creates games without registry access. |
+| Built use (full ZIP) | `bin/`, bare `packages/`, `templates/`, `skills/`, `store/pnpm/` | The CLI requires `empty` or `game-3d`, installs project-local Engine skills, and creates games without registry access. |
 | Built use (npm carrier) | `bin/`, bare `packages/`, `templates/`, `skills/` | The carrier deliberately omits `store/pnpm/` to stay publishable; `new` and `init` use the exact lockfile against the npm registry. |
-| Source development | `source/engine/` | A public source snapshot containing the tracked Engine project, `AGENTS.md`, `CLAUDE.md`, README files, `rules/`, and `skills/`, with private submodule inputs removed. |
+| Source development | `source/engine/` | Tracked Engine source and guidance, plus the pinned wgpu source expanded under `third_party/wgpu/`; private binary assets remain excluded. |
 | Prebuilt WASM | `source/engine/packages/{wgpu-wasm,fbx,codec}/pkg/` and `toolchain/wasm/` | Checked glue and binary outputs remove the default Rust/Emscripten hydration prerequisite. |
 
 The source snapshot is not a nested Git checkout and intentionally excludes
@@ -116,14 +183,59 @@ step. `sdk-manifest.json` records both resource allowlists, every root skill's
 file/byte closure, source file/byte counts, explicit exclusions, and checked WASM paths, while `artifacts` remains
 the single per-file inventory.
 
-The verifier exercises both product surfaces: it creates the default
-`templates/game-empty` project through `new`, `skill verify`, `doctor`, `test`,
-`build`, `dev`, and `preview`, creates `game-3d` through explicit template selection,
-then checks the source snapshot's public resource
-closure and real Preview-host template smoke separately. The standalone host
-consumes project-owned build-time importers declared in
-`package.json#forgeax.assets.importers`, while `forgeaxShader` owns WGSL
-compilation and the game plugin owns the matching runtime loader.
+Before building from a contributor checkout, initialize the Engine-pinned wgpu
+source with `node scripts/ci/prepare-wgpu-checkout.mjs`. Source export fails if it
+is missing. Verify `source.gitDependencies` in the manifest and the corresponding
+ordinary source directory in the extracted SDK; users must not need Git access.
+Maintenance and Rust rebuild commands are in `third_party/README.md`.
+
+The verifier covers both product surfaces: it explicitly creates a `templates/empty` project through `new`, `skill verify`, `doctor`, `test`,
+`build`, `dev`, and `preview`, and creates a
+`game-3d` project through explicit template selection.
+It then separately checks the source snapshot's public resource closure and real Preview-host template smoke. The standalone host
+consumes the project's build-time producers declared in `*.pack.ts`; `forgeaxShader` owns WGSL compilation,
+and game plugins own the corresponding runtime loaders.
+
+The exact source-distribution smoke proves renderer health, UI, pointer lock,
+mouse look, W/D movement, animation, projection, and FixedTick from the unpacked
+source snapshot. It records the long `game-3d` collision journey as exactly
+`{ status: 'omitted', reason: 'sdk-source-distribution' }`; any other omitted or
+missing state fails verification. Collision acceptance remains owned by the
+default full `@forgeax/preview smoke:templates` gate. The Candidate workflow runs
+that complete `game-3d` collision journey through the exact archive/browser
+lane and requires successful baseline CI for the exact commit before sealing.
+That lane must fetch the content-keyed private `wgpu-wasm` release with
+`GHA` and pass `verify-current.mjs` before building Engine; best-effort WASM
+hydration is not release evidence.
+The collision lane keeps `FORGEAX_TEMPLATE_SMOKE_DIR` absolute (`${{ github.workspace
+}}/artifacts/sdk-release-template-smoke`) because pnpm's filtered Preview script
+runs from `apps/preview`; the root combine step reads the report from that same
+workspace path.
+
+Pointer-lock carrier selection is page-local: every fresh `game-3d` browser
+process probes native acquisition and Escape release on a dedicated same-origin
+blank document in the same Playwright Page before navigating that Page to the
+real game. The blank document must not boot a second Preview/game instance, and
+a different or discarded browser must not donate a stale native-capability
+result. When that exact Page cannot carry native lock, the smoke records the
+failed native probe and installs its explicit test-only Host-input shim before
+navigation; UI, relative mouse look, movement, animation, projection, and
+FixedTick assertions remain mandatory.
+
+Hosted Chrome/Lavapipe may lose its external GPU Instance while the unpacked
+source journey is running. The source-distribution route accepts at most one
+exact `A valid external Instance reference no longer exists` event only when it
+is ordered before `journey-complete`, the complete UI, pointer, mouse-look, W/D,
+animation, projection, and FixedTick evidence is still present, and the old
+renderer's real terminal state remains `device-lost`. The verifier then starts a
+new Chrome/GPU process and requires an `alive` renderer with a submitted frame;
+that fresh-process viability is not described as survival of the lost renderer.
+The report records the event sequence, journey-completion sequence, old terminal
+health, and fresh frame as `sdk-source-host-gpu-instance-loss`. Every different,
+duplicate, late, page, response, or console error remains fatal. Source
+verification reports `passed-with-omissions`, preserving both bounded omissions
+in the release evidence instead of presenting them as full Preview/physics
+acceptance.
 
 The full ZIP treats pnpm package payloads under `store/pnpm/` as immutable distribution content. The verifier recomputes those payloads after creating and exercising both templates; `sdk-consumer-mutated-store` blocks content drift. pnpm 11 may hydrate its SQLite `index.db` runtime cache during the first install, so that cache is the only post-extraction digest exception and carries no package authority. The npm carrier intentionally has no store: `findSdkContext()` detects that absence and the bootstrap path runs a frozen, registry-backed install.
 
@@ -135,6 +247,7 @@ SHA256SUMS
 forgeax-sdk-v{version}.spdx.json
 forgeax-sdk-v{version}.provenance.json
 sdk-verify-result.json
+sdk-candidate.json
 ```
 
 The build also emits `npm/packages/*.tgz` and
@@ -148,12 +261,39 @@ pnpm sdk:publish:npm -- --version 1.2.3 --check-only
 The check-only gate serves the exact staged tarballs from a local registry and
 proves umbrella `dlx` → carrier install → SDK init → both template
 new/doctor/test/build/dev paths without publishing.
+Its registry is passed through `pnpm_config_registry` for pnpm 11 and
+`npm_config_registry` for SDK metadata fetches; it does not require template
+`.npmrc` files. If an unpublished check version reaches the public registry,
+repair this verifier configuration before assessing the carrier.
+The verifier also uses pnpm 11 script argument forwarding, `project package`,
+and the `dev start` endpoint lifecycle described in the CI operating guide.
+It stops a discovered daemon even when startup fails and retains the failed
+consumer directory so cleanup cannot erase the original diagnostic.
 
-The release workflow publishes the exact tarballs with `NPM_TOKEN`. Focused
+The Promotion workflow publishes the exact Candidate tarballs with `NPM_TOKEN`. Focused
 Engine packages are physical dependencies, `@forgeax/engine` is the user-facing
 runtime/CLI umbrella, and `@forgeax/engine-sdk` is its on-demand SDK carrier.
+Focused packages publish eight at a time; the umbrella and then the carrier
+publish only after every focused package succeeds, so `@forgeax/engine@{version}`
+never resolves before its pinned dependencies. The publisher writes one
+`npm <status> <name>@<version> in <ms>` line per package to stderr for timing
+diagnosis; a failure stops new publications and a Promotion retry accepts the
+packages that already landed with matching bytes.
 Because the source repository and its Releases are private, no public install
 path may require a GitHub token.
+
+Publication is not complete when `npm publish` merely exits successfully. npm
+may expose version metadata and tarball bytes several minutes apart while it
+scans a release. Before creating the GitHub Release, the publisher waits up to
+20 minutes for every exact version on the public registry, repairs a missing
+requested dist-tag when the immutable bytes already match, checks its staged
+integrity, confirms the requested dist-tag, and proves the tarball URL is
+downloadable. `npm-publication-not-visible` means the version remains pending
+or incomplete after that window; inspect the per-package reason and npm status,
+then rerun Promotion with the same Candidate only when its immutable registry
+bytes are absent or match exactly.
+`npm-published-integrity-mismatch` is terminal for those bytes and must never be
+repaired by overwriting or retagging the version.
 
 ## Reproducibility check
 
@@ -165,24 +305,39 @@ pnpm sdk:build -- --version 1.2.3 --output artifacts/sdk-b
 shasum -a 256 artifacts/sdk-a/forgeax-sdk-v1.2.3.zip artifacts/sdk-b/forgeax-sdk-v1.2.3.zip
 ```
 
-The ZIP digests must match, and the release workflow also compares a sorted
-SHA-256 inventory of both `npm/` trees. A mismatch in the ZIP, any physical
-package tarball, or the SDK carrier blocks publication.
+The ZIP digests must match. The Candidate workflow independently compares a
+sorted SHA-256 inventory of both `npm/` trees, including every physical package
+tarball and the SDK carrier. The rebuild lane uploads its inventory and `seal`
+compares it with the exact seed. A mismatch in either evidence set blocks
+publication. Critical-path timing and its measured/estimated split live in
+`scripts/ci/README.md` §SDK Candidate critical path.
 
 ## Failure routing
+
+Build and verifier stage progress is written to stderr, including elapsed time,
+child exit code/signal and bounded error-output tails. Start with the last
+`[sdk] start` / `[sdk] running` stage when a command stalls. Profile preparation
+reuses only a source/compiler/profile and byte-verified shared projection;
+missing acceleration rebuilds. The stored roster is `base-ssao` plus `point-ssao`;
+consumer projection disables the independent SSAO utility without duplicating
+material compilation or package bytes. See the [SDK/Dawn workload evidence](../../scripts/ci/sdk-dawn-workload-2026-09-19.md).
 
 | Signal | Owning input | Action |
 |:--|:--|:--|
 | `sdk-dirty-checkout` | Git source identity | Commit or remove unintended changes |
 | `sdk-package-*` | Bare public package directories | Repair package visibility, exports, wrapper removal, or file closure; rebuild |
-| `npm-*` | Exact-version npm package set or SDK carrier | Repair version projection, umbrella closure, or carrier bytes; never publish a partial mismatched version |
+| `package-runtime-dependency-closure` | Built package JavaScript plus package manifests | Move every external `@forgeax/engine-*` runtime import out of `devDependencies` and into `dependencies`, `optionalDependencies`, or `peerDependencies`; rebuild |
+| `npm-publication-not-visible` | Public npm metadata, dist-tag, or tarball propagation | Inspect the named package reason and npm status; preserve the version and retry only absent bytes |
+| `npm-published-integrity-mismatch` | Immutable registry bytes versus staged tarball | Stop; never overwrite or retag the version |
+| `sdk-candidate-*` / `sdk-npm-version-conflict` / `sdk-tag-conflict` | Sealed Candidate identity, artifact, or collision gate | Keep the version unallocated; repair the source/gate and create a new Candidate |
+| Other `npm-*` | Exact-version npm package set or SDK carrier | Repair version projection, umbrella closure, or carrier bytes; never publish a partial mismatched version |
 | `sdk-artifact-mismatch` / `sdk-unmanifested-artifact` | Archive manifest generation | Repair the SDK builder; do not edit the staged archive |
-| `sdk-manifest-schema` | `sdk-manifest.schema.json` contract | Repair the producer or schema in one change |
+| `sdk-manifest-schema` | `schemas/sdk-manifest.schema.json` contract | Repair the producer or schema in one change |
 | `sdk-source-file-count` / `sdk-source-byte-count` / `sdk-source-unportable-tree` | Source snapshot materialization | Repair source archival or exclusion rules; rebuild |
 | `sdk-source-private-dependency` / `sdk-source-exclusions` | Public source sanitization | Remove submodule metadata or private asset paths from the staged source; rebuild |
 | `sdk-resource-allowlist-missing` / `sdk-resource-allowlist-drift` / `sdk-resource-package-drift` | SDK resource closure | Repair the allowlist or the package-owned resource; rebuild and rerun the verifier |
 | `sdk-template-resource-missing` / `sdk-template-resource-allowlist-drift` | Full template resource closure | Repair the template allowlist or its package-owned inputs; rebuild and rerun the verifier |
-| `sdk-skill-*` / `skill-verify-failed` | SDK root `skills/` or project-local mount projection | Repair the skill source/manifest or rerun `forgeax skill install`; never patch mount copies |
+| `sdk-skill-*` / `skill-verify-failed` | SDK root `skills/` or project-local mount projection | Repair the skill source/manifest or rerun `forgeax project skill install`; never patch mount copies |
 | `sdk-consumer-mutated-store` | SDK-backed pnpm package payloads | Repair package-content mutation; SQLite `index.db` hydration is the only cache exception |
 | `npm-sdk-carrier-store-*` | npm carrier surface | Remove `store/pnpm/` from the carrier; keep it in the full ZIP and rebuild |
 | `sdk-source-wasm-path` / `sdk-source-wasm-unmanifested` | Prebuilt source WASM closure | Restore the owning package `pkg/` outputs and rebuild |
@@ -192,3 +347,14 @@ package tarball, or the SDK carrier blocks publication.
 | `doctor`, `test`, `build`, or `preview` failure | External consumer path | Fix the owning Engine/DevKit layer, rebuild a new ZIP, verify that ZIP |
 
 Do not publish an archive verified before its final bytes were produced. Do not substitute a workspace-linked project for the verifier's extracted offline project.
+
+## Plugin asset authoring
+
+Create functional Packs: export small native behaviors from the same file, and split
+complex implementations into ordinary TypeScript modules. Follow the
+[Plugin contract](../../packages/plugin/README.md): persistent definitions live in
+Pack, and schema-v3 project `roots` select their GUIDs. Use `asset plugin inspect`
+to check sourceKey and definitions, then inspect native Fiber state to confirm
+activation. Verify a new session after code or configuration changes; engine and
+frontend effects own scene and DOM cleanup respectively. For source reuse, read
+`help asset source import` or `help asset clone` and transfer the author closure.

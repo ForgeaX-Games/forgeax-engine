@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { cookParticleCodeProgram } from '../code-program.js';
 
 const source = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'sparks',
@@ -21,7 +21,7 @@ const source = {
 
 const entry = `#import forgeax_vfx::prelude::{VfxParticle, VfxSpawnContext, VfxUpdateContext, vfx_integrate}
 fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {
-  (*particle).velocity = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+  (*particle).velocity = vec3<f32>(0.0, 1.0, 0.0);
 }
 fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {
   vfx_integrate(ctx, particle);
@@ -47,11 +47,11 @@ describe('code-first VFX program cook', () => {
       'forgeax_vfx_add_offsets_main',
       'forgeax_vfx_compact_main',
       'forgeax_vfx_sort_main',
-      'forgeax_vfx_event_main',
       'forgeax_vfx_billboard_main',
       'forgeax_vfx_mesh_main',
       'forgeax_vfx_ribbon_main',
       'forgeax_vfx_trail_history_main',
+      'forgeax_vfx_trail_offsets_main',
       'forgeax_vfx_trail_main',
       'forgeax_vfx_beam_main',
     ]);
@@ -63,17 +63,17 @@ describe('code-first VFX program cook', () => {
     expect(result.value.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
     const asset: ParticleEffectAsset = {
       kind: 'particle-effect',
-      schemaVersion: 2,
+      schemaVersion: 3,
       programFingerprint: result.value.fingerprint,
       emitters: result.value.program.emitters.map(({ id, capacity }) => ({ id, capacity })),
       program: {
-        format: 'forgeax-vfx-program-2',
+        format: 'forgeax-vfx-program-4',
         fingerprint: result.value.fingerprint,
         emitters: result.value.program.emitters,
       },
     };
     expect(asset.program).toMatchObject({
-      format: 'forgeax-vfx-program-2',
+      format: 'forgeax-vfx-program-4',
       fingerprint: result.value.fingerprint,
     });
     expect(asset.program.emitters).toEqual(result.value.program.emitters);
@@ -88,9 +88,29 @@ describe('code-first VFX program cook', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.program.emitters[0]?.reflection.dataInterfaces).toEqual([
-      expect.objectContaining({ token: 'vfx:camera', binding: 8 }),
-      expect.objectContaining({ token: 'vfx:scene-depth', binding: 9 }),
+      expect.objectContaining({ token: 'vfx:camera', binding: 12 }),
+      expect.objectContaining({ token: 'vfx:scene-depth', binding: 13 }),
     ]);
+  });
+
+  it('projects mesh instances from quaternion orientation and Scale3', async () => {
+    const result = await cookParticleCodeProgram(source, { 'sparks.vfx.wgsl': { entry } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const wgsl = result.value.program.emitters[0]?.wgsl ?? '';
+    const meshStart = wgsl.indexOf('fn forgeax_vfx_mesh_main');
+    const ribbonStart = wgsl.indexOf('fn forgeax_vfx_ribbon_main');
+    expect(meshStart).toBeGreaterThanOrEqual(0);
+    expect(ribbonStart).toBeGreaterThan(meshStart);
+    const mesh = wgsl.slice(meshStart, ribbonStart);
+    expect(mesh).toContain('forgeax_vfx_renderer_orientation');
+    expect(mesh).toContain('forgeax_vfx_renderer_scale');
+    expect(mesh).toContain('forgeax_vfx_quaternion_rotate');
+    expect(mesh).not.toContain('size_rotation');
+    expect(mesh).not.toContain('sprite_size');
+    expect(mesh).toContain('forgeax_vfx_mesh_transform_valid');
+    expect(mesh).toContain('forgeax_vfx_zero_mesh_instance');
+    expect(mesh).toContain('droppedCount');
   });
 
   it('is byte deterministic and rejects reserved author bindings', async () => {

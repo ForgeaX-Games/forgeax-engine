@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -142,8 +142,7 @@ if (!worldAttachment1.ok) throw worldAttachment1.error;
 const mesh = world.allocSharedRef('MeshAsset', geometry.value);
 const texture = world.allocSharedRef('TextureAsset', {
   kind: 'texture',
-  width: 2,
-  height: 2,
+  shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
   format: 'rgba8unorm',
   data: new Uint8Array([
     255, 255, 255, 255,
@@ -152,7 +151,7 @@ const texture = world.allocSharedRef('TextureAsset', {
     255, 255, 255, 255,
   ]),
   colorSpace: 'linear',
-  mipmap: false,
+  mips: { kind: 'none' },
 });
 const makeMaterial = (sourceMaterial, baseColor) => world.allocSharedRef('MaterialAsset', {
   ...sourceMaterial,

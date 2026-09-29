@@ -40,6 +40,7 @@ import type {
   VirtualAxisSample,
   VirtualJoystickConfig,
 } from './input-snapshot';
+import { createEmptyInputBackendSample } from './input-snapshot';
 import { isUiOwnedEvent } from './ui-ownership';
 import { type BindState, deriveVirtualAxes, handleVirtualJoystickUnbind } from './virtual-joystick';
 
@@ -176,7 +177,11 @@ export function attachBrowserInputBackend(
   const upEdges = new Set<string>();
   const heldCodes = new Set<string>();
   const upCodeEdges = new Set<string>();
+  const pressedKeys = new Set<string>();
+  const pressedCodes = new Set<string>();
   const buttons: [boolean, boolean, boolean] = [false, false, false];
+  const pressedButtons: [boolean, boolean, boolean] = [false, false, false];
+  const releasedButtons: [boolean, boolean, boolean] = [false, false, false];
   let mvx = 0;
   let mvy = 0;
   let wheelAccum = 0;
@@ -194,6 +199,19 @@ export function attachBrowserInputBackend(
   let providerLocked = false;
   // gameGate is a command-set boolean (setPointerLockAllowed), default true.
   let gameGate = true;
+  // Startup overlays and other host lifecycle boundaries gate acquisition at
+  // the producer, so events cannot become stale gameplay input at the next
+  // frame-start scan.
+  let inputAllowed = true;
+
+  function emitLockError(path: 'w3c' | 'provider', cause: unknown): void {
+    try {
+      options.onLockError?.({ path, cause });
+    } catch {
+      // Lock diagnostics are observational; a throwing host callback must not
+      // create a second unhandled rejection from the browser Promise path.
+    }
+  }
 
   // w8 (D-1/D-3): release the provider lock idempotently. Calls the injected
   // exitLock (routing any throw to onLockError as { path: 'provider' }) and
@@ -205,7 +223,7 @@ export function attachBrowserInputBackend(
       try {
         options.lockProvider.exitLock();
       } catch (err: unknown) {
-        if (options.onLockError) options.onLockError({ path: 'provider', cause: err });
+        emitLockError('provider', err);
       }
     }
     providerLocked = false;
@@ -344,15 +362,16 @@ export function attachBrowserInputBackend(
   }
 
   function onKeyDown(ev: KeyboardEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) {
       clear();
       return;
     }
+    if (!heldKeys.has(ev.key)) pressedKeys.add(ev.key);
     heldKeys.add(ev.key);
-    upEdges.delete(ev.key);
     if (ev.code) {
+      if (!heldCodes.has(ev.code)) pressedCodes.add(ev.code);
       heldCodes.add(ev.code);
-      upCodeEdges.delete(ev.code);
     }
     // w8 (D-1): ESC releases provider lock (W3C path handles ESC via browser
     // pointerlockchange). Only acts when providerLocked is true.
@@ -361,6 +380,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onKeyUp(ev: KeyboardEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) return;
     heldKeys.delete(ev.key);
     if (isFocused()) {
@@ -372,6 +392,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerDown(ev: PointerEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) {
       clear();
       return;
@@ -379,6 +400,7 @@ export function attachBrowserInputBackend(
     // Only mouse-type pointers affect the mouse button cluster (D-3).
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
+        if (!buttons[ev.button]) pressedButtons[ev.button] = true;
         buttons[ev.button] = true;
       }
     }
@@ -450,9 +472,11 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerUp(ev: PointerEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) return;
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
+        if (buttons[ev.button]) releasedButtons[ev.button] = true;
         buttons[ev.button] = false;
       }
     }
@@ -474,6 +498,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerMove(ev: PointerEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) return;
     // D-3: movementDelta from pointermove (PointerEvent extends MouseEvent).
     if (ev.pointerType === 'mouse') {
@@ -503,6 +528,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerCancel(ev: PointerEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) return;
     const entry = pointerMap.get(ev.pointerId);
     if (entry) {
@@ -527,6 +553,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onWheel(ev: WheelEvent): void {
+    if (!inputAllowed) return;
     if (isUiEvent(ev)) {
       clear();
       return;
@@ -547,6 +574,14 @@ export function attachBrowserInputBackend(
     // sole consumer as it did before ownership routing existed.
     upEdges.clear();
     upCodeEdges.clear();
+    pressedKeys.clear();
+    pressedCodes.clear();
+    pressedButtons[0] = false;
+    pressedButtons[1] = false;
+    pressedButtons[2] = false;
+    releasedButtons[0] = false;
+    releasedButtons[1] = false;
+    releasedButtons[2] = false;
     heldKeys.clear();
     heldCodes.clear();
     buttons[0] = false;
@@ -623,6 +658,11 @@ export function attachBrowserInputBackend(
   }
   safeAdd(doc, 'pointerlockchange', onPointerLockChange as EventListener);
 
+  function onPointerLockError(event: Event): void {
+    emitLockError('w3c', event);
+  }
+  safeAdd(doc, 'pointerlockerror', onPointerLockError as EventListener);
+
   // PointerLock entry must be triggered by user activation (W3C requires
   // a click / keydown handler to call `requestPointerLock()`). The MVP
   // wires a click listener on the canvas as the activation surface;
@@ -638,6 +678,7 @@ export function attachBrowserInputBackend(
   }
 
   function onCanvasClick(): void {
+    if (!inputAllowed) return;
     // D-3: dual gate synthesis -- gameGate (command-set by template) AND
     // hostPredicate (per-click evaluated by host). Both must pass to proceed.
     if (!gameGate) return;
@@ -645,9 +686,6 @@ export function attachBrowserInputBackend(
     // the cursor outside the play-game quadrant) skip the lock entirely. Default
     // is always-allow, so the standalone game runtime is unchanged.
     if (options.pointerLockAllowed && !options.pointerLockAllowed()) return;
-    // Pointer Lock requires window focus; skip silently when unfocused.
-    if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
-
     // D-2 / D-7: lockProvider path takes priority over W3C.
     if (options.lockProvider) {
       providerLocked = true; // D-7 optimistic placement
@@ -656,17 +694,13 @@ export function attachBrowserInputBackend(
         if (result && typeof (result as Promise<void>).catch === 'function') {
           (result as Promise<void>).catch((cause: unknown) => {
             providerLocked = false;
-            if (options.onLockError) {
-              options.onLockError({ path: 'provider', cause });
-            }
+            emitLockError('provider', cause);
           });
         }
       } catch (cause: unknown) {
         // Synchronous throw from requestLock.
         providerLocked = false;
-        if (options.onLockError) {
-          options.onLockError({ path: 'provider', cause });
-        }
+        emitLockError('provider', cause);
       }
       return;
     }
@@ -674,18 +708,24 @@ export function attachBrowserInputBackend(
     // W3C path: standard requestPointerLock.
     const fn = canvas.requestPointerLock;
     if (typeof fn !== 'function') return;
-    const r = fn.call(canvas) as unknown;
-    if (r && typeof (r as Promise<void>).catch === 'function') {
-      (r as Promise<void>).catch((cause: unknown) => {
-        if (options.onLockError) {
-          options.onLockError({ path: 'w3c', cause });
-        }
-      });
+    try {
+      const r = fn.call(canvas) as unknown;
+      if (r && typeof (r as Promise<void>).catch === 'function') {
+        (r as Promise<void>).catch((cause: unknown) => {
+          emitLockError('w3c', cause);
+        });
+      }
+    } catch (cause: unknown) {
+      emitLockError('w3c', cause);
     }
   }
   safeAdd(canvas, 'click', onCanvasClick as EventListener);
 
   function sample(): InputBackendSample {
+    if (!inputAllowed) {
+      clear();
+      return createEmptyInputBackendSample();
+    }
     // D-1: gamepad edge diff derived inside sample() — the only
     // cross-frame state holder. getGamepads() is polled once per frame;
     // null-padded arrays use gamepad.index as slot key.
@@ -714,14 +754,7 @@ export function attachBrowserInputBackend(
         }
         // Store this frame's state for next frame's diff.
         const nextFrame = new Map<number, GamepadSlotSample>();
-        for (const slot of gamepads) {
-          // Only store currently-connected slots for the next diff.
-          // Disconnected slots (standardMapping=false, pressed=empty)
-          // are not stored; they won't appear in next frame's prev.
-          if (slot.pressed.size > 0 || slot.standardMapping) {
-            nextFrame.set(slot.index, slot);
-          }
-        }
+        for (const slot of gamepads) nextFrame.set(slot.index, slot);
         prevGamepadFrame = nextFrame;
       } catch {
         // getGamepads() threw — treat as if no gamepad API.
@@ -787,7 +820,19 @@ export function attachBrowserInputBackend(
       upKeys: new Set(upEdges),
       downCodes: new Set(heldCodes),
       upCodes: new Set(upCodeEdges),
+      pressedKeys: new Set(pressedKeys),
+      pressedCodes: new Set(pressedCodes),
       buttons: [buttons[0], buttons[1], buttons[2]] as readonly [boolean, boolean, boolean],
+      pressedButtons: [pressedButtons[0], pressedButtons[1], pressedButtons[2]] as readonly [
+        boolean,
+        boolean,
+        boolean,
+      ],
+      releasedButtons: [releasedButtons[0], releasedButtons[1], releasedButtons[2]] as readonly [
+        boolean,
+        boolean,
+        boolean,
+      ],
       movementX: mvx,
       movementY: mvy,
       ...(mouseX !== undefined && mouseY !== undefined ? { mouseX, mouseY } : {}),
@@ -806,6 +851,14 @@ export function attachBrowserInputBackend(
     // Reset per-frame accumulators (movement delta + key edges + wheel notches + phase queue).
     upEdges.clear();
     upCodeEdges.clear();
+    pressedKeys.clear();
+    pressedCodes.clear();
+    pressedButtons[0] = false;
+    pressedButtons[1] = false;
+    pressedButtons[2] = false;
+    releasedButtons[0] = false;
+    releasedButtons[1] = false;
+    releasedButtons[2] = false;
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -828,11 +881,20 @@ export function attachBrowserInputBackend(
     }
   }
 
+  function setInputAllowed(allowed: boolean): void {
+    inputAllowed = allowed;
+    // Both closing and reopening are lease boundaries. Clearing on reopen
+    // fences any event that raced the closed gate before the next scan.
+    clear();
+  }
+
   function clear(): void {
     heldKeys.clear();
     upEdges.clear();
+    pressedKeys.clear();
     heldCodes.clear();
     upCodeEdges.clear();
+    pressedCodes.clear();
     pointerMap.clear();
     phaseQueue.length = 0;
     prevGamepadFrame.clear();
@@ -841,6 +903,12 @@ export function attachBrowserInputBackend(
     buttons[0] = false;
     buttons[1] = false;
     buttons[2] = false;
+    pressedButtons[0] = false;
+    pressedButtons[1] = false;
+    pressedButtons[2] = false;
+    releasedButtons[0] = false;
+    releasedButtons[1] = false;
+    releasedButtons[2] = false;
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -866,6 +934,7 @@ export function attachBrowserInputBackend(
     safeRemove(canvas, 'wheel', onWheel as EventListener);
     safeRemove(doc, 'visibilitychange', onVisibilityChange as EventListener);
     safeRemove(doc, 'pointerlockchange', onPointerLockChange as EventListener);
+    safeRemove(doc, 'pointerlockerror', onPointerLockError as EventListener);
     safeRemove(canvas, 'click', onCanvasClick as EventListener);
     clear();
     // D-5: restore original touch-action value.
@@ -874,7 +943,13 @@ export function attachBrowserInputBackend(
     }
   }
 
-  const backend: InputBackend = { sample, clear, detach, setPointerLockAllowed };
+  const backend: InputBackend = {
+    sample,
+    clear,
+    detach,
+    setPointerLockAllowed,
+    setInputAllowed,
+  };
 
   // Returned callable doubles as the InputBackend (detach + sample). AI
   // users see one symbol with both shapes, mirroring the

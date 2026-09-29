@@ -203,6 +203,66 @@ function resourceSubjectDigest(resource: ToolPreviewResourceFacts | undefined): 
   return candidates.find((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
+const TOOL_PREVIEW_SUBJECT_DRAW_MINIMUMS: Readonly<Record<ToolPreviewResourceKind, number>> = {
+  material: 2,
+  mesh: 0,
+  texture: 0,
+  vfx: 2,
+};
+
+/**
+ * Apply the shared preview draw policy to tape and native evidence. Mesh and
+ * texture previews accept one render draw; material previews retain the
+ * two-draw canonical-only guard.
+ */
+export function toolPreviewSubjectDrawn(kind: ToolPreviewResourceKind, drawCalls: number): boolean {
+  return drawCalls > TOOL_PREVIEW_SUBJECT_DRAW_MINIMUMS[kind];
+}
+
+function resourceSubjectDrawn(resource: ToolPreviewResourceFacts, drawCalls: number): boolean {
+  if (resource.kind !== 'vfx') return toolPreviewSubjectDrawn(resource.kind, drawCalls);
+  return resource.observation !== undefined;
+}
+
+function isPreviewCapabilityUnavailable(cause: unknown): cause is {
+  readonly code: 'tool-preview-capability-unavailable';
+  readonly expected?: string;
+  readonly hint?: string;
+  readonly detail?: unknown;
+} {
+  return (
+    cause !== null &&
+    typeof cause === 'object' &&
+    (cause as { readonly code?: unknown }).code === 'tool-preview-capability-unavailable'
+  );
+}
+
+const TOOL_PREVIEW_FRAME_CREDIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Deterministic preview stepping shares the App frame authority with rAF.
+ * Renderer receipts are asynchronous, so a paused sequence must yield and
+ * retry when the authority reports exhausted frame credit.
+ */
+export async function stepToolPreviewFrame(
+  app: App,
+  deltaSeconds: number,
+): Promise<ReturnType<App['stepFrame']>> {
+  const startedAtMs = performance.now();
+  for (;;) {
+    const stepped = app.stepFrame(deltaSeconds);
+    if (stepped.ok) return stepped;
+    if (
+      stepped.error.code !== 'app-frame-step-invalid' ||
+      stepped.error.detail.reason !== 'credit'
+    ) {
+      return stepped;
+    }
+    if (performance.now() - startedAtMs >= TOOL_PREVIEW_FRAME_CREDIT_TIMEOUT_MS) return stepped;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 export async function replayToolPreviewCapture(
   capture: ToolPreviewCaptureResult,
 ): Promise<Result<ToolPreviewRunResult, ToolPreviewHostError>> {
@@ -217,13 +277,30 @@ export async function replayToolPreviewCapture(
       detail: { phase: 'tape-parse', cause: parsed.error },
     });
   }
-  const subjectDigest = resourceSubjectDigest(capture.resource);
-  if (capture.resource !== undefined && subjectDigest === undefined) {
+  const drawCalls = countDrawCalls(parsed.value);
+  const resource =
+    capture.resource !== undefined &&
+    capture.resource.kind !== 'texture' &&
+    capture.resource.observation === undefined &&
+    capture.resource.ownerFacts !== undefined &&
+    resourceSubjectDrawn(capture.resource, drawCalls)
+      ? { ...capture.resource, observation: capture.resource.ownerFacts }
+      : capture.resource;
+  const subjectDigest = resourceSubjectDigest(resource);
+  if (resource !== undefined && subjectDigest === undefined) {
     return err({
       code: 'tool-preview-bootstrap-failed',
       expected: 'the resource owner to publish a subject identity before evidence publication',
       hint: 'repair AssetRegistry owner facts or post-frame observation; recipe and trace are not subject identity',
-      detail: { phase: 'resource-identity' },
+      detail: {
+        phase: 'resource-identity',
+        cause: {
+          kind: resource.kind,
+          drawCalls,
+          ownerFactsPublished: resource.ownerFacts !== undefined,
+          observationPublished: resource.observation !== undefined,
+        },
+      },
     });
   }
   let runtime: Awaited<ReturnType<typeof createBrowserRhiDebugRuntime>>;
@@ -237,7 +314,7 @@ export async function replayToolPreviewCapture(
       detail: { phase: 'replay-runtime', cause },
     });
   }
-  const replayDevice = await runtime.createReplayDevice();
+  const replayDevice = await runtime.createReplayDevice(parsed.value);
   if (!replayDevice.ok) {
     return err({
       code: 'tool-preview-capability-unavailable',
@@ -259,7 +336,6 @@ export async function replayToolPreviewCapture(
     });
   }
   const replay = replayResult.value;
-  const drawCalls = countDrawCalls(parsed.value);
   if (drawCalls === 0) {
     await replay.dispose();
     return err({
@@ -507,7 +583,7 @@ export async function replayToolPreviewCapture(
         },
       },
     },
-    ...(capture.resource === undefined ? {} : { resource: capture.resource }),
+    ...(resource === undefined ? {} : { resource }),
   });
 }
 
@@ -608,9 +684,20 @@ export async function createToolPreviewHost(
             phase: 'resource-bootstrap',
           };
     return err({
-      code: 'tool-preview-bootstrap-failed',
-      ...bootstrapFailure,
-      detail: { phase: bootstrapFailure.phase, cause },
+      code: isPreviewCapabilityUnavailable(cause)
+        ? 'tool-preview-capability-unavailable'
+        : 'tool-preview-bootstrap-failed',
+      expected: isPreviewCapabilityUnavailable(cause)
+        ? (cause.expected ?? 'the preview resource capability')
+        : bootstrapFailure.expected,
+      hint: isPreviewCapabilityUnavailable(cause)
+        ? (cause.hint ??
+          'Use a supported preview representation or inspect the producer limitation.')
+        : bootstrapFailure.hint,
+      detail: {
+        phase: bootstrapFailure.phase,
+        cause: isPreviewCapabilityUnavailable(cause) ? (cause.detail ?? cause) : cause,
+      },
     });
   }
   const attached = app.renderer.attach(app.world);
@@ -673,7 +760,7 @@ export async function createToolPreviewHost(
       });
     const executeStartedAtMs = performance.now();
     const actionTrace: ToolPreviewAction[] = [];
-    const encodedCapture = runtime.attachment.captureFrame();
+    let encodedCapture: ReturnType<typeof runtime.attachment.captureFrame> | undefined;
     for (let frame = 0; frame < recipe.frames; frame += 1) {
       for (const action of recipe.actions.filter((candidate) => candidate.frame === frame)) {
         let accepted = false;
@@ -697,7 +784,18 @@ export async function createToolPreviewHost(
         }
         actionTrace.push(action);
       }
-      const stepped = app.stepFrame(recipe.deltaSeconds);
+      if (frame === recipe.frames - 1) {
+        encodedCapture = runtime.attachment.captureFrame();
+        const snapshot = await runtime.attachment.frameBoundary();
+        if (!snapshot.ok)
+          return err({
+            code: 'tool-preview-bootstrap-failed',
+            expected: 'RHI-debug snapshots live resources before the captured frame',
+            hint: snapshot.error.hint,
+            detail: { phase: 'rhi-snapshot', cause: snapshot.error },
+          });
+      }
+      const stepped = await stepToolPreviewFrame(app, recipe.deltaSeconds);
       if (!stepped.ok)
         return err({
           ...stepped.error,
@@ -710,12 +808,14 @@ export async function createToolPreviewHost(
       // only the feature's intentional `next-frame` pending state.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
-    // RecorderAttachment captures one complete frame. The first boundary
-    // snapshots live resources and the following boundary finalizes it;
-    // explicit boundaries keep stepFrame() deterministic for preview hosts.
-    await runtime.attachment.frameBoundary();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await runtime.attachment.frameBoundary();
+    const finalized = await runtime.attachment.frameBoundary();
+    if (!finalized.ok)
+      return err({
+        code: 'tool-preview-bootstrap-failed',
+        expected: 'RHI-debug finalizes the captured frame',
+        hint: finalized.error.hint,
+        detail: { phase: 'rhi-finalize', cause: finalized.error },
+      });
     if (options.collectResourceFacts !== undefined) {
       try {
         const collected = await options.collectResourceFacts(app, resourceFacts);
@@ -742,6 +842,14 @@ export async function createToolPreviewHost(
         expected: 'the bounded App profiler to finish with ProfileCapture',
         hint: profile.error.hint,
         detail: { phase: 'profiler-finish', cause: profile.error },
+      });
+    }
+    if (encodedCapture === undefined) {
+      return err({
+        code: 'tool-preview-bootstrap-failed',
+        expected: 'a positive-frame recipe to arm one captured frame',
+        hint: 'validate the recipe before running the preview host',
+        detail: { phase: 'rhi-capture' },
       });
     }
     const tape = await encodedCapture;

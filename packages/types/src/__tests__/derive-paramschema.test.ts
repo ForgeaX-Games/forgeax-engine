@@ -4,11 +4,11 @@
 //   - D-2  derive(schema) signature (single pure function, no side-effect)
 //   - D-3  numeric-run merging into a single UBO entry at binding(0)
 //   - D-4  filtering sampler auto-pair for every texture* family entry
-//   - D-7  14 MaterialParamType literals (9 v1 + 5 new)
+//   - D-7  16 MaterialParamType literals (9 v1 + 7 new)
 //   - D-12 empty schema graceful path (bglEntries=[] / totalBytes=0 / userRegionBindingEnd=0)
 //
 // Acceptance check (plan-tasks w1):
-//   - >= 30 it; covers 14 type literals + 7 std140 packing walkthroughs
+//   - >= 30 it; covers 16 type literals + 7 std140 packing walkthroughs
 //     + sampler auto-pair + 4 error-path cases.
 //
 // std140 alignment rules used in the walkthroughs (WGSL uniform):
@@ -26,8 +26,8 @@ import { MATERIAL_PARAM_TYPES } from '../index';
 const FRAGMENT = 0x2 as GPUShaderStageFlags;
 
 describe('MATERIAL_PARAM_TYPES', () => {
-  it('contains exactly 14 type literals (D-7)', () => {
-    expect(MATERIAL_PARAM_TYPES.length).toBe(14);
+  it('contains exactly 16 type literals (D-7)', () => {
+    expect(MATERIAL_PARAM_TYPES.length).toBe(16);
   });
 
   it('exposes the 7 numeric literals', () => {
@@ -36,9 +36,11 @@ describe('MATERIAL_PARAM_TYPES', () => {
     }
   });
 
-  it('exposes the 6 texture-binding literals (textures + samplers)', () => {
+  it('exposes the 8 texture-binding literals (textures + samplers)', () => {
     for (const t of [
       'texture2d',
+      'texture2d_array',
+      'texture3d',
       'texture_cube',
       'texture_depth_2d',
       'texture_cube_array',
@@ -386,7 +388,7 @@ describe('findUndeclaredSampledTextures', () => {
   });
 
   it('does NOT flag engine-injected textures (emissive / occlusion) absent from schema', () => {
-    // These live in the appendInjection lightmap region, not the user region;
+    // These are engine-owned Standard textures, not user-region fields;
     // default-standard-pbr samples them without a schema entry by design.
     const wgsl = sampleWgsl('emissiveTexture', 'occlusionTexture');
     expect(findUndeclaredSampledTextures(wgsl, [])).toEqual([]);

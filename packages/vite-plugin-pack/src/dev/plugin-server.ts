@@ -7,19 +7,79 @@ import type {
   CatalogDelta,
   PackIndexEntry,
   RuntimeAssetBinding,
-  RuntimeCatalogSnapshot,
 } from '@forgeax/engine-types';
+import type { ViteDevServer } from 'vite';
 import { resolvePackBuildInputs } from '../build-inputs.js';
+import {
+  appendPluginPackCleanup,
+  createPluginPackFailure,
+  type PluginPackFailure,
+} from '../errors.js';
 import type { PluginPackInternalOptions } from '../plugin-contract.js';
 import { projectRuntimeDiagnostics } from '../runtime-diagnostics.js';
-import { createMiddlewareDispatcher, type DispatcherServer } from './dispatcher.js';
+import type { DispatcherServer, MiddlewareDispatcher } from './dispatcher.js';
+import { createMiddlewareDispatcher } from './dispatcher.js';
 import {
   createConfigureServer,
   type PluginServerLifecycleState,
 } from './plugin-server-configure.js';
 import { createProductionBridge, type ProductionBridge } from './production-bridge.js';
 
+function isPluginPackFailure(error: unknown): error is PluginPackFailure {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    'expected' in error &&
+    'hint' in error &&
+    'detail' in error
+  );
+}
+
+function normalizeRebindFailure(error: unknown, subject: string): PluginPackFailure {
+  if (isPluginPackFailure(error)) return error;
+  return createPluginPackFailure({
+    code: 'watch-failed',
+    expected: 'the replacement watcher to complete its ready barrier',
+    hint: 'inspect the watcher diagnostic, repair the root, rebuild, verify, and retry',
+    detail: { stage: 'watch', subject },
+    cause: error,
+  });
+}
+
+function cleanupFailure(error: unknown, subject: string): PluginPackFailure {
+  return createPluginPackFailure({
+    code: 'cleanup-failed',
+    expected: 'the failed dev generation watcher and session to close',
+    hint: 'inspect the cleanup diagnostic, close the failed generation, and retry the rebind',
+    detail: { stage: 'cleanup', subject },
+    cause: error,
+  });
+}
+
+async function closeGeneration(
+  stopWatcher: () => Promise<void>,
+  session: { close(): Promise<void> } | undefined,
+  subject: string,
+): Promise<PluginPackFailure | undefined> {
+  let failure: PluginPackFailure | undefined;
+  try {
+    await stopWatcher();
+  } catch (error) {
+    failure = cleanupFailure(error, `${subject}-watcher`);
+  }
+  try {
+    await session?.close();
+  } catch (error) {
+    const sessionFailure = cleanupFailure(error, `${subject}-session`);
+    failure =
+      failure === undefined ? sessionFailure : appendPluginPackCleanup(failure, sessionFailure);
+  }
+  return failure;
+}
+
 export interface PluginServerLike extends DispatcherServer {
+  readonly environments?: ViteDevServer['environments'];
   readonly ws?: {
     send(payload: { type: string } & Record<string, unknown>): void;
   };
@@ -57,24 +117,20 @@ export interface PluginServerCallbacks {
   discardImportPublications(
     candidates: ReadonlyMap<string, StagedImportPublication>,
   ): Promise<void>;
-  ensureMetaPackBody(url: string): Promise<string | undefined>;
+  ensureMetaPackBody(
+    url: string,
+    runtimeBinding?: RuntimeAssetBinding,
+  ): Promise<string | undefined>;
   setCatalogDeltaPublisher(publisher: (delta: CatalogDelta) => void): void;
 }
 
-export interface RebuildAssetOptions {
-  /** Catalog-space source keys; when set, only these paths are rescanned instead of every pack root. */
-  readonly sourceKeys?: readonly string[];
-}
-
 export interface PluginServerRouteCallbacks {
-  rebuildSource?(sourceKey: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
   materializeAsset(guid: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
-  rebuildAsset(
-    guid: string,
-    signal?: AbortSignal,
-    options?: RebuildAssetOptions,
-  ): Promise<readonly PackIndexEntry[]>;
-  ensureMetaPackBody(url: string): Promise<string | undefined>;
+  rebuildAsset(guid: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
+  ensureMetaPackBody(
+    url: string,
+    runtimeBinding?: RuntimeAssetBinding,
+  ): Promise<string | undefined>;
 }
 
 export interface PluginServerContext {
@@ -88,7 +144,11 @@ export interface PluginServerContext {
   readonly catalogVisibility: CatalogProducerVisibility;
   readonly resetState: () => void;
   readonly scopedPackageUrl: (binding: RuntimeAssetBinding, packageUrl: string) => string;
-  readonly scopedCatalogResponse: (binding: RuntimeAssetBinding) => RuntimeCatalogSnapshot;
+  readonly scopedCatalogEntry: (
+    binding: RuntimeAssetBinding,
+    entry: PackIndexEntry,
+  ) => PackIndexEntry;
+  readonly scopedCatalogBody: (binding: RuntimeAssetBinding) => string;
   readonly state: PluginServerState;
   readonly callbacks: PluginServerCallbacks;
   readonly setSourceRefresh: (refresh: (sourcePath: string) => Promise<void>) => void;
@@ -96,19 +156,40 @@ export interface PluginServerContext {
 
 export function createPluginServer(context: PluginServerContext) {
   const { opts, registeredImporterKeys, catalogVisibility, state, callbacks } = context;
-  const dispatcher = createMiddlewareDispatcher();
+  // Vite may close and then reuse the same plugin object when hosts create
+  // sequential servers (for example a preview probe followed by dev/HMR).
+  // Keep the old dispatcher terminally closed so its middleware remains a
+  // truthful 410, and route the next server through a fresh dispatcher.
+  let activeDispatcher = createMiddlewareDispatcher();
+  const dispatcher: MiddlewareDispatcher = {
+    get registrationCount() {
+      return activeDispatcher.registrationCount;
+    },
+    install(server) {
+      activeDispatcher.install(server);
+    },
+    replace(handler) {
+      activeDispatcher.replace(handler);
+    },
+    close() {
+      return activeDispatcher.close();
+    },
+  };
   const configuredServers = new Set<PluginServerLike>();
   const lifecycle: PluginServerLifecycleState = {
     roots: [...resolvePackBuildInputs({ roots: opts.roots, base: context.transportBase }).roots],
     startupReady: Promise.resolve(),
-    stopWatcher: () => {},
+    stopWatcher: async () => {},
     watchEpoch: 0,
+    readyFailedEpoch: undefined,
     configuredServer: undefined,
     devSession: undefined,
+    rebuildCatalogInPlace: async () => false,
   };
   const productionBridge: ProductionBridge = createProductionBridge({
     producerReadiness: opts.producerReadiness,
     ignorePath: opts.ignorePath,
+    sourceIdentityFor: opts.sourceIdentityFor,
     transportBase: () => context.transportBase,
     registeredImporterKeys,
     catalogVisibility,
@@ -123,7 +204,15 @@ export function createPluginServer(context: PluginServerContext) {
     lifecycle,
     configuredServers,
     dispatcher,
+    runtimeDiagnostics: projectRuntimeDiagnostics,
   });
+  let generationClosed = false;
+  let closeInFlight: Promise<void> | undefined;
+
+  const configureServerForGeneration: typeof configureServer = (...args) => {
+    generationClosed = false;
+    configureServer(...args);
+  };
 
   const rebind = async (
     binding: RuntimeAssetBinding,
@@ -140,16 +229,33 @@ export function createPluginServer(context: PluginServerContext) {
     }
     const previousRuntime = lifecycle.devSession?.runtimeScope();
     const previousRoots = [...lifecycle.roots];
+    const previousSession = lifecycle.devSession;
+    const stopPreviousWatcher = lifecycle.stopWatcher;
     lifecycle.watchEpoch += 1;
-    lifecycle.stopWatcher();
-    await lifecycle.devSession?.close();
+    await stopPreviousWatcher();
+    await previousSession?.close();
     productionBridge.replaceSession();
     context.resetState();
-    configureServer(server, nextRoots, binding);
-    await lifecycle.startupReady;
+    configureServerForGeneration(server, nextRoots, binding);
+    let startupFailure: PluginPackFailure | undefined;
+    try {
+      await lifecycle.startupReady;
+    } catch (error) {
+      startupFailure = normalizeRebindFailure(error, lifecycle.roots[0] ?? 'watcher');
+    }
     const failedRebindState = lifecycle.devSession?.state();
-    if (failedRebindState?.status === 'failed') {
-      const failedRebindFailure = failedRebindState.error;
+    if (startupFailure !== undefined || failedRebindState?.status === 'failed') {
+      const failedRebindFailure =
+        startupFailure ??
+        (failedRebindState?.status === 'failed' ? failedRebindState.error : undefined);
+      if (failedRebindFailure === undefined) {
+        throw createPluginPackFailure({
+          code: 'watch-failed',
+          expected: 'the replacement watcher to complete its ready barrier',
+          hint: 'inspect the watcher diagnostic, repair the root, rebuild, verify, and retry',
+          detail: { stage: 'watch', subject: lifecycle.roots[0] ?? 'watcher' },
+        });
+      }
       const rebindDiagnostics = projectRuntimeDiagnostics([
         {
           code: failedRebindFailure.code,
@@ -159,27 +265,71 @@ export function createPluginServer(context: PluginServerContext) {
         },
       ]);
       const failedRebindSession = lifecycle.devSession;
-      if (previousRuntime === undefined && failedRebindSession !== undefined) {
+      if (
+        startupFailure === undefined &&
+        previousRuntime === undefined &&
+        failedRebindSession !== undefined
+      ) {
         const failedBinding = failedRebindSession.runtimeScope();
         if (failedBinding !== undefined) {
           failedRebindSession.publishRuntime('degraded', 'degraded', rebindDiagnostics);
           return failedRebindSession.runtimeScope() ?? binding;
         }
       }
-      await lifecycle.devSession?.close();
+      // Capture the failed generation's watcher before configureServer can
+      // replace the lifecycle handle during rollback. Its async close is part
+      // of the rollback fence, not a best-effort background cleanup.
+      const stopFailedWatcher = lifecycle.stopWatcher;
+      const cleanupError = await closeGeneration(
+        stopFailedWatcher,
+        failedRebindSession,
+        'failed-rebind',
+      );
+      if (cleanupError !== undefined) {
+        throw appendPluginPackCleanup(failedRebindFailure, cleanupError);
+      }
       productionBridge.replaceSession();
       context.resetState();
       lifecycle.roots = previousRoots;
       context.setProjectDdcRoot(previousProjectDdcRoot);
-      configureServer(server, previousRoots, previousRuntime);
-      await lifecycle.startupReady;
+      configureServerForGeneration(server, previousRoots, previousRuntime);
+      try {
+        await lifecycle.startupReady;
+      } catch (error) {
+        const restoreFailure = normalizeRebindFailure(error, lifecycle.roots[0] ?? 'watcher');
+        const restoredSession = lifecycle.devSession;
+        const stopRestoredWatcher = lifecycle.stopWatcher;
+        const restoreCleanup = await closeGeneration(
+          stopRestoredWatcher,
+          restoredSession,
+          'restored',
+        );
+        throw restoreCleanup === undefined
+          ? restoreFailure
+          : appendPluginPackCleanup(restoreFailure, restoreCleanup);
+      }
       const restoredSession = lifecycle.devSession;
+      const restoredState = restoredSession?.state();
+      if (restoredState?.status === 'failed') {
+        const restoreFailure = restoredState.error;
+        const restoreCleanup = await closeGeneration(
+          lifecycle.stopWatcher,
+          restoredSession,
+          'restored',
+        );
+        throw restoreCleanup === undefined
+          ? restoreFailure
+          : appendPluginPackCleanup(restoreFailure, restoreCleanup);
+      }
+      if (previousRuntime === undefined && restoredSession?.runtimeScope() === undefined) {
+        throw failedRebindFailure;
+      }
       if (restoredSession !== undefined) {
         const restoredBinding = restoredSession.runtimeScope();
         const restoredDiagnostics = [...(restoredBinding?.diagnostics ?? []), ...rebindDiagnostics];
         restoredSession.publishRuntime('degraded', 'degraded', restoredDiagnostics);
       }
-      throw failedRebindFailure;
+      return restoredSession?.runtimeScope() ?? binding;
     }
     return lifecycle.devSession?.runtimeScope() ?? binding;
   };
@@ -190,15 +340,47 @@ export function createPluginServer(context: PluginServerContext) {
   const runtimeBinding = (): RuntimeAssetBinding | undefined =>
     lifecycle.devSession?.runtimeScope();
 
-  const close = async (): Promise<void> => {
-    if (lifecycle.devSession?.state().status === 'closed') return;
-    lifecycle.watchEpoch += 1;
-    lifecycle.stopWatcher();
-    await lifecycle.devSession?.close();
-    await productionBridge.session.close();
-    configuredServers.clear();
-    await dispatcher.close();
+  const close = (): Promise<void> => {
+    if (closeInFlight !== undefined) return closeInFlight;
+    if (generationClosed) return Promise.resolve();
+    generationClosed = true;
+    const closingDispatcher = activeDispatcher;
+    closeInFlight = (async () => {
+      lifecycle.watchEpoch += 1;
+      await lifecycle.stopWatcher();
+      await lifecycle.devSession?.close();
+      await productionBridge.session.close();
+      configuredServers.clear();
+      context.resetState();
+      lifecycle.configuredServer = undefined;
+      lifecycle.devSession = undefined;
+      lifecycle.startupReady = Promise.resolve();
+      await closingDispatcher.close();
+      activeDispatcher = createMiddlewareDispatcher();
+      productionBridge.replaceSession();
+    })().finally(() => {
+      closeInFlight = undefined;
+    });
+    return closeInFlight;
   };
 
-  return { configureServer, rebind, runtimeBinding, close };
+  return {
+    invalidateModules(ids: readonly string[]): void {
+      for (const server of configuredServers) {
+        for (const { moduleGraph } of Object.values(server.environments ?? {})) {
+          for (const id of ids) {
+            const module = moduleGraph.getModuleById(id);
+            if (module !== undefined) moduleGraph.invalidateModule(module);
+          }
+        }
+      }
+    },
+    configureServer: configureServerForGeneration,
+    ready: () => lifecycle.startupReady,
+    rebind,
+    runtimeBinding,
+    rebuildCatalogInPlace: (filenames: readonly string[]) =>
+      lifecycle.rebuildCatalogInPlace(filenames),
+    close,
+  };
 }

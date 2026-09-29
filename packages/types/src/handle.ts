@@ -110,6 +110,7 @@ export type SharedHandle<T extends string> = Handle<T, 'shared'>;
  * downstream `register<NewAsset>` calls fail to compile).
  */
 export interface AssetTagMap {
+  plugin: 'PluginAsset';
   mesh: 'MeshAsset';
   texture: 'TextureAsset';
   equirect: 'EquirectAsset';
@@ -136,6 +137,7 @@ export interface AssetTagMap {
   video: 'VideoAsset';
   /** feat-20260728-wave1-vfx-contract-and-asset-cook M1 / m1-i1 */
   'particle-effect': 'ParticleEffectAsset';
+  'ies-profile': 'IesProfileAsset';
 }
 
 /**

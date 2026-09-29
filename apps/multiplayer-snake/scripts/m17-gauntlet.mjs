@@ -26,7 +26,9 @@ function run(label, command, args, overrides = {}) {
       ...overrides,
     },
     encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
+    // The real chaos evidence includes bounded frame lineage for three
+    // repeats; keep the subprocess capture above that deterministic payload.
+    maxBuffer: 64 * 1024 * 1024,
   });
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
@@ -159,8 +161,10 @@ try {
     );
     const marker = `[m17-sabotage:${sabotage}]`;
     const output = `${sabotageResult.stdout}\n${sabotageResult.stderr}`;
-    const explicitMarker = `Error: ${marker}`;
-    if (sabotageResult.status === 0 || !output.split(/\r?\n/).some((line) => line.startsWith(explicitMarker)))
+    // Vitest's verbose reporter renders a thrown Error as `→ [marker]` and
+    // omits the `Error:` prefix. The subprocess exit remains the failure
+    // oracle; the marker only identifies the intended sabotage.
+    if (sabotageResult.status === 0 || !output.includes(marker))
       throw new Error(`${sabotage}: expected a failing named sabotage, got exit ${sabotageResult.status}`);
     process.stdout.write(`[m17-net] sabotage ${sabotage}: PASS\n`);
   }

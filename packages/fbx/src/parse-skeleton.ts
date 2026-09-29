@@ -12,12 +12,14 @@
 //
 // Output: SkeletonPod { jointCount, inverseBindMatrices: Float32Array, jointPaths }
 
-import type { SkeletonPod } from '@forgeax/engine-types';
+import { parseConservativeAnimatedBounds, type SkeletonPod } from '@forgeax/engine-types';
 
 export interface FbxRawSkeleton {
   readonly jointCount: number;
   readonly inverseBindMatrices: number[];
   readonly jointPaths: string[];
+  /** Producer-authored conservative animated local bounds, when present. */
+  readonly bounds?: number[];
 }
 
 export interface FbxRawSkeletonDoc {
@@ -38,9 +40,11 @@ export function parseSkeleton(doc: FbxRawSkeletonDoc): SkeletonPod {
   if (!skel) {
     return { jointCount: 0, inverseBindMatrices: new Float32Array(0), jointPaths: [] };
   }
+  const bounds = parseConservativeAnimatedBounds(skel.bounds);
   return {
     jointCount: skel.jointCount,
     inverseBindMatrices: new Float32Array(skel.inverseBindMatrices),
     jointPaths: [...skel.jointPaths],
+    ...(bounds === undefined ? {} : { bounds }),
   };
 }

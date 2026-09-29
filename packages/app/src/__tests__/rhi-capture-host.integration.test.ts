@@ -1,7 +1,12 @@
+import type { RhiBackendInstrumentation } from '@forgeax/engine-render/internal/construct-renderer';
 import type { EncodedTape, RecorderAttachment, RhiDebugError } from '@forgeax/engine-rhi-debug';
 import { ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { bindRhiCaptureFrameDriver, createRhiCapture } from '../internal/rhi-capture';
+import {
+  bindRhiCaptureFrameDriver,
+  createRhiCapture,
+  mergeRhiInstrumentation,
+} from '../internal/rhi-capture';
 
 const encoded: EncodedTape = {
   bytes: new Uint8Array([82, 72, 73, 84, 65, 80, 69]),
@@ -71,6 +76,7 @@ function driverFor(
   });
   const resume = vi.fn(() => {
     state = 'running';
+    if (initialState === 'running') void attachment.frameBoundary();
     return ok(undefined);
   });
   const stepFrame = vi.fn((_deltaSeconds: number) => {
@@ -91,6 +97,43 @@ function driverFor(
 }
 
 describe('RHI capture host capability', () => {
+  it('preserves host fault hooks when the recorder wraps the backend', () => {
+    const recorderFrameBoundary = vi.fn();
+    const recorderDeviceLost = vi.fn();
+    const hostFrameBoundary = vi.fn();
+    const hostDeviceLost = vi.fn();
+    const hostBeforeSubmit = vi.fn(() => undefined);
+    const hostDeviceProjection = vi.fn(
+      (device: Parameters<NonNullable<RhiBackendInstrumentation['deviceLost']>>[0]) => device.lost,
+    );
+    const recorderResolver: NonNullable<RhiBackendInstrumentation['resolveSurfaceDevice']> = (
+      device,
+    ) => ok(device);
+    const recorder: RhiBackendInstrumentation = {
+      resolveSurfaceDevice: recorderResolver,
+      onFrameBoundary: recorderFrameBoundary,
+      onDeviceLost: recorderDeviceLost,
+    };
+    const host: RhiBackendInstrumentation = {
+      beforeSubmit: hostBeforeSubmit,
+      deviceLost: hostDeviceProjection,
+      onFrameBoundary: hostFrameBoundary,
+      onDeviceLost: hostDeviceLost,
+    };
+
+    const merged = mergeRhiInstrumentation(recorder, host);
+
+    expect(merged.beforeSubmit).toBe(hostBeforeSubmit);
+    expect(merged.deviceLost).toBe(hostDeviceProjection);
+    expect(merged.resolveSurfaceDevice).toBe(recorderResolver);
+    merged.onFrameBoundary?.();
+    merged.onDeviceLost?.();
+    expect(recorderFrameBoundary).toHaveBeenCalledTimes(1);
+    expect(hostFrameBoundary).toHaveBeenCalledTimes(1);
+    expect(recorderDeviceLost).toHaveBeenCalledTimes(1);
+    expect(hostDeviceLost).toHaveBeenCalledTimes(1);
+  });
+
   it('uses one typed capability for main and worker host handoff', async () => {
     const main = createRhiCapture(attachment());
     const worker = main;
@@ -111,7 +154,7 @@ describe('RHI capture host capability', () => {
     expect(workerResult).toEqual(mainResult);
   });
 
-  it('owns one App frame transaction and resumes a previously running loop', async () => {
+  it('captures the next measured frame and keeps a previously running loop running', async () => {
     const deferred = deferredAttachment();
     const capture = createRhiCapture(deferred.attachment);
     const driver = driverFor(deferred.attachment, 'running');
@@ -134,8 +177,7 @@ describe('RHI capture host capability', () => {
         bytes: encoded.bytes,
       },
     });
-    expect(driver.stepFrame).toHaveBeenCalledWith(0);
-    expect(driver.stepFrame).toHaveBeenCalledTimes(1);
+    expect(driver.stepFrame).not.toHaveBeenCalled();
     expect(driver.resume).toHaveBeenCalledTimes(1);
   });
 

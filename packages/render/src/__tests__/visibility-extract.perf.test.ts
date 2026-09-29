@@ -6,11 +6,17 @@ import { MeshFilter } from '../components/mesh-filter';
 import { MeshRenderer } from '../components/mesh-renderer';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
 import type { MaterialSnapshot, RenderableSnapshot } from '../render-system-extract';
-import { extractFrames } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 import { RenderScene } from '../scene/render-scene';
 
 const ENTITY_COUNT = 10_000;
 const SAMPLE_COUNT = 101;
+const LIGHTWEIGHT_RENDER_SCENE_PERF = process.env.FORGEAX_RENDER_PERF_LIGHTWEIGHT === '1';
+// The full 100k scene remains the local/nightly scaling check.  CI keeps the
+// same delta/no-change assertions at a bounded 10k population so a standard
+// runner does not spend its memory budget constructing a second large graph.
+const RENDER_SCENE_ENTITY_COUNT = LIGHTWEIGHT_RENDER_SCENE_PERF ? 10_000 : 100_000;
+const RENDER_SCENE_DELTA_COUNT = LIGHTWEIGHT_RENDER_SCENE_PERF ? 1_000 : 10_000;
 
 const sceneMaterial = {} as MaterialSnapshot;
 
@@ -88,7 +94,7 @@ function measureWorlds(worlds: readonly World[]): number[] {
   return measureWorldSamples(worlds).map((values) => median(values));
 }
 
-describe('visibility extraction performance (10k)', () => {
+describe(`visibility extraction performance (10k + RenderScene ${RENDER_SCENE_ENTITY_COUNT / 1_000}k)`, () => {
   it('keeps inherited hierarchy extraction within the 10 percent budget', () => {
     const flat = buildWorld(false, false);
     const hierarchy = buildWorld(false, true);
@@ -104,27 +110,33 @@ describe('visibility extraction performance (10k)', () => {
     expect(overhead).toBeLessThanOrEqual(0.1);
   }, 60_000);
 
-  it('keeps RenderScene delta and no-change evidence on the 100k workload', () => {
+  it(`keeps RenderScene delta and no-change evidence on the ${RENDER_SCENE_ENTITY_COUNT / 1_000}k workload`, () => {
     const scene = new RenderScene();
-    scene.reset(Array.from({ length: 100_000 }, (_, entityKey) => sceneSnapshot(entityKey)));
+    scene.reset(
+      Array.from({ length: RENDER_SCENE_ENTITY_COUNT }, (_, entityKey) => sceneSnapshot(entityKey)),
+    );
     const stable = scene.materialize();
     const noChange = scene.apply([]);
     const delta = scene.apply(
-      Array.from({ length: 10_000 }, (_, entityKey) => {
+      Array.from({ length: RENDER_SCENE_DELTA_COUNT }, (_, entityKey) => {
         const previous = stable[entityKey];
         const world =
           previous === undefined
             ? new Float32Array(16)
             : new Float32Array(previous.transform.world);
         world[12] = (world[12] ?? 0) + 1;
-        return { kind: 'update-transform' as const, worldId: 0, entityKey, world };
+        return { kind: 'update' as const, worldId: 0, entityKey, world };
       }),
     );
 
     expect(noChange).toMatchObject({ updated: 0, resynced: 0 });
-    expect(delta).toMatchObject({ updated: 10_000, resynced: 0 });
-    expect(scene.inspect()).toMatchObject({ renderableScans: 10_000 });
-    expect(scene.materialize()).not.toBe(stable);
+    expect(delta).toMatchObject({ updated: RENDER_SCENE_DELTA_COUNT, resynced: 0 });
+    expect(scene.inspect()).toMatchObject({ renderableScans: RENDER_SCENE_DELTA_COUNT });
+    // Transform-only updates patch the retained snapshot in place so the
+    // unified scene flow does not allocate a second large publication.
+    expect(scene.materialize()).toBe(stable);
+    expect(stable[0]?.transform.world[12]).toBe(1);
+    expect(stable[RENDER_SCENE_DELTA_COUNT - 1]?.transform.world[12]).toBe(1_000);
     expect(scene.querySpatial({ min: [-1, -1, -1], max: [1, 1, 1] }).length).toBeGreaterThan(0);
   }, 60_000);
 });

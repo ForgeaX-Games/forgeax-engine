@@ -1,4 +1,4 @@
-import { encodeTape, type V7Tape } from '@forgeax/engine-rhi-debug';
+import { encodeTape, tapeDigest, type V7Tape } from '@forgeax/engine-rhi-debug';
 import { createShaderModule, rhi } from '@forgeax/engine-rhi-null';
 import { ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -39,7 +39,7 @@ function makeContext(bytes: Uint8Array): {
 } {
   const artifact: ArtifactRef = {
     kind: 'rhi-tape',
-    digest: 'sha256:m5-operation-fixture',
+    digest: tapeDigest(bytes),
     source: 'rhi.capture',
   };
   const captured: CapturedRhiTape = { ...artifact, bytes };
@@ -93,7 +93,7 @@ describe('DevKit RHI debug operations', () => {
     expect(summary.ok).toBe(true);
     if (!summary.ok) return;
     expect(summary.value.artifact).toEqual(captured.value);
-    expect(summary.value.model.works).toEqual([]);
+    expect(summary.value.summary.works).toEqual([]);
   });
 
   it('rejects an artifact that changes kind or digest at the operation boundary', async () => {
@@ -154,5 +154,20 @@ describe('DevKit RHI debug operations', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.inspection.workIndex).toBe(0);
+    const missingBuffer = await runRhiDebugOperation(
+      'rhi.inspect',
+      {
+        artifact,
+        workIndex: 0,
+        buffer: {
+          resourceId: 'buffer:missing',
+          first: 0,
+          count: 1,
+          layout: { stride: 4, fields: [{ name: 'id', offset: 0, type: 'u32', components: 1 }] },
+        },
+      },
+      inspectContext,
+    );
+    expect(missingBuffer).toMatchObject({ ok: false, error: { code: 'readback-failed' } });
   });
 });

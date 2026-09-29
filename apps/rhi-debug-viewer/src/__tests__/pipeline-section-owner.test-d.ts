@@ -1,14 +1,9 @@
-import type { ShaderPreviewSelection } from '../shader-preview/session';
+import { selectedShaderPreview } from '../components/PipelineState';
 import type { ViewerModel } from '../viewer-model';
 
 declare const model: ViewerModel;
-declare function selectedShaderPreview(
-  model: ViewerModel,
-  workIndex: number,
-  shaderModuleId: string,
-): ShaderPreviewSelection | null;
 
-const selection = selectedShaderPreview(model, 0, 'shader:fragment');
+const selection = selectedShaderPreview(model, 0, 'fragment');
 if (selection !== null) {
   selection.tapeDigest satisfies string;
   selection.workIndex satisfies number;

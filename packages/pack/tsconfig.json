@@ -7,11 +7,24 @@
     "declaration": true,
     "declarationMap": true,
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "__tests__"],
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist/**",
+    "src/**/__tests__/**"
+  ],
   "references": [
-    { "path": "../types" }
+    {
+      "path": "../types"
+    },
+    {
+      "path": "../tool-runtime"
+    }
   ]
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "hello-ssr-visual-cases/1",
+  "cases": [
+    { "id": "screen-hit", "expectation": "a traced screen hit differs from its fallback contribution" },
+    { "id": "probe-source", "expectation": "inside the volume selects the committed local ReflectionProbe" },
+    { "id": "skylight-source", "expectation": "outside the volume selects the committed Skylight" },
+    { "id": "neutral-source", "expectation": "removing Skylight reaches the neutral fallback" },
+    { "id": "edge-confidence", "expectation": "screen-edge confidence fades continuously" },
+    { "id": "roughness-confidence", "expectation": "roughness attenuates the reflection" },
+    { "id": "thickness", "expectation": "Hi-Z mip-0 thickness rejection is visible in the trace" },
+    { "id": "motion-reset", "expectation": "camera motion resets history without a trail" },
+    { "id": "recovery", "expectation": "submit failure and device recovery preserve the committed owner" }
+  ]
+}

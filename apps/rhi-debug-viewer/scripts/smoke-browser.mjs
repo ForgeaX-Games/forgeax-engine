@@ -20,13 +20,13 @@ const falsifyTextureAttachment = process.env.FORGEAX_FALSIFY_TEXTURE_ATTACHMENT 
 function makeTape() {
   const vertexShader = `
 @vertex
-fn main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
   var positions = array<vec2<f32>, 3>(vec2<f32>(0.0, 0.7), vec2<f32>(-0.7, -0.7), vec2<f32>(0.7, -0.7));
   return vec4<f32>(positions[vertexIndex], 0.0, 1.0);
 }`;
   const fragmentShader = `
 @fragment
-fn main() -> @location(0) vec4<f32> {
+fn fs_main() -> @location(0) vec4<f32> {
   return vec4<f32>(1.0, 0.0, 0.0, 1.0);
 }`;
   const colorBytes = new Uint8Array([
@@ -37,7 +37,7 @@ fn main() -> @location(0) vec4<f32> {
   ]);
   const bufferBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
   const tape = {
-    header: { formatVersion: 7, rhiCaps: {}, eventCount: 22, blobCount: 2 },
+    header: { formatVersion: 7, rhiCaps: {}, eventCount: 21, blobCount: 2 },
     bootstrap: [
       {
         handleId: 'encoder:1',
@@ -58,7 +58,7 @@ fn main() -> @location(0) vec4<f32> {
       {
         handleId: 'buffer:known',
         kind: 'buffer',
-        create: { kind: 'createBuffer', handleId: 'buffer:known', desc: { size: bufferBytes.byteLength, usage: 132 } },
+        create: { kind: 'createBuffer', handleId: 'buffer:known', desc: { size: bufferBytes.byteLength, usage: 164 } },
         initialData: [{ hash: 'fixture-buffer', byteOffset: 0, byteLength: bufferBytes.byteLength }],
       },
       {
@@ -75,28 +75,27 @@ fn main() -> @location(0) vec4<f32> {
     ],
     events: [
       { kind: 'frameMark', frameIdx: 0 },
-      { kind: 'createShaderModule', handleId: 'shader:vertex', wgslCode: vertexShader },
-      { kind: 'createShaderModule', handleId: 'shader:fragment', wgslCode: fragmentShader },
+      { kind: 'createShaderModule', handleId: 'shader:shared', wgslCode: vertexShader + '\n' + fragmentShader },
       { kind: 'createBindGroupLayout', handleId: 'layout:empty', desc: { entries: [] } },
       { kind: 'createPipelineLayout', handleId: 'pipeline-layout:empty', bglHandleIds: ['layout:empty'] },
       {
         kind: 'createRenderPipeline',
         handleId: 'pipeline:fixture',
         desc: {
-          vertex: { entryPoint: 'main', buffers: [] },
-          fragment: { entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+          vertex: { entryPoint: 'vs_main', buffers: [] },
+          fragment: { entryPoint: 'fs_main', targets: [{ format: 'rgba8unorm' }] },
           primitive: { topology: 'triangle-list' },
         },
         layoutHandleId: 'pipeline-layout:empty',
-        vertexShaderModuleHandleId: 'shader:vertex',
-        fragmentShaderModuleHandleId: 'shader:fragment',
+        vertexShaderModuleHandleId: 'shader:shared',
+        fragmentShaderModuleHandleId: 'shader:shared',
       },
       { kind: 'pushDebugGroup', cmdHandleId: 'encoder:1', groupLabel: 'main-pass' },
       {
         kind: 'beginRenderPass',
         cmdHandleId: 'encoder:1',
         passHandleId: 'pass:1',
-        desc: { colorAttachments: [] },
+        desc: { colorAttachments: [{ loadOp: 'load', storeOp: 'store' }] },
         colorAttachmentViewHandleIds: ['view:color'],
       },
       { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipeline:fixture' },
@@ -107,7 +106,7 @@ fn main() -> @location(0) vec4<f32> {
       { kind: 'passPopDebugGroup', passHandleId: 'pass:1' },
       { kind: 'endRenderPass', passHandleId: 'pass:1' },
       { kind: 'popDebugGroup', cmdHandleId: 'encoder:1' },
-      { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:2', desc: { colorAttachments: [] }, colorAttachmentViewHandleIds: ['view:color'] },
+      { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:2', desc: { colorAttachments: [{ loadOp: 'load', storeOp: 'store' }] }, colorAttachmentViewHandleIds: ['view:color'] },
       { kind: 'setPipeline', passHandleId: 'pass:2', pipelineHandleId: 'pipeline:fixture' },
       { kind: 'passInsertDebugMarker', passHandleId: 'pass:2', markerLabel: 'second pass' },
       { kind: 'draw', passHandleId: 'pass:2', vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0 },
@@ -120,9 +119,9 @@ fn main() -> @location(0) vec4<f32> {
     ],
   };
   if (falsifyTextureAttachment) {
-    tape.bootstrap = tape.bootstrap.filter((resource) => resource.kind === 'encoder');
+    tape.bootstrap = tape.bootstrap.filter((resource) => resource.kind !== 'texture' && resource.kind !== 'texture-view');
     tape.events = tape.events.map((event) =>
-      event.kind === 'beginRenderPass' ? { ...event, colorAttachmentViewHandleIds: [] } : event,
+      event.kind === 'beginRenderPass' ? { ...event, desc: { colorAttachments: [] }, colorAttachmentViewHandleIds: [] } : event,
     );
   }
   return tape;
@@ -297,9 +296,11 @@ try {
   }
   const resourceTab = page.getByRole('tab', { name: 'Resource Inspector' });
   if (await resourceTab.count() > 0) await resourceTab.click();
-  await page.locator('[data-forgeax-resource-row="texture:color"]').click();
-  await page.waitForSelector('[data-forgeax-resource-inspector="selected"]');
-  if (!(await page.locator('[data-forgeax-resource-inspector]').textContent()).includes('Resource facts')) throw new Error('resource identity linkage failed');
+  if (!falsifyTextureAttachment) {
+    await page.locator('[data-forgeax-resource-row="texture:color"]').click();
+    await page.waitForSelector('[data-forgeax-resource-inspector="selected"]');
+    if (!(await page.locator('[data-forgeax-resource-inspector]').textContent()).includes('Resource facts')) throw new Error('resource identity linkage failed');
+  }
   const drawCallTab = page.getByRole('tab', { name: 'Draw Call Viewer' });
   if (await drawCallTab.count() > 0) await drawCallTab.click();
 
@@ -307,8 +308,12 @@ try {
   const capability = await page.locator('[data-forgeax-capability]').getAttribute('data-forgeax-capability');
   if (capability === null) throw new Error('viewer capability anchor missing');
   await page.waitForFunction(
-    () => [...document.querySelectorAll('[data-forgeax-rt-status]')].some((element) => element.getClientRects().length > 0 && element.getAttribute('data-forgeax-rt-status') !== 'no-rt'),
-    undefined,
+    (falsified) => [...document.querySelectorAll('[data-forgeax-rt-status]')].some((element) => {
+      if (element.getClientRects().length === 0) return false;
+      const status = element.getAttribute('data-forgeax-rt-status');
+      return status === 'ok' || status === 'error' || status === 'no-webgpu' || (falsified && status === 'no-rt');
+    }),
+    falsifyTextureAttachment,
     { timeout: 10000 },
   );
   const textureStatus = await page.evaluate(() => {
@@ -422,14 +427,17 @@ try {
     if (evidencePath !== undefined) writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
     console.log('[smoke-browser] FALSIFIER_CONFIRMED ' + JSON.stringify(evidence));
     await browser.close();
-    await stop();
+    await viewerServer.stop();
     process.exit(0);
   }
 
   await page.getByRole('tab', { name: 'Pipeline state' }).click();
-  const shaderEditor = page
-    .locator('[data-forgeax-pipeline-state="selected"] [data-forgeax-shader-editor]')
-    .first();
+  const editors = page.locator('[data-forgeax-pipeline-state="selected"] [data-forgeax-shader-editor]');
+  const editorKeys = await editors.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-forgeax-editor-key')));
+  if (editorKeys.length !== 2 || new Set(editorKeys).size !== 2) {
+    throw new Error('shared shader module lost stage identity: ' + JSON.stringify(editorKeys));
+  }
+  const shaderEditor = editors.filter({ hasText: 'fragment / fs_main' });
   const shaderPreview = {
     status: null,
     canvasCount: 0,
@@ -447,7 +455,7 @@ try {
   await shaderEditor.scrollIntoViewIfNeeded();
   await shaderEditor.getByRole('button', { name: 'Edit' }).click();
   const canonicalShaderSource = (await shaderEditor.locator('.cm-line').allTextContents()).join('\n');
-  const previewShaderSource = canonicalShaderSource.replace('0.7', '0.4');
+  const previewShaderSource = canonicalShaderSource.replace('vec4<f32>(1.0, 0.0, 0.0, 1.0)', 'vec4<f32>(0.0, 1.0, 0.0, 1.0)');
   if (previewShaderSource === canonicalShaderSource) throw new Error('shader fixture did not expose a mutable WGSL source');
   shaderPreview.sourceChanged = previewShaderSource !== canonicalShaderSource;
   await shaderEditor.locator('.cm-content').fill(previewShaderSource);
@@ -460,18 +468,27 @@ try {
     if (context === null) return { width: canvas.width, height: canvas.height, sample: [] };
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
     let nonZeroRgbPixels = 0;
+    let greenPixels = 0;
+    let redPixels = 0;
     for (let index = 0; index < data.length; index += 4) {
       if (data[index] !== 0 || data[index + 1] !== 0 || data[index + 2] !== 0) nonZeroRgbPixels += 1;
+      if (data[index + 1] > 0) greenPixels += 1;
+      if (data[index] > 0) redPixels += 1;
     }
     return {
       width: canvas.width,
       height: canvas.height,
       sample: Array.from(data.slice(0, 16)),
       nonZeroRgbPixels,
+      greenPixels,
+      redPixels,
     };
   });
   if (!shaderPreview.sourceChanged || shaderPreview.canvasCount !== 1 || shaderPreview.pixels.nonZeroRgbPixels === 0) {
     throw new Error('shader preview did not produce real non-zero pixels: ' + JSON.stringify(shaderPreview));
+  }
+  if (shaderPreview.pixels.greenPixels === 0 || shaderPreview.pixels.redPixels !== 0) {
+    throw new Error('fragment preview did not apply the selected stage: ' + JSON.stringify(shaderPreview));
   }
   await page.screenshot({ path: visualScreenshotPaths['viewer-shader-preview'], fullPage: true });
 

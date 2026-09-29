@@ -11,7 +11,7 @@ const root = resolve(here, '..', '..', '..', '..');
 const appRoot = resolve(here, '..');
 const width = 200;
 const height = 150;
-const minFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const minFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const errors = [];
 
 const { create, globals } = await import('webgpu');

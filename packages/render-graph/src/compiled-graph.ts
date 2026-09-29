@@ -8,13 +8,15 @@ import type {
   TextureView,
 } from '@forgeax/engine-rhi';
 import { err, ok, RenderGraphError, type Result } from './errors.js';
+import type { ResolvedColorTargetDescriptor } from './graph.js';
 import type {
   CompiledPass,
   CompiledResource,
   CompiledView,
+  GraphTextureAllocation,
   ResourceHandleData,
 } from './kernel-internal.js';
-import { handleData } from './kernel-internal.js';
+import { handleData, releaseGraphTexture } from './kernel-internal.js';
 import type {
   CompiledRenderGraph,
   CompiledRenderGraphInfo,
@@ -23,13 +25,119 @@ import type {
   GraphTexture,
   GraphTextureView,
   RenderGraphFrame,
+  RenderGraphPassInstrumentation,
   RenderGraphPassRunner,
+  RenderGraphResourceAllocationInspection,
 } from './types.js';
 
 interface FrameResources {
   readonly buffers: ReadonlyMap<number, Buffer>;
   readonly textures: ReadonlyMap<number, Texture>;
   readonly views: ReadonlyMap<number, TextureView>;
+}
+
+interface AllocationEntry {
+  readonly handle: unknown;
+  readonly bytes: number | undefined;
+  readonly newlyAllocated: boolean;
+}
+
+/**
+ * Compiled-graph owner ledger. It counts only graph-created physical handles;
+ * imported handles are references owned by the caller and remain byte-unknown.
+ */
+class RenderGraphAllocationLedger {
+  private readonly live = new Map<unknown, number | undefined>();
+  private readonly pending = new Map<unknown, number | undefined>();
+  private liveBytes = 0;
+  private pendingBytes = 0;
+  private peakBytes = 0;
+  private successfulAllocationCount = 0;
+  private successfulAllocationBytes = 0;
+  private retiredBytes = 0;
+  private unknownByteSizeCount = 0;
+  private readonly importedResourceCount: number;
+
+  constructor(entries: readonly AllocationEntry[], importedResourceCount: number) {
+    this.importedResourceCount = importedResourceCount;
+    for (const entry of entries) this.allocate(entry.handle, entry.bytes, entry.newlyAllocated);
+  }
+
+  inspect(): RenderGraphResourceAllocationInspection {
+    return {
+      unit: 'engine-allocation-bytes',
+      physicalResidency: 'unknown',
+      liveBytes: this.liveBytes,
+      pendingRetirementBytes: this.pendingBytes,
+      peakBytes: this.peakBytes,
+      successfulAllocationCount: this.successfulAllocationCount,
+      successfulAllocationBytes: this.successfulAllocationBytes,
+      pendingRetirementCount: this.pending.size,
+      retiredBytes: this.retiredBytes,
+      failedAllocationRollbacks: 0,
+      failedAllocationRollbackBytes: 0,
+      unknownByteSizeCount: this.unknownByteSizeCount,
+      importedResourceCount: this.importedResourceCount,
+    };
+  }
+
+  state(handle: unknown): 'live' | 'pending-retirement' | 'released' {
+    return this.live.has(handle)
+      ? 'live'
+      : this.pending.has(handle)
+        ? 'pending-retirement'
+        : 'released';
+  }
+
+  retireAll(): void {
+    for (const handle of [...this.live.keys()]) this.retire(handle);
+  }
+
+  release(handle: unknown): void {
+    const pendingBytes = this.pending.get(handle);
+    if (pendingBytes !== undefined || this.pending.has(handle)) {
+      this.pending.delete(handle);
+      if (pendingBytes !== undefined) this.pendingBytes -= pendingBytes;
+      if (pendingBytes === undefined) this.unknownByteSizeCount -= 1;
+      this.retiredBytes += pendingBytes ?? 0;
+      return;
+    }
+    const liveBytes = this.live.get(handle);
+    if (liveBytes !== undefined || this.live.has(handle)) {
+      this.live.delete(handle);
+      if (liveBytes !== undefined) this.liveBytes -= liveBytes;
+      if (liveBytes === undefined) this.unknownByteSizeCount -= 1;
+      this.retiredBytes += liveBytes ?? 0;
+    }
+  }
+
+  private allocate(handle: unknown, bytes: number | undefined, newlyAllocated: boolean): void {
+    if (this.live.has(handle) || this.pending.has(handle)) return;
+    this.live.set(handle, bytes);
+    if (newlyAllocated) this.successfulAllocationCount += 1;
+    if (bytes === undefined) this.unknownByteSizeCount += 1;
+    else {
+      this.liveBytes += bytes;
+      if (newlyAllocated) this.successfulAllocationBytes += bytes;
+    }
+    this.updatePeak();
+  }
+
+  private retire(handle: unknown): void {
+    const bytes = this.live.get(handle);
+    if (bytes === undefined && !this.live.has(handle)) return;
+    this.live.delete(handle);
+    if (bytes !== undefined) {
+      this.liveBytes -= bytes;
+      this.pendingBytes += bytes;
+    }
+    this.pending.set(handle, bytes);
+    this.updatePeak();
+  }
+
+  private updatePeak(): void {
+    this.peakBytes = Math.max(this.peakBytes, this.liveBytes + this.pendingBytes);
+  }
 }
 
 function resolutionError(label: string, cause?: unknown): RenderGraphError {
@@ -46,6 +154,7 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
 {
   private retired = false;
   private retireResult: Promise<Result<void, RenderGraphError>> | undefined;
+  private readonly allocationLedger: RenderGraphAllocationLedger;
 
   constructor(
     private readonly generation: number,
@@ -55,13 +164,90 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
     private readonly views: ReadonlyMap<number, CompiledView<FrameCtx>>,
     private readonly passes: readonly CompiledPass<FrameCtx>[],
     private readonly info: CompiledRenderGraphInfo,
-  ) {}
-
-  inspect(): CompiledRenderGraphInfo {
-    return this.info;
+    private readonly colorTargetDescriptors: ReadonlyMap<string, ResolvedColorTargetDescriptor>,
+  ) {
+    const infoByLabel = new Map(info.resources.map((resource) => [resource.label, resource]));
+    const seen = new Set<unknown>();
+    const entries: AllocationEntry[] = [];
+    let importedResourceCount = 0;
+    for (const compiled of resources.values()) {
+      if (compiled.usage === 0) continue;
+      const handle = compiled.texture ?? compiled.buffer;
+      if (compiled.record.origin === 'imported') {
+        importedResourceCount += 1;
+        continue;
+      }
+      if (handle === undefined || seen.has(handle)) continue;
+      seen.add(handle);
+      entries.push({
+        handle,
+        bytes: infoByLabel.get(compiled.record.label)?.byteSize,
+        newlyAllocated:
+          compiled.textureAllocation === undefined || compiled.textureAllocation.references === 1,
+      });
+    }
+    this.allocationLedger = new RenderGraphAllocationLedger(entries, importedResourceCount);
   }
 
-  execute(frame: FrameCtx, runPass?: RenderGraphPassRunner): Result<void, RenderGraphError> {
+  inspect(): CompiledRenderGraphInfo {
+    const states = new Map<string, 'live' | 'pending-retirement' | 'released'>();
+    for (const resource of this.resources.values()) {
+      states.set(
+        resource.record.label,
+        this.allocationLedger.state(resource.texture ?? resource.buffer),
+      );
+    }
+    const resources = this.info.resources.map((resource) => {
+      if (resource.origin !== 'created' || resource.physicalAllocationKey === undefined)
+        return resource;
+      return Object.freeze({ ...resource, allocationState: states.get(resource.label) });
+    });
+    return {
+      ...this.info,
+      resources: Object.freeze(resources),
+      resourceAllocation: this.allocationLedger.inspect(),
+    };
+  }
+
+  retainTexture(
+    device: RhiDevice,
+    label: string,
+    signature: string,
+  ): GraphTextureAllocation | undefined {
+    if (this.retired || this.device !== device) return undefined;
+    for (const resource of this.resources.values()) {
+      const allocation = resource.textureAllocation;
+      if (resource.record.label !== label || allocation?.signature !== signature) continue;
+      allocation.references += 1;
+      return allocation;
+    }
+    return undefined;
+  }
+
+  getColorTargetView(name: string): TextureView | undefined {
+    for (const view of this.views.values()) {
+      const resource = this.resources.get(view.record.textureId);
+      if (resource?.record.label === name) return view.view;
+    }
+    return undefined;
+  }
+
+  getColorTargetTexture(name: string): Texture | undefined {
+    for (const resource of this.resources.values()) {
+      if (resource.record.label === name) return resource.texture;
+    }
+    return undefined;
+  }
+
+  getColorTargetDescriptor(name: string): ResolvedColorTargetDescriptor | undefined {
+    return this.colorTargetDescriptors.get(name);
+  }
+
+  execute(
+    frame: FrameCtx,
+    runPass?: RenderGraphPassRunner,
+    instrumentation?: RenderGraphPassInstrumentation<FrameCtx>,
+  ): Result<void, RenderGraphError> {
     if (this.retired) {
       return err(
         new RenderGraphError({
@@ -80,8 +266,14 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
       const resolver = this.createPassResolver(pass, resolved.value);
       try {
         if (pass.pass.descriptor.executeIf?.(frame) === false) continue;
+        const execution = { name: pass.name, kind: pass.pass.kind, executionIndex };
         let encodeResult: Result<void, RenderGraphError> = ok(undefined);
         const encode = () => {
+          // Resolve instrumentation only when the runner actually enters the
+          // pass. A runner may inspect or skip a pass without calling encode;
+          // such a pass must not reserve timestamp queries that it never
+          // writes.
+          const scope = instrumentation?.begin(execution, frame);
           switch (pass.pass.kind) {
             case 'raster': {
               const descriptor = pass.pass.descriptor;
@@ -151,11 +343,19 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
                     : { stencilReadOnly: attachment.stencilReadOnly }),
                 };
               }
-              const encoder = frame.encoder.beginRenderPass({
+              const querySet =
+                typeof descriptor.occlusionQuerySet === 'function'
+                  ? descriptor.occlusionQuerySet(frame)
+                  : descriptor.occlusionQuerySet;
+              const baseDescriptor = {
                 label: pass.name,
                 colorAttachments,
                 ...(depthStencilAttachment === undefined ? {} : { depthStencilAttachment }),
-              });
+                ...(querySet === undefined ? {} : { occlusionQuerySet: querySet }),
+              };
+              const instrumentedDescriptor =
+                scope?.renderPassDescriptor?.(baseDescriptor) ?? baseDescriptor;
+              const encoder = frame.encoder.beginRenderPass(instrumentedDescriptor);
               try {
                 descriptor.encode({ pass: encoder, frame, resources: resolver });
               } finally {
@@ -165,9 +365,13 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
             }
             case 'compute': {
               const begin = pass.pass.descriptor.begin?.(frame);
+              const instrumentedBegin = scope?.computePassDescriptor?.(begin ?? {}) ?? begin;
               let encoder: RhiComputePassEncoder;
               try {
-                encoder = frame.encoder.beginComputePass({ ...(begin ?? {}), label: pass.name });
+                encoder = frame.encoder.beginComputePass({
+                  ...(instrumentedBegin ?? {}),
+                  label: pass.name,
+                });
               } catch (cause) {
                 pass.pass.descriptor.onBeginError?.(frame, cause);
                 throw cause;
@@ -181,14 +385,19 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
               break;
             }
             case 'copy':
-              pass.pass.descriptor.encode({ encoder: frame.encoder, frame, resources: resolver });
+              scope?.beforeCopy?.(frame.encoder);
+              try {
+                pass.pass.descriptor.encode({ encoder: frame.encoder, frame, resources: resolver });
+              } finally {
+                scope?.afterCopy?.(frame.encoder);
+              }
               break;
           }
         };
         if (runPass === undefined) {
           encode();
         } else {
-          runPass({ name: pass.name, kind: pass.pass.kind, executionIndex }, encode);
+          runPass(execution, encode);
         }
         if (!encodeResult.ok) return encodeResult;
       } catch (cause) {
@@ -213,6 +422,7 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
   }
 
   private async finishRetire(): Promise<Result<void, RenderGraphError>> {
+    this.allocationLedger.retireAll();
     try {
       await this.device.queue.onSubmittedWorkDone();
     } catch (cause) {
@@ -230,11 +440,15 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
     for (const compiled of this.resources.values()) {
       if (compiled.record.origin === 'imported') continue;
       if (compiled.texture === undefined && compiled.buffer === undefined) continue;
+      let destroyedSuccessfully = false;
       try {
         const destroyed =
-          compiled.record.kind === 'texture'
-            ? this.device.destroyTexture(compiled.texture as Texture)
-            : this.device.destroyBuffer(compiled.buffer as Buffer);
+          compiled.textureAllocation !== undefined
+            ? releaseGraphTexture(this.device, compiled.textureAllocation)
+            : compiled.record.kind === 'texture'
+              ? this.device.destroyTexture(compiled.texture as Texture)
+              : this.device.destroyBuffer(compiled.buffer as Buffer);
+        destroyedSuccessfully = destroyed.ok;
         if (!destroyed.ok && firstFailure === undefined) {
           firstFailure = new RenderGraphError({
             code: 'resource-retire-failed',
@@ -254,6 +468,12 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
           hint: 'inspect detail.cause for the RHI destroy failure',
           detail: { generation: this.generation, resourceLabel: compiled.record.label, cause },
         });
+      } finally {
+        // A failed or throwing destroy leaves the handle owned by this
+        // graph. Keep its token pending so inspection reflects the
+        // retirement failure instead of claiming bytes were released.
+        if (destroyedSuccessfully)
+          this.allocationLedger.release(compiled.texture ?? compiled.buffer);
       }
     }
     return firstFailure === undefined ? ok(undefined) : err(firstFailure);

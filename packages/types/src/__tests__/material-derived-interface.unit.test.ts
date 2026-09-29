@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { derive, ParamSchemaProjectionOwner } from '../derive-paramschema.js';
+import { derive, deriveObserved, ParamSchemaProjectionOwner } from '../derive-paramschema.js';
+import type { ParamSchemaEntry } from '../index.js';
 
 const CHARACTERIZATION_RECEIPT =
   '/tmp/forgeax-material-reflection-m1-owner-abi-characterization.json';
@@ -68,6 +69,35 @@ describe('derived material interface contract matrix', () => {
     expect(output.totalBytes).toBe(32);
   });
 
+  it('derives array and volume texture bindings with their authored view dimensions', () => {
+    const output = derive([
+      { name: 'layers', type: 'texture2d_array' },
+      { name: 'volume', type: 'texture3d' },
+    ]);
+
+    expect(output.bglEntries).toEqual([
+      { binding: 0, visibility: 0x2, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: 0x2, sampler: { type: 'filtering' } },
+      {
+        binding: 2,
+        visibility: 0x2,
+        texture: { sampleType: 'float', viewDimension: '2d-array', multisampled: false },
+      },
+      { binding: 3, visibility: 0x2, sampler: { type: 'filtering' } },
+      {
+        binding: 4,
+        visibility: 0x2,
+        texture: { sampleType: 'float', viewDimension: '3d', multisampled: false },
+      },
+    ]);
+    expect(output.resourceBindings.map((entry) => entry.name)).toEqual([
+      'layers_sampler',
+      'layers',
+      'volume_sampler',
+      'volume',
+    ]);
+  });
+
   it('keeps numeric members and coordinate records non-overlapping when interleaved', () => {
     const output = derive([
       { name: 'exposure', type: 'f32' },
@@ -122,8 +152,50 @@ describe('derived material interface contract matrix', () => {
     const second = derive(schema);
     const differentShaderConsumer = derive(schema);
 
-    expect(first).toEqual(second);
+    expect(second).toBe(first);
     expect(first.layoutIdentity).toBe(differentShaderConsumer.layoutIdentity);
+  });
+
+  it('reuses only an unchanged name/type shape and keeps the result immutable', () => {
+    const schema: ParamSchemaEntry[] = [
+      { name: '__fallback_cache_value', type: 'f32', default: 0 },
+    ];
+    const first = derive(schema);
+
+    schema[0] = { name: '__fallback_cache_value', type: 'f32', default: 1 };
+    expect(derive(schema)).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.bglEntries)).toBe(true);
+    expect(Object.isFrozen(first.uboLayout)).toBe(true);
+
+    schema[0] = { name: '__fallback_cache_renamed', type: 'f32' };
+    const changed = derive(schema);
+    expect(changed).not.toBe(first);
+    expect(changed.uboLayout.entries[0]?.name).toBe('__fallback_cache_renamed');
+
+    schema[0] = { name: '', type: 'f32' };
+    expect(() => derive(schema)).toThrow(/name/i);
+
+    schema[0] = { name: '__fallback_cache_restored', type: 'f32' };
+    expect(derive(schema).uboLayout.entries[0]?.name).toBe('__fallback_cache_restored');
+  });
+
+  it('observes fallback derivation, SHA, and identity-cache hits separately', () => {
+    const schema: ParamSchemaEntry[] = [{ name: '__fallback_cache_observer', type: 'vec4' }];
+    const events: string[] = [];
+    const observer = {
+      enabled: true,
+      observe: ({ kind }: { readonly kind: string }) => events.push(kind),
+    };
+
+    deriveObserved(schema, observer, 'types-test');
+    deriveObserved(schema, observer, 'types-test');
+
+    expect(events).toEqual([
+      'unregistered-fallback-derive',
+      'fallback-layout-sha',
+      'fallback-cache-hit',
+    ]);
   });
 
   it('admits one immutable projection per owner revision', () => {

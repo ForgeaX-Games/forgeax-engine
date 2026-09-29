@@ -1,26 +1,23 @@
 // shadow-csm-cascade-loadop.test.ts - typed shadow per-cascade depth clear
-// @perf-budget-skip - the two truth-table cases intentionally drive the full renderer call site.
-// M1: per-cascade depth loadOp truth table, asserted against the REAL call site.
-//
-// The invariant is owned by the typed shadow graph's cascade recording path:
-//   buildBeginRenderPassDescriptor(..., 'shadow-caster',
-//     { depthLoadOp: cascadeIndex === 0 ? 'clear' : 'load' })
+// @perf-budget-skip - the two cases intentionally drive the full renderer call site.
+// Per-cascade depth loadOp, asserted against the REAL call site: the typed
+// shadow graph gives each cascade its own array layer and clears it.
 //
 // This test does NOT re-declare the decision expression and feed it to the
 // pure builder (that would be tautological — the bug could regress verbatim
 // while the suite stays green). Instead it drives the whole pipeline through
 // createRenderer + renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }): the URP cascade loop calls
 // one typed shadow pass per cascade, whose execute closure invokes the real
-// encodeDirectionalShadowPass(c, pass, cascadeIndex, viewport). A mock GPU device
+// encodeDirectionalShadowPass(c, pass, cascadeIndex). A mock GPU device
 // captures every descriptor handed to beginRenderPass on the dedicated
 // 'render-system-shadow' command encoder, so the asserted truth table is the
-// engine's decision at the real call site — flip the ternary to a constant and
-// these assertions fail.
+// engine's decision at the real call site.
 
 import type { World as WorldType } from '@forgeax/engine-ecs';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 
 const ENGINE = '../createRenderer';
 
@@ -107,6 +104,7 @@ function makeMockGPUDevice(log: CaptureLog): unknown {
       submit: () => undefined,
       writeBuffer: () => undefined,
       writeTexture: () => undefined,
+      onSubmittedWorkDone: async () => undefined,
     },
     createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
     createBindGroupLayout: () => ({}),
@@ -152,7 +150,10 @@ function buildManifestDataUrl(): string {
     sourcePath: `${identifier}.wgsl`,
     composedWgsl,
     paramSchema: '[]',
-    variants: [],
+    variants:
+      identifier === 'forgeax::default-standard-pbr'
+        ? standardMaterialShaderVariants(composedWgsl)
+        : [],
   });
   const manifest = {
     schemaVersion: '1.0.0',
@@ -211,6 +212,7 @@ async function importEcs(): Promise<{ World: new () => unknown }> {
 
 async function importComponents(): Promise<{
   Transform: unknown;
+  GlobalTransform: unknown;
   MeshFilter: unknown;
   MeshRenderer: unknown;
   Camera: unknown;
@@ -316,30 +318,19 @@ describe('CSM per-cascade depth loadOp (typed shadow call site)', () => {
   // ── AC-03: cascadeCount=4 truth table (drives the real call site) ──────────
   // N=4 cascades share a single shadowDepth atlas. Each cascade pass routes
   // through the typed shadow graph -> beginRenderPass with the per-cascade override.
-  // The captured descriptors must read: cascade 0 -> clear + depthClearValue,
-  // cascades 1..3 -> load + no depthClearValue.
-
-  it('AC-03: cascadeCount=4 produces clear@0, load@1..3 at the real call site', async () => {
+  // Every cascade owns one depth-array layer and clears it, so a cascade
+  // re-raster never depends on (or erases) another cascade's retained depth.
+  it('AC-03: cascadeCount=4 clears every cascade layer at the real call site', async () => {
     const log = await drawCsmScene(4);
     expect(log.shadowPassDescriptors).toHaveLength(4);
-
-    // AC-01: cascade 0 clears the whole atlas once.
-    const c0 = log.shadowPassDescriptors[0];
-    expect(c0?.depthLoadOp).toBe('clear');
-    expect(c0?.hasDepthClearValue).toBe(true);
-    expect(c0?.depthClearValue).toBe(1);
-    expect(c0?.depthStoreOp).toBe('store');
-
-    // AC-02: cascades 1..3 load (preserve prior tiles), never clear.
-    for (const i of [1, 2, 3]) {
-      const ci = log.shadowPassDescriptors[i];
-      expect(ci?.depthLoadOp).toBe('load');
-      expect(ci?.hasDepthClearValue).toBe(false);
-      expect(ci?.depthStoreOp).toBe('store');
+    for (const descriptor of log.shadowPassDescriptors) {
+      expect(descriptor.depthLoadOp).toBe('clear');
+      expect(descriptor.hasDepthClearValue).toBe(true);
+      expect(descriptor.depthClearValue).toBe(0);
+      expect(descriptor.depthStoreOp).toBe('store');
     }
   }, 15_000);
 
-  // ── AC-04: cascadeCount=1 no regression ────────────────────────────────────
   // The single cascade (index 0) must still clear, matching pre-fix behavior.
 
   it('AC-04: cascadeCount=1 uses clear (no regression)', async () => {
@@ -348,7 +339,7 @@ describe('CSM per-cascade depth loadOp (typed shadow call site)', () => {
     const only = log.shadowPassDescriptors[0];
     expect(only?.depthLoadOp).toBe('clear');
     expect(only?.hasDepthClearValue).toBe(true);
-    expect(only?.depthClearValue).toBe(1);
+    expect(only?.depthClearValue).toBe(0);
     expect(only?.depthStoreOp).toBe('store');
   }, 15_000);
 });

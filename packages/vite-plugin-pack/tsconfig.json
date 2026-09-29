@@ -15,6 +15,7 @@
   "references": [
     { "path": "../codec" },
     { "path": "../ddc" },
+    { "path": "../fbx" },
     { "path": "../gltf" },
     { "path": "../image" },
     { "path": "../pack" },

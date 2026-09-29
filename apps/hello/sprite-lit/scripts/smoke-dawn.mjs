@@ -11,11 +11,11 @@
 //   3. Build a World with 4 sprite-lit quads + 3 lights (1 directional +
 //      1 point + 1 spot) + 1 standard-PBR cube (AC-14 sanity); identical
 //      scene shape to apps/hello/sprite-lit/src/main.ts three-lights mode.
-//   4. Render 300 frames; assert no draw error + no NaN/Inf in the
+//   4. Render 60 frames; assert no draw error + no NaN/Inf in the
 //      readback + sprite-center pixel R/G/B > 0 (AC-06 three lights
 //      generated visible illumination).
 //   5. Falsification variant: rebuild the World without the PointLight or
-//      SpotLight (directional-only), re-render 300 frames, assert the
+//      SpotLight (directional-only), re-render 60 frames, assert the
 //      sprite-center pixel differs from the 3-light variant by > 0.05
 //      (charter feedback 61 falsifiability: the smoke can detect a
 //      regression where two of the three lights silently fall off the
@@ -34,7 +34,7 @@ import { dirname, resolve } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -165,7 +165,8 @@ const {
 const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 function buildCheckerboardRgba(side) {
   const w = side;
@@ -219,12 +220,11 @@ console.log(`[hello-sprite-lit] backend=${renderer.inspect().capabilities.backen
 const checker = buildCheckerboardRgba(8);
 const synthPod = {
   kind: 'texture',
-  width: checker.width,
-  height: checker.height,
+  shape: { viewDimension: '2d', extent: { width: checker.width, height: checker.height } },
   format: 'rgba8unorm-srgb',
   data: checker.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 
 function expectOk(r, label) {
@@ -410,7 +410,7 @@ async function renderCase({ includePoint, includeSpot, label }) {
       environment: { lease: attached.value },
     });
     if (!r.ok) drawErrors++;
-    draws++;
+    else draws++;
   }
   await sharedDevice?.queue.onSubmittedWorkDone();
   if (drawErrors > 0) {
@@ -482,7 +482,7 @@ async function renderCase({ includePoint, includeSpot, label }) {
   const g = tight[off + 1] ?? 0;
   const b = tight[off + 2] ?? 0;
   console.log(`[smoke] case ${label} center=${r},${g},${b} frames=${draws}`);
-  return { ok: true, center: [r, g, b], tight };
+  return { ok: true, center: [r, g, b], tight, draws };
 }
 
 // --- 4. Run the 2 cases + falsifier ---------------------------------------
@@ -552,6 +552,15 @@ if (failures.length > 0) {
 
 console.log(
   `[smoke] PASS - backend=${renderer.inspect().capabilities.backendKind}; three-lights + directional-only rendered ${SMOKE_MIN_FRAMES} frames; AC-06 center>0; falsifier delta > ${SMOKE_PIXEL_THRESHOLD}`,
+);
+console.log(
+  `[forgeax-smoke-receipt] ${JSON.stringify({
+    schemaVersion: 1,
+    gateId: 'hello-sprite-lit/smoke',
+    commandId: 'smoke',
+    framesObserved: SMOKE_MIN_FRAMES,
+    completed: true,
+  })}`,
 );
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

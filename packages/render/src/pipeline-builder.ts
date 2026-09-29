@@ -43,6 +43,7 @@
 
 import {
   err,
+  ok,
   type PipelineLayout,
   type RenderPipeline,
   type RenderPipelineDescriptor,
@@ -53,6 +54,7 @@ import {
 } from '@forgeax/engine-rhi';
 import type { MaterialShaderEntry } from '@forgeax/engine-shader';
 import type { MaterialRenderState, PassKind, PrimitiveTopology } from '@forgeax/engine-types';
+import { materialColorTarget, materialDepthStencil } from './material-render-state';
 import { colorFormatsForPassKind, type PipelineSpec } from './pipeline-spec';
 
 /**
@@ -121,6 +123,9 @@ export interface PipelineBuilderContext {
    * tonemap field (M9 keeps the LDR shape; HDR variants are OOS-M9).
    */
   readonly colorFormat: GPUTextureFormat;
+  /** Additional color targets for an MRT pass; the first target is colorFormat. */
+  readonly colorFormats?: readonly GPUTextureFormat[] | undefined;
+  readonly constants?: Readonly<Record<string, number>> | undefined;
   /** Depth attachment format, or `undefined` for a color-only pass. */
   readonly depthFormat: GPUTextureFormat | undefined;
   /**
@@ -130,6 +135,8 @@ export interface PipelineBuilderContext {
    * feat).
    */
   readonly vertexBuffers: readonly GPUVertexBufferLayout[];
+  /** Explicit layout family selected by the renderer assembly. */
+  readonly layoutKind?: 'pbr-skin' | 'gpu-driven-skin' | 'gpu-driven-cluster-skin' | undefined;
   /** Pipeline label (for GPU debug captures); defaults to `pbr-pipeline-${id}`. */
   readonly label?: string | undefined;
   /**
@@ -150,6 +157,90 @@ export interface PipelineBuilderContext {
    * `moduleLabel` so two `#define` prefixes do not collide on one module.
    */
   readonly moduleLabel?: string | undefined;
+  /** Device facts used to reject a temporal PSO before it reaches submit. */
+  readonly capabilities?: {
+    readonly storageBuffer: boolean;
+    readonly rgba16floatRenderable: boolean;
+  };
+  /** The output-domain binary coverage variant uses an r8unorm attachment. */
+  readonly coverageOnly?: boolean | undefined;
+}
+
+/**
+ * Validate the temporal material contract at the PSO creation boundary.
+ *
+ * Downlevel WebGL2 implementations can accept a pipeline whose shader/layout
+ * pair is invalid and report the failure only when the command buffer is
+ * submitted. The temporal producer is the one material path where this is
+ * especially damaging: the invalid handle is cached and every frame then
+ * fails. Keep this check beside descriptor construction so the caller gets a
+ * structured shader failure before a handle is cached.
+ */
+export function validateTemporalPipelineContract(
+  source: string,
+  ctx: Pick<
+    PipelineBuilderContext,
+    'colorFormat' | 'depthFormat' | 'capabilities' | 'coverageOnly'
+  >,
+): Result<void, RhiError> {
+  if (!source.includes('fn vs_temporal') || !source.includes('fn fs_temporal')) {
+    return err(
+      new RhiError({
+        code: 'shader-compile-failed',
+        expected: 'temporal material source declares vs_temporal and fs_temporal entry points',
+        hint: 'compile the temporal material variant that owns the temporal producer ABI',
+      }),
+    );
+  }
+  const validCoverageTarget = ctx.coverageOnly === true && ctx.colorFormat === 'r8unorm';
+  if (ctx.colorFormat !== 'rgba16float' && !validCoverageTarget) {
+    return err(
+      new RhiError({
+        code: 'shader-compile-failed',
+        expected: 'temporal material target format is rgba16float',
+        hint:
+          ctx.coverageOnly === true
+            ? `coverage temporal producer received unsupported color format ${ctx.colorFormat}; use r8unorm`
+            : `temporal producer received color format ${ctx.colorFormat}; use its physical rgba16float target`,
+      }),
+    );
+  }
+  if (ctx.depthFormat === undefined) {
+    return err(
+      new RhiError({
+        code: 'shader-compile-failed',
+        expected: 'temporal material pipeline has a depth format',
+        hint: 'provide the shared scene depth attachment for the temporal producer',
+      }),
+    );
+  }
+  const capabilities = ctx.capabilities;
+  if (capabilities !== undefined) {
+    const sourceUsesStorageBuffer = /var\s*<\s*storage(?:\s*,|\s*>)/u.test(source);
+    if (sourceUsesStorageBuffer !== capabilities.storageBuffer) {
+      return err(
+        new RhiError({
+          code: 'shader-compile-failed',
+          expected: `temporal shader storage-buffer variant matches device capability (${capabilities.storageBuffer})`,
+          hint: 'resolve the material variant against the active WebGL2/native capability before creating the PSO',
+        }),
+      );
+    }
+    if (!capabilities.rgba16floatRenderable) {
+      return err(
+        new RhiError({
+          code: 'shader-compile-failed',
+          expected: 'rgba16float temporal target is renderable on the active device',
+          hint: 'preserve the structured capability refusal instead of creating a deferred-invalid PSO',
+        }),
+      );
+    }
+  }
+  return ok(undefined);
+}
+
+function pipelineCreationHint(error: RhiError): string {
+  return `inspect compiler messages on the shader module; verify pipeline layout matches shader bindings (cause: ${error.code}; underlying hint: ${error.hint}; raw: ${error.message})`;
 }
 
 /**
@@ -182,7 +273,8 @@ export function buildPipelineForMaterialShader(
   renderState?: MaterialRenderState,
   geometry?: PipelineGeometry,
   vertexEntry?: string,
-  fragmentEntry?: string,
+  // null explicitly selects vertex-only depth; omitted preserves authored coverage.
+  fragmentEntry?: string | null,
   defines?: Record<string, string>,
   passKind: PassKind = 'forward',
   // bug-20260615 M2 / m2-1: sampleCount is a CAMERA fact (per-frame antialias
@@ -194,8 +286,16 @@ export function buildPipelineForMaterialShader(
   sampleCount: number = 1,
 ): Result<RenderPipeline, RhiError> {
   const label = ctx.label ?? `pbr-pipeline-${id}`;
-  const vsEntry = vertexEntry ?? 'vs_main';
-  const fsEntry = fragmentEntry ?? (passKind === 'deferred' ? 'fs_gbuffer' : 'fs_main');
+  const vsEntry = vertexEntry ?? (passKind === 'temporal' ? 'vs_temporal' : 'vs_main');
+  const fsEntry =
+    fragmentEntry ??
+    (passKind === 'temporal'
+      ? 'fs_temporal'
+      : passKind === 'deferred'
+        ? 'fs_gbuffer'
+        : passKind === 'shadow-caster'
+          ? 'fs_shadow'
+          : 'fs_main');
 
   let source = entry.source;
   if (defines !== undefined && Object.keys(defines).length > 0) {
@@ -226,6 +326,11 @@ export function buildPipelineForMaterialShader(
   }
   const shaderModule = moduleResult.value;
 
+  if (passKind === 'temporal') {
+    const temporalContract = validateTemporalPipelineContract(source, ctx);
+    if (!temporalContract.ok) return temporalContract;
+  }
+
   // feat-20260609 M4 / R3-fixup: shadow-caster branch.
   // The shadow render pass beginRenderPass desc is `{ colorAttachments: [],
   // depthStencilAttachment: { format: 'depth32float', ... } }` (see
@@ -235,32 +340,29 @@ export function buildPipelineForMaterialShader(
   // compatible with [RenderPassEncoder]". Ground truth descriptor was the
   // hardcoded shadowCasterPipeline removed in T-009 (commit 6416e9de~);
   // this branch reconstructs that exact shape via the lazy cache path.
-  // Vertex layout is position-only (12-float stride, shaderLocation 0 vec3)
-  // — the shadow_caster.wgsl vs_main reads only @location(0) position.
-  if (colorFormatsForPassKind(passKind, ctx.colorFormat).length === 0) {
-    // bug-20260619-csm RC-3 (AC-10): a material may supply a custom
-    // ShadowCaster pass shader that carries a fragment stage (e.g. an
-    // alpha-test cutout that calls `discard` and returns
-    // `@builtin(frag_depth)`). The built-in `forgeax::default-shadow-caster`
-    // is vertex-only — the GPU writes depth from `gl_Position.z` with no
-    // fragment. To run the cutout discard, the PSO MUST include the
-    // fragment stage when the shader declares one; otherwise the fragment
-    // never executes and the shadow comes out solid. The depth pass has no
-    // color attachments, so the fragment stage targets an empty list (it
-    // only writes `@builtin(frag_depth)`).
-    const hasFragmentStage = source.includes('@fragment');
+  // The ordinary shadow variant reads only position from the canonical 12F
+  // layout. The skinned variant additionally reads JOINTS_0 / WEIGHTS_0;
+  // both layouts come from the same geometry projection used by the main
+  // pass, so shadow rendering cannot silently reinterpret an 18F stream.
+  const attachmentFormats = ctx.colorFormats ?? colorFormatsForPassKind(passKind, ctx.colorFormat);
+  if (attachmentFormats.length === 0) {
+    // Depth-only passes still run fragment coverage: alpha masks and public
+    // clipping must discard the same fragments as the visible surface.
+    const hasFragmentStage = fragmentEntry !== null && source.includes('@fragment');
     const shadowPipelineResult = ctx.device.createRenderPipeline({
       label,
       layout: ctx.pipelineLayout,
       vertex: {
         module: shaderModule,
         entryPoint: vsEntry,
-        buffers: [
-          {
-            arrayStride: 12 * 4,
-            attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' as const }],
-          },
-        ],
+        ...(ctx.constants === undefined ? {} : { constants: ctx.constants }),
+        // Surface-backed Standard shadow entries evaluate the same material
+        // surface as Forward/Deferred, so their vertex stage consumes normal,
+        // UV, and tangent inputs in addition to position. Keep the complete
+        // derived mesh layout here; extra attributes remain legal for legacy
+        // position-only custom casters, while trimming to position would make
+        // the built-in Surface shadow shader fail WebGPU validation.
+        buffers: [...ctx.vertexBuffers],
       },
       // Vertex-only depth pass writes `fragment: undefined` (GPU derives
       // depth from gl_Position.z). A custom ShadowCaster shader with a
@@ -270,6 +372,7 @@ export function buildPipelineForMaterialShader(
         ? {
             module: shaderModule,
             entryPoint: fsEntry,
+            ...(ctx.constants === undefined ? {} : { constants: ctx.constants }),
             targets: [],
           }
         : undefined,
@@ -278,13 +381,7 @@ export function buildPipelineForMaterialShader(
         cullMode: renderState?.cullMode ?? 'back',
         frontFace: renderState?.frontFace ?? 'ccw',
       },
-      depthStencil: {
-        // depth32float (matches shadow RT format), NOT ctx.depthFormat
-        // (which is depth24plus-stencil8 for the main pass).
-        format: 'depth32float',
-        depthWriteEnabled: true,
-        depthCompare: 'less',
-      },
+      depthStencil: materialDepthStencil(ctx.depthFormat ?? 'depth32float', renderState),
       multisample: sampleCount > 1 ? { count: sampleCount } : undefined,
     });
     if (!shadowPipelineResult.ok) {
@@ -295,7 +392,7 @@ export function buildPipelineForMaterialShader(
         new RhiError({
           code: 'shader-compile-failed',
           expected: `shadow-caster pipeline for material shader '${id}' builds successfully`,
-          hint: `inspect compiler messages on the shader module; verify pipeline layout matches shader bindings (cause: ${shadowPipelineResult.error.code})`,
+          hint: pipelineCreationHint(shadowPipelineResult.error),
         }),
       );
     }
@@ -309,7 +406,7 @@ export function buildPipelineForMaterialShader(
   const forwardSpec: PipelineSpec = {
     shader: { id, passKind, variantSet: undefined },
     attachments: {
-      colorFormats: colorFormatsForPassKind(passKind, ctx.colorFormat),
+      colorFormats: attachmentFormats,
       depthFormat: ctx.depthFormat,
       sampleCount: (sampleCount === 4 ? 4 : 1) as 1 | 4,
     },
@@ -328,15 +425,16 @@ export function buildPipelineForMaterialShader(
     vertex: {
       module: shaderModule,
       entryPoint: vsEntry,
+      ...(ctx.constants === undefined ? {} : { constants: ctx.constants }),
       buffers: [...ctx.vertexBuffers],
     },
     fragment: {
       module: shaderModule,
       entryPoint: fsEntry,
-      targets: forwardSpec.attachments.colorFormats.map((format) => ({
-        format,
-        ...(renderState?.blend === undefined ? {} : { blend: renderState.blend }),
-      })),
+      ...(ctx.constants === undefined ? {} : { constants: ctx.constants }),
+      targets: forwardSpec.attachments.colorFormats.map((format, index) =>
+        materialColorTarget(format, renderState, index),
+      ),
     },
     primitive: {
       topology: forwardSpec.geometry.topology,
@@ -348,11 +446,10 @@ export function buildPipelineForMaterialShader(
     },
   };
   if (forwardSpec.attachments.depthFormat !== undefined) {
-    descriptor.depthStencil = {
-      format: forwardSpec.attachments.depthFormat,
-      depthWriteEnabled: renderState?.depthWriteEnabled ?? true,
-      depthCompare: renderState?.depthCompare ?? 'less',
-    };
+    descriptor.depthStencil = materialDepthStencil(
+      forwardSpec.attachments.depthFormat,
+      renderState,
+    );
   }
   if (sampleCount > 1) {
     descriptor.multisample = {
@@ -374,7 +471,7 @@ export function buildPipelineForMaterialShader(
       new RhiError({
         code: 'shader-compile-failed',
         expected: `pipeline for material shader '${id}' builds successfully`,
-        hint: `inspect compiler messages on the shader module; verify pipeline layout matches shader bindings (cause: ${pipelineResult.error.code})`,
+        hint: pipelineCreationHint(pipelineResult.error),
       }),
     );
   }

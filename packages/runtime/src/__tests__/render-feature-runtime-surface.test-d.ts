@@ -15,7 +15,7 @@ const feature = {
   plan(data: FrameData) {
     const count: number = data.visibleCount;
     void count;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [] });
   },
 } satisfies RenderFeature<FrameData>;
 

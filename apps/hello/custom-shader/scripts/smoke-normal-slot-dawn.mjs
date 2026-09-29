@@ -26,12 +26,27 @@ const cookedByGuid = new Map(
   fixture.assets.map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
 );
 const loader = createMaterialLoader({
-  loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
+  loadPublication: async (guid) => {
+    const record = cookedByGuid.get(guid.toLowerCase());
+    if (record === undefined) return undefined;
+    return {
+      guid,
+      record,
+      artifacts: Object.fromEntries(
+        record.programs.map(({ artifact }) => [
+          artifact.path,
+          { bytes: new Uint8Array(artifact.bytes), digest: artifact.digest },
+        ]),
+      ),
+    };
+  },
   loadReference: async () => true,
 });
+const rootRecord = cookedByGuid.get('01935b00-7d8c-7c4e-9f12-345678abcd02');
+assert(rootRecord !== undefined, 'cooked root material record is absent');
 const material = await loader.load({
   guid: '01935b00-7d8c-7c4e-9f12-345678abcd02',
-  specializationKey: 'my-game::pulse-material',
+  specializationKey: rootRecord.specializationKey,
 });
 assert(material.status === 'Ready', 'authored material record is not runtime-ready');
 
@@ -152,6 +167,6 @@ console.log(JSON.stringify({
   backend: 'dawn-webgpu',
   variant,
   pixel,
-  rootArtifactDigest: material.artifact.digest,
+  rootArtifactDigest: material.artifactDigest,
   normalTextureSlot: authoredNormalTextureGuid,
 }));

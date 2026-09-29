@@ -46,12 +46,11 @@ function makeWoodTexture(format: GPUTextureFormat, colorSpace: 'srgb' | 'linear'
   // the actual bytes.
   return {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format,
     data: new Uint8Array([139, 69, 19, 255]), // SaddleBrown wood-ish
     colorSpace,
-    mipmap: false,
+    mips: { kind: 'none' },
   } as unknown as TextureAsset;
 }
 

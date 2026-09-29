@@ -33,6 +33,7 @@ export interface AssetDecoderInput<P> {
 }
 
 export interface AssetDecoder<P> {
+  readonly references?: 'eager' | 'deferred';
   decode(input: AssetDecoderInput<P>): Promise<AssetDecoderResult<P>>;
 }
 

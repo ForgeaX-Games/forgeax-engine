@@ -6,6 +6,7 @@ import { gltfImporter } from '@forgeax/engine-gltf';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
+import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
@@ -38,10 +39,19 @@ export default defineConfig({
         refresh: reloadAssetHost(),
         roots: assetRoots,
         importers: [audioImporter, imageImporter, gltfImporter, fbxImporter, fontImporter],
+        cookers: [createMaterialPackCooker()],
       }),
     ),
   ],
   server: {
+    // The local/CI smoke runs in disposable worktrees where macOS Node 26 can
+    // stall while registering FSEvents during the first Vite request.  Keep
+    // normal development on the native watcher, but let the smoke select the
+    // deterministic polling path explicitly.
+    watch:
+      process.env.FORGEAX_COLLECTATHON_HMR_POLLING === '1'
+        ? { usePolling: true, interval: 100 }
+        : undefined,
     fs: {
       allow: [monorepoRoot],
     },

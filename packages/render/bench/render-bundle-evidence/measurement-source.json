@@ -1,0 +1,276 @@
+{
+  "base": "787eac1a35f9e1948b6543798c1dad06e10a3565",
+  "branch": "feat/render-bundle-reuse",
+  "committed": false,
+  "sourceManifestSha256": "a29d2dfcfcf0ebbc5fc99ced6693673dbcd8ce1c8c48da0ee97c685a944b995d",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "5e692ab9dcb118241fcedb0572d6f5b8bfd7f72ec8529ecedd6024a19e8313cb"
+    },
+    {
+      "path": "packages/render/README.md",
+      "sha256": "206f1606e19332c38e159fa0e10f68b3e4ba54bfd0911417263e3e2088c24744"
+    },
+    {
+      "path": "packages/render/bench/render-bundle-stress.ts",
+      "sha256": "d3c5fcdf16eb3af5b14229ec3fa53a7e3fab2324054e86d2b82dc60cf1dda414"
+    },
+    {
+      "path": "packages/render/bench/render-bundle.ts",
+      "sha256": "febf71d09beb122d59f20cef734ffc445992a6137e036614075a17a4345babdb"
+    },
+    {
+      "path": "packages/render/src/__tests__/standard-independent-maps.fixture.ts",
+      "sha256": "22861d4b1b6844340d29fb5332320dfbfb3e9d8f4d2a0403d88fdc9ff93f199d"
+    },
+    {
+      "path": "packages/render/src/__tests__/standard-pbr-artifact-assembly.unit.test.ts",
+      "sha256": "fe82aea42c8135ea864e1e11c6182bb34ce15f48a4f7b3470230d0eb3af6c3ca"
+    },
+    {
+      "path": "packages/render/src/record/__tests__/render-bundle-cache.unit.test.ts",
+      "sha256": "0d303f317b83d2d8228d3207256a03ea23588188f27b360d719ddac2fb2cf100"
+    },
+    {
+      "path": "packages/render/src/record/render-bundle-cache.ts",
+      "sha256": "7bfcf7da6e44877f487f5469b1c6ee4cd95d84edc8cf32caf1686f42b53a0bde"
+    },
+    {
+      "path": "packages/render/src/typed-render-graph-primitives.ts",
+      "sha256": "339b2d7b5ae1d5ad52010e14ad73092450cdf6afd502afd0f4274f68d24a6f7f"
+    },
+    {
+      "path": "packages/rhi-debug/README.md",
+      "sha256": "30daa5883a04b035f7cf4161c9fb8849ea9b385608c52461cfa78f5b5645d553"
+    },
+    {
+      "path": "packages/rhi-debug/src/__tests__/coverage-invariant.test-d.ts",
+      "sha256": "7cea994b22051bfeea47aa6d7a0e5f17520a7ba8c8e952386294a30c80f4bfc3"
+    },
+    {
+      "path": "packages/rhi-debug/src/__tests__/coverage-invariant.unit.test.ts",
+      "sha256": "211a82dcb3b74ffe0c662ed5d60fe70accb6490d3793950617f0f7075737aafe"
+    },
+    {
+      "path": "packages/rhi-debug/src/__tests__/replay-session.unit.test.ts",
+      "sha256": "ff9c9fcfb82f935606ed403a9343ebd3d56ee6db687521ccc39b7daf807efe5b"
+    },
+    {
+      "path": "packages/rhi-debug/src/frame-model.ts",
+      "sha256": "f8a255476333a11b538c9c624d37e77147366eb947c0a0a06baad9da74dd59a3"
+    },
+    {
+      "path": "packages/rhi-debug/src/protocol/event-semantics.ts",
+      "sha256": "e8c73786f87e430b747afa2e50fcddff0ae39fa3cf85f565115aeedd043d1400"
+    },
+    {
+      "path": "packages/rhi-debug/src/protocol/validation.ts",
+      "sha256": "d8ed01de4252929fbe2d0c453a5d33c92a7bd501d806fac0dd30d15d5daca380"
+    },
+    {
+      "path": "packages/rhi-debug/src/recorder/closure.ts",
+      "sha256": "979d4ee0e127128f11715cc7bc5a76be5947eb62a58cc95f8c9a8d2b868a7d3d"
+    },
+    {
+      "path": "packages/rhi-debug/src/recorder/device.ts",
+      "sha256": "5ded38c33f5f34aadb091bbea109a8671f1478f6407b6c99f4225e937aef592d"
+    },
+    {
+      "path": "packages/rhi-debug/src/recorder/pass.ts",
+      "sha256": "f6970dc8fb115460ffab594b687c114918e722966df74ba91df7caf4d0e05eb4"
+    },
+    {
+      "path": "packages/rhi-debug/src/replay/execute.ts",
+      "sha256": "ca4a91033f0fee10f5e6f3a08848842c8bb2aab0c9b2f3670055d4ed67193c0a"
+    },
+    {
+      "path": "packages/rhi-debug/src/replay/session.ts",
+      "sha256": "d6cce9ae5d672561b9304ac52c106e4d25510edf3e2be07eb1f4f51b49ab700e"
+    },
+    {
+      "path": "packages/rhi-debug/src/types.ts",
+      "sha256": "1fc52857497c1eaade50f32cba29c7710f6da624cbe40e1084fd48155a4a9b6a"
+    },
+    {
+      "path": "packages/rhi-null/README.md",
+      "sha256": "41e7d2b0c3cb2830d52f19d4a27812ad22f56caae62231e3885b5ff174318458"
+    },
+    {
+      "path": "packages/rhi-null/src/__tests__/render-bundle.unit.test.ts",
+      "sha256": "4e3644de455f5b58128cb78af1f75468631b9e908c26acc39a92a111d36bcaf8"
+    },
+    {
+      "path": "packages/rhi-null/src/device.ts",
+      "sha256": "5f5d1837a25ad125eb96b6f6037c536dafc75cd205221ce5d88553bdbf16f868"
+    },
+    {
+      "path": "packages/rhi-null/src/pass-encoders.ts",
+      "sha256": "73f097ebd7c0de64532b5a6e336f7875937e65f013a0fca86ee2c5935e04e84e"
+    },
+    {
+      "path": "packages/rhi-null/src/render-bundle.ts",
+      "sha256": "97c328bf26a10f14630a3a041f9eea88554945875dc06ea697d2ca0b1f0571bb"
+    },
+    {
+      "path": "packages/rhi-webgpu/README.md",
+      "sha256": "35cd5016c84e4efbf4d31e6d720c60034affa3be3e7bed2f4b223ae4871d197d"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/__tests__/__mocks__/gpu-device.ts",
+      "sha256": "770f175af83ad375db519cc4736a02528842ce4a4f25bbc4bd502b307fd4eb97"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/__tests__/render-bundle-validation.browser.test.ts",
+      "sha256": "7da839c8049e7ff0a4eec71ac36c6b0ac80f946e75f42f221cd6828301cd1751"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/__tests__/render-bundle-validation.dawn.test.ts",
+      "sha256": "015de11f3e1160b59cafc37f0e9fafdd8bcb862a85c3d1aa2f46b1c6b5b73778"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/__tests__/render-bundle-validation.fixture.ts",
+      "sha256": "6be7979be4e28a8d6d03e8ab9572b7cac183bc5b522cf91adff486f7546691d1"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/__tests__/rhi-webgpu.unit.test.ts",
+      "sha256": "cdb4cfc4c0e5f78e0ea1530cb7d1567314d1f3260c44aed3b315f2294708e955"
+    },
+    {
+      "path": "packages/rhi-webgpu/src/device.ts",
+      "sha256": "8d319910022e41606fe2af6befe98d7d0bfb7dd828d742c2121c8071ee8a9384"
+    },
+    {
+      "path": "packages/rhi-wgpu/README.md",
+      "sha256": "2504f62a13f2a5e45ce0c37083d78ff84f224d72c65a094d1507338e309fd836"
+    },
+    {
+      "path": "packages/rhi-wgpu/src/command-encoder.ts",
+      "sha256": "8ec3ab6ace9d6900fc4d8aed7a33ded7b2a9b0d6b745efba0115e8dc94b92782"
+    },
+    {
+      "path": "packages/rhi-wgpu/src/device.ts",
+      "sha256": "c9da457e95fecde88bd2881b6e9203f7b594d2566a7bc1bfb6b0d07aa48dffe7"
+    },
+    {
+      "path": "packages/rhi-wgpu/src/render-pass-encoder.ts",
+      "sha256": "ddb5b0d48905aed0e4d459ce8d8db2ade94fb4ba11feedc1a1319929ce3c8163"
+    },
+    {
+      "path": "packages/rhi/README.md",
+      "sha256": "50a5473dba3181b8194a11a8daf0383f5571cb22e15be4d993036e64672f392b"
+    },
+    {
+      "path": "packages/rhi/src/index.ts",
+      "sha256": "a04a8adcdb4e1a4a37dcd133d51e3d15aa8736d88111d9ebd362bf5da5d4159c"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/geometry.unit.test.ts",
+      "sha256": "541a96ea94ba3a4fbe82e67275deb1ce18d0483b8214120620437f6005a504e7"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/mock-render-bundles.ts",
+      "sha256": "01d2c92b0cf7fd0b3b1c6d87960e2e0af54ad1af2c3510c3cf307311b5232883"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/record-all-topology.cases.unit.test.ts",
+      "sha256": "9b1cafac13be97859071332fbeee650701b1c6bc980de966cb0b2aa2a64899ee"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/record-draw-branch.cases.unit.test.ts",
+      "sha256": "10c75354bde2c06863c7b7def72518152a5013960297b7c876ed08d864c27825"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle-scene.integration.test.ts",
+      "sha256": "41a89ec4828d6cfd921474313b91091e79272de010d7f9272a0f3872f651fc1a"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle-stress.browser.test.ts",
+      "sha256": "76a14cececbd12a019a7627254861a81e005167aff6bdf0fa93fe4b7213b3341"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle-stress.dawn.test.ts",
+      "sha256": "9e1b32b2d91bd61d2ca0f1e15fc58ec8a63fc7ef2ebb253619cb7be955485730"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle-stress.fixture.ts",
+      "sha256": "670165f8a30af634e9ff24de5a98d5371c62f79d62b62a24ea4a787de65a2048"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle-wasm.browser.test.ts",
+      "sha256": "0e5b48fa92b4717be8049f04da7e97b10f03dafe3e902b4cbd350b8895cde88f"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle.browser.test.ts",
+      "sha256": "792155060f71b901134714ac60c37bc89b5b0ddebe18e907e3a273612b05f0ef"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle.dawn.test.ts",
+      "sha256": "34654984b4a1c0a4b7cb02b12f73c9a4ef60476e6c8d51cebd8003af6590ae98"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-bundle.fixture.ts",
+      "sha256": "8e5405a5ebf2c5988ee0cfc18dedcec4485534b892944f2f822258f7fceda357"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-system-mega.test.ts",
+      "sha256": "b9eb1300c4e5c6547d0cbfe36f46613ed1d3ecff63744de84be8305d9254fa55"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-system-record-multi-material-textureview.test.ts",
+      "sha256": "e6e6ba1f90ff630bb9306e9039834235d1e647f9f151c96168afabe8c1a33682"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/render-system-record-per-submesh-transparency.test.ts",
+      "sha256": "a75f32afab2410948873a17d8fe5288a9dfc3dfdb449cc655d1d6e2c0f9c2614"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/shadow-skip-non-triangle.cases.unit.test.ts",
+      "sha256": "744a98aa37bb74df69c70fb425aa91a28f75c49f198e9fee759a89a82d6f2e77"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/surface-standard-pipeline.dawn.test.ts",
+      "sha256": "140b9cbbe94b4f0c18c74388b94573780a52cd25f20d6c29a79a8a0cef3f01b0"
+    },
+    {
+      "path": "packages/wgpu-wasm/README.md",
+      "sha256": "447778f4e1d53c1f44e18c2e6d453a71552130225b3a6e189ed478e40185891b"
+    },
+    {
+      "path": "packages/wgpu-wasm/src/rhi.rs",
+      "sha256": "cb87fc78d79a122a007f83bfe2d2694f584489e369f60dee5cb7777bbfb0b7d1"
+    }
+  ],
+  "wasm": {
+    "schemaVersion": "wgpu-wasm-provenance/1",
+    "sourceContentKey": "sha256-9891aeaf0fddf5425245685fd6713745d4b1153d06a91cdf2a362ed914294e2e",
+    "artifactSha256": "e81c574da60af30c392e0c069f3d826d84c298b2ccfce268a5ad2ef23c41541c",
+    "artifactBytes": 6598686,
+    "glueSha256": "9dec209f6b87b5639355c6e12f08c08047eaadcba1d9dbf59f0db49880e20133",
+    "glueBytes": 148139,
+    "toolchain": {
+      "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+      "wasmPack": "wasm-pack 0.15.0",
+      "wasmBindgen": "unavailable"
+    },
+    "dependencies": {
+      "wgpu": "29.0.3",
+      "naga": "29.0.3",
+      "nagaOil": "0.22.0",
+      "wasmBindgen": "0.2.121"
+    },
+    "compilerFingerprint": "sha256-168d5dd595dfe11fc12af5ad18e4f7d9d665a223235022e8f16861009e66733e"
+  },
+  "recordedAt": "2026-09-25T02:51:20.996Z",
+  "stressFollowup": {
+    "priorManifest": "stress/source-before.json",
+    "productionSourcesChanged": [
+      "packages/render/src/record/render-bundle-cache.ts",
+      "packages/rhi-debug/src/replay/session.ts"
+    ],
+    "performance": [
+      "stress/performance-2.json",
+      "stress/performance-3.json"
+    ]
+  }
+}

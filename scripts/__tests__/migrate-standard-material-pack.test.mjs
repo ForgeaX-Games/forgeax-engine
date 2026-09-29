@@ -15,9 +15,16 @@
 // so the test does not spawn a subprocess; it imports directly and asserts
 // over JS values.
 
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { migratePack, migratePayload } from '../migrate-standard-material-pack.mjs';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const RUSTED_WGSL = join(REPO_ROOT, 'templates/game-3d/assets/shaders/rusted-iron.wgsl');
+const RUSTED_PACK = join(REPO_ROOT, 'templates/game-3d/assets/materials.pack.ts');
 
 const SCHEMA = [
   { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -160,5 +167,21 @@ describe('migrate-standard-material-pack codemod', () => {
     expect(result.pack.assets[0].guid).toBe('mat-guid-1');
     expect(result.pack.assets[0].refs).toEqual(['tex-guid-a']);
     expect(result.pack.assets[0].payload.materialShader).toBe('forgeax::default-standard-pbr');
+  });
+
+  it('(h) keeps rusted-iron as one Surface-only Standard authoring path', async () => {
+    const [wgsl, packText] = await Promise.all([
+      readFile(RUSTED_WGSL, 'utf8'),
+      readFile(RUSTED_PACK, 'utf8'),
+    ]);
+    expect(packText).toContain("'material/rusted-iron'");
+    expect(packText).toContain('packageId: PACKAGE_IDS.materials');
+    expect(packText).not.toContain('rusted-iron.pack.json');
+    expect(wgsl).toContain('#define_import_path game_3d::rusted_iron_surface');
+    expect(wgsl).toContain('fn evaluate_surface(');
+    expect(wgsl).not.toMatch(/@(?:vertex|fragment)/);
+    expect(wgsl).not.toMatch(/(?:vs_main|fs_main|lightDir|f_schlick|@builtin\(position\))/);
+    expect(packText.match(/'material\/rusted-iron'/g)).toHaveLength(1);
+    expect(packText.match(/surfaceModule: 'game_3d::rusted_iron_surface'/g)).toHaveLength(1);
   });
 });

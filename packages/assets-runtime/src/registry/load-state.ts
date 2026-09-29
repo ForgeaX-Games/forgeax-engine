@@ -1,4 +1,4 @@
-export type LoadStatus = 'unloaded' | 'provisional' | 'ready' | 'failed';
+export type LoadStatus = 'unloaded' | 'prepared' | 'provisional' | 'ready' | 'failed';
 
 export interface LoadRecord {
   readonly status: LoadStatus;
@@ -16,6 +16,42 @@ interface MutableLoadRecord {
 
 export class LoadStateStore {
   private readonly records = new Map<string, MutableLoadRecord>();
+  private readonly consumers = new Map<string, Set<string>>();
+
+  private set(guid: string, record: MutableLoadRecord): void {
+    this.remove(guid);
+    this.records.set(guid, record);
+    for (const ref of record.refs) {
+      const key = ref.toLowerCase();
+      let consumers = this.consumers.get(key);
+      if (!consumers) {
+        consumers = new Set();
+        this.consumers.set(key, consumers);
+      }
+      consumers.add(guid);
+    }
+  }
+
+  /** Reverse edges derive from existing load records; visit only the affected closure. */
+  affected(guid: string): ReadonlySet<string> {
+    const affected = new Set<string>();
+    const visit = (key: string): void => {
+      if (affected.has(key)) return;
+      affected.add(key);
+      for (const consumer of this.consumers.get(key) ?? []) visit(consumer);
+    };
+    visit(guid.toLowerCase());
+    return affected;
+  }
+
+  prepare(guid: string, value: unknown, refs: readonly string[]): void {
+    this.set(guid.toLowerCase(), { status: 'prepared', value, refs });
+  }
+
+  getPrepared<T>(guid: string): T | undefined {
+    const record = this.records.get(guid.toLowerCase());
+    return record?.status === 'prepared' ? (record.value as T) : undefined;
+  }
 
   get(guid: string): LoadRecord | undefined {
     return this.records.get(guid.toLowerCase());
@@ -43,7 +79,7 @@ export class LoadStateStore {
       status: 'provisional',
       refs: refs.map((ref) => ref.toLowerCase()),
     };
-    this.records.set(key, record);
+    this.set(key, record);
     return record;
   }
 
@@ -51,7 +87,7 @@ export class LoadStateStore {
     const key = guid.toLowerCase();
     const record = this.records.get(key);
     if (record === undefined) {
-      this.records.set(key, { status: 'provisional', refs: [], value });
+      this.set(key, { status: 'provisional', refs: [], value });
       return;
     }
     record.value = value;
@@ -85,7 +121,7 @@ export class LoadStateStore {
     const doomed = this.provisionalGroup(guid.toLowerCase());
     if (doomed.size === 0) doomed.add(guid.toLowerCase());
     for (const key of doomed) {
-      this.records.set(key, { status: 'unloaded', refs: [] });
+      this.set(key, { status: 'unloaded', refs: [] });
     }
     const root = this.records.get(guid.toLowerCase());
     if (root !== undefined) root.error = error;
@@ -93,11 +129,18 @@ export class LoadStateStore {
   }
 
   remove(guid: string): void {
-    this.records.delete(guid.toLowerCase());
+    const key = guid.toLowerCase();
+    for (const ref of this.records.get(key)?.refs ?? []) {
+      const consumers = this.consumers.get(ref.toLowerCase());
+      consumers?.delete(key);
+      if (consumers?.size === 0) this.consumers.delete(ref.toLowerCase());
+    }
+    this.records.delete(key);
   }
 
   clear(): void {
     this.records.clear();
+    this.consumers.clear();
   }
 
   private provisionalGroup(root: string): Set<string> {

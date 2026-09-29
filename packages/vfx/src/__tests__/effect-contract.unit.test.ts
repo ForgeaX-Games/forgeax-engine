@@ -1,9 +1,10 @@
 import type { ParticleEffectAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createVfxEffectContract } from '../effect-contract.js';
+import { VFX_PARTICLE_CORE_LAYOUT } from '../particle-layout.js';
 
 const reflection = {
-  version: 1,
+  version: 3,
   parameters: {
     name: 'VfxParameters',
     fields: [
@@ -14,6 +15,8 @@ const reflection = {
     alignment: 16,
   },
   custom: { name: 'VfxCustom', fields: [], size: 0, alignment: 1 },
+  core: VFX_PARTICLE_CORE_LAYOUT,
+  customLayout: { name: 'VfxCustom', fields: [], size: 0, alignment: 1, stride: 0, lanes: 0 },
   fingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
 } as const;
 
@@ -21,11 +24,11 @@ describe('VfxEffectContract', () => {
   it('models the executable program on the ordinary particle asset', () => {
     const asset: ParticleEffectAsset = {
       kind: 'particle-effect',
-      schemaVersion: 2,
+      schemaVersion: 3,
       programFingerprint: 'sha256:program',
       emitters: [{ id: 'sparks', capacity: 8 }],
       program: {
-        format: 'forgeax-vfx-program-2',
+        format: 'forgeax-vfx-program-4',
         fingerprint: 'sha256:program',
         emitters: [],
       },

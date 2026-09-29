@@ -18,6 +18,8 @@ import { createApp } from '../create-app';
 function rendererStub() {
   const lease = {};
   return {
+    state: () => 'alive' as const,
+    subscribe: () => () => undefined,
     attach: () => ({ ok: true as const, value: lease }),
     draw: () => ({ ok: true as const, value: {} }),
     observe: async () => ({ ok: true as const, value: {} }),

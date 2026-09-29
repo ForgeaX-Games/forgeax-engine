@@ -343,12 +343,11 @@ async function textureFor(
       selected,
       texture: {
         kind: 'texture',
-        width: mip.width,
-        height: mip.height,
+        shape: { viewDimension: '2d', extent: { width: mip.width, height: mip.height } },
         format: selected,
         data: mip.data,
         colorSpace: input.colorSpace,
-        mipmap: false,
+        mips: { kind: 'none' },
       },
     };
   }
@@ -377,12 +376,11 @@ async function textureFor(
     selected,
     texture: {
       kind: 'texture',
-      width: mip.width,
-      height: mip.height,
+      shape: { viewDimension: '2d', extent: { width: mip.width, height: mip.height } },
       format: selected,
       data: mip.data,
       colorSpace: input.colorSpace,
-      mipmap: false,
+      mips: { kind: 'none' },
     },
   };
 }
@@ -392,6 +390,8 @@ async function readbackTexture(
   texture: TextureAsset,
   gpuTexture: { readonly handle: Texture },
 ): Promise<Uint8Array> {
+  const width = texture.shape.extent.width;
+  const height = texture.shape.extent.height;
   const hdr = texture.format === 'rgba16float' || texture.format.startsWith('bc6h');
   const outputFormat: GPUTextureFormat = hdr ? 'rgba16float' : 'rgba8unorm-srgb';
   const outputBytesPerPixel = hdr ? 8 : 4;
@@ -447,7 +447,7 @@ async function readbackTexture(
   });
   if (!bindings.ok) throw new Error(`${bindings.error.code}:${bindings.error.hint}`);
   const normalizedTexture = device.createTexture({
-    size: { width: texture.width, height: texture.height, depthOrArrayLayers: 1 },
+    size: { width, height, depthOrArrayLayers: 1 },
     format: outputFormat,
     usage: 0x10 | 0x01,
   } as never);
@@ -457,7 +457,7 @@ async function readbackTexture(
   if (!normalizedView.ok)
     throw new Error(`${normalizedView.error.code}:${normalizedView.error.hint}`);
   const readback = device.createBuffer({
-    size: 256 * texture.height,
+    size: 256 * height,
     usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_MAP_READ,
   });
   if (!readback.ok) throw new Error(`${readback.error.code}:${readback.error.hint}`);
@@ -483,9 +483,9 @@ async function readbackTexture(
       buffer: readback.value as unknown as GPUBuffer,
       offset: 0,
       bytesPerRow: 256,
-      rowsPerImage: texture.height,
+      rowsPerImage: height,
     },
-    { width: texture.width, height: texture.height, depthOrArrayLayers: 1 },
+    { width, height, depthOrArrayLayers: 1 },
   );
   const command = encoder.value.finish();
   if (!command.ok) throw new Error(`${command.error.code}:${command.error.hint}`);
@@ -497,11 +497,11 @@ async function readbackTexture(
   const range = mapped.value.getMappedRange();
   if (!range.ok) throw new Error(`${range.error.code}:${range.error.hint}`);
   const mappedBytes = new Uint8Array(range.value);
-  const bytes = new Uint8Array(texture.width * texture.height * outputBytesPerPixel);
-  for (let row = 0; row < texture.height; row += 1) {
+  const bytes = new Uint8Array(width * height * outputBytesPerPixel);
+  for (let row = 0; row < height; row += 1) {
     bytes.set(
-      mappedBytes.subarray(row * 256, row * 256 + texture.width * outputBytesPerPixel),
-      row * texture.width * outputBytesPerPixel,
+      mappedBytes.subarray(row * 256, row * 256 + width * outputBytesPerPixel),
+      row * width * outputBytesPerPixel,
     );
   }
   mapped.value.unmap();
@@ -560,7 +560,10 @@ describe.skipIf(!pkgBuilt)('KTX2/Basis real GPU texture consumer matrix', () => 
     store.configureGpuDevice(
       device as never,
       undefined,
-      (world, pod) => ok(world.allocSharedRef('EquirectAsset', pod)),
+      (source, pod) => {
+        if ('resolveAsset' in source) throw new Error('This fixture only allocates World assets');
+        return ok(source.allocSharedRef('EquirectAsset', pod));
+      },
       device.caps,
     );
     const rows: GpuCell[] = [];
@@ -708,6 +711,12 @@ describe.skipIf(!pkgBuilt)('KTX2/Basis real GPU texture consumer matrix', () => 
     // biome-ignore lint/suspicious/noConsole: the twenty-cell matrix is the GPU evidence
     console.log(JSON.stringify({ status: 'complete', rows }));
     expect(rows).toHaveLength(20);
+    expect(rows.filter((row) => row.status === 'error')).toEqual([]);
+    expect(
+      rows
+        .filter((row) => row.status === 'unsupported')
+        .every((row) => row.error?.code === 'gpu-texture-format-feature-unavailable'),
+    ).toBe(true);
     expect(
       rows.every(
         (row) =>

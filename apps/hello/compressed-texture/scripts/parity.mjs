@@ -321,14 +321,19 @@ const samplerHandle = world.allocSharedRef('SamplerAsset', {
   addressModeU: 'repeat', addressModeV: 'repeat',
 });
 const matHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material', passes: [{
-    program: { module: 'forgeax::standard-pbr' },
-    values: {
-      baseColorFactor: [1, 1, 1, 1], roughnessFactor: 0.8, metallicFactor: 0,
-      baseColorTexture: { handle: texHandle },
-      baseColorSampler: { handle: samplerHandle },
-    },
+  kind: 'material',
+  passes: [{
+    name: 'Forward',
+    program: { module: 'forgeax::default-standard-pbr' },
+    renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
   }],
+  values: {
+    baseColor: [1, 1, 1, 1],
+    metallic: 0,
+    roughness: 0.8,
+    baseColorTexture: texHandle,
+    sampler: samplerHandle,
+  },
 });
 const quads = [[-1.5, 0.8, 0, 0.7, 0.7, 1], [1.5, 0.8, 0, 0.5, 0.5, 1], [-1.5, -0.8, 0, 0.5, 0.5, 1], [1.5, -0.8, 0, 0.7, 0.7, 1]];
 for (const [px, py, pz, sx, sy, sz] of quads) {

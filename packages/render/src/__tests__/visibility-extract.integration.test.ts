@@ -1,8 +1,15 @@
 import { World } from '@forgeax/engine-ecs';
-import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
-import { describe, expect, it } from 'vitest';
+import {
+  ChildOf,
+  GlobalTransform,
+  registerPropagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
+import { describe, expect, it, vi } from 'vitest';
+import { Fog } from '../components/fog';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
-import { extractFrame, extractFrames, prepareExtractContext } from '../render-system-extract';
+import { prepareExtractContext } from '../render-system-extract';
+import { extractFrame, extractFrames } from '../render-system-extract-tail';
 
 function transform(pos: [number, number, number]) {
   return {
@@ -32,6 +39,31 @@ function makeWorld() {
 }
 
 describe('visibility extract orchestration', () => {
+  it('selects Fog once at the resource-owner frame boundary', () => {
+    const cameraWorld = new World();
+    const resourceWorld = new World();
+    resourceWorld
+      .spawn({
+        component: Fog,
+        data: { color: [0.1, 0.2, 0.3], density: 0.02, heightFalloff: 0.4, maxOpacity: 0.8 },
+      })
+      .unwrap();
+
+    const cameraQuery = vi.spyOn(cameraWorld, 'query');
+    const resourceQuery = vi.spyOn(resourceWorld, 'query');
+    extractFrames([cameraWorld, resourceWorld], { cameraOwner: 0, resourceOwner: 1 });
+
+    const readsFog = (calls: readonly unknown[][]) =>
+      calls.filter(([spec]) => {
+        if (typeof spec !== 'object' || spec === null || !('read' in spec)) return false;
+        const read = (spec as { readonly read?: readonly unknown[] }).read;
+        return read?.includes(Fog) ?? false;
+      });
+
+    expect(readsFog(cameraQuery.mock.calls)).toHaveLength(0);
+    expect(readsFog(resourceQuery.mock.calls)).toHaveLength(1);
+  });
+
   it('refreshes hierarchy and visibility from the final World state', () => {
     const { world, parent, child } = makeWorld();
     world.set(parent, Visibility, { state: VisibilityStateValue.visible }).unwrap();
@@ -41,13 +73,13 @@ describe('visibility extract orchestration', () => {
     const snapshot = frame.visibilitySnapshots[0];
     expect(snapshot?.get(parent)?.effective).toBe('visible');
     expect(snapshot?.get(child)?.effective).toBe('visible');
-    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(3);
+    expect(world.get(child, GlobalTransform).unwrap().world[12]).toBeCloseTo(3);
   });
 
-  it('keeps renderer extraction read-only over derived Transform.world', () => {
+  it('keeps renderer extraction read-only over derived GlobalTransform.world', () => {
     const { world, parent, child } = makeWorld();
     world.update(0).unwrap();
-    const before = [...world.get(child, Transform).unwrap().world];
+    const before = [...world.get(child, GlobalTransform).unwrap().world];
     const beforeInspection = world.inspect();
     const beforeShape = {
       entityCount: beforeInspection.entityCount,
@@ -61,7 +93,7 @@ describe('visibility extract orchestration', () => {
     world.set(parent, Transform, { pos: [9, 0, 0] }).unwrap();
     extractFrames([world], 0);
 
-    expect([...world.get(child, Transform).unwrap().world]).toEqual(before);
+    expect([...world.get(child, GlobalTransform).unwrap().world]).toEqual(before);
     const afterInspection = world.inspect();
     expect({
       entityCount: afterInspection.entityCount,
@@ -72,7 +104,7 @@ describe('visibility extract orchestration', () => {
       resourceKeys: afterInspection.resourceKeys,
     }).toEqual(beforeShape);
     world.update(0).unwrap();
-    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(11);
+    expect(world.get(child, GlobalTransform).unwrap().world[12]).toBeCloseTo(11);
   });
 
   it('keeps direct prepared-kernel output aligned with extractFrames output', () => {

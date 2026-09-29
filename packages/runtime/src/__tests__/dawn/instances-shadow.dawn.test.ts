@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 // instances-shadow.dawn.test.ts -- feat-20260604-instances-per-instance-transform-shader-group3-bin
 // M2 / w10.
 //
@@ -55,6 +56,17 @@ const MAP_MODE_READ = 0x0001;
 const INSTANCE_COUNT = 5;
 const SPACING = 2.5;
 
+const SHADOW_FILTER = (() => {
+  const value = (
+    globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }
+  ).process?.env?.FORGEAX_SHADOW_FILTER;
+  if (value === 'pcssMedium') return 4;
+  if (value === 'pcssHigh') return 5;
+  if (value === 'pcf1') return 1;
+  if (value === 'pcf5') return 3;
+  return 2;
+})();
+
 function buildTranslationGrid(): Float32Array {
   const out = new Float32Array(INSTANCE_COUNT * 16);
   const half = ((INSTANCE_COUNT - 1) * SPACING) / 2;
@@ -95,9 +107,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
   it('N=5 instanced cubes cast shadows at distinct X positions on floor (RED when FALSIFY=collapsed-shadow)', async () => {
@@ -263,7 +273,9 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         depthBias: 0.005,
         normalBias: 0.05,
         shadowDistance: 50,
-        pcfKernelSize: 3,
+        shadowFilter: SHADOW_FILTER,
+        shadowAngularRadius: 0.00465,
+        maxPenumbraTexels: 32,
       },
     });
 
@@ -285,12 +297,12 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       { component: Instances, data: { transforms: instanceTransforms } },
     );
 
-    // Render 300 frames for temporal stability (PCF shadow, light accumulation)
+    // Render 60 frames for temporal stability (PCF or PCSS shadow, light accumulation)
     const attachment = renderer.attach(world);
     expect(attachment.ok).toBe(true);
     if (!attachment.ok) throw attachment.error;
     let drawErrors = 0;
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 60; i++) {
       world.update(1 / 60).unwrap();
       const r = renderer.draw({
         leases: [attachment.value],

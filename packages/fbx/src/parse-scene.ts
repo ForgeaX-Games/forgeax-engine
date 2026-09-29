@@ -15,6 +15,19 @@ export interface FbxRawNode {
 
 export interface FbxRawNodes {
   readonly nodes?: readonly FbxRawNode[];
+  readonly lodGroups?: readonly FbxRawLodGroup[];
+}
+
+export interface FbxRawLodGroup {
+  readonly children?: readonly {
+    readonly meshIndex?: unknown;
+    readonly distance?: unknown;
+    readonly display?: unknown;
+  }[];
+  readonly threshold?: unknown;
+  readonly mode?: unknown;
+  readonly relative?: unknown;
+  readonly displayMode?: unknown;
 }
 
 export type FbxNodePathResult =

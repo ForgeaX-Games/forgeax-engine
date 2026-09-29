@@ -26,7 +26,7 @@
 import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { ChildOf, GlobalTransform } from '@forgeax/engine-scene';
 import { err, ok, type Result } from '@forgeax/engine-types';
 
 /**
@@ -62,7 +62,7 @@ export interface PickTileHit {
  *   - `Result.err({ code: 'tilemap-component-missing' })` for a live entity
  *     without a Tilemap component.
  *
- * The caller must propagate the World so `Transform.world` is current. A
+ * The caller must propagate the World so `GlobalTransform.world` is current. A
  * singular world transform follows `mat4.invert`'s deterministic identity
  * fallback, which keeps this error union structural rather than adding a
  * third diagnostic arm.
@@ -95,7 +95,7 @@ export function pickTile(
   // way to recover local cell coordinates under rotation and non-uniform scale.
   let localX = worldX;
   let localY = worldY;
-  const transformResult = world.get(tilemapEntity, Transform);
+  const transformResult = world.get(tilemapEntity, GlobalTransform);
   if (transformResult.ok) {
     const w = transformResult.value.world;
     if (w !== undefined && w.length >= 16) {

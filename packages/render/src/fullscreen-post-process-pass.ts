@@ -23,6 +23,7 @@ import type {
   Sampler,
   TextureView,
 } from '@forgeax/engine-rhi';
+import { GPU_SHADER_STAGE_FRAGMENT } from './gpu-stage';
 import type { BglKind } from './pipeline-spec';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
 
@@ -47,14 +48,14 @@ const FULLSCREEN_DEFAULT_SPEC: PipelineSpec = Object.freeze({
 /**
  * Declared sample type for a post-process read entry.
  *
- * Closed union (plan-strategy D-7): only `'depth'` is an explicit sampleType
- * discriminant; color inputs are the default (bare `string` or un-suffixed
- * `{ key }`).  Future texture types (`r32float`, etc.) are add-only.
+ * Closed union (plan-strategy D-7): `'depth'` identifies a depth input and
+ * `'multisampled-float'` identifies the explicit 4x paired-resolve color
+ * input. Color inputs otherwise use the default bare string / `{ key }` form.
  *
  * AI-user affordance: IDE autocomplete exposes `'depth'` at the register call
  * site; misspellings are caught by the type system (AC-08).
  */
-export type PostProcessReadSampleType = 'depth';
+export type PostProcessReadSampleType = 'depth' | 'multisampled-float';
 
 // ─── Post-process shader entry (owned by the fullscreen feature host) ──────
 
@@ -66,7 +67,8 @@ export type PostProcessReadSampleType = 'depth';
  * no paramSchema (params are passed inline via a {type, value} struct — plan-strategy D-4).
  *
  * `params` carries the WGSL struct definition + default value. When `params` is
- * `undefined`, the post-process shader has no UBO (e.g. FXAA — Finding M2-1).
+ * `undefined`, the post-process shader has no params UBO. Special graph-owned
+ * passes such as FXAA may still register an internal policy UBO separately.
  *
  * `reads` declares graph resource keys this pass samples as input texture(s).
  * If omitted, the pass samples the swap-chain color attachment (default path).
@@ -79,8 +81,10 @@ export type PostProcessReadSampleType = 'depth';
 export interface PostProcessShaderEntry {
   /** Composed WGSL source for the fragment stage (post-naga_oil). */
   readonly source: string;
+  /** Fragment entry point selected by the typed graph; defaults to `fs_main`. */
+  readonly fragmentEntryPoint?: string | undefined;
   /**
-   * Params UBO schema. When undefined, the shader has no uniform buffer (e.g. FXAA)
+   * Params UBO schema. When undefined, the generic shader has no uniform buffer
    * and the BGL degrades to 2 entries (texture@0 + sampler@1). When present, the
    * primitive eager-creates a params UBO (at register, sized `byteSize`) and binds
    * it at bindgroup(1) binding(2) as part of a 3-entry BGL
@@ -101,14 +105,86 @@ export interface PostProcessShaderEntry {
    * represent a color input (plan-strategy D-1 / D-7).
    */
   readonly reads?: readonly (string | PostProcessReadEntry)[] | undefined;
+  /** Use the renderer-owned View bind group at group(0). */
+  readonly usesView?: boolean | undefined;
+  /** Read-only storage buffers appended to the fullscreen bind group. */
+  readonly storageBindings?: readonly number[] | undefined;
+}
+
+function postProcessSourceDigest(source: string): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ (code + index), 0x01000193);
+  }
+  return `${source.length.toString(16)}-${(first >>> 0).toString(16).padStart(8, '0')}-${(second >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/** Content-addressed PSO label shared by the post-process pipeline factory. */
+export function postProcessShaderPipelineLabel(identity: string, source: string): string {
+  return `post-process-${identity}-pso-${postProcessSourceDigest(source)}`;
+}
+
+/** Content-addressed shader-module label shared by prewarm and lazy paths. */
+export function postProcessShaderModuleLabel(source: string): string {
+  // Graph-local names and public feature identities may alias the same source.
+  // Share the prewarmed module, while pipelines retain their own layouts/targets.
+  return `post-process-module-${postProcessSourceDigest(source)}`;
+}
+
+const postProcessSources = new WeakMap<
+  PostProcessShaderEntry,
+  { readonly source: string; readonly digest: string }
+>();
+
+/**
+ * Stable declaration identity used by graph admission and the renderer's
+ * device-bound pipeline cache. Shader source, bind-group-affecting params,
+ * and graph reads must move together when a feature reuses its identity.
+ */
+export function postProcessShaderEntrySignature(entry: PostProcessShaderEntry): string {
+  // Source-sized JSON used to be regenerated for every pipeline lookup and
+  // embedded again in the frame topology. Retain the content digest beside
+  // the declaration; changing even same-length WGSL invalidates it. Keep the
+  // small mutable params/read projection live, including typed-array bytes.
+  let cached = postProcessSources.get(entry);
+  if (cached?.source !== entry.source) {
+    cached = { source: entry.source, digest: postProcessSourceDigest(entry.source) };
+    postProcessSources.set(entry, cached);
+  }
+  return JSON.stringify({
+    source: cached.digest,
+    fragmentEntryPoint: entry.fragmentEntryPoint,
+    params:
+      entry.params === undefined
+        ? undefined
+        : {
+            byteSize: entry.params.byteSize,
+            defaultValue: Array.from(entry.params.defaultValue),
+          },
+    reads: entry.reads,
+    usesView: entry.usesView,
+    storageBindings: entry.storageBindings,
+  });
+}
+
+/** Whether a feature binding opts into the temporal multi-read contract. */
+export function isTemporalFullscreenBinding(values: Readonly<Record<string, unknown>>): boolean {
+  return (
+    values.temporal !== undefined ||
+    values.shader === 'forgeax.taa-resolve' ||
+    values.shader === 'forgeax.motion-blur'
+  );
 }
 
 /**
  * Structured read entry for a post-process shader.
  *
  * `key` is the graph resource key (matching a graph color target).
- * `sampleType` is an optional type discriminant (D-1 SSOT); when omitted
- * the entry is treated as a color input (same as a bare string).
+ * `sampleType` is an optional type discriminant (D-1 SSOT); when omitted the
+ * entry is treated as a single-sample color input (same as a bare string).
  */
 export interface PostProcessReadEntry {
   readonly key: string;
@@ -252,6 +328,8 @@ export function buildFullscreenPostProcessPass(
   bindGroupLayout: BindGroupLayout;
   sampler: Sampler | null;
   depthSampler: Sampler | null;
+  extraColorBindings: readonly number[];
+  extraStorageBindings: readonly number[];
   createHandle: (
     name: string,
     pipeline: unknown,
@@ -272,18 +350,40 @@ export function buildFullscreenPostProcessPass(
   // texture variant for a 4-sample scene target. params@2 is always present to
   // avoid 2x2 kind explosion.
   const hasDepth = entryHasDepthRead(entry);
+  const hasMultisampledColor = (entry.reads ?? []).some(
+    (read) => typeof read !== 'string' && read.sampleType === 'multisampled-float',
+  );
   const bglKind: BglKind = hasDepth
     ? depthMultisampled
-      ? 'fullscreen-post-with-scene-depth-msaa'
+      ? hasMultisampledColor
+        ? 'fullscreen-post-with-paired-msaa'
+        : 'fullscreen-post-with-scene-depth-msaa'
       : 'fullscreen-post-with-scene-depth'
     : entry.params !== undefined
       ? 'fullscreen-post-with-params'
       : 'fullscreen-post';
-  const bglRes = device.createBindGroupLayout(
-    buildBindGroupLayoutDescriptor(FULLSCREEN_DEFAULT_SPEC, {
-      kind: bglKind,
-    }),
+  const descriptor = buildBindGroupLayoutDescriptor(FULLSCREEN_DEFAULT_SPEC, { kind: bglKind });
+  const colorReads = (entry.reads ?? []).filter(
+    (read) => typeof read === 'string' || read.sampleType !== 'depth',
   );
+  const extraColorCount = Math.max(0, colorReads.length - 1);
+  const firstExtraBinding = hasDepth ? 5 : entry.params === undefined ? 2 : 3;
+  for (let index = 0; index < extraColorCount; index += 1) {
+    descriptor.entries.push({
+      binding: firstExtraBinding + index,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      texture: { sampleType: 'float', viewDimension: '2d' },
+    });
+  }
+  const firstStorageBinding = firstExtraBinding + extraColorCount;
+  for (const [index, binding] of (entry.storageBindings ?? []).entries()) {
+    descriptor.entries.push({
+      binding: binding ?? firstStorageBinding + index,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      buffer: { type: 'read-only-storage' },
+    });
+  }
+  const bglRes = device.createBindGroupLayout(descriptor);
   if (!bglRes.ok) {
     ctx.errorRegistry.fire(bglRes.error);
     return null;
@@ -297,6 +397,12 @@ export function buildFullscreenPostProcessPass(
     bindGroupLayout: bglRes.value,
     sampler,
     depthSampler,
+    extraColorBindings: Object.freeze(
+      Array.from({ length: extraColorCount }, (_, index) => firstExtraBinding + index),
+    ),
+    extraStorageBindings: Object.freeze(
+      (entry.storageBindings ?? []).map((binding, index) => binding ?? firstStorageBinding + index),
+    ),
     createHandle: (name, pipeline, paramsBuffer) => ({
       name,
       paramsBuffer,
@@ -334,6 +440,8 @@ export function createFullscreenBindGroup(
   paramsBuffer?: Buffer | null,
   depthTexView?: TextureView | null,
   depthSampler?: Sampler | null,
+  additionalViews: readonly { readonly binding: number; readonly view: TextureView }[] = [],
+  additionalBuffers: readonly { readonly binding: number; readonly buffer: Buffer }[] = [],
 ): BindGroup | null {
   const entries: { binding: number; resource: { kind: string; value: unknown } }[] = [
     { binding: 0, resource: { kind: 'textureView', value: inputView } },
@@ -352,6 +460,18 @@ export function createFullscreenBindGroup(
   if (depthTexView && depthSampler) {
     entries.push({ binding: 3, resource: { kind: 'textureView', value: depthTexView } });
     entries.push({ binding: 4, resource: { kind: 'sampler', value: depthSampler } });
+  }
+  for (const additional of additionalViews) {
+    entries.push({
+      binding: additional.binding,
+      resource: { kind: 'textureView', value: additional.view },
+    });
+  }
+  for (const additional of additionalBuffers) {
+    entries.push({
+      binding: additional.binding,
+      resource: { kind: 'buffer', value: { buffer: additional.buffer } },
+    });
   }
   const res = device.createBindGroup({
     label: 'fullscreen-post-process-bg',

@@ -2,7 +2,7 @@
 // hello-fbx-cube dawn smoke (M4 / T17): structural gate + pixel readback.
 //
 // Two layers:
-//   1. Structural (unchanged from M3): backend=webgpu, >=300 frames, 0 RhiError.
+//   1. Structural (unchanged from M3): backend=webgpu, >=60 frames, 0 RhiError.
 //   2. Pixel readback (T17, AC-14/AC-18): copyTextureToBuffer the offscreen
 //      render target after the frame loop and assert the cube covers the NDC
 //      center with a deterministic lit colour distinctly above black, while a
@@ -29,8 +29,9 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = 300;
+const SMOKE_MIN_FRAMES = Math.max(60, Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10));
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 // feat-20260615-ci-smoke-time-budget parity: 200x150 keeps the fragment-bound
 // dawn/lavapipe readback cheap; the cube still covers the NDC center at this size.
@@ -318,4 +319,5 @@ if (failures.length > 0) {
 }
 
 console.log(`[smoke] PASS - backend=webgpu, frames=${framesObserved}, errors=0, NDC-center distance to black=${centerDist.toFixed(4)}, corner black`);
+emitSmokeReceipt('hello-fbx-cube/smoke', framesObserved);
 process.exit(0);

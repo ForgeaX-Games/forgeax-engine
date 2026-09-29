@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ export const REQUIRED_CATEGORIES = Object.freeze([
   'image',
   'font',
   'audio',
+  'plugin',
 ]);
 
 const REQUIRED_CHANNELS = Object.freeze(['ts', 'scripts', 'json']);
@@ -279,13 +280,60 @@ function validateProducer(producer, index, producerIds, allowedCategories, root)
   return null;
 }
 
+/**
+ * Check the M4 renderer/asset ownership seams that cannot be expressed by the
+ * category manifest alone. This is deliberately source-level and narrow: it
+ * proves the public Instances shape and the two single-owner projection
+ * seams, without attempting to parse TypeScript or duplicate its schemas.
+ */
+function auditRenderOwnership(root) {
+  const paths = {
+    instances: 'packages/render/src/components/instances.ts',
+    derivedBounds: 'packages/render/src/instances-derived-bounds.ts',
+    extract: 'packages/render/src/render-system-extract-tail.ts',
+    observation: 'packages/render/src/mesh-material-bindings.ts',
+    render: 'packages/render/src/render-system.ts',
+    materialInspection: 'packages/assets-runtime/src/material/inspection.ts',
+  };
+  if (!Object.values(paths).every((path) => pathExists(root, path))) return null;
+  const source = Object.fromEntries(
+    Object.entries(paths).map(([key, path]) => [key, readFileSync(resolve(root, path), 'utf8')]),
+  );
+  if (/\bbounds\s*:/.test(source.instances)) {
+    return failure(
+      'instances-author-schema-expanded',
+      'Instances exposes only its packed transforms field',
+      'keep derived union bounds in the renderer; do not add an author-facing bounds field',
+      { source: paths.instances },
+    );
+  }
+  const requiredSeams = [
+    ['derived bounds helper', source.derivedBounds, 'deriveInstancesUnionBounds'],
+    ['extract integration', source.extract, 'deriveInstancesUnionBounds'],
+    ['resident observation projection', source.observation, 'residency'],
+    ['render observation consumption', source.render, 'projectMeshMaterialBindingObservation'],
+    ['producer material inspection', source.materialInspection, 'inspectMaterialRuntime'],
+  ];
+  for (const [name, text, token] of requiredSeams) {
+    if (!text.includes(token)) {
+      return failure(
+        'render-owner-seam-missing',
+        `${name} keeps the M4 single-owner seam`,
+        `restore ${token} at its owning boundary instead of adding a parallel ledger`,
+        { source: name, token },
+      );
+    }
+  }
+  return null;
+}
+
 export function auditAuthorityDefinition(definition, root = process.cwd()) {
   const audit = definition?.audit;
   const rootDir = rootPath(root);
   if (!audit || typeof audit !== 'object') {
     return failure(
       'audit-definition-missing',
-      'asset-authority.schema.json contains x-forgeax-audit',
+      'schemas/asset-authority.schema.json contains x-forgeax-audit',
       'keep the audit input beside the manifest schema',
     );
   }
@@ -384,6 +432,8 @@ export function auditAuthorityDefinition(definition, root = process.cwd()) {
       );
     }
   }
+  const renderOwnershipError = auditRenderOwnership(rootDir);
+  if (renderOwnershipError) return renderOwnershipError;
   return {
     ok: true,
     value: {
@@ -408,10 +458,10 @@ export function buildAuthorityManifest(definition, root = process.cwd()) {
 
 export async function loadAuthorityDefinition(root = process.cwd()) {
   const rootDir = rootPath(root);
-  const schemaPath = resolve(rootDir, 'asset-authority.schema.json');
+  const schemaPath = resolve(rootDir, 'schemas/asset-authority.schema.json');
   const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
   if (!schema['x-forgeax-audit']) {
-    throw new Error('asset-authority.schema.json is missing x-forgeax-audit');
+    throw new Error('schemas/asset-authority.schema.json is missing x-forgeax-audit');
   }
   return { schema, audit: schema['x-forgeax-audit'] };
 }
@@ -440,7 +490,7 @@ async function main() {
     console.error(
       JSON.stringify({
         code: 'audit-read-failed',
-        expected: 'a readable asset-authority.schema.json',
+        expected: 'a readable schemas/asset-authority.schema.json',
         hint: 'repair the authority schema and rerun the audit',
         detail: { reason: error instanceof Error ? error.message : String(error) },
         status: 'blocked',

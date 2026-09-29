@@ -75,7 +75,7 @@ if (!client.ok) throw client.error;
 |:--|:--|:--|
 | Bytes | `NetEndpoint.poll()` returns ordered complete `Uint8Array` message events; `send(peerId, data)` returns a `Result`. | This package |
 | Cancellation | `NetEndpointConnector.connect(signal)` cancels a pending socket attempt through the supplied `AbortSignal`. | This package |
-| Queue bound | `maxQueuedEvents` defaults to `1024`. Overflow closes the affected socket and retains a terminal `peer-disconnected` event for polling. | `BoundedEventQueue` |
+| Queue bound | `maxQueuedEvents` defaults to `1024`. Overflow closes the affected socket and retains a terminal `peer-disconnected` event for polling. | Per-peer `BoundedEventQueue` |
 | Failure | Expected failures are `EndpointError` values with `.code`, `.expected`, `.hint`, and code-specific `.detail`. | This package |
 | Close | `NetEndpoint.close()` is idempotence-aware: repeated close returns `already-closed` instead of reopening or replacing the endpoint. | This package |
 | Replacement | A later `connector.connect(signal)` returns a new endpoint and transport peer attachment. | Connector |
@@ -151,3 +151,23 @@ is the real listener-side companion.
 For deterministic memory recovery, packet, and lifecycle evidence, use the
 public consumers and recovery documentation in
 [`@forgeax/engine-net`](../net/README.md#runnable-public-evidence).
+
+## Listener capacity and isolation
+
+Each peer owns its queue. Overflow closes only that peer; healthy peers and new
+connections continue to work. A closed peer retains its queued events and one
+terminal notification until `poll()`, then releases its slot. Disconnected
+identity is derived from the allocated ID range instead of a historical set.
+
+| Listener option | Default | Scope |
+|:--|--:|:--|
+| `maxPeers` | 128 | Live peers plus unpolled terminal peers |
+| `maxQueuedEvents` | 1024 | Events per peer |
+| `maxQueuedBytes` | 8388608 | Incoming payload bytes per peer and maximum message size |
+| `maxBufferedBytes` | 8388608 | Outgoing platform buffer bytes per peer |
+
+Capacity options must be positive safe integers. Sending beyond the outgoing
+budget returns `send-failed`; retry after the socket drains. Client queues and
+send buffers use the same default byte bound; asynchronous message conversion
+is bounded by the client's event limit. Event order is preserved within each
+peer; polling groups peer streams and does not impose cross-peer chronology.

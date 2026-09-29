@@ -1,81 +1,71 @@
-// apps/bevy/shadow-biases — reproduce Bevy's `shadow_biases` example.
-// Thin over existing DirectionalLight.depthBias/normalBias fields.
-// 1/2 keys adjust depthBias, 3/4 keys adjust normalBias.
+// apps/bevy/shadow-biases — Bevy's `shadow_biases` example.
+// 1-8 step point/directional depth and normal biases, L swaps the lights,
+// F cycles the directional filter, R resets, Z zeroes, arrows and
+// PageUp/PageDown move the light rig. The scene lives in scene.mjs so the Dawn
+// smoke falsifies exactly this composition.
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import type { Handle } from '@forgeax/engine-types';
-import { Transform } from '@forgeax/engine-scene';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { perspective } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
+import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import {
+  adjustBias, BIAS_DEFAULTS, cycleFilter, describe, moveLight, setBiases, spawnBiasesScene, toggleLight,
+  ZERO_BIASES,
+} from './scene.mjs';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
-if (!canvas) throw new Error('bevy-shadow-biases: missing <canvas id="app"> in index.html');
+const overlay = document.querySelector<HTMLPreElement>('#status');
+if (!canvas || !overlay) throw new Error('bevy-shadow-biases: missing #app canvas or #status overlay in index.html');
 
-bootstrap(canvas).catch((err: unknown) => {
+bootstrap(canvas, overlay).catch((err: unknown) => {
   console.error('[bevy-shadow-biases] bootstrap error:', err);
 });
 
-async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+const BIAS_KEYS = [
+  ['Digit1', 'point', 'depthBias', -1], ['Digit2', 'point', 'depthBias', 1],
+  ['Digit3', 'point', 'normalBias', -1], ['Digit4', 'point', 'normalBias', 1],
+  ['Digit5', 'directional', 'depthBias', -1], ['Digit6', 'directional', 'depthBias', 1],
+  ['Digit7', 'directional', 'normalBias', -1], ['Digit8', 'directional', 'normalBias', 1],
+] as const;
+const MOVE_KEYS = [
+  ['ArrowLeft', [-1, 0, 0]], ['ArrowRight', [1, 0, 0]],
+  ['ArrowUp', [0, 0, -1]], ['ArrowDown', [0, 0, 1]],
+  ['PageDown', [0, -1, 0]], ['PageUp', [0, 1, 0]],
+] as const;
+
+async function bootstrap(target: HTMLCanvasElement, status: HTMLPreElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
-  if (!appResult.ok) { console.error('[bevy-shadow-biases] createApp failed:', appResult.error); return; }
-  const app = appResult.value;
-  const world = app.world;
-
-  const mat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.8, 0.8, 0.8, 1], metallic: 0, roughness: 0.5 }));
-
-  // Ground plane
-  world.spawn(
-    { component: Transform, data: { pos: [0, -1.5, 0], quat: [0, 0, 0, 1], scale: [20, 0.02, 20] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [mat] } },
-  );
-
-  // Spheres above the plane
-  for (let x = -5; x <= 5; x += 2) {
-    world.spawn(
-      { component: Transform, data: { pos: [x * 0.5, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.3, 0.3, 0.3] } },
-      { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE as Handle<'MeshAsset', 'shared'> } },
-      { component: MeshRenderer, data: { materials: [mat] } },
-    );
+  if (!appResult.ok) {
+    console.error('[bevy-shadow-biases] createApp failed:', appResult.error);
+    return;
   }
+  const app = appResult.value;
+  const scene = spawnBiasesScene(app.world, target.width / Math.max(target.height, 1));
+  status.textContent = describe(app.world, scene);
 
-  const lightEntity = world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.8, -0.5], color: [1, 1, 1], intensity: 2, depthBias: 0.005, normalBias: 0.05 },
-  }).unwrap();
-
-  world.spawn(
-    { component: Transform, data: { pos: [0, 2, 5] } },
-    { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
-  );
-
-  world.addSystem(Update, {
-    name: 'shadow-bias-keys',
-    after: ['input-frame-start-scan'],
+  app.world.addSystem(Update, {
+    name: 'bevy-shadow-biases-keys',
+    after: [FRAME_START_SCAN_SYSTEM_NAME],
     queries: [],
-    fn: () => {
-      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
-      if (!snap) return;
-      const lightResult = world.get(lightEntity, DirectionalLight);
-      if (!lightResult.ok) return;
-      const light = lightResult.value;
-      let db = light.depthBias, nb = light.normalBias;
-      if (snap.keyboard.down('1')) { db = Math.max(0, db - 0.001); console.log(`depthBias=${db.toFixed(4)}`); }
-      if (snap.keyboard.down('2')) { db += 0.001; console.log(`depthBias=${db.toFixed(4)}`); }
-      if (snap.keyboard.down('3')) { nb = Math.max(0, nb - 0.01); console.log(`normalBias=${nb.toFixed(3)}`); }
-      if (snap.keyboard.down('4')) { nb += 0.01; console.log(`normalBias=${nb.toFixed(3)}`); }
-      if (db !== light.depthBias || nb !== light.normalBias) {
-        world.set(lightEntity, DirectionalLight, { depthBias: db, normalBias: nb });
+    fn: (world) => {
+      const keyboard = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.keyboard;
+      if (keyboard === undefined) return;
+      let changed = false;
+      for (const [code, light, field, sign] of BIAS_KEYS) {
+        if (keyboard.justPressedCode(code)) { adjustBias(world, scene, light, field, sign); changed = true; }
       }
+      for (const [code, offset] of MOVE_KEYS) {
+        if (keyboard.justPressedCode(code)) { moveLight(world, scene, offset); changed = true; }
+      }
+      if (keyboard.justPressedCode('KeyL')) { toggleLight(world, scene); changed = true; }
+      if (keyboard.justPressedCode('KeyF')) { cycleFilter(world, scene); changed = true; }
+      if (keyboard.justPressedCode('KeyR')) { setBiases(world, scene, BIAS_DEFAULTS); changed = true; }
+      if (keyboard.justPressedCode('KeyZ')) { setBiases(world, scene, ZERO_BIASES); changed = true; }
+      if (changed) status.textContent = describe(world, scene);
     },
   });
 
   const started = app.start();
-  if (!started.ok) { console.error('[bevy-shadow-biases] app.start() failed:', started.error); return; }
-  console.warn('[bevy-shadow-biases] running. 1/2: depthBias, 3/4: normalBias.');
+  if (!started.ok) console.error('[bevy-shadow-biases] app.start() failed:', started.error);
+  Object.assign(globalThis, { __bevyShadowBiasesReady: true });
 }

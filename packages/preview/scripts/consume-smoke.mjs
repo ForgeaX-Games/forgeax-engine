@@ -10,4 +10,4 @@ for (const [kind, plugin] of Object.entries({ material: materialPlugin, mesh: me
   assert.equal(plugin.tools[0].descriptor.id, `${kind}.preview`);
   assert.equal(plugin.tools[0].descriptor.realm, 'host');
 }
-console.log('[preview] ToolPlugin consumer smoke: PASS');
+console.log('[preview] native plugin tool consumer smoke: PASS');

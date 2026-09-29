@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "kind": "wave1-ibl-dawn-baseline",
+  "engineHead": "974757dcacd9cb25ba3d902a9fe5a573693ec265",
+  "assetsCommit": "377dd57a0c147a16f0e453d65d43f23e5087d717",
+  "lockfileSha256": "f015ca04a65e48b4a2f15d14ede72f66e98c26fe64aaa18a236b51bf1b91414b",
+  "runtime": {
+    "node": "v26.4.0",
+    "pnpm": "11.7.0",
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O"
+  },
+  "build": {
+    "packages": {
+      "command": "pnpm build:packages",
+      "exitCode": 0
+    },
+    "sharedInputs": {
+      "command": "pnpm build:shared",
+      "exitCode": 0
+    },
+    "apps": {
+      "command": "FORGEAX_BUILD_CONCURRENCY=1 pnpm exec node scripts/build-apps.mjs --shared-input-manifest shared-build-inputs/manifest.json apps/learn-render/6.pbr/2.ibl-irradiance apps/learn-render/6.pbr/3.ibl-specular",
+      "exitCode": 0
+    }
+  },
+  "inputs": {
+    "hdrSha256": "f521688ab09b3e748341921d0c8c114d1256e6ca9e94c6e6783b9952b0042c44",
+    "irradianceReferenceSha256": "af42ca8a592bb4b5ae8ee11a4cc70d95329cee18cf80de30185968f4633e26ec",
+    "specularReferenceSha256": "3cf8b5296e60aab34bda85aa3a83d63fd106a1bf917b4751b679f46337b2ce2d"
+  },
+  "results": [
+    {
+      "app": "@forgeax/app-learn-render-6-pbr-2-ibl-irradiance",
+      "command": "pnpm --filter @forgeax/app-learn-render-6-pbr-2-ibl-irradiance smoke",
+      "exitCode": 1,
+      "framesExpected": 300,
+      "framesObserved": 332,
+      "frameEvidence": "owner legacy frames observed field; no canonical receipt",
+      "meanAbsDelta": 0.07083,
+      "threshold": 0.05,
+      "failure": "pixel delta exceeded threshold",
+      "log": "irradiance.log",
+      "logSha256": "5973858c6c44c17ec6d6cddc7d73008979376fb67e4e91d05f01ab7d69fb2a6f",
+      "reference": "forgeax-engine-assets/smoke-baselines/learn-render-6-pbr-2-ibl-irradiance/skylight-irradiance.ref.png"
+    },
+    {
+      "app": "@forgeax/app-learn-render-6-pbr-3-ibl-specular",
+      "command": "pnpm --filter @forgeax/app-learn-render-6-pbr-3-ibl-specular smoke",
+      "exitCode": 1,
+      "framesExpected": 300,
+      "framesObserved": 332,
+      "frameEvidence": "owner legacy frames observed field; no canonical receipt",
+      "meanAbsDelta": 0.08039,
+      "threshold": 0.05,
+      "failure": "pixel delta exceeded threshold",
+      "log": "specular.log",
+      "logSha256": "852e0c1ef91b609e730c7871195eaf36fedb23e62d5c148814308c7121e6af2c",
+      "reference": "forgeax-engine-assets/smoke-baselines/learn-render-6-pbr-3-ibl-specular/skylight-specular.ref.png"
+    }
+  ],
+  "interpretation": {
+    "comparison": "Both exact-base values equal the current 634c561d additional-smoke values: irradiance 0.07083 and specular 0.08039.",
+    "regression": "No evidence of a delta introduced by the rendering branch from these two Dawn runs.",
+    "gate": "Both commands exit 1 solely because meanAbsDelta exceeds 0.05; backend is webgpu, loadByGuid succeeds, and frames observed is 332.",
+    "countCaveat": "The shared IBL owner increments framesObserved after each draw call without making the field a canonical FrameReceipt. The log has no draw-error lines; the final readback and queue completion do complete."
+  }
+}

@@ -9,7 +9,7 @@
 // loop, dt clamp, error fan-out, and input attach internals land in
 // later milestones (M2..M5 per plan-strategy section 7).
 
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { AssetRegistry, CatalogSource } from '@forgeax/engine-assets-runtime';
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { TimePolicy, World } from '@forgeax/engine-ecs';
@@ -20,17 +20,27 @@ import type {
   VirtualJoystickConfig,
 } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
-import type { Context, Plugin } from '@forgeax/engine-plugin';
+import type { Context, Plugin, PluginPrograms } from '@forgeax/engine-plugin';
 import type { Profiler } from '@forgeax/engine-profiler';
-import type { RenderError, Renderer, RenderFeature, RenderProfile } from '@forgeax/engine-render';
+import type {
+  GpuPassTimingOptions,
+  RenderError,
+  Renderer,
+  RenderFeature,
+  RenderProfile,
+  SsrAdmissionIdentity,
+} from '@forgeax/engine-render';
 import type { RhiBackendInstrumentation } from '@forgeax/engine-render/internal/construct-renderer';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import type { ImportTransport, Result } from '@forgeax/engine-types';
+import type { ImportTransport, Loader, Result, RuntimeAssetBinding } from '@forgeax/engine-types';
 
+import type { AssetRuntimeAssemblyError } from './assets-runtime-assembly';
 import type { AppError, AppErrorCode } from './errors';
 import type { ExecutionControl, ExecutionOptions } from './execution';
 import type { RhiCapture } from './internal/rhi-capture';
+import type { AppObservation } from './observation';
+import type { RuntimePackOptions } from './runtime-packs.js';
 
 // Re-export AppError + AppErrorCode (the canonical SSOT lives in
 // `./errors`). Pre-M5 (M1..M4) referenced these as type-only declarations
@@ -110,7 +120,7 @@ export const APP_PHASE_CATALOG = [
  *     `undefined`.
  *   - Returns a {@link DrawSourceResult} → the frame-loop runs `world.update(1 / 60).unwrap()`
  *     on EVERY returned world (so transform propagation writes each world's
- *     derived `Transform.world` mat4 before extract reads it — no stale matrix),
+ *     derived `GlobalTransform.world` mat4 before extract reads it — no stale matrix),
  *     then calls `renderer.draw(worlds, { cameraOwner, resourceOwner })`.
  *
  * When omitted entirely, the App never consults a seam and always renders its
@@ -133,6 +143,16 @@ export interface AppAssembleArgs {
   readonly renderer: Renderer;
   /** Host-owned asset catalogue paired with the renderer construction. */
   readonly assets?: AssetRegistry;
+  /** Explicit catalog projection for this Registry. */
+  readonly assetCatalog?: CatalogSource;
+  /** Explicit owner decoder contributions; no app-side decoder discovery is performed. */
+  readonly assetDecoders?: readonly Loader<unknown>[];
+  /** Program definitions owned by this realm's existing asset provider. */
+  readonly pluginPrograms?: PluginPrograms;
+  /** Opt-in producer; construct realm-bound hosts/imports inside an execution bootstrap when used. */
+  readonly runtimePacks?: RuntimePackOptions;
+  /** Optional runtime scope that supplies the catalog URL and generation fence. */
+  readonly assetRuntimeBinding?: RuntimeAssetBinding;
   readonly world: World;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: readonly Plugin[];
@@ -170,14 +190,34 @@ export interface CanvasDrawingBufferSize {
 export interface CreateAppOptions {
   /** Opt into realm-local engine execution. Omission preserves the existing local assembly path. */
   readonly execution?: ExecutionOptions;
+  /** One realm-owned Registry; omitted reuses the Registry created by createRenderer. */
+  readonly assets?: AssetRegistry;
+  /** Explicit catalog projection for this Registry. */
+  readonly assetCatalog?: CatalogSource;
+  /** Explicit owner decoder contributions; no app-side decoder discovery is performed. */
+  readonly assetDecoders?: readonly Loader<unknown>[];
+  /** Program definitions owned by this realm's existing asset provider. */
+  readonly pluginPrograms?: PluginPrograms;
+  /** Opt-in producer; construct realm-bound hosts/imports inside an execution bootstrap when used. */
+  readonly runtimePacks?: RuntimePackOptions;
+  /** Optional runtime scope that supplies the catalog URL and generation fence. */
+  readonly assetRuntimeBinding?: RuntimeAssetBinding;
   /** Host-owned UI root whose events do not enter gameplay input. */
   readonly uiRoot?: Node;
   /** Producer-owned render features forwarded to the renderer unchanged. */
   readonly features?: readonly RenderFeature<unknown>[];
   /** Standard profile forwarded to the single renderer-owned pipeline. */
   readonly standardProfile?: RenderProfile;
+  /** Optional bounded Render-owned GPU pass facts; this is not frame latency. */
+  readonly gpuPassTiming?: GpuPassTimingOptions;
+  /** Exact source/tree/lock/build identity binding for the renderer-owned SSR seam. */
+  readonly ssrIdentity?: SsrAdmissionIdentity;
+  /** Explicit Render-owned full-frame reflection pixel readback for diagnostics. */
+  readonly captureReflectionFallbackReadback?: boolean;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: readonly Plugin[];
+  /** Existing Cordis root supplied by a generic host plugin. */
+  readonly context?: Context;
   /**
    * A host-owned input backend for this canvas. When supplied, createApp inserts
    * it into the World instead of attaching a second browser listener set. The
@@ -261,7 +301,7 @@ export interface CreateAppOptions {
  *
  * feat-20260608-create-app-param-surface-trim / M2 / D-3: this is the SSOT
  * for build-tool emit knowledge that the engine consumes at runtime.
- * Aggregates two host-injected channels:
+ * Aggregates three host-injected channels:
  *
  *   - importTransport: dev-only ImportTransport that the engine threads to
  *     the AssetRegistry third ctor slot so a DDC miss can lazy-import.
@@ -273,7 +313,11 @@ export interface CreateAppOptions {
  *     (createRenderer.ts D-2 q5-A) so the LO 1.1 zero-config takeoff path
  *     keeps working without any explicit injection.
  *
- * Both fields are optional so `BundlerOptions = {}` is a valid call shape.
+ *   - build: the exact checkout revision emitted by the build-tool adapter;
+ *     renderer-owned inspection submits and their World attribution carry
+ *     this identity so evidence cannot silently join different builds.
+ *
+ * All fields are optional so `BundlerOptions = {}` is a valid call shape.
  * M3 collapses the typical demo callsite to `forgeaxBundlerAdapter()` (a
  * factory exported by `virtual:forgeax/bundler`), which returns an object
  * with this same structural shape -- type compatibility is enforced by
@@ -303,6 +347,8 @@ export interface BundlerOptions {
    * "explicitly undefined"; see D-2 q5-A in plan-strategy).
    */
   readonly shaderManifestUrl?: string | undefined;
+  /** Exact checkout revision emitted by the build-tool adapter. */
+  readonly build?: string | undefined;
 }
 
 /**
@@ -317,12 +363,13 @@ export interface BundlerOptions {
 export interface App {
   /** Caller-owned Renderer (reference equality with the assemble input). */
   readonly renderer: Renderer;
-  /** Host-owned asset catalogue paired with this renderer lease. */
+  /** Host-owned AssetRegistry paired with this App realm, when available. */
   readonly assets?: AssetRegistry;
   /** Caller-owned World (reference equality with the assemble input). */
   readonly world: World;
   /** Host-side lifecycle and immutable diagnostics for the selected execution tier. */
   readonly execution: ExecutionControl;
+  readonly observation?: AppObservation;
   /**
    * Pause frame submission and relinquish the renderer presentation surface
    * without replacing World, Renderer, AssetRegistry, plugins, or history.
@@ -357,17 +404,15 @@ export interface App {
    */
   readonly debugDraw?: DebugDraw | undefined;
   /**
-   * Begin rAF scheduling. Idempotent guard lands in M2:
+   * Begin host frame scheduling:
    *   - first call: Result.ok(undefined)
    *   - second call (already running): Result.err({ code: 'app-already-running' })
-   * M1 stub returns Result.ok(undefined) unconditionally.
    */
   start(): Result<void, AppError>;
   /**
-   * Stop rAF scheduling. State-machine semantics land in M2:
+   * Stop host frame scheduling:
    *   - 'idle' / 'stopped' state: Result.err({ code: 'app-not-started' })
    *   - 'running' / 'paused' state: Result.ok(undefined)
-   * M1 stub returns Result.ok(undefined) unconditionally.
    */
   stop(): Result<void, AppError>;
   /** Tear down plugins, host resources, and renderer ownership. */
@@ -427,8 +472,41 @@ export interface App {
 /** Host control returned by the unified execution path. Engine-owned objects remain realm-local. */
 export type ExecutionApp = Pick<
   App,
-  'execution' | 'input' | 'audio' | 'start' | 'stop' | 'pause' | 'resume' | 'onError' | 'lastError'
->;
+  | 'execution'
+  | 'input'
+  | 'audio'
+  | 'start'
+  | 'stop'
+  | 'pause'
+  | 'resume'
+  | 'onError'
+  | 'lastError'
+  | 'dispose'
+> & {
+  /** Current host surface; render-worker recovery replaces the transferred element. */
+  readonly canvas?: HTMLCanvasElement;
+  /** Optional eval bridge whose executor remains in the selected Engine realm. */
+  readonly remoteEval?: ExecutionRemoteEval;
+  /** Internal bridge-disconnect hook for revoking Worker synthetic input. */
+  readonly clearInput?: () => void;
+  /** Open a fresh synthetic-input lease in the Worker session. */
+  readonly beginInputLease?: () => void;
+  /** Finish one Worker profiler session, fenced to its World and capture id. */
+  readonly finishProfiler?: (expected?: {
+    readonly worldIdentity?: string;
+    readonly captureId?: string;
+  }) => void;
+};
+
+/** A Promise-shaped inspection call with admission and cancellation witnesses. */
+export type ExecutionRemoteEval = (
+  code: string,
+  expectedWorldIdentity?: string,
+) => Promise<unknown> & {
+  readonly started: Promise<void>;
+  /** Resolves with whether the Worker had already admitted the inspection. */
+  readonly cancel: () => Promise<boolean>;
+};
 
 /**
  * Error union returned by the assemble-form entry. The canvas-form thin
@@ -437,7 +515,7 @@ export type ExecutionApp = Pick<
  *
  * Cordis activation failures are projected into AppError at this boundary.
  */
-export type AssembleAppError = AppError | RhiError;
+export type AssembleAppError = AppError | RhiError | AssetRuntimeAssemblyError;
 
 /**
  * Error union returned by the canvas-form thin wrapper. Extends

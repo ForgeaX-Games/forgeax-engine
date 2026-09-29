@@ -14,6 +14,7 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-5-advanced-lighting-6-hdr smoke",
     "rhiDebug": {
       "riskFamilies": ["screen-space-post"]
     },
@@ -32,7 +33,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "placeholder smoke script; structural-only smoke (>=300 frames, onError=0)"
+        "reason": "placeholder smoke script; structural-only smoke (>=60 frames, onError=0)"
       },
       "spike-report": {
         "enabled": false,
@@ -63,6 +64,6 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "playwright": "^1.50.0",
-    "vite": "8.0.10"
+    "vite": "8.0.16"
   }
 }

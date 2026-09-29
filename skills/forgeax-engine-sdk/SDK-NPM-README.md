@@ -13,12 +13,11 @@ the npm cache:
 ```bash
 pnpm dlx @forgeax/engine@latest sdk install ~/ForgeaX/sdk
 cd ~/ForgeaX/sdk
-node ./bin/forgeax.mjs init
-node ./bin/forgeax.mjs new ../my-game
+node ./bin/forgeax.mjs project init
+node ./bin/forgeax.mjs project new ../my-game --template game-3d  # 3D games
 cd ../my-game
-pnpm exec forgeax doctor --json
-pnpm test
-pnpm dev
+pnpm exec forgeax project check --json && pnpm test && pnpm exec tsc --noEmit && pnpm exec forgeax project build --json
+pnpm exec forgeax project preview --json
 ```
 
 The carrier uses the exact SDK lockfile and installs the Engine packages from
@@ -32,7 +31,7 @@ release instead.
 |:--|:--|
 | `sdk/bin/` | Standalone `forgeax` CLI used to initialise the SDK and create games |
 | `sdk/packages/` | Bare built Engine package directories |
-| `sdk/templates/` | `empty` (default) and pack.ts-only `game-3d` starter projects |
+| `sdk/templates/` | Explicitly selected `empty` and source-complete `game-3d` starter projects; the latter keeps procedural packs and a readable imported UI pair |
 | `sdk/skills/` | Engine authoring and debugging skills copied into each game |
 | `sdk/source/engine/` | Public Engine source snapshot for inspection and extension |
 | `sdk/AGENTS.md` | AI-first workflow, capability map, asset and verification guidance |
@@ -48,17 +47,17 @@ flowchart LR
   A[Need an SDK] --> B{Network available?}
   B -->|Yes| C[pnpm dlx @forgeax/engine sdk install]
   B -->|No or reproducible handoff| D[Download SDK ZIP]
-  C --> E[forgeax init]
+  C --> E[forgeax project init]
   D --> E
-  E --> F[forgeax new ../my-game]
-  F --> G[doctor, test, dev, build, package]
+  E --> F[forgeax project new ../my-game --template game-3d or empty]
+  F --> G[doctor, test, typecheck, build, package, serve]
 ```
 
 Both surfaces use the same Engine version and pnpm 11 lockfile. A game stays
 pinned to the SDK used to create it; when a newer `@forgeax/engine-sdk` is
 available, review its release notes and migrate/test the game explicitly.
 
-For browser-compositor screenshots, use `forgeax capture --backend auto`; use
+For browser-compositor screenshots, use `forgeax project capture --backend auto`; use
 `--backend software` on a machine without a display or physical GPU. The final
 `page.screenshot()` PNG contains the Canvas and HTML/Shadow DOM UI, while the
 sidecar separately proves a non-flat Canvas frame and the Engine
@@ -68,10 +67,10 @@ Source iteration can bind a game to a local Engine checkout without changing its
 manifest:
 
 ```bash
-forgeax engine status --json
-forgeax engine use-local ../forgeax-engine --json
-forgeax engine doctor --json
-forgeax engine unlink --json
+forgeax project engine status --json
+forgeax project engine use-local ../forgeax-engine --json
+forgeax project engine check --json
+forgeax project engine unlink --json
 ```
 
 The binding lives in `.forgeax/engine-binding.json`; `doctor` fails closed for

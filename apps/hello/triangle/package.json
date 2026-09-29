@@ -16,7 +16,7 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-triangle smoke",
-    "_comment": "smokeInvocation = canonical SSOT literal for the cross-source diff gate (feat-20260508-verify-gpu-smoke-gate w18 / F-3). Three sources (ci.yml step run / this field / .claude/skills/forgeax-step-verify/SKILL.md) must stay byte-identical.",
+    "_comment": "smokeInvocation = package manifest SSOT for the authoritative dawn-smoke-roster sharded gate; the roster proves this unique 60-frame receipt entry. CI must not duplicate the smoke literal.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -55,7 +55,7 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-shader-compiler": "workspace:*",
     "playwright": "1.56.1",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0",
     "@webgpu/types": "^0.1.71"
   }

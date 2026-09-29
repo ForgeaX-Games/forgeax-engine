@@ -1,13 +1,18 @@
 import type { AudioIntent } from '@forgeax/engine-audio';
 import type { InputBackendSample } from '@forgeax/engine-input';
+import type { BrowserFrameSubmitted } from '../browser-frame-signal';
 import type { CanvasDrawingBufferSize } from '../types';
-import type { ExecutionAssetCatalog } from './types';
+import type { ExecutionAssetCatalog, ExecutionFrameInspection } from './types';
 
 export interface ExecutionFrameMessage {
   readonly kind: 'frame';
   readonly worldIdentity: string;
   readonly frameId: number;
   readonly deltaSeconds: number;
+  /** Host render-sample time before ECS applies its simulation clamp. */
+  readonly sampleTimeSeconds?: number;
+  /** Explicit pause/resume or replay lifecycle boundary for temporal owners. */
+  readonly temporalReset?: boolean;
   readonly inputSample: InputBackendSample;
   readonly canvasWidth: number;
   readonly canvasHeight: number;
@@ -17,6 +22,18 @@ export interface ExecutionFrameCompletion {
   readonly kind: 'frame-complete';
   readonly worldIdentity: string;
   readonly frameId: number;
+  /** Renderer queue-submit generation for the browser compositor witness. */
+  readonly deviceGeneration?: number;
+  /** Compiled graph generation paired with the submitted picture. */
+  readonly graphGeneration?: number;
+  /**
+   * Serialized output mapping for the accepted frame. `undefined` means that
+   * no accepted submitted display context is available; consumers must fail
+   * closed rather than manufacture identity from the omission.
+   */
+  readonly barrelDistortion?: import('@forgeax/engine-render').BarrelDistortionMapping;
+  /** Renderer presentation readiness from the completed FrameReceipt. */
+  readonly presentation?: import('@forgeax/engine-render').FramePresentation;
   readonly engineUpdateMs: number;
   readonly kernelWaitMs: number;
   readonly audioIntents?: readonly AudioIntent[];
@@ -29,12 +46,24 @@ export interface ExecutionFrameCompletion {
   };
 }
 
+export interface ExecutionFrameSubmitted
+  extends Omit<BrowserFrameSubmitted, 'receipt' | 'worldIdentity'> {
+  readonly kind: 'frame-submitted';
+  readonly worldIdentity: string;
+  readonly frameId: number;
+  readonly deviceGeneration: number;
+}
+
 export type FrameCompletionDisposition = 'accepted' | 'duplicate' | 'stale-world' | 'late';
 
 export class FrameCreditLedger {
   private nextFrameId = 1;
   private inFlight: number | null = null;
   private completed = 0;
+  private completedCount = 0;
+  private submitted = 0;
+  private highWater = 0;
+  private throttledTicks = 0;
 
   constructor(readonly worldIdentity: string) {}
 
@@ -42,29 +71,51 @@ export class FrameCreditLedger {
     deltaSeconds: number,
     sampleInput: () => InputBackendSample,
     canvasSize: CanvasDrawingBufferSize = { width: 0, height: 0 },
+    sampleTimeSeconds?: number,
+    temporalReset = false,
   ): ExecutionFrameMessage | undefined {
-    if (this.inFlight !== null) return undefined;
+    if (this.inFlight !== null) {
+      this.throttledTicks += 1;
+      return undefined;
+    }
     const frameId = this.nextFrameId;
     this.nextFrameId += 1;
     this.inFlight = frameId;
+    this.submitted += 1;
+    this.highWater = Math.max(this.highWater, 1);
     return {
       kind: 'frame',
       worldIdentity: this.worldIdentity,
       frameId,
       deltaSeconds,
+      ...(sampleTimeSeconds === undefined ? {} : { sampleTimeSeconds }),
+      ...(temporalReset ? { temporalReset: true } : {}),
       inputSample: sampleInput(),
       canvasWidth: canvasSize.width,
       canvasHeight: canvasSize.height,
     };
   }
 
-  complete(message: ExecutionFrameCompletion): FrameCompletionDisposition {
+  complete(
+    message: ExecutionFrameCompletion | ExecutionSimulationCompletion,
+  ): FrameCompletionDisposition {
     if (message.worldIdentity !== this.worldIdentity) return 'stale-world';
     if (message.frameId <= this.completed) return 'duplicate';
     if (message.frameId !== this.inFlight) return 'late';
     this.completed = message.frameId;
+    this.completedCount += 1;
     this.inFlight = null;
     return 'accepted';
+  }
+
+  inspect(): ExecutionFrameInspection {
+    return {
+      submitted: this.submitted,
+      completed: this.completedCount,
+      inFlight: this.inFlight === null ? 0 : 1,
+      highWater: this.highWater,
+      throttledTicks: this.throttledTicks,
+    };
   }
 
   get hasCreditInFlight(): boolean {
@@ -74,6 +125,8 @@ export class FrameCreditLedger {
 
 export interface ExecutionInitMessage {
   readonly kind: 'init';
+  /** App-owned startup policy also bounds Renderer realm creation and replacement. */
+  readonly startupTimeoutMs: number;
   readonly canvas: OffscreenCanvas;
   readonly bootstrapUrl: string;
   readonly bootstrapData?: import('./types').ExecutionBootstrapValue;
@@ -81,8 +134,11 @@ export interface ExecutionInitMessage {
   /** Realm-serializable asset catalog configuration. */
   readonly assetCatalog?: ExecutionAssetCatalog;
   readonly shaderManifestUrl?: string;
+  /** Exact checkout revision emitted by the host build-tool adapter. */
+  readonly build?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
-  readonly tier: import('./types').ExecutionTier;
+  readonly diagnostics?: import('./types').ExecutionDiagnosticsOptions;
+  readonly workers: import('./types').ExecutionSelection;
 }
 
 export interface ExecutionHostControlMessage {
@@ -112,6 +168,7 @@ export interface ExecutionFaultMessage {
 
 export interface ExecutionRebuildMessage {
   readonly kind: 'rebuild';
+  readonly canvas?: OffscreenCanvas;
   readonly worldIdentity: string;
 }
 
@@ -121,14 +178,88 @@ export interface ExecutionRebuiltMessage {
   readonly worldIdentity: string;
 }
 
+/** A serialized inspection request executed by the selected Engine realm. */
+export interface ExecutionInspectMessage {
+  readonly kind: 'inspect';
+  readonly requestId: number;
+  readonly code: string;
+  /** World identity observed by the caller before the request was queued. */
+  readonly worldIdentity: string;
+}
+
+export interface ExecutionInspectCancelMessage {
+  readonly kind: 'inspect-cancel';
+  readonly requestId: number;
+  readonly worldIdentity: string;
+}
+
+export interface ExecutionInspectStartedMessage {
+  readonly kind: 'inspect-started';
+  readonly requestId: number;
+  readonly worldIdentity: string;
+}
+
+/** Worker-side cancellation admission witness. `admitted` means execution may continue. */
+export interface ExecutionInspectCanceledMessage {
+  readonly kind: 'inspect-canceled';
+  readonly requestId: number;
+  readonly worldIdentity: string;
+  readonly admitted: boolean;
+}
+
+export interface ExecutionInspectResultMessage {
+  readonly kind: 'inspect-result';
+  readonly requestId: number;
+  readonly worldIdentity: string;
+  readonly result:
+    | { readonly ok: true; readonly value: unknown }
+    | { readonly ok: false; readonly error: unknown };
+}
+
+/** Out-of-band profiler cleanup fenced to the capture's owning World. */
+export interface ExecutionProfileFinishMessage {
+  readonly kind: 'profile-finish';
+  readonly worldIdentity?: string;
+  readonly captureId?: string;
+}
+
+/** Simulation completion releases source credit; it is never a presentation witness. */
+export interface ExecutionSimulationCompletion extends Omit<ExecutionFrameCompletion, 'kind'> {
+  readonly kind: 'simulation-complete';
+}
+
 export type HostToEngineMessage =
+  | { readonly kind: 'render-replace'; readonly epoch: number; readonly canvas: OffscreenCanvas }
   | ExecutionInitMessage
   | ExecutionFrameMessage
   | ExecutionRebuildMessage
+  | ExecutionInspectMessage
+  | ExecutionInspectCancelMessage
+  | { readonly kind: 'input-clear' }
+  | { readonly kind: 'input-lease-open' }
+  | ExecutionProfileFinishMessage
   | { readonly kind: 'dispose' };
 export type EngineToHostMessage =
+  | { readonly kind: 'disposed'; readonly error?: unknown }
+  | ExecutionSimulationCompletion
+  | { readonly kind: 'render-ready'; readonly epoch: number }
+  | { readonly kind: 'render-lost'; readonly epoch: number; readonly detail: string }
+  | {
+      readonly kind: 'render-submitted';
+      readonly epoch: number;
+      readonly frame: ExecutionFrameSubmitted;
+    }
+  | {
+      readonly kind: 'render-complete';
+      readonly epoch: number;
+      readonly frame: ExecutionFrameCompletion;
+    }
   | ExecutionReadyMessage
+  | ExecutionFrameSubmitted
   | ExecutionFrameCompletion
   | ExecutionFaultMessage
   | ExecutionRebuiltMessage
+  | ExecutionInspectStartedMessage
+  | ExecutionInspectCanceledMessage
+  | ExecutionInspectResultMessage
   | ExecutionHostControlMessage;

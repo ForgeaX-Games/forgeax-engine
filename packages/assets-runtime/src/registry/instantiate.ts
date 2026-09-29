@@ -21,10 +21,8 @@ import {
   AssetError,
   type CatalogEntry,
   type Handle,
-  type MountOverride,
   PACK_ERROR_HINTS,
   type SceneAsset,
-  type SceneInstanceMount,
   type SkeletonAsset,
   type SkinAsset,
   type TagOf,
@@ -32,13 +30,9 @@ import {
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 import { resolveAssetHandle } from '../resolve-asset-handle';
-import {
-  extractMountOverrideHandleGuids,
-  extractSceneEntityHandleGuids,
-} from '../scene-handle-fields';
+import { extractSceneEntityHandleGuids } from '../scene-handle-fields';
 import {
   compareScenePublicationFences,
-  parseScenePublicationFence,
   type ScenePublicationFence,
   type ScenePublicationFenceError,
   scenePublicationFenceFromCatalog,
@@ -53,21 +47,6 @@ export interface SkinJointResolver {
   resolveSkinAsset(skeletonHandleRaw: number): SkinAsset | undefined;
 }
 
-function catalogSourceGuidForFence(
-  registry: AssetRegistry,
-  expected: ScenePublicationFence,
-): string | undefined {
-  const entries = catalogEntriesForFence(registry);
-  for (const entry of entries) {
-    if (entry.kind !== 'scene') continue;
-    const current = scenePublicationFenceFromCatalog(entries, entry.guid);
-    if (current.ok && compareScenePublicationFences(expected, current.value).ok) {
-      return entry.guid;
-    }
-  }
-  return undefined;
-}
-
 /** Merge the live Edit Catalog and the Play pack-index projection for fences. */
 function catalogEntriesForFence(registry: AssetRegistry): readonly CatalogEntry[] {
   const byGuid = new Map<string, CatalogEntry>();
@@ -78,14 +57,165 @@ function catalogEntriesForFence(registry: AssetRegistry): readonly CatalogEntry[
     if (record.sourcePath === undefined) continue;
     const candidate = { ...record, guid, sourcePath: record.sourcePath } as CatalogEntry;
     const current = byGuid.get(guid.toLowerCase());
-    if (
-      current === undefined ||
-      (current.publication === undefined && candidate.publication !== undefined)
-    ) {
+    if (current === undefined || candidate.publication !== undefined) {
+      // A persisted Scene fence is captured from the complete pack-index
+      // publication at save time. If the CatalogReplica is still carrying its
+      // previous tuple during the watcher handoff, keep the same pack-index
+      // authority here or the freshly reopened scene will reject its own
+      // mount with asset-generation-fence-mismatch.
       byGuid.set(guid.toLowerCase(), candidate);
     }
   }
   return [...byGuid.values()];
+}
+
+/** Resolve the authored SceneEntity identity from the Catalog projection. */
+function sceneSourceKeyForGuid(
+  registry: AssetRegistry,
+  guid: string | undefined,
+): string | undefined {
+  if (guid === undefined) return undefined;
+  const key = guid.toLowerCase();
+  const snapshotEntry = registry
+    .catalogSnapshot()
+    ?.entries.find((entry) => entry.guid.toLowerCase() === key);
+  if (snapshotEntry?.sourceKey !== undefined) return snapshotEntry.sourceKey;
+  return registry.packIndexCache?.get(key)?.sourceKey;
+}
+
+/** Derive a publication fence from the registry's unified live projections. */
+export function scenePublicationFenceFromRegistry(
+  registry: AssetRegistry,
+  outputGuid: string,
+): Result<ScenePublicationFence, ScenePublicationFenceError> {
+  return scenePublicationFenceFromCatalog(catalogEntriesForFence(registry), outputGuid);
+}
+
+/**
+ * Validate the producer receipt for every keyed instance edge before the
+ * Scene owner starts spawning. The authored declaration carries only the
+ * child GUID; the expected generation/digest comes from the parent
+ * publication's external evidence, so publication state never leaks into the
+ * SceneAsset model.
+ */
+/** @internal */
+export function validateKeyedScenePublication(
+  registry: AssetRegistry,
+  scene: SceneAsset,
+  rootGuid: string | undefined,
+): Result<void, ScenePublicationFenceError> {
+  if (rootGuid === undefined) return ok(undefined);
+  const entries = catalogEntriesForFence(registry);
+  const byGuid = new Map(entries.map((entry) => [entry.guid.toLowerCase(), entry]));
+  const rootEntry = byGuid.get(rootGuid.toLowerCase());
+  const rootPublication = rootEntry?.publication;
+  if (rootPublication === undefined) return ok(undefined);
+  const visited = new Set<string>();
+
+  const visit = (
+    current: SceneAsset,
+    parentPublication: typeof rootPublication,
+    path: readonly string[],
+  ): Result<void, ScenePublicationFenceError> => {
+    for (const [entityKey, node] of Object.entries(current.entities)) {
+      const source = node.instance?.source;
+      if (source === undefined) continue;
+      const childGuid = source.toLowerCase();
+      const childEntry = byGuid.get(childGuid);
+      const childPublication = childEntry?.publication;
+      const address = [...path, entityKey].join('/');
+      if (childPublication === undefined) {
+        return err({
+          code: 'asset-generation-fence-mismatch',
+          phase: 'instantiate',
+          hint: `nested SceneAsset publication is unavailable at ${address}`,
+          ...(childEntry?.sourcePath === undefined ? {} : { sourcePath: childEntry.sourcePath }),
+          retryable: true,
+          recoveryActions: ['continue-last-known-good', 'retry-rebuild', 'fresh-reopen'],
+        });
+      }
+      const evidence = parentPublication.externalEvidence.find(
+        (item) => item.guid.toLowerCase() === childGuid,
+      );
+      const childOutput = childPublication.outputs.find(
+        (output) => output.guid.toLowerCase() === childGuid,
+      );
+      if (
+        evidence !== undefined &&
+        (evidence.generation !== undefined || evidence.digest !== undefined)
+      ) {
+        if (
+          (evidence.generation !== undefined &&
+            evidence.generation !== childPublication.generation) ||
+          (evidence.digest !== undefined &&
+            (childOutput === undefined || evidence.digest !== childOutput.digest))
+        ) {
+          return err({
+            code: 'asset-generation-fence-mismatch',
+            phase: 'instantiate',
+            hint: `nested SceneAsset publication changed at ${address}`,
+            sourcePath: childPublication.sourcePath,
+            sourceRevision: childPublication.sourceRevision,
+            currentGeneration: childPublication.generation,
+            retryable: true,
+            recoveryActions: ['continue-last-known-good', 'retry-rebuild', 'fresh-reopen'],
+          });
+        }
+      }
+      if (visited.has(childGuid)) continue;
+      visited.add(childGuid);
+      const child =
+        childEntry?.guid === undefined ? undefined : registry.assetCatalog.get(childGuid)?.payload;
+      if (child?.kind === 'scene') {
+        const nested = visit(child, childPublication, [...path, entityKey]);
+        if (!nested.ok) return nested;
+      }
+    }
+    return ok(undefined);
+  };
+
+  return visit(scene, rootPublication, []);
+}
+
+/** Resolve one schema-declared shared-field GUID to a World-owned handle. */
+export function resolveHandleGuid(
+  registry: AssetRegistry,
+  world: World,
+  guidString: string,
+  guidToHandle: Map<string, number>,
+  fieldPath: string,
+  location: string,
+): Result<number, AssetError> {
+  const guidRes = AssetGuid.parse(guidString);
+  if (!guidRes.ok) {
+    return err(
+      new AssetError({
+        code: 'asset-not-found',
+        expected: `valid GUID string for field ${fieldPath}`,
+        hint: `GUID "${guidString}" could not be parsed; at ${location}, field=${fieldPath}`,
+      }),
+    );
+  }
+  const guidKey = guidString.toLowerCase();
+  let slot = guidToHandle.get(guidKey);
+  if (slot === undefined) {
+    const envelope = registry.assetCatalog.get(guidKey);
+    if (envelope === undefined) {
+      return err(
+        new AssetError({
+          code: 'asset-not-found',
+          expected: `GUID ${guidString} catalogued in AssetRegistry`,
+          hint:
+            `GUID ${guidString} not catalogued; ` +
+            `call loadByGuid('${guidString}') before instantiate; ` +
+            `at ${location}, field=${fieldPath}`,
+        }),
+      );
+    }
+    slot = unwrapHandle(world.sharedRefs.acquire(envelope.payload.kind, envelope.payload));
+    guidToHandle.set(guidKey, slot);
+  }
+  return ok(slot);
 }
 
 /**
@@ -100,36 +230,14 @@ export type PostSpawnHook = (
   root: EntityHandle,
 ) => { ok: true } | { ok: false; error: unknown };
 
-/**
- * Remove the entities and producer grants created by one instantiate call.
- *
- * GUID fields use World interning, so an interned handle is released only when
- * its producer grant is the last live reference. A failed scene has no live
- * holders after `despawnScene`; a handle retained by an unrelated sibling is
- * therefore left untouched. Fresh scene and nested-scene alloc grants are
- * always released after their spawned holders are gone.
- */
+/** Remove only the entities and grants acquired by this instantiate call. */
 function rollbackSpawn(
   world: World,
   roots: readonly EntityHandle[],
   allocHandles: readonly number[],
-  internedHandles: readonly number[],
-  sharedRefBaseline: number,
 ): void {
-  for (const root of new Set(roots)) {
-    void worldDespawnScene(world, root);
-  }
-
-  for (const raw of new Set(allocHandles)) {
-    const handle = raw as never;
-    if (world.sharedRefs.refcount(handle) > 0) void world.sharedRefs.release(handle);
-  }
-
-  for (const raw of new Set(internedHandles)) {
-    if (world.sharedRefs._liveCount() <= sharedRefBaseline) break;
-    const handle = raw as never;
-    if (world.sharedRefs.refcount(handle) === 1) void world.sharedRefs.release(handle);
-  }
+  for (const root of new Set(roots)) void worldDespawnScene(world, root);
+  for (const raw of allocHandles) void world.sharedRefs.release(raw as never);
 }
 
 /**
@@ -173,9 +281,7 @@ export function instantiate<T extends SceneAsset>(
   parent?: EntityHandle,
   expectedPublication?: ScenePublicationFence,
 ): Result<EntityHandle, AssetError | PackError | EcsError | ScenePublicationFenceError> {
-  const sharedRefBaseline = world.sharedRefs._liveCount();
   const allocHandles: number[] = [];
-  const internedHandles: number[] = [];
   // feat-20260614 M8 (D-15 / D-17): resolve the SceneAsset payload from the
   // handle through the two-tier `resolveAssetHandle` (builtin / user-tier
   // world.sharedRefs) -- the registry holds no handle->payload map. Scene
@@ -202,6 +308,9 @@ export function instantiate<T extends SceneAsset>(
     // feat-20260622 M3 / w8: find the scene's GUID key in the catalog
     // so _resolveSceneGuids can reverse-decode from envelope.refs edges.
     const sceneGuidKey = registry._guidForAsset(sceneAsset);
+    const sceneSourceKey = sceneSourceKeyForGuid(registry, sceneGuidKey);
+    const nestedPublication = validateKeyedScenePublication(registry, sceneAsset, sceneGuidKey);
+    if (!nestedPublication.ok) return nestedPublication;
     if (expectedPublication !== undefined) {
       const entries = catalogEntriesForFence(registry);
       if (sceneGuidKey === undefined) {
@@ -229,16 +338,10 @@ export function instantiate<T extends SceneAsset>(
       resolvedSceneHandles,
     );
     if (!sceneRes.ok) {
-      rollbackSpawn(
-        world,
-        [],
-        [...resolvedSceneHandles.values()],
-        [...guidToHandle.values()],
-        sharedRefBaseline,
-      );
+      rollbackSpawn(world, [], [...resolvedSceneHandles.values(), ...guidToHandle.values()]);
       return sceneRes;
     }
-    internedHandles.push(...guidToHandle.values());
+    allocHandles.push(...guidToHandle.values());
     allocHandles.push(...resolvedSceneHandles.values());
 
     // feat-20260703 M1 (D-1): register the resolved copy -> original
@@ -250,19 +353,23 @@ export function instantiate<T extends SceneAsset>(
 
     // Register the GUID-resolved SceneAsset as a shared ref so
     // Scene owner resolves it transparently. The shared
-    // ref alloc-grant rc=1 stays held by the alloc; the SceneInstance spawn
-    // retains to rc=2 and the despawn path releases back to rc=1.
+    // grant remains temporary; the SceneInstance source column retains its
+    // own reference before this call releases its grant.
     const sharedHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
     allocHandles.push(unwrapHandle(sharedHandle));
 
-    // m3-i3: wire identity resolver so mount.source already resolved
-    // to a live handle number by _resolveMountsRec passes through.
+    // Wire the identity resolver so keyed instance.source GUIDs resolved by
+    // the registry pass through to the Scene owner.
     // Scene mount resolution calls this resolver; when source is a number (live handle),
     // return it as-is; when source is a string (unresolved GUID),
     // fail (should not happen after resolution, but fail-safe).
     worldSetSceneAssetResolver(world, (source, _parentHandle) => {
       if (typeof source === 'number') {
         return ok(source as unknown as Handle<'SceneAsset', 'shared'>);
+      }
+      const resolved = resolvedSceneHandles.get(source.toLowerCase());
+      if (resolved !== undefined) {
+        return ok(resolved as unknown as Handle<'SceneAsset', 'shared'>);
       }
       return err({
         code: 'asset-not-found' as const,
@@ -271,14 +378,12 @@ export function instantiate<T extends SceneAsset>(
       });
     });
 
-    // C-R2 (feat-20260622-s5 M6): instantiateScene now returns
-    // `{ root, diagnostics }` on success. This runtime API keeps its
-    // `Result<EntityHandle>` contract; unwrap to `root`. (Surfacing scene
-    // unknown-field diagnostics through `assets.instantiate` is M7 README
-    // scope — the Scene package owns this boundary.)
-    const sceneInst = worldInstantiateScene(world, sharedHandle, parent);
+    // The Scene API still returns `{ root, diagnostics }` on success. This
+    // runtime API keeps its `Result<EntityHandle>` contract and unwraps
+    // `root`; schema-invalid authored fields fail before spawning.
+    const sceneInst = worldInstantiateScene(world, sharedHandle, parent, sceneSourceKey);
     if (!sceneInst.ok) {
-      rollbackSpawn(world, [], allocHandles, internedHandles, sharedRefBaseline);
+      rollbackSpawn(world, [], allocHandles);
       return sceneInst as unknown as Result<EntityHandle, AssetError | PackError | EcsError>;
     }
     instantiateResult = ok(sceneInst.value.root);
@@ -334,13 +439,7 @@ export function instantiate<T extends SceneAsset>(
     };
     const jointResolveResult = hook(world, resolver, instantiateResult.value);
     if (!jointResolveResult.ok) {
-      rollbackSpawn(
-        world,
-        [instantiateResult.value],
-        allocHandles,
-        internedHandles,
-        sharedRefBaseline,
-      );
+      rollbackSpawn(world, [instantiateResult.value], allocHandles);
       return { ok: false, error: jointResolveResult.error } as unknown as Result<
         EntityHandle,
         AssetError | PackError | EcsError
@@ -348,6 +447,8 @@ export function instantiate<T extends SceneAsset>(
     }
   }
 
+  // The spawned source and component columns now own their retained references.
+  for (const raw of allocHandles) void world.sharedRefs.release(raw as never);
   return instantiateResult;
 }
 
@@ -375,9 +476,7 @@ export function instantiateFlat<T extends SceneAsset>(
   world: World,
   expectedPublication?: ScenePublicationFence,
 ): Result<EntityHandle[], AssetError | PackError | EcsError | ScenePublicationFenceError> {
-  const sharedRefBaseline = world.sharedRefs._liveCount();
   const allocHandles: number[] = [];
-  const internedHandles: number[] = [];
   let roots: EntityHandle[];
   let mountEntities: EntityHandle[];
   const sceneRes0 = resolveAssetHandle<SceneAsset>(
@@ -387,6 +486,8 @@ export function instantiateFlat<T extends SceneAsset>(
   const sceneAsset = sceneRes0.ok ? sceneRes0.value : undefined;
   if (sceneAsset !== undefined && sceneAsset.kind === 'scene') {
     const sceneGuidKey = registry._guidForAsset(sceneAsset);
+    const nestedPublication = validateKeyedScenePublication(registry, sceneAsset, sceneGuidKey);
+    if (!nestedPublication.ok) return nestedPublication;
     if (expectedPublication !== undefined) {
       const entries = catalogEntriesForFence(registry);
       if (sceneGuidKey === undefined) {
@@ -414,16 +515,10 @@ export function instantiateFlat<T extends SceneAsset>(
       resolvedSceneHandles,
     );
     if (!sceneRes.ok) {
-      rollbackSpawn(
-        world,
-        [],
-        [...resolvedSceneHandles.values()],
-        [...guidToHandle.values()],
-        sharedRefBaseline,
-      );
+      rollbackSpawn(world, [], [...resolvedSceneHandles.values(), ...guidToHandle.values()]);
       return sceneRes;
     }
-    internedHandles.push(...guidToHandle.values());
+    allocHandles.push(...guidToHandle.values());
     allocHandles.push(...resolvedSceneHandles.values());
     if (sceneGuidKey !== undefined) {
       registry._originIndex.set(sceneRes.value, sceneGuidKey);
@@ -434,6 +529,10 @@ export function instantiateFlat<T extends SceneAsset>(
       if (typeof source === 'number') {
         return ok(source as unknown as Handle<'SceneAsset', 'shared'>);
       }
+      const resolved = resolvedSceneHandles.get(source.toLowerCase());
+      if (resolved !== undefined) {
+        return ok(resolved as unknown as Handle<'SceneAsset', 'shared'>);
+      }
       return err({
         code: 'asset-not-found' as const,
         expected: `mount source GUID ${source} resolved before instantiate`,
@@ -442,7 +541,7 @@ export function instantiateFlat<T extends SceneAsset>(
     });
     const sceneInst = worldInstantiateSceneFlat(world, sharedHandle);
     if (!sceneInst.ok) {
-      rollbackSpawn(world, [], allocHandles, internedHandles, sharedRefBaseline);
+      rollbackSpawn(world, [], allocHandles);
       return sceneInst as unknown as Result<EntityHandle[], AssetError | PackError | EcsError>;
     }
     roots = sceneInst.value.roots;
@@ -489,13 +588,7 @@ export function instantiateFlat<T extends SceneAsset>(
     for (const root of hookRoots) {
       const jointResolveResult = hook(world, resolver, root);
       if (!jointResolveResult.ok) {
-        rollbackSpawn(
-          world,
-          [...roots, ...mountEntities],
-          allocHandles,
-          internedHandles,
-          sharedRefBaseline,
-        );
+        rollbackSpawn(world, [...roots, ...mountEntities], allocHandles);
         return { ok: false, error: jointResolveResult.error } as unknown as Result<
           EntityHandle[],
           AssetError | PackError | EcsError
@@ -504,408 +597,10 @@ export function instantiateFlat<T extends SceneAsset>(
     }
   }
 
+  // Spawned component columns retain their resources; the flat top-level
+  // scene has no source column to own these temporary producer grants.
+  for (const raw of allocHandles) void world.sharedRefs.release(raw as never);
   return ok(roots);
-}
-
-/**
- * m3-i2: Recursively resolve mounts[].source GUID strings.
- * Returns a PackError-shaped object on cycle (R-9) or AssetError
- * on child resolution failure.
- *
- * feat-20260713 M3 / w13: also down-drills `mounts[].overrides[].value`,
- * resolving any GUID string bound to a `shared<...>` / `array<shared<...>>`
- * schema field to a live handle (D-2). `guidToHandle` is the caller's per-scene
- * dedup map (shared with the entity-field resolution in `_resolveSceneGuids`) so
- * the same catalogued GUID mints exactly one user-tier handle across entity
- * fields and override values (D-15/D-17 dedup contract); it defaults to a fresh
- * map so standalone callers keep working. Override resolution runs for every
- * mount regardless of `source` branch — an unresolvable GUID fail-fasts here,
- * before any spawn (P3: no half-initialized member).
- */
-export function resolveMountsRec(
-  registry: AssetRegistry,
-  mounts: readonly SceneInstanceMount[],
-  world: World,
-  visited: Set<string>,
-  guidToHandle: Map<string, number> = new Map(),
-  resolvedSceneHandles: Map<string, number> = new Map(),
-): Result<
-  SceneInstanceMount[],
-  | AssetError
-  | {
-      readonly code: 'pack-cyclic-reference';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: {
-        readonly code: 'pack-cyclic-reference';
-        readonly kind: 'mount-asset';
-        readonly cycle: readonly string[];
-      };
-    }
-  | ScenePublicationFenceError
-> {
-  const out: SceneInstanceMount[] = [];
-  for (const m of mounts) {
-    if (m.publicationFence !== undefined) {
-      const parsedFence = parseScenePublicationFence(m.publicationFence);
-      if (!parsedFence.ok) return parsedFence;
-      const handleSourceGuid =
-        typeof m.source === 'string'
-          ? m.source
-          : (() => {
-              const resolved = resolveAssetHandle<SceneAsset>(world, m.source as never);
-              return resolved.ok && resolved.value.kind === 'scene'
-                ? registry._guidForAsset(resolved.value)
-                : undefined;
-            })();
-      const sourceGuid =
-        handleSourceGuid ??
-        (typeof m.source === 'string'
-          ? undefined
-          : catalogSourceGuidForFence(registry, parsedFence.value));
-      if (sourceGuid === undefined) {
-        return err({
-          code: 'asset-generation-fence-mismatch',
-          phase: 'instantiate',
-          hint: 'publication-fenced mount has no source GUID identity for validation',
-          expected: parsedFence.value,
-          retryable: true,
-          recoveryActions: ['continue-last-known-good', 'retry-rebuild', 'fresh-reopen'],
-        });
-      }
-      const currentFence = scenePublicationFenceFromCatalog(
-        catalogEntriesForFence(registry),
-        sourceGuid,
-      );
-      if (!currentFence.ok) return currentFence;
-      const matches = compareScenePublicationFences(parsedFence.value, currentFence.value);
-      if (!matches.ok) return matches;
-    }
-    let componentPatch:
-      | { components: NonNullable<SceneInstanceMount['components']> }
-      | Record<string, never> = {};
-    if (m.components !== undefined) {
-      const resolvedComponents = resolveMountComponents(
-        registry,
-        world,
-        m.components,
-        guidToHandle,
-      );
-      if (!resolvedComponents.ok) return resolvedComponents;
-      componentPatch = {
-        components: resolvedComponents.value as NonNullable<SceneInstanceMount['components']>,
-      };
-    }
-    // Resolve override value GUIDs first — applies to every mount regardless of
-    // the source branch below (a number-source mount can still carry overrides).
-    let overridePatch: { overrides: readonly MountOverride[] } | Record<string, never> = {};
-    if (m.overrides !== undefined && m.overrides.length > 0) {
-      const ro = resolveMountOverrides(registry, world, m.overrides, guidToHandle);
-      if (!ro.ok) return ro;
-      overridePatch = { overrides: ro.value };
-    }
-
-    const src = m.source;
-    // m3-i3: if source is already a number (live handle from a prior
-    // resolution pass), pass through unchanged.
-    if (typeof src === 'number') {
-      out.push({ ...m, ...componentPatch, ...overridePatch });
-      continue;
-    }
-
-    // source is a GUID string — resolve it.
-    const guidKey = src.toLowerCase();
-
-    // Cycle detection.
-    if (visited.has(guidKey)) {
-      return err({
-        code: 'pack-cyclic-reference' as const,
-        expected: 'no circular mount.source GUID references',
-        hint: PACK_ERROR_HINTS['pack-cyclic-reference'],
-        detail: {
-          code: 'pack-cyclic-reference' as const,
-          kind: 'mount-asset' as const,
-          cycle: [...visited, guidKey],
-        },
-      });
-    }
-
-    // Look up child scene.
-    const childEnv = registry.assetCatalog.get(guidKey);
-    if (childEnv === undefined) {
-      // Not catalogued — pass through as-is (overrides still resolved above).
-      out.push({ ...m, ...componentPatch, ...overridePatch });
-      continue;
-    }
-    const childPayload = childEnv.payload;
-    if (
-      typeof childPayload !== 'object' ||
-      childPayload === null ||
-      (childPayload as Asset).kind !== 'scene'
-    ) {
-      out.push({ ...m, ...componentPatch, ...overridePatch });
-      continue;
-    }
-
-    const cachedChildHandle = resolvedSceneHandles.get(guidKey);
-    if (cachedChildHandle !== undefined) {
-      out.push({
-        ...m,
-        source: cachedChildHandle,
-        ...componentPatch,
-        ...overridePatch,
-      } as SceneInstanceMount);
-      continue;
-    }
-
-    // Resolve mounts recursively.
-    const childVisited = new Set(visited);
-    // Don't add guidKey to visited here — _resolveSceneGuids will do it
-    // via its own _visitedMountGuids parameter.
-    const childRes = registry._resolveSceneGuids(
-      childPayload as SceneAsset,
-      world,
-      guidKey,
-      childVisited,
-      guidToHandle,
-      resolvedSceneHandles,
-      true,
-    );
-
-    if (!childRes.ok) {
-      // Propagate child resolution error.
-      return childRes as unknown as Result<SceneInstanceMount[], AssetError>;
-    }
-
-    // Build resolved child with its own mounts.
-    const resolvedChild: SceneAsset = {
-      kind: 'scene',
-      entities: childRes.value.entities,
-      ...(childRes.value.mounts !== undefined && childRes.value.mounts.length > 0
-        ? { mounts: childRes.value.mounts }
-        : {}),
-    } as SceneAsset;
-
-    // allocSharedRef + register in originIndex (D-7).
-    const chRaw = unwrapHandle(world.allocSharedRef('SceneAsset', resolvedChild));
-    resolvedSceneHandles.set(guidKey, chRaw);
-    registry._originIndex.set(resolvedChild, guidKey);
-
-    // Replace source with live handle number (D-5: source is number|string).
-    out.push({
-      ...m,
-      source: chRaw,
-      ...componentPatch,
-      ...overridePatch,
-    } as SceneInstanceMount);
-  }
-  return ok(out);
-}
-
-function resolveMountComponents(
-  registry: AssetRegistry,
-  world: World,
-  components: NonNullable<SceneInstanceMount['components']>,
-  guidToHandle: Map<string, number>,
-): Result<Record<string, Record<string, unknown>>, AssetError> {
-  const source = components as Record<string, Record<string, unknown>>;
-  const output: Record<string, Record<string, unknown>> = {};
-  for (const [componentName, fields] of Object.entries(source))
-    output[componentName] = { ...fields };
-  const entries = extractSceneEntityHandleGuids(world.components.entries(), [
-    { localId: 0, components: source },
-  ]);
-  for (const entry of entries) {
-    const fieldPath =
-      `${entry.componentName}.${entry.fieldName}` +
-      (entry.arrayIndex === undefined ? '' : `[${entry.arrayIndex}]`);
-    const resolved = resolveHandleGuid(
-      registry,
-      world,
-      entry.guidString,
-      guidToHandle,
-      fieldPath,
-      'mount.components',
-    );
-    if (!resolved.ok) return resolved;
-    const fields = output[entry.componentName];
-    if (fields === undefined) continue;
-    if (entry.arrayIndex === undefined) {
-      fields[entry.fieldName] = resolved.value;
-      continue;
-    }
-    const current = fields[entry.fieldName];
-    if (!Array.isArray(current)) continue;
-    const next = [...current];
-    next[entry.arrayIndex] = resolved.value;
-    fields[entry.fieldName] = next;
-  }
-  return ok(output);
-}
-
-/**
- * Resolve one GUID string to a live user-tier handle (feat-20260713 M3 / w13
- * SSOT). Parses the GUID, uses `guidToHandle` as the per-resolution fast path,
- * and on a miss looks the envelope up in the catalog + interns its shared ref
- * by `(target, payload identity)` in the World. An unparseable / uncatalogued
- * GUID returns `AssetError(code='asset-not-found')` with a breadcrumb hint
- * (`fieldPath` + `location`) for AI-user debuggability (P3). Shared by the
- * entity-field fallback in `_resolveSceneGuids` and the override-value down-drill
- * in {@link resolveMountOverrides} so the parse/dedup/lookup/mint idiom has one
- * home (architecture-principles §1 SSOT).
- */
-export function resolveHandleGuid(
-  registry: AssetRegistry,
-  world: World,
-  guidString: string,
-  guidToHandle: Map<string, number>,
-  fieldPath: string,
-  location: string,
-): Result<number, AssetError> {
-  const guidRes = AssetGuid.parse(guidString);
-  if (!guidRes.ok) {
-    return err(
-      new AssetError({
-        code: 'asset-not-found',
-        expected: `valid GUID string for field ${fieldPath}`,
-        hint: `GUID "${guidString}" could not be parsed; at ${location}, field=${fieldPath}`,
-      }),
-    );
-  }
-  const guidKey = guidString.toLowerCase();
-  let slot = guidToHandle.get(guidKey);
-  if (slot === undefined) {
-    const envelope = registry.assetCatalog.get(guidKey);
-    if (envelope === undefined) {
-      return err(
-        new AssetError({
-          code: 'asset-not-found',
-          expected: `GUID ${guidString} catalogued in AssetRegistry`,
-          hint:
-            `GUID ${guidString} not catalogued; ` +
-            `call loadByGuid('${guidString}') before instantiate; ` +
-            `at ${location}, field=${fieldPath}`,
-        }),
-      );
-    }
-    slot = unwrapHandle(world.internSharedRef(envelope.payload.kind, envelope.payload));
-    guidToHandle.set(guidKey, slot);
-  }
-  return ok(slot);
-}
-
-/**
- * feat-20260713 M3 / w13: resolve every GUID string inside a mount's
- * `overrides[].value` to a live handle, returning a new overrides array whose
- * shared fields hold numeric handles (D-2 — the ecs apply loop never sees a
- * GUID). Identification is delegated to the shared w12 core
- * ({@link extractMountOverrideHandleGuids}); resolution reuses the
- * `envelope.payload → world.internSharedRef` path with the caller's
- * `guidToHandle` fast path (D-15/D-17). Stop-on-first-error: an unparseable /
- * uncatalogued GUID
- * returns `AssetError(code='asset-not-found')` with a breadcrumb hint (P3),
- * aborting before any spawn. Number elements pass through untouched (D-8).
- */
-function resolveMountOverrides(
-  registry: AssetRegistry,
-  world: World,
-  overrides: readonly MountOverride[],
-  guidToHandle: Map<string, number>,
-): Result<MountOverride[], AssetError> {
-  const entries = extractMountOverrideHandleGuids(world.components.entries(), overrides);
-  if (entries.length === 0) return ok([...overrides]);
-
-  // resolvedMap key: `${overrideIndex}|${fieldName}|${arrayIndex ?? ''}`.
-  const resolvedMap = new Map<string, number>();
-  for (const entry of entries) {
-    const fieldPath =
-      `${entry.componentName}.${entry.fieldName}` +
-      (entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : '');
-    const slot = resolveHandleGuid(
-      registry,
-      world,
-      entry.guidString,
-      guidToHandle,
-      fieldPath,
-      `mount override index=${entry.overrideIndex}`,
-    );
-    if (!slot.ok) return slot;
-    resolvedMap.set(
-      overrideFieldKey(entry.overrideIndex, entry.fieldName, entry.arrayIndex),
-      slot.value,
-    );
-  }
-
-  // Reconstruct: substitute resolved handles back into each override's value.
-  const out: MountOverride[] = [];
-  for (let ovIdx = 0; ovIdx < overrides.length; ovIdx++) {
-    out.push(reconstructOverride(overrides[ovIdx] as MountOverride, ovIdx, resolvedMap));
-  }
-  return ok(out);
-}
-
-/** resolvedMap key for a resolved override handle. */
-function overrideFieldKey(overrideIndex: number, fieldName: string, arrayIndex?: number): string {
-  return `${overrideIndex}|${fieldName}|${arrayIndex ?? ''}`;
-}
-
-/**
- * Rebuild one override with its shared-field GUID strings replaced by resolved
- * handles from `resolvedMap`. Preserves object identity when nothing resolved
- * (no shared GUID in this override). Patch form substitutes the single `value`;
- * add form substitutes each key of the value map.
- */
-function reconstructOverride(
-  ov: MountOverride,
-  ovIdx: number,
-  resolvedMap: Map<string, number>,
-): MountOverride {
-  if (ov.field !== undefined) {
-    const nv = reconstructFieldValue(ovIdx, ov.field, ov.value, resolvedMap);
-    return nv === ov.value ? ov : { ...ov, value: nv };
-  }
-  const value = ov.value;
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return ov;
-  const map = value as Record<string, unknown>;
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const key of Object.keys(map)) {
-    const nv = reconstructFieldValue(ovIdx, key, map[key], resolvedMap);
-    next[key] = nv;
-    if (nv !== map[key]) changed = true;
-  }
-  return changed ? { ...ov, value: next } : ov;
-}
-
-/**
- * Resolve one field value: a scalar `shared<T>` string becomes its handle; an
- * `array<shared<T>>` becomes an array with resolved handles substituted and
- * already-numeric elements passed through (D-8). Non-shared / unresolved values
- * pass through unchanged (identity preserved).
- */
-function reconstructFieldValue(
-  ovIdx: number,
-  fieldName: string,
-  value: unknown,
-  resolvedMap: Map<string, number>,
-): unknown {
-  const scalar = resolvedMap.get(overrideFieldKey(ovIdx, fieldName));
-  if (scalar !== undefined) return scalar;
-  if (Array.isArray(value)) {
-    const arr: unknown[] = [];
-    let anyResolved = false;
-    for (let i = 0; i < value.length; i++) {
-      const resolved = resolvedMap.get(overrideFieldKey(ovIdx, fieldName, i));
-      if (resolved !== undefined) {
-        arr.push(resolved);
-        anyResolved = true;
-      } else {
-        arr.push(value[i]);
-      }
-    }
-    return anyResolved ? arr : value;
-  }
-  return value;
 }
 
 /**
@@ -927,7 +622,7 @@ export function buildSceneChildContext(
   sceneGuidKey?: string,
 ):
   | {
-      sceneEntityId?: number;
+      sceneEntityKey?: string;
       componentField?: string;
       sourceField?: {
         componentName?: string;
@@ -957,16 +652,16 @@ export function buildSceneChildContext(
   }
   let edgeResult:
     | {
-        sceneEntityId?: number;
+        sceneEntityKey?: string;
         componentField?: string;
       }
     | undefined;
   if (sceneEnvelope?.refs !== undefined) {
     for (const ref of sceneEnvelope.refs) {
       if (ref.guid.toLowerCase() === subGuidKey) {
-        const { sceneEntityId, sourceField } = ref;
+        const { sceneEntityKey, sourceField } = ref;
         const result: {
-          sceneEntityId?: number;
+          sceneEntityKey?: string;
           componentField?: string;
           sourceField?: {
             componentName?: string;
@@ -974,8 +669,8 @@ export function buildSceneChildContext(
             arrayIndex?: number;
           };
         } = {};
-        if (sceneEntityId !== undefined) {
-          result.sceneEntityId = sceneEntityId;
+        if (sceneEntityKey !== undefined) {
+          result.sceneEntityKey = sceneEntityKey;
         }
         if (sourceField?.componentName !== undefined && sourceField?.fieldName !== undefined) {
           result.componentField =
@@ -986,11 +681,11 @@ export function buildSceneChildContext(
           result.sourceField = sourceField;
         }
         // A rich edge (dev register path) carries full detail — return now.
-        if (result.sceneEntityId !== undefined || result.componentField !== undefined) {
+        if (result.sceneEntityKey !== undefined || result.componentField !== undefined) {
           return result;
         }
         // feat-20260622 M4 / w14: a GUID-only edge (prod path: on-disk refs[]
-        // strip sourceField / sceneEntityId at the serialization boundary, w7
+        // strip sourceField / sceneEntityKey at the serialization boundary, w7
         // D-10) carries no per-entity detail. Keep this empty-but-defined
         // result as the fallback, then try the entity walk below to recover
         // the entity localId + component.field path (D-7 / B-8). The walk
@@ -1005,17 +700,11 @@ export function buildSceneChildContext(
   // Backward compat: fall back to entity walk when the envelope edge carries
   // no per-entity detail (prod path: GUID-only refs[]) or no envelope is
   // available (e.g. direct catalog() registration with scene payload, no refs).
-  const entries = extractSceneEntityHandleGuids(
-    registry.componentCatalog,
-    scene.entities as unknown as ReadonlyArray<{
-      readonly localId: number;
-      readonly components: Record<string, Record<string, unknown>>;
-    }>,
-  );
+  const entries = extractSceneEntityHandleGuids(registry.componentCatalog, scene.entities);
   for (const entry of entries) {
     if (entry.guidString.toLowerCase() === subGuidKey) {
       return {
-        sceneEntityId: entry.entityLocalId,
+        sceneEntityKey: entry.entityKey,
         componentField: `${entry.componentName}.${entry.fieldName}${entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : ''}`,
         // feat-20260622 verify r1: also surface the recovered provenance in
         // structured parts so the failure `.detail` can expose them for AI
@@ -1044,13 +733,14 @@ export function buildBreadcrumbHint(
   parentKind: string,
   subGuidKey: string,
   parentContext?: {
-    sceneEntityId?: number;
+    sceneEntityKey?: string;
     componentField?: string;
   },
 ): string {
   let breadcrumb = `sub-asset ${subGuidKey} referenced by ${parentKind} ${parentGuidKey}`;
-  if (parentContext?.sceneEntityId !== undefined && parentContext?.componentField !== undefined) {
-    breadcrumb += ` (entity ${parentContext.sceneEntityId}, field ${parentContext.componentField})`;
+  const entity = parentContext?.sceneEntityKey;
+  if (entity !== undefined && parentContext?.componentField !== undefined) {
+    breadcrumb += ` (entity ${entity}, field ${parentContext.componentField})`;
   }
   return breadcrumb;
 }

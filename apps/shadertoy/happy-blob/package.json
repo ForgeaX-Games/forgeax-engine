@@ -42,6 +42,7 @@
     }
   },
   "dependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
@@ -53,7 +54,7 @@
   "devDependencies": {
     "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0",
     "@webgpu/types": "^0.1.71"
   }

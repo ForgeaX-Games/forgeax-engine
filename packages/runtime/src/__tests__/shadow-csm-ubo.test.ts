@@ -5,15 +5,17 @@
 // independent of runtime cascadeCount. Validates std140 byte offsets for
 // lightViewProj[4], splitPlanes[4], cascadeCount, cascadeBlend.
 //
-// feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
-// the View UBO grew 592 -> 784 B (148 -> 196 f32). The directional cascade
+// feat-20260827-directional-csm-pcss-quality M1: the View UBO keeps its
+// fixed View payload (1168 B after the fog lanes) and 1280 B slot while the directional filter carrier
+// reuses the tail pad. The directional cascade
 // offsets [0..128] are byte-for-byte UNCHANGED; the per-spot fragment-read
 // `spotLightViewProj` array<mat4x4<f32>,4> (256 B) folded into the tail at
 // byte 528 (float 132), replacing the former zero tail-pad and removing the
 // standalone @group(0) binding 9 uniform buffer that overflowed the WebGL2
 // fallback fragment uniform-buffer budget.
 //
-// Layout (784 B std140, 196 f32):
+// Layout (1168 B View payload and 1280 B slot; the directional prefix remains
+// byte-compatible with the 784 B Spot-matrix boundary):
 //   [  0.. 16) worldViewProj   mat4x4<f32>  (align 16, size 64)
 //   [ 16.. 19) lightDir        vec3<f32>    (align 16, 12 + 4 pad)
 //   [ 20.. 22) lightColor      vec3<f32>    (align 16, 12 + 4 pad)
@@ -31,30 +33,28 @@
 //   [125]      cascadeBlend    f32          (align 4, size 4)
 //   [126]      depthBias       f32          (align 4, size 4)
 //   [127]      normalBias      f32          (align 4, size 4)
-//   [128]      pcfKernelSize   f32          (align 4, size 4)
-//   [129..131] align padding   f32[3]       (mat4 array align 16)
+//   [128..131] directionalShadowFilter vec4<f32> (profile, radius, penumbra, reserved)
 //   [132..195] spotLightViewProj array<mat4x4<f32>,4> (align 16, size 256)
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { VIEW_UNIFORM_BYTES } from '../../../render/src/record/view-ubo';
 
-const VIEW_UBO_FLOAT_COUNT = 196;
-const VIEW_UBO_BYTES = 784;
+const VIEW_UBO_FLOAT_COUNT = VIEW_UNIFORM_BYTES / 4;
+const VIEW_UBO_BYTES = VIEW_UNIFORM_BYTES;
 // feat-20260625 w25: spot lightViewProj array folded into the View UBO tail.
-const OFFSET_SPOT_LIGHT_VIEW_PROJ = 132; // byte 528 (16 B-aligned after pcfKernelSize)
+const OFFSET_SPOT_LIGHT_VIEW_PROJ = 132; // byte 528 (16 B-aligned after filter carrier)
 const SPOT_LVP_LANE_COUNT = 4;
 const SPOT_LVP_FLOATS_PER_LANE = 16;
 
-// feat-20260621-merge-directionallightshadow-into-directionallight M3:
+// feat-20260827-directional-csm-pcss-quality M1:
 // the merged DirectionalLight's shadow tail-pad slots — depthBias [126]/byte504,
-// normalBias [127]/byte508, pcfKernelSize [128]/byte512 (zero byte-layout growth;
-// three previously-zero tail-pad floats are consumed). The 5.3-production-shadow-
-// demos AC-14 pcfKernelSize lane moved from [126] to [128] when depthBias/normalBias
-// merged in ahead of it.
+// normalBias [127]/byte508, and the four-float directional filter carrier
+// [128..131]. The Spot matrix array remains at [132..195].
 const OFFSET_DEPTH_BIAS = 126; // byte 504
 const OFFSET_NORMAL_BIAS = 127; // byte 508
-const OFFSET_PCF_KERNEL_SIZE = 128; // byte 512
+const OFFSET_DIRECTIONAL_FILTER = 128; // byte 512
 
 const F32_BYTES = 4;
 
@@ -79,30 +79,30 @@ const SPLIT_STRIDE_FLOATS = 4;
 
 describe('View UBO std140 layout (w14)', () => {
   describe('size invariants', () => {
-    it('UBO total size is 784 B (196 f32)', () => {
-      expect(VIEW_UBO_FLOAT_COUNT).toBe(196);
+    it('UBO total size is 1168 B (292 f32)', () => {
+      expect(VIEW_UBO_FLOAT_COUNT).toBe(292);
       expect(VIEW_UBO_BYTES).toBe(VIEW_UBO_FLOAT_COUNT * F32_BYTES);
-      expect(VIEW_UBO_BYTES).toBe(784);
+      expect(VIEW_UBO_BYTES).toBe(1168);
     });
 
     it('UBO size is fixed — independent of cascadeCount', () => {
-      // The host always allocates 784 B regardless of whether cascadeCount
+      // The host always allocates 1168 B regardless of whether cascadeCount
       // is 1, 2, 3, or 4 at runtime. This validates AC-08.
       const sizeForN1 = VIEW_UBO_FLOAT_COUNT * F32_BYTES; // cascadeCount=1
       const sizeForN4 = VIEW_UBO_FLOAT_COUNT * F32_BYTES; // cascadeCount=4
       expect(sizeForN1).toBe(sizeForN4);
-      expect(sizeForN1).toBe(784);
+      expect(sizeForN1).toBe(1168);
     });
 
     it('spotLightViewProj array lands at byte 528 (float 132), 16 B-aligned, last field', () => {
       // feat-20260625 w25: the 4-lane spot perspective matrix array folds into
-      // the View UBO tail after pcfKernelSize (float 128 / byte 512), 16 B-aligned
+      // the View UBO tail after the directional filter carrier, 16 B-aligned
       // so it starts at byte 528 (float 132). It is the last struct field.
       expect(OFFSET_SPOT_LIGHT_VIEW_PROJ * F32_BYTES).toBe(528);
       expect((OFFSET_SPOT_LIGHT_VIEW_PROJ * F32_BYTES) % 16).toBe(0);
       const spotArrayEndFloat =
         OFFSET_SPOT_LIGHT_VIEW_PROJ + SPOT_LVP_LANE_COUNT * SPOT_LVP_FLOATS_PER_LANE;
-      expect(spotArrayEndFloat).toBe(VIEW_UBO_FLOAT_COUNT);
+      expect(spotArrayEndFloat).toBe(196);
       expect(spotArrayEndFloat * F32_BYTES).toBe(784);
     });
   });
@@ -220,15 +220,8 @@ describe('View UBO std140 layout (w14)', () => {
   });
 });
 
-// feat-20260621-learn-render-5-3-production-shadow-demos M0 / AC-14: the host
-// record stage must write pcfKernelSize into the tail-pad slot [126], and the
-// WGSL View struct must declare the matching `pcfKernelSize : f32` immediately
-// after cascadeBlend (single SSOT, append-at-tail, plan-strategy D-0). These
-// are read against the real source the compiler/host use (mirrors the
-// shadow-csm-tile-consistency antipattern guard: never re-declare and test a
-// formula against itself). RED until M0-T-IMPL-RECORD + M0-T-IMPL-WGSL-STRUCT
-// land; the slot was previously a zero tail-pad float (no record write existed).
-describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
+// M1-T05: read the real host and WGSL sources so the frozen ABI cannot drift.
+describe('directional filter carrier tail-pad wiring (M1-T05)', () => {
   const recordSrc = readFileSync(
     fileURLToPath(new URL('../../../render/src/record/view-ubo.ts', import.meta.url)),
     'utf8',
@@ -238,41 +231,47 @@ describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
     'utf8',
   );
 
-  it('shadow tail floats [126..128] at fixed offsets, before the spot matrix array', () => {
+  it('shadow tail floats [126..131] at fixed offsets, before the spot matrix array', () => {
     expect(OFFSET_DEPTH_BIAS * F32_BYTES).toBe(504);
     expect(OFFSET_NORMAL_BIAS * F32_BYTES).toBe(508);
-    expect(OFFSET_PCF_KERNEL_SIZE * F32_BYTES).toBe(512);
+    expect(OFFSET_DIRECTIONAL_FILTER * F32_BYTES).toBe(512);
     expect(OFFSET_DEPTH_BIAS).toBeGreaterThan(OFFSET_CASCADE_BLEND);
-    expect(OFFSET_PCF_KERNEL_SIZE).toBeLessThan(VIEW_UBO_FLOAT_COUNT);
-    // feat-20260625 w25: the shadow bias floats stay at [126..128]; the spot
-    // matrix array follows them at float 132 (byte 528). The struct grew to
-    // 196 f32 / 784 B to carry the folded-in spot matrices (was 148 / 592).
-    expect(OFFSET_PCF_KERNEL_SIZE).toBeLessThan(OFFSET_SPOT_LIGHT_VIEW_PROJ);
-    expect(VIEW_UBO_FLOAT_COUNT).toBe(196);
-    expect(VIEW_UBO_BYTES).toBe(784);
+    expect(OFFSET_DIRECTIONAL_FILTER + 4).toBe(OFFSET_SPOT_LIGHT_VIEW_PROJ);
+    expect(OFFSET_DIRECTIONAL_FILTER).toBeLessThan(OFFSET_SPOT_LIGHT_VIEW_PROJ);
+    expect(VIEW_UBO_FLOAT_COUNT).toBe(292);
+    expect(VIEW_UBO_BYTES).toBe(1168);
   });
 
-  it('record writes the merged shadow tail-pad floats [126]/[127]/[128]', () => {
+  it('record writes the merged shadow tail-pad floats [126]/[127]/[128..131]', () => {
     expect(recordSrc).toMatch(/viewPayload\[126\]\s*=\s*lights\.depthBias/);
     expect(recordSrc).toMatch(/viewPayload\[127\]\s*=\s*lights\.normalBias/);
-    expect(recordSrc).toMatch(
-      /viewPayload\[128\]\s*=\s*clampPcfKernelSize\(lights\.pcfKernelSize\)/,
-    );
+    expect(recordSrc).toMatch(/viewPayload\[128\]/);
+    expect(recordSrc).toMatch(/viewPayload\[129\]/);
+    expect(recordSrc).toMatch(/viewPayload\[130\]/);
+    expect(recordSrc).toMatch(/viewPayload\[131\]/);
+    expect(recordSrc).not.toMatch(/lights\.pcfKernelSize/);
   });
 
   it('record carries the folded spot matrices in the complete View UBO payload (w25)', () => {
     // feat-20260625 w25: the per-spot fragment-read lightViewProj matrices fold
     // into the View UBO tail. The current View struct also carries temporal and
-    // fog fields, so the complete payload is 240 floats.
-    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*240/);
+    // cloud projection, clipping and fog fields, so the complete payload is 292 floats.
+    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*VIEW_UNIFORM_BYTES \/ 4/);
     // The spot matrix array is written at base float 132.
     expect(recordSrc).toMatch(/SPOT_LVP_BASE_FLOAT\s*=\s*132/);
   });
 
-  it('common.wgsl View struct declares depthBias/normalBias/pcfKernelSize after cascadeBlend', () => {
+  it('common.wgsl View struct declares the directional filter vec4 after biases', () => {
     const m = wgslSrc.match(
-      /cascadeBlend\s*:\s*f32\s*,\s*depthBias\s*:\s*f32\s*,\s*normalBias\s*:\s*f32\s*,\s*pcfKernelSize\s*:\s*f32\s*,/,
+      /cascadeBlend\s*:\s*f32\s*,\s*depthBias\s*:\s*f32\s*,\s*normalBias\s*:\s*f32\s*,\s*directionalShadowFilter\s*:\s*vec4<f32>\s*,/,
     );
     expect(m).not.toBeNull();
+  });
+
+  it('keeps one View binding and removes the retired spot matrix binding', () => {
+    expect(wgslSrc.match(/@group\(0\) @binding\(0\) var<uniform> view/g)).toHaveLength(1);
+    expect(wgslSrc).not.toMatch(
+      /@group\(0\)\s*@binding\(9\)\s*var<uniform>\s+spotLightViewProj\s*:/,
+    );
   });
 });

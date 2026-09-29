@@ -18,6 +18,8 @@ export interface ComponentSchemaDefinition {
 export interface ComponentPolicy {
   readonly transient: boolean;
   readonly meta: Record<string, unknown>;
+  /** Components that are materialized whenever this component is added. */
+  readonly requires: readonly Component[];
 }
 
 /** Immutable schema reflection plus non-token policy projection. */
@@ -58,6 +60,55 @@ export function componentDefinition(component: Component): ComponentDefinition {
     throw new Error(`Component definition missing for '${component.name}'.`);
   }
   return definition;
+}
+
+/** Read the generic structural requirements declared by one component. */
+export function componentRequirements(component: Component): readonly Component[] {
+  // Keep invalid/foreign tokens on the ordinary preflight error path. The
+  // expansion helper runs before validation, so it must not turn a structured
+  // `component-not-defined` Result into an uncaught registry exception.
+  return definitions.definitions.get(component)?.policy.requires ?? [];
+}
+
+type ComponentDataLike = {
+  readonly component: Component;
+  readonly data: Partial<Record<string, unknown>>;
+};
+
+/**
+ * Expand component requirements once at the structural boundary.
+ *
+ * Explicit component data wins and is never duplicated. Requirements are
+ * appended in declaration order, and the same identity set also terminates a
+ * malformed dependency cycle without a per-frame scan.
+ */
+export function expandComponentRequirements<T extends ComponentDataLike>(
+  componentDatas: readonly T[],
+): T[] {
+  let hasRequirements = false;
+  for (const entry of componentDatas) {
+    if (componentRequirements(entry.component).length !== 0) {
+      hasRequirements = true;
+      break;
+    }
+  }
+  // Most structural operations use components without dependencies. Preserve
+  // that path without copying or allocating a Set; callers only consume the
+  // returned list and never mutate it.
+  if (!hasRequirements) return componentDatas as T[];
+
+  const expanded = [...componentDatas];
+  const seen = new Set<Component>(expanded.map((entry) => entry.component));
+  for (let index = 0; index < expanded.length; index++) {
+    const component = expanded[index]?.component;
+    if (component === undefined) continue;
+    for (const required of componentRequirements(component)) {
+      if (seen.has(required)) continue;
+      seen.add(required);
+      expanded.push({ component: required, data: {} } as T);
+    }
+  }
+  return expanded;
 }
 
 /**

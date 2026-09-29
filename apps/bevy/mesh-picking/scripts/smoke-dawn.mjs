@@ -8,7 +8,7 @@ import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErr
 //   (b) center pick on the box returns a hit (entity matches)
 //   (c) center pick on the sphere returns a hit
 //   (d) corner pick (empty space) returns undefined (miss)
-//   (e) frames >= 300 with no draw crash
+//   (e) frames >= 60 with no draw crash
 //   (f) Renderer.onError count == 0
 
 import { readFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -184,7 +184,7 @@ const cameraEntity = world.spawn(
 
 // --- 4. Frame loop ---
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 

@@ -1,7 +1,0 @@
-{
-  "id": "fps",
-  "name": "Sector Strike",
-  "schemaVersion": "1.0.0",
-  "entry": "main.ts",
-  "pointerLock": true
-}

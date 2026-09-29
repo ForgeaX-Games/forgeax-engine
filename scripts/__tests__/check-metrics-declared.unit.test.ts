@@ -16,11 +16,12 @@ function validMetrics() {
 function fixture(metrics: Record<string, unknown>) {
   const dir = mkdtempSync(join(tmpdir(), 'metrics-declared-'));
   mkdirSync(join(dir, 'packages', 'demo'), { recursive: true });
+  mkdirSync(join(dir, 'schemas'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
   writeFileSync(
-    join(dir, 'forgeax-metrics.schema.json'),
-    readFileSync(join(root, 'forgeax-metrics.schema.json')),
+    join(dir, 'schemas/forgeax-metrics.schema.json'),
+    readFileSync(join(root, 'schemas/forgeax-metrics.schema.json')),
   );
   writeFileSync(
     join(dir, 'packages', 'demo', 'package.json'),
@@ -67,7 +68,9 @@ describe('metrics declaration gate', () => {
   });
 
   it('keeps the gate vocabulary aligned with the metrics schema', () => {
-    const schema = JSON.parse(readFileSync(join(root, 'forgeax-metrics.schema.json'), 'utf8'));
+    const schema = JSON.parse(
+      readFileSync(join(root, 'schemas/forgeax-metrics.schema.json'), 'utf8'),
+    );
     const script = readFileSync(join(root, 'scripts/check-metrics-declared.mjs'), 'utf8');
     const schemaKinds = schema.required;
     expect(schemaKinds).toEqual(expect.arrayContaining(requiredKinds));

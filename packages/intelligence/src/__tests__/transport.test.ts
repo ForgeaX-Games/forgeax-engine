@@ -4,7 +4,9 @@ import { createIntelligenceRuntime } from '../runtime';
 import {
   bindIntelligencePort,
   createIntelligencePortClient,
+  type IntelligenceHostCommand,
   type IntelligenceMessagePort,
+  type IntelligenceRealmMessage,
 } from '../transport';
 import { type ActivitySink, activityId, type IntelligenceProvider } from '../types';
 
@@ -765,6 +767,493 @@ describe('intelligence MessagePort boundary', () => {
     }
   });
 
+  it('contains a synchronous Worker client close command failure and releases local transport', async () => {
+    let starts = 0;
+    let closeCalls = 0;
+    const provider: IntelligenceProvider = {
+      id: 'port.client-close-command.provider',
+      start() {
+        starts += 1;
+        return ok(undefined);
+      },
+      cancel() {
+        return ok(undefined);
+      },
+      async close() {
+        closeCalls += 1;
+      },
+    };
+    const runtime = createIntelligenceRuntime(provider);
+    const channel = new MessageChannel();
+    const rawClientPort = channel.port2;
+    const commandKinds: string[] = [];
+    let removeListenerCalls = 0;
+    let clientPortCloseCalls = 0;
+    const clientPort: IntelligenceMessagePort = {
+      postMessage(message) {
+        commandKinds.push(message.kind);
+        if (message.kind === 'intelligence-close') {
+          throw new Error('sentinel Worker client close command failure');
+        }
+        rawClientPort.postMessage(message);
+      },
+      addEventListener(type, listener) {
+        rawClientPort.addEventListener(type, listener as EventListener);
+      },
+      removeEventListener(type, listener) {
+        removeListenerCalls += 1;
+        rawClientPort.removeEventListener(type, listener as EventListener);
+      },
+      start() {
+        rawClientPort.start();
+      },
+      close() {
+        clientPortCloseCalls += 1;
+        rawClientPort.close();
+      },
+    };
+    const host = bindIntelligencePort(channel.port1 as unknown as IntelligenceMessagePort, runtime);
+    const client = createIntelligencePortClient(provider.id, clientPort, {
+      createActivityId: () => activityId('client-close-command-activity'),
+      createSessionId: () => 'client-close-command-session',
+    });
+
+    try {
+      const started = client.submit({ input: 'live close' });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      for (let attempt = 0; attempt < 20 && starts === 0; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(starts).toBe(1);
+
+      client.poll();
+      const closeTask = client.close();
+      expect(client.close()).toBe(closeTask);
+      await expect(closeTask).resolves.toBeUndefined();
+
+      expect(commandKinds).toEqual([
+        'intelligence-submit',
+        'intelligence-poll',
+        'intelligence-close',
+      ]);
+      expect(removeListenerCalls).toBe(1);
+      expect(clientPortCloseCalls).toBe(1);
+      expect(closeCalls).toBe(0);
+
+      const afterCloseSubmit = client.submit({ input: 'after close' });
+      expect(afterCloseSubmit.ok).toBe(false);
+      if (!afterCloseSubmit.ok) expect(afterCloseSubmit.error.code).toBe('intelligence-closed');
+      const afterCloseCancel = client.cancel(started.value.id);
+      expect(afterCloseCancel.ok).toBe(false);
+      if (!afterCloseCancel.ok) expect(afterCloseCancel.error.code).toBe('intelligence-closed');
+      expect(client.poll()).toEqual([]);
+
+      await expect(host.close()).resolves.toBeUndefined();
+      expect(closeCalls).toBe(1);
+    } finally {
+      rawClientPort.close();
+      await host.close().catch(() => undefined);
+    }
+  });
+
+  it('contains a synchronous Worker client submit command failure and clears local state', async () => {
+    const sinks = new Map<string, ActivitySink>();
+    const starts: string[] = [];
+    let closeCalls = 0;
+    const provider: IntelligenceProvider = {
+      id: 'port.client-submit-command.provider',
+      start(submission, sink) {
+        starts.push(submission.input);
+        sinks.set(String(submission.id), sink);
+        if (submission.input === 'live') sink.text('pending');
+        return ok(undefined);
+      },
+      cancel(id) {
+        sinks.get(String(id))?.cancelled();
+        return ok(undefined);
+      },
+      async close() {
+        closeCalls += 1;
+      },
+    };
+    const runtime = createIntelligenceRuntime(provider, {
+      limits: { maxConcurrentActivities: 1 },
+    });
+    const channel = new MessageChannel();
+    const rawClientPort = channel.port2;
+    const commandKinds: string[] = [];
+    let removeListenerCalls = 0;
+    let clientPortCloseCalls = 0;
+    const clientPort: IntelligenceMessagePort = {
+      postMessage(message) {
+        commandKinds.push(message.kind);
+        if (message.kind === 'intelligence-submit' && message.submission.input === 'submit-fault') {
+          throw new Error('sentinel Worker client submit command failure');
+        }
+        rawClientPort.postMessage(message);
+      },
+      addEventListener(type, listener) {
+        rawClientPort.addEventListener(type, listener as EventListener);
+      },
+      removeEventListener(type, listener) {
+        removeListenerCalls += 1;
+        rawClientPort.removeEventListener(type, listener as EventListener);
+      },
+      start() {
+        rawClientPort.start();
+      },
+      close() {
+        clientPortCloseCalls += 1;
+        rawClientPort.close();
+      },
+    };
+    const host = bindIntelligencePort(channel.port1 as unknown as IntelligenceMessagePort, runtime);
+    const client = createIntelligencePortClient(provider.id, clientPort, {
+      limits: { maxConcurrentActivities: 2 },
+      createActivityId: (() => {
+        let identity = 0;
+        return () => activityId(`client-submit-command-${++identity}`);
+      })(),
+      createSessionId: () => 'client-submit-command-session',
+    });
+
+    try {
+      const live = client.submit({ input: 'live' });
+      expect(live.ok).toBe(true);
+      const hostRejected = client.submit({ input: 'host-reject' });
+      expect(hostRejected.ok).toBe(true);
+      if (!live.ok || !hostRejected.ok) return;
+
+      let rejectionObserved = false;
+      const rejectionListener = (event: MessageEvent<unknown>): void => {
+        const value = event.data as { readonly kind?: unknown; readonly activityId?: unknown };
+        if (value.kind === 'intelligence-rejected' && value.activityId === hostRejected.value.id) {
+          rejectionObserved = true;
+        }
+      };
+      rawClientPort.addEventListener('message', rejectionListener);
+      rawClientPort.start();
+      for (let attempt = 0; attempt < 40 && !rejectionObserved; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      rawClientPort.removeEventListener('message', rejectionListener);
+      expect(rejectionObserved).toBe(true);
+
+      client.poll();
+      for (
+        let attempt = 0;
+        attempt < 40 && !commandKinds.includes('intelligence-poll');
+        attempt += 1
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      const failed = client.submit({ input: 'submit-fault' });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.error.code).toBe('intelligence-closed');
+
+      const commandCountAfterFailure = commandKinds.length;
+      expect(client.poll()).toEqual([]);
+      const afterFailure = client.submit({ input: 'after-failure' });
+      expect(afterFailure.ok).toBe(false);
+      if (!afterFailure.ok) expect(afterFailure.error.code).toBe('intelligence-closed');
+      const cancelAfterFailure = client.cancel(live.value.id);
+      expect(cancelAfterFailure.ok).toBe(false);
+      if (!cancelAfterFailure.ok) expect(cancelAfterFailure.error.code).toBe('intelligence-closed');
+      expect(commandKinds).toHaveLength(commandCountAfterFailure);
+      expect(starts).toEqual(['live']);
+      expect(removeListenerCalls).toBe(1);
+      expect(clientPortCloseCalls).toBe(1);
+
+      const closeTask = client.close();
+      expect(client.close()).toBe(closeTask);
+      await expect(closeTask).resolves.toBeUndefined();
+      await expect(host.close()).resolves.toBeUndefined();
+      expect(closeCalls).toBe(1);
+      sinks.get(String(live.value.id))?.complete('late');
+      expect(runtime.poll()).toEqual([]);
+    } finally {
+      rawClientPort.close();
+      await host.close().catch(() => undefined);
+    }
+  });
+
+  it('contains a synchronous Worker client cancel command failure and releases local transport', async () => {
+    const sinks = new Map<string, ActivitySink>();
+    let starts = 0;
+    let cancelCalls = 0;
+    let closeCalls = 0;
+    const provider: IntelligenceProvider = {
+      id: 'port.client-cancel-command.provider',
+      start(submission, sink) {
+        starts += 1;
+        sinks.set(String(submission.id), sink);
+        sink.text('staged-before-cancel-fault');
+        return ok(undefined);
+      },
+      cancel(id) {
+        cancelCalls += 1;
+        sinks.get(String(id))?.cancelled();
+        return ok(undefined);
+      },
+      async close() {
+        closeCalls += 1;
+      },
+    };
+    const runtime = createIntelligenceRuntime(provider, {
+      limits: { maxConcurrentActivities: 1, maxPollEvents: 1 },
+    });
+    const channel = new MessageChannel();
+    const rawHostPort = channel.port1;
+    const rawClientPort = channel.port2;
+    const clientCommands: string[] = [];
+    const hostCommands: string[] = [];
+    let stagedEventObserved = false;
+    let removeListenerCalls = 0;
+    let clientPortCloseCalls = 0;
+    rawHostPort.addEventListener('message', (event: MessageEvent<unknown>) => {
+      const message = event.data as { readonly kind?: unknown };
+      if (typeof message.kind === 'string') hostCommands.push(message.kind);
+    });
+    rawHostPort.start();
+    rawClientPort.addEventListener('message', (event: MessageEvent<unknown>) => {
+      const message = event.data as {
+        readonly kind?: unknown;
+        readonly events?: readonly unknown[];
+      };
+      if (message.kind === 'intelligence-events' && (message.events?.length ?? 0) > 0) {
+        stagedEventObserved = true;
+      }
+    });
+    rawClientPort.start();
+    const clientPort: IntelligenceMessagePort = {
+      postMessage(message) {
+        clientCommands.push(message.kind);
+        if (message.kind === 'intelligence-cancel') {
+          throw new Error('sentinel Worker client cancel command failure');
+        }
+        rawClientPort.postMessage(message);
+      },
+      addEventListener(type, listener) {
+        rawClientPort.addEventListener(type, listener as EventListener);
+      },
+      removeEventListener(type, listener) {
+        removeListenerCalls += 1;
+        rawClientPort.removeEventListener(type, listener as EventListener);
+      },
+      start() {
+        rawClientPort.start();
+      },
+      close() {
+        clientPortCloseCalls += 1;
+        rawClientPort.close();
+      },
+    };
+    const host = bindIntelligencePort(rawHostPort as unknown as IntelligenceMessagePort, runtime);
+    let activityIdentityCalls = 0;
+    let sessionIdentityCalls = 0;
+    const client = createIntelligencePortClient(provider.id, clientPort, {
+      limits: { maxConcurrentActivities: 1, maxPollEvents: 1 },
+      createActivityId: () => activityId(`client-cancel-command-${++activityIdentityCalls}`),
+      createSessionId: () => `client-cancel-command-session-${++sessionIdentityCalls}`,
+    });
+
+    try {
+      const started = client.submit({ input: 'live-cancel' });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      for (let attempt = 0; attempt < 40 && starts === 0; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(starts).toBe(1);
+
+      expect(client.poll()).toEqual([]);
+      for (let attempt = 0; attempt < 40 && !stagedEventObserved; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(stagedEventObserved).toBe(true);
+
+      let cancellation: ReturnType<typeof client.cancel> | undefined;
+      let thrown: unknown;
+      try {
+        cancellation = client.cancel(started.value.id);
+      } catch (cause) {
+        thrown = cause;
+      }
+      expect(thrown).toBeUndefined();
+      expect(cancellation?.ok).toBe(false);
+      if (cancellation !== undefined && !cancellation.ok) {
+        expect(cancellation.error.code).toBe('intelligence-closed');
+      }
+      expect(clientCommands).toEqual([
+        'intelligence-submit',
+        'intelligence-poll',
+        'intelligence-cancel',
+      ]);
+      expect(hostCommands).toEqual(['intelligence-submit', 'intelligence-poll']);
+      expect(cancelCalls).toBe(0);
+      expect(removeListenerCalls).toBe(1);
+      expect(clientPortCloseCalls).toBe(1);
+
+      const commandCountAfterFault = clientCommands.length;
+      expect(client.submit({ input: 'after-cancel-fault' }).ok).toBe(false);
+      expect(client.cancel(started.value.id).ok).toBe(false);
+      expect(client.poll()).toEqual([]);
+      expect(clientCommands).toHaveLength(commandCountAfterFault);
+      expect(activityIdentityCalls).toBe(1);
+      expect(sessionIdentityCalls).toBe(1);
+
+      await expect(host.close()).resolves.toBeUndefined();
+      expect(closeCalls).toBe(1);
+      sinks.get(String(started.value.id))?.text('late');
+      sinks.get(String(started.value.id))?.complete('late');
+      expect(client.poll()).toEqual([]);
+    } finally {
+      rawClientPort.close();
+      await host.close().catch(() => undefined);
+    }
+  });
+
+  it('contains a synchronous Worker client poll command failure and discards staged events', async () => {
+    const sinks = new Map<string, ActivitySink>();
+    const starts: string[] = [];
+    let closeCalls = 0;
+    const provider: IntelligenceProvider = {
+      id: 'port.client-poll-command.provider',
+      start(submission, sink) {
+        starts.push(submission.input);
+        sinks.set(String(submission.id), sink);
+        sink.text('staged-before-poll-fault');
+        return ok(undefined);
+      },
+      cancel(id) {
+        sinks.get(String(id))?.cancelled();
+        return ok(undefined);
+      },
+      async close() {
+        closeCalls += 1;
+      },
+    };
+    const runtime = createIntelligenceRuntime(provider, {
+      limits: { maxConcurrentActivities: 1, maxPollEvents: 1 },
+    });
+    const channel = new MessageChannel();
+    const rawHostPort = channel.port1;
+    const rawClientPort = channel.port2;
+    const commandKinds: string[] = [];
+    let pollRequests = 0;
+    let normalPollResponses = 0;
+    let stagedEventObserved = false;
+    let throwNextPoll = false;
+    let pollFaultThrows = 0;
+    let removeListenerCalls = 0;
+    let clientPortCloseCalls = 0;
+    rawHostPort.addEventListener('message', (event: MessageEvent<unknown>) => {
+      const message = event.data as { readonly kind?: unknown };
+      if (message.kind === 'intelligence-poll') pollRequests += 1;
+    });
+    rawHostPort.start();
+    rawClientPort.addEventListener('message', (event: MessageEvent<unknown>) => {
+      const message = event.data as {
+        readonly kind?: unknown;
+        readonly events?: readonly unknown[];
+      };
+      if (message.kind === 'intelligence-events') {
+        normalPollResponses += 1;
+        if ((message.events?.length ?? 0) > 0) {
+          stagedEventObserved = true;
+          throwNextPoll = true;
+        }
+      }
+    });
+    rawClientPort.start();
+    const clientPort: IntelligenceMessagePort = {
+      postMessage(message) {
+        commandKinds.push(message.kind);
+        if (message.kind === 'intelligence-poll' && throwNextPoll) {
+          throwNextPoll = false;
+          pollFaultThrows += 1;
+          throw new Error('sentinel Worker client poll command failure');
+        }
+        rawClientPort.postMessage(message);
+      },
+      addEventListener(type, listener) {
+        rawClientPort.addEventListener(type, listener as EventListener);
+      },
+      removeEventListener(type, listener) {
+        removeListenerCalls += 1;
+        rawClientPort.removeEventListener(type, listener as EventListener);
+      },
+      start() {
+        rawClientPort.start();
+      },
+      close() {
+        clientPortCloseCalls += 1;
+        rawClientPort.close();
+      },
+    };
+    const host = bindIntelligencePort(rawHostPort as unknown as IntelligenceMessagePort, runtime);
+    const client = createIntelligencePortClient(provider.id, clientPort, {
+      limits: { maxConcurrentActivities: 1, maxPollEvents: 1 },
+      createActivityId: (() => {
+        let identity = 0;
+        return () => activityId(`client-poll-command-${++identity}`);
+      })(),
+      createSessionId: () => 'client-poll-command-session',
+    });
+
+    try {
+      const started = client.submit({ input: 'live' });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      for (let attempt = 0; attempt < 40 && starts.length === 0; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(starts).toEqual(['live']);
+
+      expect(client.poll()).toEqual([]);
+      for (let attempt = 0; attempt < 40 && !stagedEventObserved; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(normalPollResponses).toBe(1);
+      expect(stagedEventObserved).toBe(true);
+      expect(pollRequests).toBe(1);
+
+      const failedPoll = client.poll();
+      expect(failedPoll).toEqual([]);
+      expect(pollFaultThrows).toBe(1);
+      expect(commandKinds).toEqual([
+        'intelligence-submit',
+        'intelligence-poll',
+        'intelligence-poll',
+      ]);
+      expect(pollRequests).toBe(1);
+
+      expect(client.poll()).toEqual([]);
+      const afterFailure = client.submit({ input: 'after-failure' });
+      expect(afterFailure.ok).toBe(false);
+      if (!afterFailure.ok) expect(afterFailure.error.code).toBe('intelligence-closed');
+      const cancelAfterFailure = client.cancel(started.value.id);
+      expect(cancelAfterFailure.ok).toBe(false);
+      if (!cancelAfterFailure.ok) expect(cancelAfterFailure.error.code).toBe('intelligence-closed');
+      expect(commandKinds).toHaveLength(3);
+      expect(starts).toEqual(['live']);
+      expect(removeListenerCalls).toBe(1);
+      expect(clientPortCloseCalls).toBe(1);
+
+      const closeTask = client.close();
+      expect(client.close()).toBe(closeTask);
+      await expect(closeTask).resolves.toBeUndefined();
+      await expect(host.close()).resolves.toBeUndefined();
+      expect(closeCalls).toBe(1);
+      sinks.get(String(started.value.id))?.complete('late');
+      expect(runtime.poll()).toEqual([]);
+    } finally {
+      rawClientPort.close();
+      await host.close().catch(() => undefined);
+    }
+  });
+
   it('contains a synchronous Host close notification failure and releases for a fresh binding', async () => {
     let sink: ActivitySink | undefined;
     let startCalls = 0;
@@ -874,6 +1363,81 @@ describe('intelligence MessagePort boundary', () => {
       }
     } finally {
       rawClientPort.close();
+      await host.close().catch(() => undefined);
+    }
+  });
+
+  it('contains a synchronous Host poll response failure after the runtime has drained events', async () => {
+    let sink: ActivitySink | undefined;
+    let closeCalls = 0;
+    let removeListenerCalls = 0;
+    let portCloseCalls = 0;
+    let hostListener:
+      | ((event: MessageEvent<IntelligenceHostCommand | IntelligenceRealmMessage>) => void)
+      | undefined;
+    const posted: string[] = [];
+    const provider: IntelligenceProvider = {
+      id: 'port.host-poll-response-failure.provider',
+      start(_submission, nextSink) {
+        sink = nextSink;
+        return ok(undefined);
+      },
+      cancel() {
+        return ok(undefined);
+      },
+      async close() {
+        closeCalls += 1;
+      },
+    };
+    const runtime = createIntelligenceRuntime(provider, { limits: { maxPollEvents: 1 } });
+    const hostPort: IntelligenceMessagePort = {
+      postMessage(message) {
+        posted.push(message.kind);
+        if (message.kind === 'intelligence-events') {
+          throw new Error('sentinel Host poll response publication failure');
+        }
+      },
+      addEventListener(_type, listener) {
+        hostListener = listener;
+      },
+      removeEventListener(_type, listener) {
+        removeListenerCalls += Number(listener === hostListener);
+        hostListener = undefined;
+      },
+      start() {},
+      close() {
+        portCloseCalls += 1;
+      },
+    };
+    const host = bindIntelligencePort(hostPort, runtime);
+    const activity = {
+      id: activityId('host-poll-response-failure-activity'),
+      session: {
+        providerId: provider.id,
+        id: 'host-poll-response-failure-session',
+      },
+      input: 'live poll response failure',
+    } as const;
+
+    try {
+      expect(runtime.accept(activity).ok).toBe(true);
+      sink?.text('staged-before-host-response-fault');
+      expect(hostListener).toBeDefined();
+      expect(() =>
+        hostListener?.({
+          data: { kind: 'intelligence-poll', maxEvents: 1 },
+        } as MessageEvent<IntelligenceHostCommand>),
+      ).not.toThrow();
+
+      const closeTask = host.close();
+      expect(host.close()).toBe(closeTask);
+      await expect(closeTask).resolves.toBeUndefined();
+      expect(posted).toEqual(['intelligence-events', 'intelligence-closed']);
+      expect(closeCalls).toBe(1);
+      expect(removeListenerCalls).toBe(1);
+      expect(portCloseCalls).toBe(1);
+      expect(runtime.poll()).toEqual([]);
+    } finally {
       await host.close().catch(() => undefined);
     }
   });

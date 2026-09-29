@@ -1,9 +1,7 @@
-// @forgeax/engine-remote - inspector P0 server + CLI dual-exit package.
+// @forgeax/engine-remote - inspector transport and eval core.
 //
-// Single entry facade (charter proposition 1 progressive disclosure). The
-// runtime server lives under the ./server sub-path; the standalone CLI binary
-// ships via `bin.forgeax` -> dist/cli.mjs. AI users import the shared error
-// model from this top entry:
+// The runtime server lives under the ./server sub-path. DevKit owns the public
+// command tree; AI users import the shared error model from this top entry:
 //
 //   import { RemoteError, type RemoteErrorCode } from '@forgeax/engine-remote';
 //

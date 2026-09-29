@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Retained diagnostic draft for Bevy's `shadow_biases`; cross-light bias and filtering control is routed.",
+  "description": "Bevy shadow_biases reproduction: live point (world/texel) and directional depth/normal biases (1-8), light swap (L), directional filter profiles (F), reset/zero (R/Z) and light movement, with a Dawn readback smoke that falsifies each control.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -13,11 +13,11 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/bevy-shadow-biases smoke",
     "bevyExample": {
       "name": "shadow_biases",
       "category": "3D Rendering",
-      "status": "shelved",
-      "shelvedFeedback": "feedbacks/2026-07-28-bevy-shadow-biases-needs-live-cross-light-shadow-filtering.md"
+      "status": "implemented"
     },
     "metrics": {
       "bundle-size": {
@@ -33,8 +33,8 @@
         "reason": "demo-specific benchmarks belong to its completed reproduction"
       },
       "gate": {
-        "enabled": false,
-        "reason": "shelved: cross-light shadow bias and filtering contract is not implemented"
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-shadow-biases smoke"
       },
       "spike-report": {
         "enabled": false,
@@ -44,20 +44,19 @@
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
-    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
-    "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
-    "@forgeax/engine-render": "workspace:*"
+    "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

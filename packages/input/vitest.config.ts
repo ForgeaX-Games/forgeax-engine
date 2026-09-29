@@ -12,6 +12,9 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/engine-input',
+    // Browser-marked edge-latch and PointerLock journeys are owned by the
+    // root Playwright project; keep them out of this node/forks project.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.browser.test.ts'],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

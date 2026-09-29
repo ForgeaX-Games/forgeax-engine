@@ -35,14 +35,16 @@ Usage:
   python check_submodule_pins.py --self-test     # run built-in fixtures, no repo needed
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _git(repo: Path, *args: str, env=None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -90,7 +92,9 @@ def _git_detail(res: subprocess.CompletedProcess) -> str:
     return detail or f"git exited with code {res.returncode}"
 
 
-def _resolve_main_ref(sub_repo: Path) -> tuple[str | None, str | None]:
+def _resolve_main_ref(
+    sub_repo: Path, authorization_repo: Path | None = None,
+) -> tuple[str | None, str | None]:
     """Refresh and resolve the submodule's remote main ref.
 
     The submodule checkout is detached in CI and may be shallow. Never fall
@@ -111,9 +115,27 @@ def _resolve_main_ref(sub_repo: Path) -> tuple[str | None, str | None]:
         "origin",
         "+refs/heads/main:refs/remotes/origin/main",
     ])
-    fetched = _git(sub_repo, *fetch_args)
+    environment = os.environ.copy()
+    if authorization_repo is not None:
+        remote = _git(sub_repo, "remote", "get-url", "origin")
+        if remote.returncode != 0:
+            return None, f"could not resolve origin URL: {_git_detail(remote)}"
+        remote_url = remote.stdout.strip()
+        authorization = _git(
+            authorization_repo, "config", "--get-urlmatch", "http.extraheader", remote_url,
+        )
+        if authorization.returncode == 0 and authorization.stdout.strip():
+            index = int(environment.get("GIT_CONFIG_COUNT", "0"))
+            environment["GIT_CONFIG_COUNT"] = str(index + 1)
+            environment[f"GIT_CONFIG_KEY_{index}"] = f"http.{remote_url}.extraheader"
+            environment[f"GIT_CONFIG_VALUE_{index}"] = authorization.stdout.strip()
+    fetched = _git(sub_repo, *fetch_args, env=environment)
     if fetched.returncode != 0:
-        return None, f"failed to refresh origin/main: {_git_detail(fetched)}"
+        return None, (
+            f"failed to refresh origin/main (exit={fetched.returncode}): {_git_detail(fetched)}; "
+            "hint=check remote access and the source checkout credentials, then retry; "
+            "ancestry has not been determined"
+        )
 
     main_ref = _git(
         sub_repo,
@@ -157,7 +179,7 @@ def check_repo(repo: Path) -> tuple[int, list[tuple[str, str, str]]]:
                 f"`git submodule update --init {sub_path}` then re-check",
             ))
             continue
-        main_ref, resolve_error = _resolve_main_ref(sub_repo)
+        main_ref, resolve_error = _resolve_main_ref(sub_repo, repo)
         if main_ref is None:
             findings.append((
                 sub_path,
@@ -181,10 +203,9 @@ def check_repo(repo: Path) -> tuple[int, list[tuple[str, str, str]]]:
 
 
 def _print_findings(repo: Path, findings: list[tuple[str, str, str]]) -> None:
-    print("[BLOCKED] a submodule pin is not on its submodule main.", file=sys.stderr)
+    print("[BLOCKED] submodule pin verification failed.", file=sys.stderr)
     print(f"  superrepo: {repo}", file=sys.stderr)
-    print("  Fix: merge each submodule's PR into that submodule's main FIRST,", file=sys.stderr)
-    print("  then bump the superrepo pin to the resulting main commit.", file=sys.stderr)
+    print("  Follow the per-submodule reason below; a failed fetch is not an ancestry verdict.", file=sys.stderr)
     print("", file=sys.stderr)
     for sub_path, pin, reason in findings:
         print(f"  - {sub_path}", file=sys.stderr)
@@ -264,6 +285,54 @@ def _self_test() -> int:
         if ancestry_error is not None or feature_is_ancestor:
             print("self-test FAIL: feature-only commit should NOT be on main", file=sys.stderr)
             ok = False
+        # Exercise a real authenticated Git fetch, with credentials owned only
+        # by the superrepo. Local submodule metadata must not receive a copy.
+        from functools import partial
+        from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+
+        credential = "fixture-only-authorization"
+
+        class AuthenticatedGitHandler(SimpleHTTPRequestHandler):
+            def do_GET(self):
+                if self.headers.get("Authorization") != credential:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                super().do_GET()
+
+            def log_message(self, *_args):
+                pass
+
+        _git(bare, "update-server-info")
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), partial(AuthenticatedGitHandler, directory=td)
+        )
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            remote_url = f"http://127.0.0.1:{server.server_port}/remote.git"
+            _git(checkout, "remote", "set-url", "origin", remote_url)
+            # The fixture represents actions/checkout storing auth in the root
+            # repository, while source-only checkout leaves the child without it.
+            _git(seed, "config", f"http.{remote_url}.extraheader", f"Authorization: {credential}")
+            unauthenticated_ref, authentication_error = _resolve_main_ref(checkout)
+            if unauthenticated_ref is not None or authentication_error is None:
+                print("self-test FAIL: missing credentials must fail refresh", file=sys.stderr)
+                ok = False
+            authenticated_ref, authentication_error = _resolve_main_ref(checkout, seed)
+            if authenticated_ref != "origin/main" or authentication_error is not None:
+                print(f"self-test FAIL: inherited checkout authentication: {authentication_error}", file=sys.stderr)
+                ok = False
+            stored = _git(checkout, "config", "--local", "--get-regexp", r"http\..*extraheader")
+            if stored.stdout.strip():
+                print("self-test FAIL: authentication persisted in submodule config", file=sys.stderr)
+                ok = False
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
         _git(checkout, "remote", "set-url", "origin", str(Path(td) / "missing.git"))
         missing_ref, refresh_error = _resolve_main_ref(checkout)
         if missing_ref is not None or refresh_error is None:

@@ -21,8 +21,8 @@
 // spotCount === 0" (M5 / w25).
 //
 // feat-20260625-spot-light-shadow-mapping M1 w4: embedded castShadow (default true)
-// + 6 shadow fields (mapSize / depthBias / normalBias / nearPlane / farPlane /
-// pcfKernelSize) aligned with DirectionalLight vocabulary (plan-strategy D-6;
+// + 7 shadow fields (mapSize / depthBias / normalBias / nearPlane / farPlane /
+// pcfKernelSize / shadowIntensity) aligned with DirectionalLight vocabulary (plan-strategy D-6;
 // charter P4 consistent abstraction). Zero-config spawns cast spot shadows;
 // set castShadow:false to opt out (validate short-circuits on false, AC-03).
 // Shadow atlas cap of 4 is enforced at extract stage, not component layer (OOS-5).
@@ -36,6 +36,17 @@
 // pre-multiplication).
 
 import { defineComponent } from '@forgeax/engine-ecs';
+
+export interface SpotLightProjector {
+  readonly guid: string;
+  readonly generation: number;
+  readonly revision: number;
+}
+
+export interface SpotLightAuthoring {
+  /** Optional GUID-backed TextureAsset projector; absent keeps the normal spot path. */
+  readonly projector?: SpotLightProjector;
+}
 
 /**
  * Cone-restricted spot light (KHR_lights_punctual `spot` type).  Casts shadows
@@ -71,6 +82,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   nearPlane                        — shadow-camera near (default 0.1)
  *   farPlane                         — shadow-camera far (default 50)
  *   pcfKernelSize odd >= 1           — PCF kernel width (default 3)
+ *   shadowIntensity in [0,1]         — residual light in shadow (default 1)
  *
  * Atlas capacity is capped at 4 castShadow spot lights by the extract stage;
  * the 5th light onward keeps direct illumination but shadowAtlasTile = -1
@@ -112,13 +124,23 @@ export const SpotLight = defineComponent('SpotLight', {
   range: { type: 'f32', default: 10.0 },
   innerConeDeg: { type: 'f32', default: 0 },
   outerConeDeg: { type: 'f32', default: 45 },
+  iesProfile: { type: 'shared<IesProfileAsset>' },
+  cookie: { type: 'shared<TextureAsset>' },
+  rollDeg: { type: 'f32', default: 0 },
   // Shadow opt-out gate: defaults to true so zero-config spawns cast shadows.
   castShadow: { type: 'bool', default: true },
-  // 6 shadow fields aligned with DirectionalLight (plan-strategy D-6).
+  // 7 shadow fields aligned with the shared light shadow vocabulary.
   mapSize: { type: 'f32', default: 2048 },
   depthBias: { type: 'f32', default: 0.005 },
   normalBias: { type: 'f32', default: 0.05 },
   nearPlane: { type: 'f32', default: 0.1 },
   farPlane: { type: 'f32', default: 50 },
   pcfKernelSize: { type: 'f32', default: 3 },
+  // Three's SpotLight.shadow.intensity is the fraction of visibility applied
+  // to a shadowed contribution. Keep it in the author-facing [0,1] domain;
+  // extract/record transport this one fact to surface and volume consumers.
+  shadowIntensity: { type: 'f32', default: 1 },
+  // Shared TextureAsset identity; publication and residency remain owned by
+  // the existing asset and GPU resource owners.
+  projector: { type: 'shared<TextureAsset>', simulationTransient: true },
 });

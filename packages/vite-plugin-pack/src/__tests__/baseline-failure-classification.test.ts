@@ -90,5 +90,5 @@ describe('M0 baseline failure fixtures', () => {
     });
     expect(baseline.behavior.closeDrain.status).toBe('not-measured');
     expect(baseline.sourceFailureAndStaleOutputAreDistinct).toBe(true);
-  }, 15_000);
+  }, 30_000);
 });

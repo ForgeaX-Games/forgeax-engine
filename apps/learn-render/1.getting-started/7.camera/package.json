@@ -13,15 +13,8 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "assets": {
-      "roots": [
-        "./assets",
-        "../../../../forgeax-engine-assets/learn-opengl/textures",
-        "../../../../forgeax-engine-assets/learn-opengl/meshes"
-      ]
-    },
     "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-1-getting-started-7-camera smoke",
-    "_smokeInvocationComment": "smokeInvocation = self-contained SSOT for AC-03 (D-7): camera dawn-node smoke literal lives in this package.json#forgeax.smokeInvocation + .github/workflows/ci.yml only. M4 milestone scaffolds the script as a placeholder; M11 milestone (T-M11-04 / -05) lands the real 300-frame dawn smoke + InputSnapshot consumption.",
+    "_smokeInvocationComment": "smokeInvocation = self-contained SSOT for AC-03 (D-7): camera dawn-node smoke literal lives in this package.json#forgeax.smokeInvocation + .github/workflows/ci.yml only. M4 milestone scaffolds the script as a placeholder; M11 milestone (T-M11-04 / -05) lands the real 60-frame dawn smoke + InputSnapshot consumption.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -64,7 +57,7 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

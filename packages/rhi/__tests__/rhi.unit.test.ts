@@ -478,9 +478,8 @@ import type { RhiCaps } from '../src/index';
       hint: 'remove duplicate Camera entities or wait for feat-future-multi-viewport',
     },
     'render-system-multi-light': {
-      expected:
-        'DirectionalLight: at most 1 entity; PointLight / SpotLight: at most 4 entities each (first-slice cap)',
-      hint: 'remove duplicate entities, or wait for todo-125 feat-future-multi-light-pack which introduces cluster (tile/slot/index) for N>4',
+      expected: 'DirectionalLight: at most 1 entity; PointLight / SpotLight use the shared Cluster corpus',
+      hint: 'keep one DirectionalLight; local lights are admitted through the Cluster transport',
     },
     'asset-not-registered': {
       expected: 'MeshFilter.assetHandle in AssetRegistry',
@@ -631,7 +630,7 @@ import type { RhiCaps } from '../src/index';
         expect(e.detail).toBeUndefined();
       });
 
-      it("'render-system-multi-light' template generates the locked .expected / .hint copy (feat-20260519 minor reword)", () => {
+      it("'render-system-multi-light' template documents the remaining directional cardinality rule", () => {
         const t = D_S7_TEMPLATES['render-system-multi-light'];
         const e = new RhiError({
           code: 'render-system-multi-light',
@@ -643,10 +642,8 @@ import type { RhiCaps } from '../src/index';
         expect(e.hint).toBe(t.hint);
         expect(e.detail).toBeUndefined();
         expect(e.expected).toContain('DirectionalLight: at most 1 entity');
-        expect(e.expected).toContain('PointLight / SpotLight: at most 4 entities each');
-        expect(e.expected).toContain('first-slice cap');
-        expect(e.hint).toContain('todo-125');
-        expect(e.hint).toContain('cluster');
+        expect(e.expected).toContain('PointLight / SpotLight use the shared Cluster corpus');
+        expect(e.hint).toContain('Cluster transport');
       });
 
       it("'asset-not-registered' template generates the locked .expected / .hint copy", () => {
@@ -702,7 +699,8 @@ import type { RhiCaps } from '../src/index';
         const e = new RhiError({
           code: 'feature-not-enabled',
           expected: 'caps.timestampQuery === true',
-          hint: 'check device.caps.timestampQuery before writeTimestamp',
+          hint: 'check device.caps.timestampQuery before creating timestamp QuerySets',
+          hint: 'check device.caps.timestampQuery before creating timestamp QuerySets or timestamp-enabled pass writes',
         });
         const r = err(e);
         expect(r.unwrapOr(999)).toBe(999);
@@ -754,6 +752,30 @@ import type { RhiCaps } from '../src/index';
           expect('code' in e.detail.error).toBe(true);
           expect('message' in e.detail.error).toBe(true);
         }
+      });
+
+      it("preserves nested producer detail on a webgpu-runtime-error fallback", () => {
+        const e = new RhiError({
+          code: 'webgpu-runtime-error',
+          expected: 'Renderer initialization preserves pipeline-spec diagnostics',
+          hint: 'inspect detail.error.detail.cause',
+          detail: {
+            error: {
+              name: 'PipelineSpecError',
+              code: 'pipeline-build-failed',
+              message: 'pipeline build failed',
+              detail: { cause: { code: 'webgpu-runtime-error' } },
+            },
+          },
+        });
+        expect(e.detail).toEqual({
+          error: {
+            name: 'PipelineSpecError',
+            code: 'pipeline-build-failed',
+            message: 'pipeline build failed',
+            detail: { cause: { code: 'webgpu-runtime-error' } },
+          },
+        });
       });
     });
 

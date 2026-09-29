@@ -54,6 +54,10 @@ export function createCommandEncoderProxy(
         kind: 'beginRenderPass',
         cmdHandleId: cmdHId,
         passHandleId: passHId,
+        timestampQuerySetHandleId:
+          desc?.timestampWrites === undefined
+            ? undefined
+            : getHandleId(s, desc.timestampWrites.querySet as object, 'querySet'),
         desc: {
           colorAttachments: Array.from(desc.colorAttachments).map((attachment) =>
             attachment === null || attachment === undefined ? attachment : { ...attachment },
@@ -61,15 +65,23 @@ export function createCommandEncoderProxy(
           ...(desc.depthStencilAttachment === undefined
             ? {}
             : { depthStencilAttachment: { ...desc.depthStencilAttachment } }),
-          ...(desc.occlusionQuerySet === undefined
+          ...(desc.timestampWrites === undefined
             ? {}
-            : { occlusionQuerySet: desc.occlusionQuerySet }),
-          ...(desc.timestampWrites === undefined ? {} : { timestampWrites: desc.timestampWrites }),
+            : { timestampWrites: recordTimestampWrites(desc.timestampWrites) }),
           ...(desc.maxDrawCount === undefined ? {} : { maxDrawCount: desc.maxDrawCount }),
         },
         colorAttachmentViewHandleIds,
         colorAttachmentResolveTargetHandleIds,
         depthStencilViewHandleId,
+        ...(desc.occlusionQuerySet === undefined
+          ? {}
+          : {
+              occlusionQuerySetHandleId: getHandleId(
+                s,
+                desc.occlusionQuerySet as object,
+                'querySet',
+              ),
+            }),
       });
       const realPass = realEnc.beginRenderPass(desc);
       return createRenderPassProxy(s, realPass, passHId);
@@ -80,10 +92,38 @@ export function createCommandEncoderProxy(
         kind: 'beginComputePass',
         cmdHandleId: cmdHId,
         passHandleId: passHId,
-        desc: desc as Partial<GPUComputePassDescriptor> | undefined,
+        timestampQuerySetHandleId:
+          desc?.timestampWrites === undefined
+            ? undefined
+            : getHandleId(s, desc.timestampWrites.querySet as object, 'querySet'),
+        desc:
+          desc === undefined
+            ? undefined
+            : {
+                ...(desc.label === undefined ? {} : { label: desc.label }),
+                timestampWrites: recordTimestampWrites(desc.timestampWrites),
+              },
       });
       const realPass = realEnc.beginComputePass(desc);
       return createComputePassProxy(s, realPass, passHId);
+    },
+    encodeEmptyComputePass(desc: ComputePassDescriptor) {
+      const passHId = allocHandleId('computePass');
+      pushEvent(s, {
+        kind: 'beginComputePass',
+        cmdHandleId: cmdHId,
+        passHandleId: passHId,
+        timestampQuerySetHandleId:
+          desc?.timestampWrites === undefined
+            ? undefined
+            : getHandleId(s, desc.timestampWrites.querySet as object, 'querySet'),
+        desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
+          timestampWrites: recordTimestampWrites(desc.timestampWrites),
+        },
+      });
+      realEnc.encodeEmptyComputePass(desc);
+      pushEvent(s, { kind: 'endComputePass', passHandleId: passHId });
     },
     // Passthrough copy/clear methods (event recording added where types permit)
     copyBufferToBuffer(...args: unknown[]) {
@@ -120,7 +160,8 @@ export function createCommandEncoderProxy(
       }
     },
     copyBufferToTexture(source, destination, copySize) {
-      const bufId = getHandleId(s, (source as { buffer: object }).buffer as object, 'buffer');
+      const { buffer } = source;
+      const bufId = getHandleId(s, buffer, 'buffer');
       const texId = getHandleId(
         s,
         (destination as { texture: object }).texture as object,
@@ -135,9 +176,9 @@ export function createCommandEncoderProxy(
         cmdHandleId: cmdHId,
         source: {
           bufferHandleId: bufId,
-          offset: source.offset ?? 0,
-          bytesPerRow: source.bytesPerRow ?? 0,
-          rowsPerImage: source.rowsPerImage ?? 0,
+          ...(source.offset === undefined ? {} : { offset: source.offset }),
+          ...(source.bytesPerRow === undefined ? {} : { bytesPerRow: source.bytesPerRow }),
+          ...(source.rowsPerImage === undefined ? {} : { rowsPerImage: source.rowsPerImage }),
         },
         destination: dstPayload as Omit<GPUTexelCopyTextureInfo, 'texture'> & {
           readonly textureHandleId: HandleId;
@@ -148,7 +189,8 @@ export function createCommandEncoderProxy(
     },
     copyTextureToBuffer(source, destination, copySize) {
       const texId = getHandleId(s, (source as { texture: object }).texture as object, 'texture');
-      const bufId = getHandleId(s, (destination as { buffer: object }).buffer as object, 'buffer');
+      const { buffer } = destination;
+      const bufId = getHandleId(s, buffer, 'buffer');
       const srcPayload: Record<string, unknown> = { textureHandleId: texId };
       if (source.mipLevel !== undefined) srcPayload.mipLevel = source.mipLevel;
       if (source.origin !== undefined) srcPayload.origin = source.origin;
@@ -161,9 +203,13 @@ export function createCommandEncoderProxy(
         },
         destination: {
           bufferHandleId: bufId,
-          offset: destination.offset ?? 0,
-          bytesPerRow: destination.bytesPerRow ?? 0,
-          rowsPerImage: destination.rowsPerImage ?? 0,
+          ...(destination.offset === undefined ? {} : { offset: destination.offset }),
+          ...(destination.bytesPerRow === undefined
+            ? {}
+            : { bytesPerRow: destination.bytesPerRow }),
+          ...(destination.rowsPerImage === undefined
+            ? {}
+            : { rowsPerImage: destination.rowsPerImage }),
         },
         copySize,
       });
@@ -209,16 +255,25 @@ export function createCommandEncoderProxy(
       realEnc.clearBuffer(buffer, offset, size);
     },
     resolveQuerySet(querySet, firstQuery, queryCount, destination, destinationOffset) {
-      return realEnc.resolveQuerySet(
+      const result = realEnc.resolveQuerySet(
         querySet,
         firstQuery,
         queryCount,
         destination,
         destinationOffset,
       );
-    },
-    writeTimestamp(querySet, queryIndex) {
-      realEnc.writeTimestamp(querySet, queryIndex);
+      if (result.ok) {
+        pushEvent(s, {
+          kind: 'resolveQuerySet',
+          cmdHandleId: cmdHId,
+          querySetHandleId: getHandleId(s, querySet as object, 'querySet'),
+          firstQuery,
+          queryCount,
+          destinationHandleId: getHandleId(s, destination as object, 'buffer'),
+          destinationOffset,
+        });
+      }
+      return result;
     },
     pushDebugGroup(groupLabel) {
       pushEvent(s, { kind: 'pushDebugGroup', cmdHandleId: cmdHId, groupLabel });
@@ -248,4 +303,17 @@ export function createCommandEncoderProxy(
       return res;
     },
   };
+}
+
+function recordTimestampWrites(writes: RenderPassDescriptor['timestampWrites']) {
+  return writes === undefined
+    ? undefined
+    : {
+        ...(writes.beginningOfPassWriteIndex === undefined
+          ? {}
+          : { beginningOfPassWriteIndex: writes.beginningOfPassWriteIndex }),
+        ...(writes.endOfPassWriteIndex === undefined
+          ? {}
+          : { endOfPassWriteIndex: writes.endOfPassWriteIndex }),
+      };
 }

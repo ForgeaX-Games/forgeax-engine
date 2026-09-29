@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import {
   copyFile,
   cp,
@@ -12,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { promisify } from 'node:util';
+import { execFileCommand } from './child-process.js';
 import { applyInitPlan, createInitPlan } from './init.js';
 import { commandError, readProjectFacts } from './project.js';
 import { findSdkContext } from './sdk.js';
@@ -23,10 +22,13 @@ import {
   sdkProjectInstallArgs,
 } from './sdk-bootstrap.js';
 import { checkSdkUpdate } from './sdk-update.js';
-import { copySdkSkills, installProjectSkills } from './skill-install.js';
+import { copySdkSkills, installProjectSkills, PROJECT_SKILL_MOUNT_ROOTS } from './skill-install.js';
+import {
+  readTemplateDescriptor,
+  resolveProjectIdentity,
+  writeProjectIdentity,
+} from './templates/materialize.js';
 import type { CommandResult, InitOptions, NewOptions, ProjectCommandOptions } from './types.js';
-
-const execFileAsync = promisify(execFile);
 
 function isMissingPathError(cause: unknown): boolean {
   return cause !== null && typeof cause === 'object' && 'code' in cause && cause.code === 'ENOENT';
@@ -87,6 +89,24 @@ function pnpmSupported(version: string): boolean {
   return major === 11 && minor >= 7;
 }
 
+async function readPnpmVersion(
+  root: string,
+  packageJson: Record<string, unknown>,
+): Promise<string> {
+  const packageManager = packageJson.packageManager;
+  if (typeof packageManager === 'string' && packageManager.startsWith('pnpm@')) {
+    try {
+      return (
+        await execFileCommand('corepack', ['pnpm', '--version'], { cwd: root })
+      ).stdout.trim();
+    } catch {
+      // Corepack is optional on some installations. Preserve the plain pnpm
+      // fallback while allowing the doctor result to report its actual version.
+    }
+  }
+  return (await execFileCommand('pnpm', ['--version'], { cwd: root })).stdout.trim();
+}
+
 export async function doctorCommand(
   options: ProjectCommandOptions = {},
 ): Promise<CommandResult<DoctorReport>> {
@@ -94,7 +114,7 @@ export async function doctorCommand(
   if (!facts.ok) return facts;
   let pnpm: string;
   try {
-    pnpm = (await execFileAsync('pnpm', ['--version'], { cwd: facts.value.root })).stdout.trim();
+    pnpm = await readPnpmVersion(facts.value.root, facts.value.packageJson);
   } catch (cause) {
     return {
       ok: false,
@@ -147,7 +167,7 @@ export async function doctorCommand(
       error: {
         code: 'project-local-dependency',
         expected: 'all external project dependencies to use SDK-resolved exact versions',
-        hint: 'Run forgeax init from the unpacked SDK and commit the resulting lockfile.',
+        hint: 'Run forgeax project init from the unpacked SDK and commit the resulting lockfile.',
         detail: { dependencies: workspaceDependencies.sort() },
       },
     };
@@ -182,8 +202,8 @@ export async function initCommand(options: InitOptions = {}): Promise<CommandRes
     const applied = await applyInitPlan(facts.value, plan.value, options);
     if (!applied.ok || options.dryRun === true) return applied;
     if (sdk !== undefined) {
-      const template = sdk.templates.get(sdk.defaultTemplate);
-      if (template === undefined) throw new Error('sdk-default-template-missing');
+      const template = sdk.templates.get('empty');
+      if (template === undefined) throw new Error('sdk-bootstrap-template-missing');
       await copyFile(
         resolve(template, 'pnpm-lock.yaml'),
         resolve(facts.value.root, 'pnpm-lock.yaml'),
@@ -216,7 +236,7 @@ export async function initCommand(options: InitOptions = {}): Promise<CommandRes
         : await canonicalProspectivePath(sdk.store);
     const installArgs =
       sdk === undefined ? ['install', '--frozen-lockfile=false'] : sdkProjectInstallArgs(store);
-    await execFileAsync('pnpm', installArgs, {
+    await execFileCommand('pnpm', installArgs, {
       cwd: facts.value.root,
       env: { ...process.env, CI: 'true' },
       maxBuffer: 16 * 1024 * 1024,
@@ -235,7 +255,7 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
         ok: false,
         error: {
           code: 'sdk-context-missing',
-          expected: 'forgeax new to run from an unpacked ForgeaX SDK',
+          expected: 'forgeax project new to run from an unpacked ForgeaX SDK',
           hint: 'Run the SDK archive bin/forgeax.mjs entry or set FORGEAX_SDK_ROOT.',
           detail: {},
         },
@@ -252,13 +272,25 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
         ok: false,
         error: {
           code: 'project-target-inside-sdk',
-          expected: 'forgeax new target to be outside the unpacked SDK root',
+          expected: 'forgeax project new target to be outside the unpacked SDK root',
           hint: 'Choose a sibling directory or an absolute path outside the SDK.',
           detail: { root, sdkRoot: sdk.root },
         },
       };
     }
-    const templateId = options.template ?? sdk.defaultTemplate;
+    if (options.template === undefined) {
+      const available = [...sdk.templates.keys()].sort();
+      return {
+        ok: false,
+        error: {
+          code: 'sdk-template-required',
+          expected: 'forgeax project new to select exactly one template with --template',
+          hint: `Choose one of: ${available.join(', ')}.`,
+          detail: { templates: available },
+        },
+      };
+    }
+    const templateId = options.template;
     const template = sdk.templates.get(templateId);
     if (template === undefined) {
       return {
@@ -268,6 +300,19 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
           expected: 'a template id declared by sdk-manifest.json',
           hint: `Choose one of: ${[...sdk.templates.keys()].sort().join(', ')}.`,
           detail: { template: templateId },
+        },
+      };
+    }
+    const descriptor = await readTemplateDescriptor(template);
+    if (!descriptor.ok) return descriptor;
+    if (descriptor.value.id !== templateId) {
+      return {
+        ok: false,
+        error: {
+          code: 'template-invalid',
+          expected: `template.json#id to match the selected template ${templateId}`,
+          hint: 'Repair the descriptor identity or refresh the SDK before creating a project.',
+          detail: { id: descriptor.value.id },
         },
       };
     }
@@ -285,16 +330,31 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
         ok: false,
         error: {
           code: 'project-target-not-empty',
-          expected: 'forgeax new target to be absent or empty',
+          expected: 'forgeax project new target to be absent or empty',
           hint: 'Choose an empty directory so existing files cannot be overwritten.',
           detail: { root },
         },
       };
     }
+    const identity = resolveProjectIdentity({
+      targetBasename: basename(root),
+      descriptor: descriptor.value,
+      overrides: {
+        ...(options.id === undefined ? {} : { id: options.id }),
+        ...(options.name === undefined ? {} : { name: options.name }),
+        ...(options.packageName === undefined ? {} : { packageName: options.packageName }),
+      },
+    });
+    if (!identity.ok) return identity;
     if (options.dryRun === true) {
       return {
         ok: true,
-        value: { root, template: templateId, sdkVersion: sdk.manifest.sdkVersion },
+        value: {
+          root,
+          template: templateId,
+          identity: identity.value,
+          sdkVersion: sdk.manifest.sdkVersion,
+        },
       };
     }
     const initialized = await requireSdkInitialization(sdk);
@@ -314,8 +374,8 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
           force: false,
         });
       }
+      await writeProjectIdentity(staging, identity.value);
       await copySdkSkills(sdk, staging);
-      await installProjectSkills(staging, sdk.manifest);
       const store = sdk.store === undefined ? undefined : await canonicalProspectivePath(sdk.store);
       await configureSdkStore(staging, store);
       if (!targetExists) {
@@ -331,10 +391,13 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
         staging = undefined;
       }
       committed = true;
+      // Create Windows junctions after the final rename. A junction made in
+      // staging would keep pointing at the temporary path after commit.
+      await installProjectSkills(root, sdk.manifest);
       // Install after the final rename so pnpm's virtual-store metadata keeps
       // the real project path. Installing inside staging would force a second
       // registry resolution when `pnpm exec` runs from the committed project.
-      await execFileAsync('pnpm', sdkProjectInstallArgs(store), {
+      await execFileCommand('pnpm', sdkProjectInstallArgs(store), {
         cwd: root,
         env: { ...process.env, CI: 'true' },
         maxBuffer: 16 * 1024 * 1024,
@@ -345,6 +408,7 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
         value: {
           root,
           template: templateId,
+          identity: identity.value,
           sdkVersion: sdk.manifest.sdkVersion,
           onboarding: agentOnboarding(sdk, root),
           sdkUpdate,
@@ -357,7 +421,11 @@ export async function newCommand(options: NewOptions = {}): Promise<CommandResul
           await rm(root, { recursive: true, force: true });
           return { ok: false, error: commandError(cause, 'project-create-failed') };
         }
-        const cleanupNames = new Set([...committedNames, 'node_modules']);
+        const cleanupNames = new Set([
+          ...committedNames,
+          ...PROJECT_SKILL_MOUNT_ROOTS.map((mountRoot) => mountRoot.split('/')[0] ?? mountRoot),
+          'node_modules',
+        ]);
         await Promise.all(
           [...cleanupNames].map((name) =>
             rm(resolve(root, name), { recursive: true, force: true }),

@@ -102,15 +102,35 @@ EOF
   echo "[apt-sources] synthesized Ubuntu $ubuntu_codename archive projection"
 fi
 
+# Some self-hosted runners can resolve the Ubuntu archive but reject plain HTTP
+# with a proxy-level 502. Keep the isolated projection deterministic and secure
+# by upgrading only the canonical Ubuntu archive endpoints to HTTPS. Third-party
+# sources remain unchanged, and the explicit mirror-list mode below still owns
+# its own route selection.
+for projected_file in "${projected_files[@]}"; do
+  run_privileged sed -Ei \
+    's#http://(archive|security)\.ubuntu\.com/ubuntu/?#https://\1.ubuntu.com/ubuntu#g' \
+    "$projected_file"
+done
+echo "[apt-sources] normalized Ubuntu archive endpoints to HTTPS"
+
 case "${FORGEAX_APT_ARCHIVE_MIRROR:-}" in
   '') ;;
-  ubuntu-mirrorlist)
+  ubuntu-kernel-mirror)
     for projected_file in "${projected_files[@]}"; do
       run_privileged sed -Ei \
-        's#https?://(([a-z0-9.-]+\.)?archive|security)\.ubuntu\.com/ubuntu/?#mirror://mirrors.ubuntu.com/mirrors.txt#g' \
+        's#https?://(([a-z0-9.-]+\.)?archive|security)\.ubuntu\.com/ubuntu/?#https://mirrors.edge.kernel.org/ubuntu#g' \
         "$projected_file"
     done
-    echo "[apt-sources] archive fallback enabled through the Ubuntu mirrorlist"
+    echo "[apt-sources] archive fallback enabled through mirrors.edge.kernel.org"
+    ;;
+  ubuntu-https)
+    for projected_file in "${projected_files[@]}"; do
+      run_privileged sed -Ei \
+        's#http://(([a-z0-9.-]+\.)?archive|security)\.ubuntu\.com/ubuntu/?#https://\1.ubuntu.com/ubuntu#g' \
+        "$projected_file"
+    done
+    echo "[apt-sources] archive fallback enabled through HTTPS Ubuntu sources"
     ;;
   *)
     echo "[apt-sources] error: unsupported FORGEAX_APT_ARCHIVE_MIRROR value" >&2

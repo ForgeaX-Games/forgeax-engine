@@ -29,12 +29,11 @@ beforeAll(async () => {
 describe('IBL diffuse sampling payload contract', () => {
   it('names the sampled payload as E over pi at the canonical sampling owner', () => {
     expect(samplingSource).toContain('irradianceEOverPi');
-    expect(samplingSource).toMatch(/irradianceEOverPi\s*\/\s*PI/);
+    expect(samplingSource).toMatch(/return\s+irradianceEOverPi\s*;/);
   });
 
-  it('does not divide the same diffuse payload twice', () => {
+  it('does not divide the already Lambert-normalized diffuse payload again', () => {
     const diffuseBody = samplingSource.match(/fn sampleIblDiffuse\([\s\S]*?\n\}/)?.[0] ?? '';
-    expect(diffuseBody.match(/\/\s*PI/g) ?? []).toHaveLength(1);
-    expect(diffuseBody).not.toMatch(/irradianceEOverPi\s*\/\s*PI[\s\S]*\/\s*PI/);
+    expect(diffuseBody).not.toMatch(/\/\s*PI/);
   });
 });

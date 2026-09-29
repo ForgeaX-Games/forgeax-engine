@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ac-08-grep-gate.mjs - AC-08 stance gates + F-3 three-way SSOT byte-for-byte
+// ac-08-grep-gate.mjs - AC-08 stance gates + roster-owned smoke SSOT
 // diff (feat-20260508-verify-gpu-smoke-gate w18 + feat-20260508-rhi-surface-completion w11)
 //
 // Exit codes:
@@ -15,21 +15,14 @@
 //       (charter anchor, see constant below)
 //   (d) .github/workflows/*.yml non-comment lines grep -E 'continue-on-error|
 //       skip-smoke|ALLOW_SMOKE_FAIL' = 0 (K-10 grep gate; comments allowed
-//       because they can explain "why we do NOT use X" rather than enabling X)
-//   (e) F-3 three-way SSOT byte-for-byte: ci.yml <-> apps/hello/triangle/
-//       package.json#forgeax.smokeInvocation (scripts.smoke is the script body
-//       'node scripts/smoke.mjs', not the invocation form
-//       'pnpm --filter @forgeax/hello-triangle smoke' which would self-recurse;
-//       forgeax.smokeInvocation is the non-scripts SSOT anchor)
-//   (e2) feat-20260509-ecs-render-bridge-mvp D-S10 / AC-12b hello-cube SSOT
-//       self-contained: ci.yml <-> apps/hello/cube/package.json#
-//       forgeax.smokeInvocation literal 'pnpm --filter @forgeax/hello-cube smoke'.
-//       The two literals must agree; they are NOT required to match the
-//       hello-triangle invocation byte-for-byte (each app owns its own SSOT,
-//       K-12 stance preserved separately under gate (e) / (f) for
-//       hello-triangle and gate (e2) for hello-cube).
-//   (f) F-3 three-way SSOT byte-for-byte: ci.yml <-> .claude/skills/
-//       forgeax-step-verify/SKILL.md (Iron Law 9 hello-triangle real-GPU smoke)
+//       because they can explain policy). Only an explicit optional diagnostic
+//       upload step may tolerate its own Action initialization/transfer failure.
+//   (e) authoritative dawn-smoke-roster <-> triangle package manifest:
+//       exactly one gate, commandId=smoke, executionClass=sharded, and the
+//       resolved manifest invocation matches forgeax.smokeInvocation.
+//   (e2) the same contract for hello-cube.
+//   (f) both roster gates remain unique and sharded; ci.yml contains no
+//       duplicate non-comment hello smoke invocation.
 //
 // Gates (g)-(j) added by feat-20260508-rhi-surface-completion w11
 // (AC-RSC-05 / AC-RSC-06 / D-S1 single-point exemption):
@@ -43,7 +36,8 @@
 //          - packages/rhi-webgpu/src/device.ts (function definition)
 //          - packages/rhi-webgpu/src/index.ts (in-package use inside the
 //            async createShaderModule entry)
-//          - apps/hello/triangle/src/main.ts (single-point exemption call)
+//          - packages/render/src/assembly/webgpu-renderer.ts (Renderer's
+//            uncaptured-error bridge)
 //          - packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts
 //            (feat-20260508-rhi-surface-completion w17 / candidate
 //            proposition 6 truth check: dawn pushErrorScope/popErrorScope
@@ -89,9 +83,10 @@
 //   pnpm --filter @forgeax/hello-triangle exec node scripts/ac-08-grep-gate.mjs
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRoster, resolveRunnableEntries } from '../../../../scripts/ci/run-dawn-smoke-roster.mjs';
 
 // ─── locate the repo root (this script lives under apps/hello/triangle/scripts/)
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -108,8 +103,7 @@ const CI_YML = join(REPO_ROOT, '.github/workflows/ci.yml');
 const NIGHTLY_YML = join(REPO_ROOT, '.github/workflows/nightly.yml');
 const HELLO_PKG = join(REPO_ROOT, 'apps/hello/triangle/package.json');
 const HELLO_CUBE_PKG = join(REPO_ROOT, 'apps/hello/cube/package.json');
-const VERIFY_SKILL = join(REPO_ROOT, '.claude/skills/forgeax-step-verify/SKILL.md');
-const VERIFY_SKILL_MOUNT = join(REPO_ROOT, '.claude/skills/forgeax-step-verify');
+const DAWN_SMOKE_ROSTER = join(REPO_ROOT, 'scripts/ci/dawn-smoke-roster.json');
 
 // ─── verbatim stance phrases (CJK) used as grep targets ──────────────────
 //
@@ -144,6 +138,62 @@ function record(name, status, detail) {
 function readSafely(path) {
   if (!existsSync(path)) return null;
   return readFileSync(path, 'utf8');
+}
+
+function checkRosterSmokeGate(packageName, manifestPath) {
+  if (!existsSync(DAWN_SMOKE_ROSTER))
+    return { status: 'FAIL', detail: `authoritative Dawn roster missing at ${DAWN_SMOKE_ROSTER}` };
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    return { status: 'FAIL', detail: `${manifestPath} JSON parse failed: ${error.message}` };
+  }
+  try {
+    const roster = readRoster(DAWN_SMOKE_ROSTER);
+    const resolved = resolveRunnableEntries({ repoRoot: REPO_ROOT, roster });
+    const relativeManifestPath = manifestPath.slice(`${REPO_ROOT}/`.length);
+    const declarations = roster.entries.filter(
+      (entry) => entry.package === packageName && entry.path === relativeManifestPath,
+    );
+    const gates = declarations.flatMap((entry) => entry.gates);
+    if (declarations.length !== 1 || gates.length !== 1) {
+      return {
+        status: 'FAIL',
+        detail: `${packageName} must have exactly one authoritative roster entry and gate; entries=${declarations.length} gates=${gates.length}`,
+      };
+    }
+    const [gate] = gates;
+    const runnable = resolved.runnable.filter(
+      (entry) => entry.package === packageName && entry.path === relativeManifestPath,
+    );
+    const invocation = manifest?.forgeax?.smokeInvocation;
+    if (
+      gate.commandId !== 'smoke' ||
+      gate.commandSource !== 'manifest-smokeInvocation' ||
+      gate.executionClass !== 'sharded' ||
+      runnable.length !== 1 ||
+      invocation !== runnable[0].command
+    ) {
+      return {
+        status: 'FAIL',
+        detail: `${packageName} roster gate must be unique, sharded, manifest-owned, and equal to forgeax.smokeInvocation; gate=${JSON.stringify(gate)} invocation=${JSON.stringify(invocation)}`,
+      };
+    }
+    return {
+      status: 'PASS',
+      detail: `${packageName} has one authoritative ${gate.gateId} gate, executionClass=sharded, command=${invocation}`,
+    };
+  } catch (error) {
+    return { status: 'FAIL', detail: `authoritative roster validation failed: ${error.message}` };
+  }
+}
+
+function workflowCommandCount(text, command) {
+  return (text ?? '').split('\n').filter((line) => {
+    const code = line.replace(/#.*$/, '');
+    return !line.trimStart().startsWith('#') && code.includes(command);
+  }).length;
 }
 
 // ─── (a) plan-strategy.md '\u4E0D\u4FDD\u7559 manual override' (literal stance phrase) ─
@@ -204,7 +254,10 @@ function readSafely(path) {
 
 // ─── (d) .github/workflows/*.yml non-comment manual-override grep = 0 ────
 {
-  const dir = join(REPO_ROOT, '.github/workflows');
+  const workflowDirIndex = process.argv.indexOf('--workflow-dir');
+  const dir = workflowDirIndex < 0
+    ? join(REPO_ROOT, '.github/workflows')
+    : resolve(process.argv[workflowDirIndex + 1]);
   const yamlFiles = readdirSync(dir)
     .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
     .map((f) => join(dir, f));
@@ -212,7 +265,27 @@ function readSafely(path) {
   for (const fp of yamlFiles) {
     const text = readSafely(fp);
     if (text == null) continue;
-    text.split('\n').forEach((line, idx) => {
+    const lines = text.split('\n');
+    lines.forEach((line, idx) => {
+      // Only the canonical optional-upload action may tolerate failure. Keep
+      // this narrow to the repository's explicit step layout; unfamiliar YAML
+      // shapes fail closed instead of creating a job or test escape hatch.
+      if (/^ {8}continue-on-error: true\s*(?:#.*)?$/.test(line)) {
+        let start = idx;
+        while (start > 0 && !/^ {6}- /.test(lines[start])) start--;
+        let end = start + 1;
+        while (end < lines.length && (
+          lines[end].trim() === '' || lines[end].trimStart().startsWith('#') ||
+          /^ {7}/.test(lines[end])
+        )) end++;
+        const step = lines.slice(start, end).map((entry) => entry.replace(/#.*$/, '').trimEnd());
+        if (
+          idx < end && /^ {6}- /.test(lines[start]) &&
+          step.filter((entry) => /^(?: {6}- | {8})uses: \.\/\.github\/actions\/upload-optional-artifact$/.test(entry)).length === 1 &&
+          step.filter((entry) => /^(?: {6}- | {8})uses:/.test(entry)).length === 1 &&
+          !step.some((entry) => /^(?: {6}- | {8})run:/.test(entry))
+        ) return;
+      }
       // Strip comments (`#` at line start or after leading whitespace) —
       // comments may explain "why we do NOT use X" stance and are not gated.
       const trimmed = line.trimStart();
@@ -228,118 +301,36 @@ function readSafely(path) {
     record(
       'd',
       'PASS',
-      `.github/workflows/*.yml non-comment manual-override grep = 0 (${yamlFiles.length} files scanned)`,
+      `no test/job overrides; only canonical optional diagnostic uploads tolerate failure (${yamlFiles.length} files scanned)`,
     );
   } else {
     record('d', 'FAIL', `manual-override hits:\n${offending.join('\n')}`);
   }
 }
 
-// ─── (e) F-3 byte-for-byte: ci.yml ↔ apps/hello/triangle/package.json ────
+// ─── (e) authoritative roster ↔ apps/hello/triangle/package.json ────────
 {
-  const ciText = readSafely(CI_YML);
-  const pkgText = readSafely(HELLO_PKG);
-  const target = 'pnpm --filter @forgeax/hello-triangle smoke';
-  if (ciText == null || pkgText == null) {
-    record('e', 'FAIL', `ci.yml=${ciText != null} pkg.json=${pkgText != null}`);
-  } else {
-    const ciHas = ciText.includes(target);
-    let pkg;
-    try {
-      pkg = JSON.parse(pkgText);
-    } catch (err) {
-      record('e', 'FAIL', `apps/hello/triangle/package.json JSON parse failed: ${err.message}`);
-      pkg = null;
-    }
-    if (pkg) {
-      const pkgInvocation = pkg?.forgeax?.smokeInvocation ?? null;
-      if (!ciHas) {
-        record('e', 'FAIL', `ci.yml does not contain literal '${target}'`);
-      } else if (pkgInvocation !== target) {
-        record(
-          'e',
-          'FAIL',
-          `apps/hello/triangle/package.json#forgeax.smokeInvocation = ${JSON.stringify(pkgInvocation)} ≠ ${JSON.stringify(target)}`,
-        );
-      } else {
-        record(
-          'e',
-          'PASS',
-          `ci.yml ↔ package.json#forgeax.smokeInvocation = '${target}' byte-for-byte same-source`,
-        );
-      }
-    }
-  }
+  const result = checkRosterSmokeGate('@forgeax/hello-triangle', HELLO_PKG);
+  record('e', result.status, result.detail);
 }
 
-// ─── (e2) hello-cube SSOT self-contained: ci.yml ↔ apps/hello/cube/package.json
-// feat-20260509-ecs-render-bridge-mvp D-S10 / AC-12b. Two anchors only;
-// NOT byte-aligned with hello-triangle (each app owns its own SSOT).
+// ─── (e2) authoritative roster ↔ apps/hello/cube/package.json ───────────
 {
-  const ciText = readSafely(CI_YML);
-  const cubePkgText = readSafely(HELLO_CUBE_PKG);
-  const target = 'pnpm --filter @forgeax/hello-cube smoke';
-  if (ciText == null || cubePkgText == null) {
-    record('e2', 'FAIL', `ci.yml=${ciText != null} hello-cube/pkg.json=${cubePkgText != null}`);
-  } else {
-    const ciHas = ciText.includes(target);
-    let pkg;
-    try {
-      pkg = JSON.parse(cubePkgText);
-    } catch (err) {
-      record('e2', 'FAIL', `apps/hello/cube/package.json JSON parse failed: ${err.message}`);
-      pkg = null;
-    }
-    if (pkg) {
-      const pkgInvocation = pkg?.forgeax?.smokeInvocation ?? null;
-      if (!ciHas) {
-        record('e2', 'FAIL', `ci.yml does not contain literal '${target}' (hello-cube smoke step missing; AC-12b)`);
-      } else if (pkgInvocation !== target) {
-        record(
-          'e2',
-          'FAIL',
-          `apps/hello/cube/package.json#forgeax.smokeInvocation = ${JSON.stringify(pkgInvocation)} ≠ ${JSON.stringify(target)}`,
-        );
-      } else {
-        record(
-          'e2',
-          'PASS',
-          `ci.yml ↔ hello-cube/package.json#forgeax.smokeInvocation = '${target}' self-contained SSOT (AC-12b; not byte-aligned with hello-triangle by design — D-S10)`,
-        );
-      }
-    }
-  }
+  const result = checkRosterSmokeGate('@forgeax/hello-cube', HELLO_CUBE_PKG);
+  record('e2', result.status, result.detail);
 }
 
-// ─── (f) F-3 byte-for-byte: ci.yml ↔ .claude/skills/forgeax-step-verify/SKILL.md
+// ─── (f) roster owns both hello smoke gates; ci.yml has no duplicate step ─
 {
   const ciText = readSafely(CI_YML);
-  const skillText = readSafely(VERIFY_SKILL);
-  const target = 'pnpm --filter @forgeax/hello-triangle smoke';
-  if (ciText == null) {
-    record('f', 'FAIL', 'ci.yml missing');
-  } else if (skillText == null || (existsSync(VERIFY_SKILL_MOUNT) && lstatSync(VERIFY_SKILL_MOUNT).isSymbolicLink())) {
-    // SKILL.md is a symlink mount from forgeax-harness and may be absent or
-    // stale in a consumer worktree; treat either case as SKIP_NOTE rather
-    // than FAIL. The harness-repo side is covered by the SKILL.md commit +
-    // grep safety net (recorded under w16).
-    record(
-      'f',
-      'PASS',
-      `forgeax-step-verify/SKILL.md is absent or externally mounted; validation skipped. The harness-repo side is backed by SKILL.md's own commit + grep safety net (recorded under w16).`,
-    );
+  const triangle = checkRosterSmokeGate('@forgeax/hello-triangle', HELLO_PKG);
+  const cube = checkRosterSmokeGate('@forgeax/hello-cube', HELLO_CUBE_PKG);
+  const duplicateTriangle = workflowCommandCount(ciText, 'pnpm --filter @forgeax/hello-triangle smoke');
+  const duplicateCube = workflowCommandCount(ciText, 'pnpm --filter @forgeax/hello-cube smoke');
+  if (triangle.status === 'PASS' && cube.status === 'PASS' && duplicateTriangle === 0 && duplicateCube === 0) {
+    record('f', 'PASS', 'authoritative roster proves unique sharded triangle/cube gates; ci.yml adds no duplicate smoke invocation');
   } else {
-    const ciHas = ciText.includes(target);
-    const skillHas = skillText.includes(target);
-    if (!ciHas || !skillHas) {
-      record(
-        'f',
-        'FAIL',
-        `ci.yml has=${ciHas} | SKILL.md has=${skillHas} (target='${target}')`,
-      );
-    } else {
-      record('f', 'PASS', `ci.yml ↔ SKILL.md = '${target}' byte-for-byte same-source`);
-    }
+    record('f', 'FAIL', `triangle=${triangle.detail}; cube=${cube.detail}; ci.yml duplicate non-comment literals triangle=${duplicateTriangle} cube=${duplicateCube}`);
   }
 }
 
@@ -512,10 +503,13 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // (`device-lost` / `oom` / `internal-error`, breaking point #4) and
     // fan-outs through `Renderer.onError`. The pack-level field shape
     // `pack._internal_getRawDevice(device)` matches `/_internal_getRawDevice\s*\(/`
-    // so the file must be in the allow-list; renamed-imports are not
-    // applicable here because the call goes through a `RhiBackendPack`
-    // record property, not a top-level import.
-    'packages/render/src/assembly/factory.ts',
+    // so each renderer assembly owner that registers this spec listener must
+    // be in the allow-list; renamed-imports are not applicable here because
+    // the call goes through a `RhiBackendPack` record property.
+    'packages/render/src/assembly/webgpu-renderer.ts',
+    // The recovery fan-out now owns that listener registration after the
+    // renderer assembly extraction; it remains the same D-S1 owner.
+    'packages/render/src/assembly/recovery/device-loss-fanout.ts',
     // feat-20260511-asset-system-v1 verify F-1 fix-up (w17): dual-impl
     // texture upload spike invokes `_internal_getRawDevice(device)` to drop
     // to the raw GPUDevice for readback (copyTextureToBuffer destination
@@ -540,6 +534,91 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // still in flight. This is a test-only D-S1 boundary, not a runtime
     // recording path.
     'packages/render/src/__tests__/gpu-driven-view-gpu-evidence.ts',
+    // Cached-depth Browser/Dawn verification observes native validation errors
+    // and disposes its fresh test device. All capture and replay work uses RHI.
+    'packages/rhi-debug/src/__tests__/cached-depth.fixture.ts',
+    // Independent Standard map probes observe native validation and destroy
+    // test devices; all draw, capture, replay and readback work stays on RHI.
+    'packages/render/src/__tests__/standard-independent-maps.dawn.test.ts',
+    'packages/render/src/__tests__/standard-independent-maps.browser.test.ts',
+    // Standard GBuffer and public MRT Browser/Dawn verification retain fresh replay devices
+    // until the live Renderer journey ends, observes native validation errors,
+    // and explicitly destroys those test-owned devices during final cleanup.
+    // Capture, replay, and readback themselves remain on the RHI-debug surface.
+    'packages/runtime/src/__tests__/standard-gbuffer-replay.fixture.ts',
+    // Visible-surface diagnostics observe native attachments and pause a real
+    // mapAsync completion to inject loss. Fresh replay devices are test-owned;
+    // production observation, capture and replay continue through RHI.
+    'packages/runtime/src/__tests__/visible-surface-replay.fixture.ts',
+    // Normal/bump replay uses the same validation-only and device-cleanup boundary.
+    'packages/runtime/src/__tests__/normal-bump.fixture.ts',
+    // Standard displacement replay uses the native boundary only for validation
+    // scopes and fresh test-device cleanup. Draw, capture, replay, and readback
+    // remain on the RHI and RHI Debug surfaces.
+    'packages/runtime/src/__tests__/standard-displacement.fixture.ts',
+    // Outline replay uses the native boundary only to destroy its fresh
+    // test-owned device; capture, replay and pixel inspection remain on RHI.
+    'packages/runtime/src/__tests__/outline.fixture.ts',
+    // Adaptive DRS replay uses the same cleanup-only boundary for its fresh
+    // test-owned device; capture, replay and pixel inspection remain on RHI.
+    'packages/runtime/src/__tests__/adaptive-drs.fixture.ts',
+    // SMAA replay uses this boundary only to destroy its fresh test-owned
+    // device; all capture, replay and stage readback remain on RHI Debug.
+    'packages/runtime/src/__tests__/smaa.fixture.ts',
+    'packages/runtime/src/__tests__/material-mrt.fixture.ts',
+    // Clipping Browser/Dawn evidence uses native error scopes and disposes
+    // fresh test-owned devices; all GPU work and readback remain on RHI Debug.
+    'packages/runtime/src/__tests__/clipping-planes.fixture.ts',
+    // Planar reflection Dawn evidence listens for validation errors and
+    // destroys its fresh replay device; capture and readback stay on RHI.
+    'packages/runtime/src/__tests__/planar-reflection.dawn.test.ts',
+    // Canvas Browser evidence observes native validation and destroys fresh
+    // test-owned devices; upload, capture, replay and readback stay on RHI.
+    'packages/runtime/src/__tests__/canvas-texture.browser.test.ts',
+
+    // Shared-material/PT fixtures observe native validation and destroy their
+    // test-owned devices. GPU work, capture and replay stay on the RHI surface.
+    'packages/render/src/__tests__/raytracing/path-lighting.fixture.ts',
+    'packages/render/src/__tests__/raytracing/path-tracer.fixture.ts',
+    'packages/render/src/__tests__/raytracing/path-buffer.fixture.ts',
+    'packages/render/src/__tests__/raytracing/raster-source.fixture.ts',
+    // Retained-scene query fixture observes native validation; all work uses RHI.
+    'packages/render/src/__tests__/raytracing/scene-projection.gpu-fixture.ts',
+    'packages/render/src/__tests__/raytracing/material-publication.gpu-fixture.ts',
+    'packages/render/src/__tests__/raytracing/submitted-textures.gpu-fixture.ts',
+    // Observe validation and destroy the captured source device before fresh replay.
+    'packages/render/src/__tests__/raytracing/normal-frame.fixture.ts',
+    'packages/render/src/__tests__/raytracing/surface-bsdf.fixture.ts',
+    // SDF/card fixtures use native access only for validation and test-device cleanup.
+    'packages/render/src/__tests__/raytracing/sdf-cards.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-cases.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-material.fixture.ts',
+    'packages/render/src/__tests__/raytracing/card-coverage.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-two-sided.fixture.ts',
+    'packages/render/src/__tests__/raytracing/multi-material-cards.fixture.ts',
+    'packages/render/src/__tests__/raytracing/global-sdf.fixture.ts',
+    'packages/render/src/__tests__/raytracing/global-sdf-query.fixture.ts',
+    'packages/render/src/__tests__/raytracing/global-card-lookup.fixture.ts',
+    'packages/render/src/__tests__/raytracing/global-sdf-step.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-visibility.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-storage.fixture.ts',
+    'packages/render/src/__tests__/raytracing/sdf-expansion.fixture.ts',
+    'packages/render/src/__tests__/raytracing/card-sampling.fixture.ts',
+    'packages/render/src/__tests__/raytracing/visibility-cards.fixture.ts',
+    // Diffuse GI observes native validation and destroys fresh test devices;
+    // raster, compute, PT reference, capture and replay work remain on RHI.
+    'packages/render/src/__tests__/raytracing/diffuse-gi.fixture.ts',
+    'packages/render/src/__tests__/raytracing/diffuse-gi-reference.fixture.ts',
+    'packages/render/src/__tests__/raytracing/gi-view.fixture.ts',
+    // Ordinary Renderer GI destroys only its fresh test-owned replay device;
+    // draw, transport, capture, replay, and readback remain on RHI.
+    'packages/runtime/src/__tests__/renderer-diffuse.fixture.ts',
+    // Diffuse reconstruction observes validation and disposes fresh test devices.
+    // All production filtering and replay use the RHI surface.
+    'packages/render/src/__tests__/raytracing/diffuse-reconstruction.fixture.ts',
+    // Rect source-texture Dawn evidence scopes validation on and destroys its
+    // fresh replay devices; capture, replay and readback stay on RHI Debug.
+    'packages/runtime/src/__tests__/rect-light-source-texture.dawn.test.ts',
   ]);
   // feat-20260510-rhi-resource-creation M4 (w28 / w29): the previous
   // `apps/hello/triangle/src/main.ts` allow-list entry was removed - the

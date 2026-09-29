@@ -48,6 +48,21 @@ const importers = new ImporterRegistry();
 importers.register(fbxImporter);
 ```
 
+## Unified asset producer
+
+The project CLI selects this producer automatically for `.fbx` sources. It
+creates the sibling sidecar and reuses existing GUIDs by producer `sourceKey`
+or `(kind, sourceIndex)` when a legacy sidecar has no matching key:
+
+```bash
+forgeax asset import assets/character.fbx --root ./game --json
+forgeax asset import assets/character.fbx --dry-run --root ./game --json
+```
+
+The sidecar is then consumed by the same `ImporterRegistry` and `runImport`
+path as every other external source. An existing non-FBX sidecar is a
+structured conflict; the CLI never replaces another producer's identity.
+
 ## 7 sub-asset POD types
 
 The FBX importer produces 7 sub-asset kinds. Types are defined in
@@ -61,13 +76,17 @@ from here.
 | `MaterialPod` | PBR parameters (StingrayPBS / Phong / Lambert / fallback) | `@forgeax/engine-types` `MaterialPod` |
 | `ScenePod` | Entity hierarchy + mounts | `@forgeax/engine-types` `ScenePod` |
 | `TexturePod` | External file path | `@forgeax/engine-types` `TexturePod` |
-| `SkeletonPod` | Joint count + inverse bind matrices | `@forgeax/engine-types` `SkeletonPod` |
+| `SkeletonPod` | Joint count + inverse bind matrices + fitted `shadowCapsules` (same `fitShadowCapsules` as glTF) | `@forgeax/engine-types` `SkeletonPod` |
 | `SkinPod` | Skeleton GUID + joint paths | `@forgeax/engine-types` `SkinPod` |
 | `AnimationClipPod` | Duration + channels + samplers | `@forgeax/engine-types` `AnimationClipPod` |
 
 ## Material mapping
 
-Three branches, one output (`passes[0].shader` = `'forgeax::default-standard-pbr'`).
+Standalone roots publish the shared Standard parameter contract with
+`passes[0].program.module` selecting rigid Standard or `forgeax::pbr-skin`
+for material slots used by the skinned mesh. The ordinary material cooker
+publishes their admitted programs before source-package loading. Parent-bearing
+materials inherit that contract and publish only their values and parent GUID.
 Priority: StingrayPBS > Phong > Lambert > fallback.
 
 | Branch | Detection | Mapping |
@@ -186,3 +205,33 @@ hash file).
 ## License
 
 MIT
+
+## FbxLODGroup contract
+
+The ufbx bridge emits native child order and optional native threshold/mode
+diagnostics. The first child is the root MeshAsset (LOD0); remaining children
+are ordinary mesh GUID references projected into `MeshAsset.lods[]` and root
+`refs[]`. Native distance or percentage thresholds are diagnostic facts only;
+the runtime selector uses the shared absolute screen-coverage contract.
+
+```mermaid
+flowchart LR
+  A["FbxLODGroup child order"] --> B["sourceKey and GUID lookup"]
+  B --> C["shared coverage defaults or sidecar values"]
+  C --> D["MeshAsset lods plus refs closure"]
+```
+
+Forced `eShow` and `eHide` modes fail as `fbx-lod-display-mode-unsupported`
+with `expected`, `hint`, and the native `displayMode` detail. Repair the
+FbxLODGroup in the DCC source, then recook; no partial Pack publication is
+allowed.
+
+### Animated skin bounds
+
+After applying source/sidecar bounds, the FBX importer derives missing bounds
+from control-point influences, inverse bind matrices, node hierarchy, morph
+deltas and the same resampled clips it publishes. Unique full joint paths or
+unambiguous source joint names must resolve. The shared [animation enclosure
+contract](../animation/README.md#imported-animation-bounds) defines coverage and
+fail-closed cases. No per-frame import or bind-pose guess is needed to enter the
+GPU skin lane.

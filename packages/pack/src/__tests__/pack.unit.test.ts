@@ -74,8 +74,8 @@ const V1_WHITELIST = new Set([
       it('equals deriveBuiltin(HANDLE_QUAD) result (UUIDv5 deterministic)', async () => {
         const mod = (await import('../builtin.js')) as Record<string, unknown>;
         const quad = mod['BUILTIN_HANDLE_QUAD'] as string;
-        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Promise<Uint8Array>;
-        const rawUuidBytes = await _deriveBuiltin('HANDLE_QUAD');
+        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Uint8Array;
+        const rawUuidBytes = _deriveBuiltin('HANDLE_QUAD');
         const AssetGuidMod = (await import('../guid.js')) as Record<string, unknown>;
         const format = (AssetGuidMod.AssetGuid as Record<string, unknown>).format as (
           guid: Uint8Array,
@@ -98,8 +98,8 @@ const V1_WHITELIST = new Set([
       it('CUBE constant is deterministic UUIDv5', async () => {
         const mod = (await import('../builtin.js')) as Record<string, unknown>;
         const cube = mod['BUILTIN_HANDLE_CUBE'] as string;
-        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Promise<Uint8Array>;
-        const raw = await _deriveBuiltin('HANDLE_CUBE');
+        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Uint8Array;
+        const raw = _deriveBuiltin('HANDLE_CUBE');
         const AssetGuidMod = (await import('../guid.js')) as Record<string, unknown>;
         const format = (AssetGuidMod.AssetGuid as Record<string, unknown>).format as (
           guid: Uint8Array,
@@ -110,8 +110,8 @@ const V1_WHITELIST = new Set([
       it('TRIANGLE constant is deterministic UUIDv5', async () => {
         const mod = (await import('../builtin.js')) as Record<string, unknown>;
         const triangle = mod['BUILTIN_HANDLE_TRIANGLE'] as string;
-        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Promise<Uint8Array>;
-        const raw = await _deriveBuiltin('HANDLE_TRIANGLE');
+        const _deriveBuiltin = mod.deriveBuiltin as (name: string) => Uint8Array;
+        const raw = _deriveBuiltin('HANDLE_TRIANGLE');
         const AssetGuidMod = (await import('../guid.js')) as Record<string, unknown>;
         const format = (AssetGuidMod.AssetGuid as Record<string, unknown>).format as (
           guid: Uint8Array,
@@ -540,7 +540,7 @@ const V1_WHITELIST = new Set([
           cwd: tempDir,
         });
         expect(code).toBe(0);
-        expect(io.stdout).toContain('material-validated: 1');
+        expect(JSON.parse(io.stdout[0] as string).summary.materialCount).toBe(1);
       });
 
       it('CLI verify prints material-validated: 0 when no material assets', async () => {
@@ -559,7 +559,7 @@ const V1_WHITELIST = new Set([
           cwd: tempDir,
         });
         expect(code).toBe(0);
-        expect(io.stdout).toContain('material-validated: 0');
+        expect(JSON.parse(io.stdout[0] as string).summary.materialCount).toBe(0);
       });
 
       it('CLI verify reports material payloads for later cook validation', async () => {
@@ -579,7 +579,7 @@ const V1_WHITELIST = new Set([
         });
         expect(code).toBe(0);
         expect(io.stderr).toEqual([]);
-        expect(io.stdout).toContain('material-validated: 1');
+        expect(JSON.parse(io.stdout[0] as string).summary.materialCount).toBe(1);
       });
 
       it('CLI verify counts only material assets among multiple kinds', async () => {
@@ -603,7 +603,7 @@ const V1_WHITELIST = new Set([
           cwd: tempDir,
         });
         expect(code).toBe(0);
-        expect(io.stdout).toContain('material-validated: 1');
+        expect(JSON.parse(io.stdout[0] as string).summary.materialCount).toBe(1);
       });
     });
   });
@@ -628,7 +628,7 @@ const V1_WHITELIST = new Set([
     type: 'object',
     additionalProperties: false,
     required: ['parent'],
-    properties: { parent: { type: 'integer', minimum: 0 } },
+    properties: { parent: { type: 'string', minLength: 1 } },
   } as const;
   const componentSchemas: Record<string, object> = {
     Transform: TRANSFORM_SCHEMA,
@@ -639,30 +639,34 @@ const V1_WHITELIST = new Set([
 
   describe('scene-schema.test.ts', () => {
     describe('SceneAsset payload schema - positive cases (w4 / D-P4)', () => {
-      it('accepts a valid 3-node payload (Transform + MeshFilter + ChildOf)', () => {
+      it('accepts a valid keyed payload (Transform + MeshFilter + ChildOf)', () => {
         const payload = {
           kind: 'scene',
-          entities: [
-            {
-              localId: 0,
+          entities: {
+            root: {
               components: {
                 Transform: { pos: [1, 2, 3] },
                 MeshFilter: { mesh: 'cube' },
               },
             },
-            {
-              localId: 1,
-              components: { Transform: { pos: [0, 0, 0] }, ChildOf: { parent: 0 } },
+            child: { components: { Transform: { pos: [0, 0, 0] }, ChildOf: { parent: 'root' } } },
+            grandchild: {
+              components: { Transform: { pos: [5, 5, 5] }, ChildOf: { parent: 'child' } },
             },
-            {
-              localId: 2,
-              components: { Transform: { pos: [5, 5, 5] }, ChildOf: { parent: 1 } },
-            },
-          ],
+          },
         };
         const ok = sceneValidate(payload);
         expect(ok).toBe(true);
         expect(sceneValidate.errors ?? []).toEqual([]);
+      });
+
+      it('accepts explicit skin dependency refs in the keyed payload', () => {
+        const payload = {
+          kind: 'scene',
+          skinGuids: ['skin-guid', 0],
+          entities: { root: { components: {} } },
+        };
+        expect(sceneValidate(payload)).toBe(true);
       });
     });
 
@@ -670,27 +674,27 @@ const V1_WHITELIST = new Set([
       it('rejects Transform with typo field `pozX`, ajv error mentions additional properties', () => {
         const payload = {
           kind: 'scene',
-          entities: [
-            { localId: 0, components: { Transform: { pos: [1, 2, 3] } } },
-            { localId: 1, components: { Transform: { pos: [0, 0, 0] } } },
-            { localId: 2, components: { Transform: { pozX: 7, pos: [0, 0, 0] } } },
-          ],
+          entities: {
+            root: { components: { Transform: { pos: [1, 2, 3] } } },
+            child: { components: { Transform: { pos: [0, 0, 0] } } },
+            broken: { components: { Transform: { pozX: 7, pos: [0, 0, 0] } } },
+          },
         };
         const ok = sceneValidate(payload);
         expect(ok).toBe(false);
         const errors = sceneValidate.errors ?? [];
         expect(errors.length).toBeGreaterThan(0);
         const e = errors[0];
-        expect(e?.instancePath ?? '').toContain('/entities/2/components/Transform');
+        expect(e?.instancePath ?? '').toContain('/entities/broken/components/Transform');
         expect(e?.message ?? '').toContain('additional properties');
       });
     });
 
     describe('SceneAsset payload schema - ChildOf.parent type guard', () => {
-      it('rejects ChildOf.parent that is not a non-negative integer', () => {
+      it('rejects ChildOf.parent that is not a non-empty entity key', () => {
         const payload = {
           kind: 'scene',
-          entities: [{ localId: 0, components: { ChildOf: { parent: -1 } } }],
+          entities: { root: { components: { ChildOf: { parent: 3 } } } },
         };
         const ok = sceneValidate(payload);
         expect(ok).toBe(false);
@@ -703,7 +707,7 @@ const V1_WHITELIST = new Set([
       it('rejects a SceneEntity.components key not in the registered schema map', () => {
         const payload = {
           kind: 'scene',
-          entities: [{ localId: 0, components: { MysteryComponent: { foo: 1 } } }],
+          entities: { root: { components: { MysteryComponent: { foo: 1 } } } },
         };
         const ok = sceneValidate(payload);
         expect(ok).toBe(false);
@@ -713,135 +717,93 @@ const V1_WHITELIST = new Set([
         expect(e?.message ?? '').toContain('additional properties');
       });
     });
+
+    it('rejects an empty authored entity key', () => {
+      const payload = { kind: 'scene', entities: { '': { components: {} } } };
+      expect(sceneValidate(payload)).toBe(false);
+      expect(
+        (sceneValidate.errors ?? []).some((e) => (e?.message ?? '').includes('property name')),
+      ).toBe(true);
+    });
   });
 
-  describe('mount-override-schema.test.ts', () => {
-    // feat-20260713-mount-override-component-add-and-shared-ref-round M1 / w1
-    // (AC-03). `mountOverrideSchema.field` is now optional so the override shape
-    // carries an implicit component-granular discriminant: an override WITH
-    // `field` patches one field (legacy 4-key), an override WITHOUT `field`
-    // adds/upserts the whole component (new 3-key). The schema accepts both;
-    // `localId` / `comp` / `value` stay required; `additionalProperties: false`
-    // rejects any op-tag discriminant (OOS: no `switch (op)` fan-out downstream).
-    function makeMountPayload(override: Record<string, unknown>): Record<string, unknown> {
+  describe('scene-instance-schema.test.ts', () => {
+    type MutableInstanceEntity = {
+      instance: { overrides: Array<Record<string, unknown>> };
+    };
+
+    function makeInstancePayload(override: Record<string, unknown>): Record<string, unknown> {
       return {
         kind: 'scene',
-        entities: [{ localId: 0, components: { Transform: { pos: [0, 0, 0] } } }],
-        mounts: [
-          {
-            localId: 1,
-            source: 0,
-            memberFirst: 2,
-            memberCount: 1,
-            overrides: [override],
+        entities: {
+          root: { components: {} },
+          child: {
+            components: {},
+            instance: {
+              source: 'child-guid',
+              overrides: [{ target: ['leaf'], components: override }],
+            },
           },
-        ],
+        },
       };
     }
 
-    it('accepts the 4-key patch shape (with field)', () => {
+    it('accepts a keyed nested instance with component fields', () => {
+      const ok = sceneValidate(makeInstancePayload({ Transform: { pos: [1, 2, 3] } }));
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+    });
+
+    it('accepts an ordered override with multiple components', () => {
       const ok = sceneValidate(
-        makeMountPayload({ localId: 2, comp: 'Transform', field: 'pos', value: [1, 2, 3] }),
+        makeInstancePayload({
+          Transform: { pos: [1, 2, 3] },
+          MeshFilter: { mesh: 'cube' },
+        }),
       );
       expect(ok).toBe(true);
       expect(sceneValidate.errors ?? []).toEqual([]);
     });
 
-    it('accepts the 3-key add shape (without field)', () => {
-      const ok = sceneValidate(
-        makeMountPayload({ localId: 2, comp: 'Transform', value: { pos: [1, 2, 3] } }),
-      );
-      expect(ok).toBe(true);
-      expect(sceneValidate.errors ?? []).toEqual([]);
+    it('rejects an override missing target', () => {
+      const payload = makeInstancePayload({ Transform: { pos: [1, 2, 3] } });
+      const instance = (payload.entities as Record<string, MutableInstanceEntity>).child.instance;
+      instance.overrides = [{ components: { Transform: { pos: [1, 2, 3] } } }];
+      expect(sceneValidate(payload)).toBe(false);
     });
 
-    it('rejects an override missing localId', () => {
-      const ok = sceneValidate(makeMountPayload({ comp: 'Transform', value: [1, 2, 3] }));
-      expect(ok).toBe(false);
-      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    it('rejects an override missing components', () => {
+      const payload = makeInstancePayload({ Transform: { pos: [1, 2, 3] } });
+      const instance = (payload.entities as Record<string, MutableInstanceEntity>).child.instance;
+      instance.overrides = [{ target: ['leaf'] }];
+      expect(sceneValidate(payload)).toBe(false);
     });
 
-    it('rejects an override missing comp', () => {
-      const ok = sceneValidate(makeMountPayload({ localId: 2, value: [1, 2, 3] }));
-      expect(ok).toBe(false);
-      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    it('rejects an instance missing source', () => {
+      const payload = makeInstancePayload({ Transform: { pos: [1, 2, 3] } });
+      const child = (payload.entities as Record<string, MutableInstanceEntity>).child;
+      child.instance = { overrides: [{ target: ['leaf'], components: {} }] };
+      expect(sceneValidate(payload)).toBe(false);
     });
 
-    it('rejects an override missing value', () => {
-      const ok = sceneValidate(makeMountPayload({ localId: 2, comp: 'Transform', field: 'pos' }));
-      expect(ok).toBe(false);
-      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    it('rejects an override carrying an op discriminant field', () => {
+      const payload = makeInstancePayload({ Transform: { pos: [1, 2, 3] } });
+      const instance = (payload.entities as Record<string, MutableInstanceEntity>).child.instance;
+      instance.overrides = [{ target: ['leaf'], components: {}, op: 'add' }];
+      expect(sceneValidate(payload)).toBe(false);
+      expect(
+        (sceneValidate.errors ?? []).some((e) =>
+          (e?.message ?? '').includes('additional properties'),
+        ),
+      ).toBe(true);
     });
 
-    it('rejects an override carrying an op discriminant field (additionalProperties:false)', () => {
-      const ok = sceneValidate(
-        makeMountPayload({ localId: 2, comp: 'Transform', value: [1, 2, 3], op: 'add' }),
-      );
-      expect(ok).toBe(false);
-      const errors = sceneValidate.errors ?? [];
-      expect(errors.length).toBeGreaterThan(0);
-      expect(errors.some((e) => (e?.message ?? '').includes('additional properties'))).toBe(true);
-    });
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // w22 — AC-03 / D-9: serialize→validate round-trip on fold-produced overrides
-    //
-    // The M5 collect fold emits component-add overrides (no `field`) whose value
-    // is a per-field map that may carry shared<T> GUID strings (e.g. the added
-    // AnimationPlayer.clips = [GUID, 0, 0, 0]). ajv's mountOverrideSchema must
-    // accept that fold-produced shape, and a serialize→validate→deserialize
-    // round-trip must not drop the override data. The override value is a free-
-    // form object (`value: {}`) at the schema layer — runtime type checks live
-    // in the ecs apply path (setSceneOverride / _validateMountOverrides).
-    // ═════════════════════════════════════════════════════════════════════════
-
-    const W22_CLIP = 'f1e2d3c4-b5a6-4b7c-8d9e-0f1a2b3c4d5e';
-
-    it('(w22-a) accepts a fold-produced add-override with a shared-field GUID array value', () => {
-      const payload = makeMountPayload({
-        localId: 2,
-        comp: 'Transform',
-        // component-add form (no field); value carries a positional array with a
-        // GUID string at slot 0 and NULL-sentinel placeholders — the exact shape
-        // the fold + serialize wiring emits for AnimationPlayer.clips.
-        value: { clips: [W22_CLIP, 0, 0, 0] },
-      });
-      const ok = sceneValidate(payload);
-      expect(ok).toBe(true);
-      expect(sceneValidate.errors ?? []).toEqual([]);
-    });
-
-    it('(w22-b) accepts an add-override whose value has no shared field at all', () => {
-      // component-add with a plain scalar-only value map (the minimal add shape).
-      const ok = sceneValidate(
-        makeMountPayload({ localId: 2, comp: 'Transform', value: { pos: [9, 9, 9] } }),
-      );
-      expect(ok).toBe(true);
-      expect(sceneValidate.errors ?? []).toEqual([]);
-    });
-
-    it('(w22-c) round-trip: JSON serialize → validate → parse preserves override data', () => {
-      const override = {
-        localId: 2,
-        comp: 'Transform',
-        value: { clips: [W22_CLIP, 0, 0, 0], pos: [1, 2, 3] },
-      };
-      const payload = makeMountPayload(override);
-
-      // Simulate the on-disk pack path: JSON.stringify → fetch → JSON.parse.
+    it('round-trips keyed instance override data through JSON', () => {
+      const payload = makeInstancePayload({ Transform: { pos: [1, 2, 3] } });
       const roundTripped = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
-      const ok = sceneValidate(roundTripped);
-      expect(ok).toBe(true);
-      expect(sceneValidate.errors ?? []).toEqual([]);
-
-      // No data lost: the override survives the round-trip byte-for-byte.
-      const mounts = roundTripped.mounts as Array<Record<string, unknown>>;
-      const overrides = mounts[0]?.overrides as Array<Record<string, unknown>>;
-      expect(overrides).toHaveLength(1);
-      expect(overrides[0]).toEqual(override);
-      const value = overrides[0]?.value as Record<string, unknown>;
-      expect(value.clips).toEqual([W22_CLIP, 0, 0, 0]);
-      expect(value.pos).toEqual([1, 2, 3]);
+      expect(sceneValidate(roundTripped)).toBe(true);
+      const child = (roundTripped.entities as Record<string, MutableInstanceEntity>).child;
+      expect(child.instance.overrides[0]?.target).toEqual(['leaf']);
     });
   });
 }
@@ -974,35 +936,35 @@ const V1_WHITELIST = new Set([
 
     describe('deriveBuiltin', () => {
       it('HANDLE_CUBE derives fixed bytes (snapshot)', async () => {
-        const guid = await deriveBuiltin('HANDLE_CUBE');
+        const guid = deriveBuiltin('HANDLE_CUBE');
         expect(AssetGuid.format(guid)).toMatchInlineSnapshot(
           '"cbe42beb-8975-5096-b3a1-3dda4cb4c077"',
         );
       });
 
       it('HANDLE_TRIANGLE derives fixed bytes (snapshot)', async () => {
-        const guid = await deriveBuiltin('HANDLE_TRIANGLE');
+        const guid = deriveBuiltin('HANDLE_TRIANGLE');
         expect(AssetGuid.format(guid)).toMatchInlineSnapshot(
           '"22592f07-d967-5116-b29c-fa9781929ba8"',
         );
       });
 
       it('same name always derives same bytes', async () => {
-        const a = await deriveBuiltin('HANDLE_CUBE');
-        const b = await deriveBuiltin('HANDLE_CUBE');
+        const a = deriveBuiltin('HANDLE_CUBE');
+        const b = deriveBuiltin('HANDLE_CUBE');
         expect(AssetGuid.equals(a, b)).toBe(true);
       });
 
       it('different names derive different GUIDs', async () => {
-        const cube = await deriveBuiltin('HANDLE_CUBE');
-        const tri = await deriveBuiltin('HANDLE_TRIANGLE');
+        const cube = deriveBuiltin('HANDLE_CUBE');
+        const tri = deriveBuiltin('HANDLE_TRIANGLE');
         expect(AssetGuid.equals(cube, tri)).toBe(false);
       });
     });
 
     describe('BUILTIN_HANDLE_CUBE constant', () => {
       it("matches deriveBuiltin('HANDLE_CUBE')", async () => {
-        const derived = await deriveBuiltin('HANDLE_CUBE');
+        const derived = deriveBuiltin('HANDLE_CUBE');
         const constant = AssetGuid.parse(BUILTIN_HANDLE_CUBE);
         if (!constant.ok) throw new Error('expected ok');
         expect(AssetGuid.equals(derived, constant.value)).toBe(true);
@@ -1011,7 +973,7 @@ const V1_WHITELIST = new Set([
 
     describe('BUILTIN_HANDLE_TRIANGLE constant', () => {
       it("matches deriveBuiltin('HANDLE_TRIANGLE')", async () => {
-        const derived = await deriveBuiltin('HANDLE_TRIANGLE');
+        const derived = deriveBuiltin('HANDLE_TRIANGLE');
         const constant = AssetGuid.parse(BUILTIN_HANDLE_TRIANGLE);
         if (!constant.ok) throw new Error('expected ok');
         expect(AssetGuid.equals(derived, constant.value)).toBe(true);
@@ -1129,7 +1091,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-meta-missing',
           expected: 'every source file must have a corresponding .meta.json in strict mode',
-          hint: 'run forgeax-engine-remote-asset scan --roots to list files without .meta.json',
+          hint: 'run forgeax asset list --root <project> --json to list source files without .meta.json',
           detail,
         });
         expect(err.code).toBe('pack-meta-missing' satisfies PackErrorCode);
@@ -1147,7 +1109,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-guid-collision',
           expected: 'every GUID must be unique across all .pack.json files in the scan roots',
-          hint: 'run forgeax-engine-remote-asset verify to list all GUID collisions',
+          hint: 'run forgeax asset verify --root <project> --json to list all GUID collisions',
           detail,
         });
         expect(err.code).toBe('pack-guid-collision' satisfies PackErrorCode);
@@ -1168,7 +1130,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-cyclic-reference',
           expected: 'asset reference graph must be acyclic',
-          hint: 'run forgeax-engine-remote-asset verify to list the cycle path',
+          hint: 'run forgeax asset verify --root <project> --json to list the cycle path',
           detail,
         });
         expect(err.code).toBe('pack-cyclic-reference' satisfies PackErrorCode);
@@ -1610,7 +1572,7 @@ const V1_WHITELIST = new Set([
         });
         expect(exitCode).toBe(0);
         expect(stderrParts).toEqual([]);
-        expect(stdoutParts).toContain('material-validated: 0');
+        expect(JSON.parse(stdoutParts[0] as string).summary.materialCount).toBe(0);
       });
 
       it('accepts shader sidecar with missing paramSchema', async () => {
@@ -1644,7 +1606,7 @@ const V1_WHITELIST = new Set([
         });
         expect(exitCode).toBe(0);
         expect(stderrParts).toEqual([]);
-        expect(stdoutParts).toContain('material-validated: 0');
+        expect(JSON.parse(stdoutParts[0] as string).summary.materialCount).toBe(0);
       });
 
       it('ignores legacy shader paramSchema types', async () => {
@@ -1970,249 +1932,12 @@ const V1_WHITELIST = new Set([
       expect(result.ok).toBe(true);
     });
 
-    it('AC-17: explicit source=hero.png + companion file → scan passes (backward compat)', async () => {
+    it('AC-17: explicit source=hero.png + companion file → scan passes', async () => {
       await writeFile(join(tmpDir, 'hero.png.meta.json'), makeMeta({ source: 'hero.png' }));
       await writeFile(join(tmpDir, 'hero.png'), Buffer.from('fake png'));
 
       const result = await scan([tmpDir]);
       expect(result.ok).toBe(true);
-    });
-  });
-
-  describe('w15-scanner-path-integration.test.ts — AC-5+AC-10', () => {
-    let tmpDir: string;
-
-    beforeEach(async () => {
-      tmpDir = await mkdtemp(join(tmpdir(), 'forgeax-ac5-'));
-    });
-    afterEach(async () => {
-      await rm(tmpDir, { recursive: true, force: true });
-    });
-
-    it('AC-5: @name/ path resolves correctly when file exists', async () => {
-      const libDir = join(tmpDir, 'lib');
-      await mkdir(libDir);
-      await writeFile(join(libDir, 'shared.png'), Buffer.from('fake png'));
-      const metaContent = JSON.stringify({
-        schemaVersion: '1.0.0',
-        kind: 'external-asset-package',
-        importer: 'image',
-        source: '@shared/shared.png',
-        importSettings: {},
-        subAssets: [
-          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
-        ],
-      });
-      await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
-
-      // The scan runs inside its own process.cwd() — paths table resolution uses cwd
-      // The tmpDir is not the cwd, so @shared/ will report pack-unknown-path.
-      // AC-5: we need the path table to be configured at the scan's cwd.
-      // For a unit test, we verify instead via resolveAssetSource directly:
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const paths = { shared: libDir };
-      const result = resolveAS(join(tmpDir, 'ref.meta.json'), '@shared/shared.png', paths);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(join(libDir, 'shared.png'));
-      }
-    });
-
-    it('AC-10: path configured but file missing → pack-orphan-meta', async () => {
-      const libDir = join(tmpDir, 'lib');
-      await mkdir(libDir);
-      // Do NOT create missing.png in libDir
-      const metaContent = JSON.stringify({
-        schemaVersion: '1.0.0',
-        kind: 'external-asset-package',
-        importer: 'image',
-        source: '@shared/missing.png',
-        importSettings: {},
-        subAssets: [
-          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
-        ],
-      });
-      await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
-
-      // resolveAssetSource resolves the path but does not stat — the resolved path will be returned ok
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const paths = { shared: libDir };
-      const result = resolveAS(join(tmpDir, 'ref.meta.json'), '@shared/missing.png', paths);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(join(libDir, 'missing.png'));
-        // The actual orphan check (stat) is done by the scanner caller
-      }
-    });
-
-    it('AC-10: scanner reports pack-orphan-meta when resolved path file does not exist', async () => {
-      const metaContent = makeMeta({ source: 'nowhere.png' });
-      await writeFile(join(tmpDir, 'orphan.meta.json'), metaContent);
-      // Do NOT create nowhere.png
-
-      const result = await scan([tmpDir]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('pack-orphan-meta');
-        if (result.error.code === 'pack-orphan-meta') {
-          expect(result.error.detail.expectedFile).toContain('nowhere.png');
-        }
-      }
-    });
-  });
-
-  describe('scanner @name/ end-to-end via cwd package.json — AC-5/AC-8', () => {
-    let tmpDir: string;
-    let originalCwd: string;
-
-    beforeEach(async () => {
-      originalCwd = process.cwd();
-      tmpDir = await mkdtemp(join(tmpdir(), 'forgeax-ac5e2e-'));
-      process.chdir(tmpDir);
-    });
-    afterEach(async () => {
-      process.chdir(originalCwd);
-      await rm(tmpDir, { recursive: true, force: true });
-    });
-
-    it('AC-5: scan() passes orphan check for @name/ meta when cwd package.json path table resolves to an existing file', async () => {
-      const sharedDir = join(tmpDir, 'shared-lib', 'assets');
-      await mkdir(sharedDir, { recursive: true });
-      await writeFile(join(sharedDir, 'cross.png'), Buffer.from('fake png'));
-      await writeFile(
-        join(tmpDir, 'package.json'),
-        JSON.stringify({
-          name: 'ac5-e2e-tmp',
-          forgeax: { assets: { paths: { shared: 'shared-lib/assets' } } },
-        }),
-      );
-      const scanRoot = join(tmpDir, 'metas');
-      await mkdir(scanRoot, { recursive: true });
-      await writeFile(
-        join(scanRoot, 'cross.png.meta.json'),
-        JSON.stringify({
-          schemaVersion: '1.0.0',
-          kind: 'external-asset-package',
-          importer: 'image',
-          source: '@shared/cross.png',
-          importSettings: {},
-          subAssets: [
-            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
-          ],
-        }),
-      );
-
-      const result = await scan([scanRoot]);
-      expect(result.ok).toBe(true);
-    });
-
-    it('AC-8: scan() reports pack-unknown-path when @name/ references an undeclared path name', async () => {
-      await writeFile(
-        join(tmpDir, 'package.json'),
-        JSON.stringify({ name: 'ac8-e2e-tmp', forgeax: { assets: { paths: {} } } }),
-      );
-      const scanRoot = join(tmpDir, 'metas');
-      await mkdir(scanRoot, { recursive: true });
-      await writeFile(
-        join(scanRoot, 'x.png.meta.json'),
-        JSON.stringify({
-          schemaVersion: '1.0.0',
-          kind: 'external-asset-package',
-          importer: 'image',
-          source: '@nope/x.png',
-          importSettings: {},
-          subAssets: [
-            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
-          ],
-        }),
-      );
-
-      const result = await scan([scanRoot]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('pack-unknown-path');
-      }
-    });
-  });
-}
-
-{
-  // ─── AC-1 regression w15 — resolveAssetSource explicit source backwards compat ───
-
-  describe('w15-AC-1-regression.test.ts', () => {
-    it('AC-1: explicit source=foo.png with resolveAssetSource == resolve(metaDir, foo.png)', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const { resolve } = await import('node:path');
-      const metaPath = '/home/you/assets/foo.png.meta.json';
-      const result = resolveAS(metaPath, 'foo.png', {});
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(resolve('/home/you/assets', 'foo.png'));
-      }
-    });
-
-    it('AC-1: explicit source=sub/deep.png with resolveAssetSource == resolve(metaDir, sub/deep.png)', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const { resolve } = await import('node:path');
-      const metaPath = '/home/you/assets/main.meta.json';
-      const result = resolveAS(metaPath, 'sub/deep.png', {});
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(resolve('/home/you/assets', 'sub/deep.png'));
-      }
-    });
-
-    it('AC-1: omitted source derives from meta filename', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const { resolve } = await import('node:path');
-      const metaPath = '/home/you/assets/foo.png.meta.json';
-      const result = resolveAS(metaPath, undefined, {});
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(resolve('/home/you/assets', 'foo.png'));
-      }
-    });
-  });
-
-  // ─── AC-5/AC-10 source path table scanner integration (w15) ───
-
-  describe('w15-AC-5-AC-10-path-table.test.ts', () => {
-    it('AC-5: @shared/ resource resolves correctly when path table configured', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const { resolve } = await import('node:path');
-      const metaPath = '/project/assets/ref.meta.json';
-      const paths = { shared: '/project/lib' };
-      const result = resolveAS(metaPath, '@shared/tex.png', paths);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(resolve('/project/lib', 'tex.png'));
-      }
-    });
-
-    it('AC-5: @shared/ with nested rest path', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const { resolve } = await import('node:path');
-      const metaPath = '/project/assets/ref.meta.json';
-      const paths = { shared: '/project/lib' };
-      const result = resolveAS(metaPath, '@shared/sub/dir/tex.png', paths);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(resolve('/project/lib', 'sub/dir/tex.png'));
-      }
-    });
-
-    it('AC-10: @unknown/ path name → pack-unknown-path error', async () => {
-      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
-      const metaPath = '/project/assets/ref.meta.json';
-      const result = resolveAS(metaPath, '@nope/tex.png', {});
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('pack-unknown-path');
-        if (result.error.code === 'pack-unknown-path') {
-          expect(result.error.detail.pathName).toBe('nope');
-          expect(result.error.detail.knownNames).toEqual([]);
-        }
-      }
     });
   });
 }

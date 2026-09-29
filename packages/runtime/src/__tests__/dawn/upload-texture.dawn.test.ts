@@ -72,12 +72,11 @@ function makeTexture(
 ): TextureAsset {
   return {
     kind: 'texture',
-    width,
-    height,
+    shape: { viewDimension: '2d', extent: { width, height } },
     format,
     data: new Uint8Array(width * height * 4),
     colorSpace,
-    mipmap,
+    mips: mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
 }
 
@@ -182,12 +181,11 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
 
     const tex: TextureAsset = {
       kind: 'texture',
-      width,
-      height,
+      shape: { viewDimension: '2d', extent: { width, height } },
       format: 'rgba8unorm',
       data: buf,
       colorSpace: 'linear',
-      mipmap: false,
+      mips: { kind: 'none' },
     };
 
     const handle = world.allocSharedRef('TextureAsset', tex);

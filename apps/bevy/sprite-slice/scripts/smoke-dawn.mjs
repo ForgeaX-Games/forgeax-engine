@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,14 @@ gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
 subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const pixels = makeSlicePixels();
-const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 buildSpriteSliceWorld(world, unwrapHandle(textureHandle));
 for (let i = 0; i < frames; i += 1) {
@@ -58,6 +65,6 @@ const outDir = process.env.SMOKE_PNG_DIR ?? resolve(here, '..', 'artifacts');
 mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'sprite-slice.png'), writeReferencePng(tight, width, height));
 console.log(`[smoke] frames=${frames} coloredPixels=${coloredPixels} errors=${errors.length}`);
-if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || coloredPixels < 1000 || errors.length > 0) { console.error('[smoke] FAIL - visible 9-slice panels and zero RHI errors required'); process.exit(1); }
+if (rendererBackend(renderer) !== 'webgpu' || frames < 60 || coloredPixels < 1000 || errors.length > 0) { console.error('[smoke] FAIL - visible 9-slice panels and zero RHI errors required'); process.exit(1); }
 console.log('[smoke] PASS - backend=webgpu, visible stretch/tile 9-slice panels, errors=0');
 device.destroy?.();

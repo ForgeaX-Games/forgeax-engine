@@ -24,7 +24,7 @@
 // The 3-frame budget keeps the test inside the dawn project default
 // timeout (vitest defaults: 5s per test) while still walking three full
 // queue.submit + drawIndexed cycles (charter F1: minimum signal for a
-// stable real-GPU loop, not the 300-frame smoke gate).
+// stable real-GPU loop, not the 60-frame smoke gate).
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -43,10 +43,16 @@ import {
   SceneInstance,
 } from '@forgeax/engine-render';
 import type { Renderer } from '@forgeax/engine-render';
-import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  Children,
+  Name,
+  registerPropagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import type { Handle, MaterialAsset, SceneAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INSTANCED_GLTF_PATH = resolve(HERE, '..', '..', 'assets', 'instanced-box.gltf');
@@ -57,11 +63,26 @@ const HEIGHT = 192;
 const PIXEL_THRESHOLD = 0.05;
 const TARGET_FRAMES = 3;
 const CLEAR_COLOR: readonly [number, number, number] = [0.05, 0.05, 0.08];
+
+const IDENTITY = new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
+
+function translated(x: number): Float32Array {
+  const matrix = new Float32Array(IDENTITY);
+  matrix[12] = x;
+  return matrix;
+}
+
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(
+  new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
+);
+afterAll(() => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 interface SubAssetEntry {
   readonly guid: string;
@@ -233,7 +254,7 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     let assets: AssetRegistry;
     try {
       const constructed = await constructRuntimeRendererHost(mockCanvas, {}, {
-        shaderManifestUrl: EMPTY_MANIFEST_URL,
+        shaderManifestUrl: ENGINE_MANIFEST_URL,
       });
       if (!constructed.ok) throw constructed.error;
       renderer = constructed.value.renderer;
@@ -286,6 +307,7 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
       values: { baseColor: matIr.baseColorFactor },
     };
     const world = new World();
+    registerPropagateTransforms(world);
     const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     const frameRequest = {
@@ -311,10 +333,8 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
       materialHandles: new Map([[0, matHandle]]),
     });
 
-    // AC-18: assert SceneAsset carries an Instances component on the
-    // mesh-bearing node with transforms.length === 4 * 16 (the fixture
-    // declares N=4 in EXT_mesh_gpu_instancing.attributes.TRANSLATION).
-    const instancedNode = sceneAsset.entities.find(
+    // The imported SceneAsset retains all four instance matrices without a Renderer identity.
+    const instancedNode = Object.values(sceneAsset.entities).find(
       (n) => (n.components.Instances as { transforms?: Float32Array } | undefined) !== undefined,
     );
     expect(instancedNode).toBeDefined();
@@ -337,6 +357,18 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
 
+    // Real-Dawn culling witness: put the entity origin outside the camera
+    // while keeping one local instance at the origin. CPU extract must use
+    // the renderer-derived union, and GPU cull must still evaluate the
+    // resulting instance separately. This would be culled by an entity-only
+    // AABB projection and is intentionally exercised before the first draw.
+    const instanceRows = [...world.query({ read: [Instances, Transform] }).unwrap()];
+    expect(instanceRows).toHaveLength(1);
+    const instanceRow = instanceRows[0];
+    if (instanceRow === undefined) return;
+    world.set(instanceRow.entity, Transform, { pos: [20, 0, 0] }).unwrap();
+    world.set(instanceRow.entity, Instances, { transforms: translated(-20) }).unwrap();
+
     const renderErrors: unknown[] = [];
     renderer.subscribe((event) => {
       if (event.kind !== 'error') return;
@@ -351,6 +383,11 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
       framesObserved++;
     }
     expect(framesObserved).toBeGreaterThanOrEqual(TARGET_FRAMES);
+
+    const inspection = renderer.inspect();
+    expect(inspection.frustumStats.total).toBeGreaterThanOrEqual(1);
+    expect(inspection.frustumStats.culled).toBeLessThan(inspection.frustumStats.total);
+    expect(inspection.frustumStats.culled).toBeGreaterThanOrEqual(0);
 
     const device = sharedDevice;
     expect(device).toBeDefined();
@@ -404,7 +441,7 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     expect(meshedRenderCount).toBeGreaterThanOrEqual(1);
 
     // No RhiError fired during the 3-frame loop. Stays loose at >=0 ;
-    // strict zero-error on the smoke gate is the 300-frame harness in
+    // strict zero-error on the smoke gate is the 60-frame harness in
     // apps/hello/gltf-instancing/scripts/smoke-dawn.mjs.
     expect(renderErrors.length).toBe(0);
   });

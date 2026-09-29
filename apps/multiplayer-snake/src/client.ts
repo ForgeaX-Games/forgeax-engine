@@ -1,7 +1,10 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { createApp } from '@forgeax/engine-app';
+import { type App, createApp } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, Update, type World } from '@forgeax/engine-ecs';
+import { createFrontendHost } from '@forgeax/engine-host/frontend';
+import { createHostAssembly } from '@forgeax/engine-host/protocol';
+import { connectHostWebSocket, type HostTransportClient } from '@forgeax/engine-host/transport';
 import {
   createReplicaCoordinator,
   createSessionId,
@@ -13,9 +16,18 @@ import {
   type SessionId,
 } from '@forgeax/engine-net';
 import { createWebSocketConnector } from '@forgeax/engine-net-websocket/browser';
-import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
+import type { Plugin } from '@forgeax/engine-plugin';
+import {
+  Camera,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  orthographic,
+  type Renderer,
+} from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
+import { SNAKE_HOST_VERSION, snakeHostRoot } from './host';
 
 import { type Direction, encodeCommand, encodeDirectionCommand } from './shared/commands';
 import {
@@ -59,6 +71,49 @@ export interface DirectionCommandEvidence {
 
 type SnakeCommandSession = Pick<NetSession, 'getRecoverySnapshot' | 'sendToAuthority'>;
 
+interface SnakeClientPluginState {
+  app?: App;
+  world?: World;
+  renderer?: Renderer;
+  dispose?: () => void;
+  session?: NetSession;
+  replica?: ReturnType<typeof createReplicaCoordinator>;
+  sessionId?: SessionId;
+  directionCommandEvidence?: DirectionCommandEvidence;
+}
+
+/** Construct the Engine App inside the frontend host's plugin lifetime. */
+function snakeAppPlugin(canvas: HTMLCanvasElement, state: SnakeClientPluginState): Plugin {
+  return {
+    name: 'snake:app',
+    async apply(ctx) {
+      const created = await createApp(canvas, { context: ctx.root }, forgeaxBundlerAdapter());
+      if (!created.ok) throw created.error;
+      state.app = created.value;
+      state.world = created.value.world;
+      state.renderer = created.value.renderer;
+      // createApp installs the World service on the shared Host context. Do
+      // not register a second provider on this startup Fiber: the Catalog
+      // loader's `snake:client` entry resolves the same root service.
+      ctx.effect(
+        () => () => {
+          void created.value.dispose();
+        },
+        'snake/app',
+      );
+    },
+  };
+}
+
+interface SnakeClientPluginOptions {
+  readonly endpoint: NetEndpoint;
+  readonly connector?: NetEndpointConnector;
+  readonly hostTransport?: HostTransportClient;
+  readonly state: SnakeClientPluginState;
+  readonly stateTarget?: HTMLElement;
+  readonly directionCommandEvidence: DirectionCommandEvidence;
+}
+
 let nextSnakeSessionId = 1;
 
 function allocateSnakeSessionId(): SessionId {
@@ -71,6 +126,74 @@ function allocateSnakeSessionId(): SessionId {
   const created = createSessionId(candidate);
   if (!created.ok) throw created.error;
   return created.value;
+}
+
+/** Own the browser game capability and its Net/App-facing effects as one Fiber. */
+function snakeClientPlugin(options: SnakeClientPluginOptions): Plugin {
+  return {
+    name: 'snake:client',
+    inject: ['world'],
+    async apply(ctx) {
+      await ctx.plugin(
+        netPlugin({
+          endpoint: options.endpoint,
+          ...(options.connector === undefined ? {} : { connector: options.connector }),
+          sessionId: allocateSnakeSessionId(),
+        }),
+      );
+      const world = ctx.world;
+      const session = world.getResource<NetSession>('net-session');
+      const replica = createReplicaCoordinator(world, snakeProfile);
+      session.attachReplica(replica, snakeProfile.limits);
+      const receiveErrors = session.receiveEvents();
+      if (receiveErrors.length > 0) throw receiveErrors[0];
+      const sessionId = session.getRecoverySnapshot().sessionId;
+      const lifecycleTarget = options.stateTarget;
+      if (lifecycleTarget !== undefined) {
+        lifecycleTarget.dataset.lifecycle = 'renderer-ready';
+        lifecycleTarget.dataset.rendererReady = 'true';
+      }
+      // Initial join is sent by the same per-epoch World system as rejoin.
+      // A socket can close while App/renderer assembly is still pending; the
+      // NetSession must be allowed to recover before a command is admitted.
+      world
+        .spawn(
+          { component: Transform, data: { pos: [0, 0, 20] } },
+          {
+            component: Camera,
+            data: orthographic({ left: -13, right: 13, bottom: -9, top: 9, near: 0.1, far: 100 }),
+          },
+        )
+        .unwrap();
+      const stateTarget =
+        globalThis.document?.querySelector<HTMLElement>('[data-testid="snake-state"]') ?? undefined;
+      const sinks: ReplicaRenderSinks = {};
+      if (stateTarget !== undefined)
+        (sinks as { stateTarget: HTMLElement }).stateTarget = stateTarget;
+      (sinks as { directionCommandEvidence: DirectionCommandEvidence }).directionCommandEvidence =
+        options.directionCommandEvidence;
+      registerReplicaDerivation(world, replica, sinks, session);
+      const disposeKeyboard = installKeyboardInput(
+        session,
+        undefined,
+        options.directionCommandEvidence,
+      );
+      options.state.session = session;
+      options.state.replica = replica;
+      options.state.sessionId = sessionId;
+      options.state.directionCommandEvidence = options.directionCommandEvidence;
+      ctx.effect(() => () => disposeKeyboard(), 'snake/client-input');
+      let retired = false;
+      const retire = (): void => {
+        if (retired) return;
+        retired = true;
+        session.dispose();
+        options.hostTransport?.close('snake client plugin disposed');
+      };
+      options.state.dispose = retire;
+      ctx.effect(() => retire, 'snake/client-lifecycle');
+    },
+  };
 }
 
 function syncSessionSnapshot(target: HTMLElement, snapshot: NetRecoverySnapshot): void {
@@ -356,7 +479,10 @@ export function registerReplicaDerivation(
       const recovery = session?.getRecoverySnapshot();
       if (sinks.stateTarget !== undefined && recovery !== undefined)
         syncSessionSnapshot(sinks.stateTarget, recovery);
-      if (session !== undefined && recovery?.state.kind === 'resyncing') {
+      if (
+        session !== undefined &&
+        (recovery?.state.kind === 'resyncing' || recovery?.state.kind === 'active')
+      ) {
         if (joinedEpoch !== recovery.state.epoch) {
           const join = encodeCommand({ kind: 'join' });
           if (!join.ok) throw join.error;
@@ -364,6 +490,11 @@ export function registerReplicaDerivation(
           if (sent.ok) {
             joinedEpoch = recovery.state.epoch;
             readyEpoch = undefined;
+            if (sinks.stateTarget !== undefined) {
+              sinks.stateTarget.dataset.lifecycle = 'join-sent';
+              sinks.stateTarget.dataset.joinSent = 'true';
+              sinks.stateTarget.dataset.waitingTick = '0';
+            }
           }
         }
       }
@@ -456,79 +587,75 @@ export function registerReplicaDerivation(
 }
 
 /** Assemble the browser-side replica. Replicated components are read-only here. */
-export async function createClient(canvas: HTMLCanvasElement, url: string) {
+export async function createClient(canvas: HTMLCanvasElement, url: string, hostUrl: string) {
   const connector = createWebSocketConnector(url);
   const connected = await connector.connect(new AbortController().signal);
   if (!connected.ok) throw connected.error;
-  return createClientWithEndpoint(canvas, connected.value, connector);
+  const hostTransport = await connectHostWebSocket(hostUrl);
+  return createClientWithEndpoint(canvas, connected.value, connector, {
+    hostTransport,
+  });
 }
 
 export async function createClientWithEndpoint(
   canvas: HTMLCanvasElement,
   endpoint: NetEndpoint,
   connector?: NetEndpointConnector,
+  options: {
+    readonly hostTransport?: HostTransportClient;
+  } = {},
 ) {
   const lifecycleTarget = globalThis.document?.querySelector<HTMLElement>(
     '[data-testid="snake-state"]',
   );
   if (lifecycleTarget !== null && lifecycleTarget !== undefined)
     lifecycleTarget.dataset.lifecycle = 'connecting';
-  const appResult = await createApp(canvas, {}, forgeaxBundlerAdapter());
-  if (!appResult.ok) throw appResult.error;
-  const app = appResult.value;
-  const { world, renderer } = app;
-  await app.pluginContext.plugin(
-    netPlugin({
-      endpoint,
-      ...(connector === undefined ? {} : { connector }),
-      sessionId: allocateSnakeSessionId(),
-    }),
-  );
-  const session = world.getResource<NetSession>('net-session');
-  const replica = createReplicaCoordinator(world, snakeProfile);
-  session.attachReplica(replica, snakeProfile.limits);
-  const receiveErrors = session.receiveEvents();
-  if (receiveErrors.length > 0) throw receiveErrors[0];
-  const sessionId = session.getRecoverySnapshot().sessionId;
-  if (lifecycleTarget !== null && lifecycleTarget !== undefined) {
-    lifecycleTarget.dataset.lifecycle = 'renderer-ready';
-    lifecycleTarget.dataset.rendererReady = 'true';
-  }
-  const join = encodeCommand({ kind: 'join' });
-  if (!join.ok) throw join.error;
-  const joined = session.sendToAuthority(sessionId, join.value);
-  if (!joined.ok) throw joined.error;
-  if (lifecycleTarget !== null && lifecycleTarget !== undefined) {
-    lifecycleTarget.dataset.lifecycle = 'join-sent';
-    lifecycleTarget.dataset.joinSent = 'true';
-    lifecycleTarget.dataset.waitingTick = '0';
-  }
-  world
-    .spawn(
-      { component: Transform, data: { pos: [0, 0, 20] } },
-      {
-        component: Camera,
-        data: orthographic({ left: -13, right: 13, bottom: -9, top: 9, near: 0.1, far: 100 }),
-      },
-    )
-    .unwrap();
-  const document = globalThis.document;
   const stateTarget =
-    document?.querySelector<HTMLElement>('[data-testid="snake-state"]') ?? undefined;
+    globalThis.document?.querySelector<HTMLElement>('[data-testid="snake-state"]') ?? undefined;
   const directionCommandEvidence: DirectionCommandEvidence = { directionCommandSendCount: 0 };
-  const sinks: ReplicaRenderSinks = {};
-  if (stateTarget !== undefined) (sinks as { stateTarget: HTMLElement }).stateTarget = stateTarget;
-  (sinks as { directionCommandEvidence: DirectionCommandEvidence }).directionCommandEvidence =
-    directionCommandEvidence;
-  registerReplicaDerivation(world, replica, sinks, session);
-  const disposeKeyboard = installKeyboardInput(session, undefined, directionCommandEvidence);
+  const pluginState: SnakeClientPluginState = {};
+  const hostAssembly =
+    options.hostTransport === undefined ? createHostAssembly({ root: snakeHostRoot() }) : undefined;
+  const frontendHost = await createFrontendHost({
+    startupPlugins: [snakeAppPlugin(canvas, pluginState)],
+    resolveRoot: async (root) => {
+      if (root.program !== 'snake:client' || root.codeRevision !== SNAKE_HOST_VERSION)
+        throw new Error('snake frontend program/version mismatch');
+      return snakeClientPlugin({
+        endpoint,
+        ...(connector === undefined ? {} : { connector }),
+        ...(options.hostTransport === undefined ? {} : { hostTransport: options.hostTransport }),
+        state: pluginState,
+        ...(stateTarget === undefined ? {} : { stateTarget }),
+        directionCommandEvidence,
+      });
+    },
+    ...(hostAssembly === undefined ? {} : { assembly: hostAssembly }),
+    ...(options.hostTransport === undefined ? {} : { transport: options.hostTransport }),
+  });
+  const session = pluginState.session;
+  const replica = pluginState.replica;
+  const sessionId = pluginState.sessionId;
+  const app = pluginState.app;
+  const world = pluginState.world;
+  const renderer = pluginState.renderer;
+  if (
+    app === undefined ||
+    world === undefined ||
+    renderer === undefined ||
+    session === undefined ||
+    replica === undefined ||
+    sessionId === undefined
+  )
+    throw new Error(
+      'snake: frontend host did not publish its App, World, renderer, session, and replica',
+    );
   let disposed = false;
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
-    disposeKeyboard();
-    session.dispose();
-    void app.dispose();
+    pluginState.dispose?.();
+    void frontendHost.dispose();
   };
   return {
     app,

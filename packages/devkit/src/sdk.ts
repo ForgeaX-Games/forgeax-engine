@@ -13,7 +13,6 @@ export interface SdkPackage {
 export interface SdkTemplate {
   readonly id: string;
   readonly root: string;
-  readonly default: boolean;
 }
 
 export interface SdkSkill {
@@ -47,13 +46,17 @@ export interface SdkSource {
   readonly root: 'source/engine';
   readonly format: 'git-archive-public-snapshot';
   readonly excluded: readonly ['.gitmodules', 'forgeax-engine-assets'];
+  readonly gitDependencies: readonly {
+    readonly root: 'third_party/wgpu';
+    readonly commit: string;
+  }[];
   readonly fileCount: number;
   readonly byteCount: number;
   readonly prebuiltWasm: readonly SdkSourceWasm[];
 }
 
 export interface SdkManifest {
-  readonly schemaVersion: '1.6.0';
+  readonly schemaVersion: '1.8.0';
   readonly sdkVersion: string;
   readonly engineCommit: string;
   readonly requirements: {
@@ -80,7 +83,6 @@ export interface SdkContext {
    */
   readonly store?: string;
   readonly templates: ReadonlyMap<string, string>;
-  readonly defaultTemplate: string;
 }
 
 async function readable(path: string): Promise<boolean> {
@@ -102,15 +104,12 @@ export async function findSdkContext(): Promise<SdkContext | undefined> {
       const templates = new Map(
         manifest.templates.map((template) => [template.id, resolve(cursor, template.root)]),
       );
-      const defaultTemplate = manifest.templates.find((template) => template.default);
-      if (defaultTemplate === undefined) throw new Error('sdk-default-template-missing');
       const store = resolve(cursor, 'store', 'pnpm');
       return {
         root: cursor,
         manifest,
         ...((await readable(store)) ? { store } : {}),
         templates,
-        defaultTemplate: defaultTemplate.id,
       };
     }
     const parent = dirname(cursor);

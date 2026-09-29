@@ -29,8 +29,10 @@ import type {
   RhiError as RhiErrorType,
   RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-types';
-import type { Bookkeeper } from './bookkeeping';
+import { type RenderBundle, RhiError } from '@forgeax/engine-rhi';
+import { err, ok } from '@forgeax/engine-types';
+import { type Bookkeeper, isHandleDestroyed } from './bookkeeping';
+import { bundles } from './render-bundle';
 
 /** Shared counter interface that pass encoders bump so the device can aggregate
  *  per-frame stats for M3 unit-test readback. */
@@ -149,9 +151,38 @@ export class RhiNullRenderPassEncoder implements RhiRenderPassEncoder {
 
   insertDebugMarker(_markerLabel: string): void {}
 
-  executeBundles(_bundles: Iterable<unknown>): Result<void, RhiErrorType> {
-    // Headless no-op: executing zero bundles against no GPU succeeds vacuously
-    // (plan-strategy §3.1 — pass-encoder Result methods return ok(void)).
+  executeBundles(handles: Iterable<RenderBundle>): Result<void, RhiErrorType> {
+    let drawCount = 0;
+    let bindGroupCount = 0;
+    for (const handle of handles) {
+      const valid = this.bookkeeper.validateOwnership(handle);
+      if (!valid.ok) return valid;
+      const bundle = bundles.get(handle);
+      if (bundle === undefined)
+        return err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'a render bundle from this device',
+            hint: 'use createRenderBundleEncoder().finish()',
+          }),
+        );
+      drawCount += bundle.draws;
+      bindGroupCount += bundle.bindGroups;
+      for (const resource of bundle.resources) {
+        const validResource = this.bookkeeper.validateOwnership(resource);
+        if (!validResource.ok) return validResource;
+        const live = isHandleDestroyed(resource);
+        if (!live.ok) return live;
+      }
+    }
+    for (let i = 0; i < drawCount; i++) {
+      this.drawCount++;
+      this.counter?.recordDraw();
+    }
+    for (let i = 0; i < bindGroupCount; i++) {
+      this.bindGroupCount++;
+      this.counter?.recordBindGroup();
+    }
     return ok(undefined);
   }
 

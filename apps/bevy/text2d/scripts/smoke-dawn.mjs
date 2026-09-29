@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const framesTarget = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const framesTarget = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -203,12 +203,11 @@ async function registerBakedFont(world, assets) {
   if (!atlas.ok || !sampler.ok) throw new Error('font asset GUID parse failed');
   assets.catalog(atlas.value, {
     kind: 'texture',
-    width: decoded.width,
-    height: decoded.height,
+    shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
     format: 'rgba8unorm',
     data: decoded.data,
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   });
   return world.allocSharedRef('FontAsset', {
     kind: 'font',

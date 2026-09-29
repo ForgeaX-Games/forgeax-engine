@@ -66,14 +66,17 @@ Schedule anchors are scoped to `Update`: `after: ['input-frame-start-scan']`, `b
 
 Both `createApp` forms install `statePlugin()` in their default Cordis realm. It projects tokens already defined at App creation and subscribes to later module-level `defineState()` calls, so a Preview may load an asset-resident game plugin after the App without a second registration path. Fiber disposal removes the subscription, transition system, descriptors, and resources. A lower-level host without App/Cordis may own the disposer returned by `registerStatesPlugin(world)`; otherwise `setNextState`/`getState` return `StateError { code: 'state-not-registered' }`.
 
-## CLI plugin
+## Unified live inspection
 
-`forgeax-engine-remote-state` is a kubectl-style plugin bin (4th-path discovery via `forgeax-engine-remote-` prefix scan). Two subcommands:
+State inspection happens through the same live Engine realm as other runtime
+facts. Use `forgeax dev eval` for a project with a running instance; the state
+plugin keeps its schema, transition rules, and lifecycle and does not publish a
+separate executable.
 
-- `list` -- prints all registered tokens with name, current variant, and variants list
-- `get <name>` -- prints the current variant string for a named token
-
-Source: `packages/state/src/cli-state.ts`.
+```bash
+forgeax dev eval --root ./game --revision '<from status>' \
+  --code 'return state.getState("LevelId")' --json
+```
 
 ## Relationship to ECS
 
@@ -85,3 +88,13 @@ The state package has zero custom ECS primitives. It consumes only:
 - `world.query` row iteration -- for collecting scoped entities
 - `resolveComponent` -- for looking up scoped component schemas
 - `world.despawn` -- for scoped entity teardown
+
+## Runtime disposal and callback identity
+
+The disposer stops transitions and removes its resources, then releases its
+component leases. A live scoped entity causes the original structured
+`component-in-use` error to be thrown. The disposer retains that lease: remove
+the entity and call the same disposer again. Reinstallation remains blocked by
+the existing runtime ownership until retirement finishes. Completed disposal is
+idempotent. Callback labels encode name, transition kind and variant as a JSON
+tuple, so separators or Unicode in a legal name cannot alias another state.

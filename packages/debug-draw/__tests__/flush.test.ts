@@ -30,6 +30,28 @@ describe('w11: flush on empty staging skips GPU pass', () => {
   it('staging.length is 0 after construction', () => {
     const dd = makeDd();
     expect(dd._stagingVertexCount).toBe(0);
+    expect(dd.hasWork()).toBe(false);
+  });
+
+  it('publishes frame work until the staged vertices are encoded', () => {
+    const dd = makeDd();
+    dd.line([0, 0, 0] as any, [1, 0, 0] as any, [1, 1, 1, 1]);
+    expect(dd.hasWork()).toBe(true);
+
+    const pass = {
+      setPipeline: vi.fn(),
+      setBindGroup: vi.fn(),
+      setVertexBuffer: vi.fn(),
+      draw: vi.fn(),
+    };
+    const encoded = dd.encode(
+      pass as any,
+      [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as any,
+    );
+
+    expect(encoded.ok).toBe(true);
+    expect(pass.draw).toHaveBeenCalledWith(2);
+    expect(dd.hasWork()).toBe(false);
   });
 
   it('flush on empty staging returns Result.ok and does not draw', () => {

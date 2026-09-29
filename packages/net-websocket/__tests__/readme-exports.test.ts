@@ -8,7 +8,13 @@ const packageRoot = resolve(import.meta.dirname, '..');
 describe('net-websocket README contract', () => {
   it('does not publish an empty package root', async () => {
     const packageName = '@forgeax/engine-net-websocket';
-    await expect(import(/* @vite-ignore */ packageName)).rejects.toThrow('is not exported');
+    const manifest = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8')) as {
+      exports?: Record<string, unknown>;
+    };
+
+    expect(manifest.exports).toBeDefined();
+    expect(Object.hasOwn(manifest.exports ?? {}, '.')).toBe(false);
+    await expect(import(/* @vite-ignore */ packageName)).rejects.toBeInstanceOf(Error);
   });
 
   it('documents importable browser and node exports', async () => {

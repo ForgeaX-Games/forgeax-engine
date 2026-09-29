@@ -5,8 +5,10 @@
 // (NOT committed; zero-binary invariant) and hydrates it on install. The logic
 // is identical across all three:
 //
-//   1. pkg/ already present  -> skip (idempotent; toolchain owners who ran
-//      build:wasm, CI which built pkg/, and prior fetches are untouched).
+//   1. pkg/ already present and freshness-validated -> skip (idempotent;
+//      toolchain owners who ran build:wasm, CI which built pkg/, and prior
+//      fetches are untouched). Package-specific provenance can reject a
+//      self-consistent bundle whose source content key is stale.
 //   2. skip env set           -> skip (opt-out for toolchain owners).
 //   3. otherwise              -> run fetch-wasm.mjs (release tier), NON-FATAL:
 //      a failed fetch (offline / no published release / source changed) NEVER
@@ -31,6 +33,7 @@ import { existsSync } from 'node:fs';
  * @param {string} opts.fetchScript     absolute path to the package's fetch-wasm.mjs
  * @param {string} opts.skipEnv         env var name that opts out of the fetch
  * @param {string} opts.buildHint       recovery hint printed on soft-fail
+ * @param {boolean} [opts.ready]        freshness-validated readiness; defaults to marker presence
  * @param {object} [opts.env]           defaults to process.env
  * @param {Function} [opts.spawn]       defaults to spawnSync (injectable for tests)
  * @param {Function} [opts.log]         defaults to console.log
@@ -42,11 +45,12 @@ export function ensureWasm({
   fetchScript,
   skipEnv,
   buildHint,
+  ready = presenceMarkers.every((p) => existsSync(p)),
   env = process.env,
   spawn = spawnSync,
   log = console.log,
 }) {
-  if (presenceMarkers.every((p) => existsSync(p))) {
+  if (ready) {
     log(`[${pkgLabel}] pkg/ WASM already present — skipping fetch.`);
     return 0;
   }

@@ -1,7 +1,22 @@
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
-import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
-import { createBrowserProject } from './vitest-browser-project';
+import { createBrowserProject } from './config/vitest-browser-project';
+import { playwrightWithBackgroundPages } from './config/vitest-browser-provider';
+import { DAWN_COMPACT_TEST_FILES } from './scripts/ci/dawn-compact-roster.mjs';
+import {
+  DAWN_ISOLATED_TEST_FILES,
+  DIRECT_LIGHT_DAWN_TEST_FILE,
+} from './scripts/ci/dawn-gate-roster.mjs';
+
+// Every exclusion is derived from the same roster used by local, PR and nightly.
+const R32FLOAT_CAPABILITY_GENERATION_TEST =
+  'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts';
+const RUNNING_DIRECT_LIGHT_PARTITION = process.env.FORGEAX_DAWN_PARTITION !== undefined;
+const RUNNING_DAWN_COMPACT = process.env.FORGEAX_DAWN_COMPACT === '1';
+const RUNNING_DAWN_ISOLATED = process.env.FORGEAX_DAWN_ISOLATED === '1';
+const REPOSITORY_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
 // Root vitest config - declares projects per K-3 split policy:
 //
@@ -25,14 +40,19 @@ import { createBrowserProject } from './vitest-browser-project';
 //                          dawn/browser untouched)
 //   - `pnpm test:browser` = the entity-visibility process plus
 //     `scripts/ci/run-split-vitest-browser.mjs` (fresh bounded processes)
-//   - `pnpm test:dawn`    = `vitest run --project dawn`
+//   - `pnpm test:dawn`    = ordinary Dawn project, the isolated renderer
+//                          integration process, plus the partitioned
+//                          direct-light Dawn runner (each heavy group gets a
+//                          fresh native process)
 //   - `pnpm test:all`     = three commands serial (K-3 warning: do NOT
 //                          fold into the root `pnpm test`, otherwise a
 //                          single chromium / dawn launch failure pollutes
 //                          the unit feedback channel)
 //
 // v4 essentials (research Finding 2.1):
-//   - `provider: playwright()` factory (not the v3 string form)
+//   - `provider: playwrightWithBackgroundPages()` factory (not the v3 string
+//     form); headed Chromium pages stay out of the foreground by default,
+//     with FORGEAX_BROWSER_BACKGROUND=0 restoring normal activation
 //   - `instances: [{ browser: 'chromium' }]` at minimum one entry
 //     (the v3 `browser.name` string short-circuit is removed)
 //   - launchOptions.headless is force-ignored -> use `test.browser.headless`
@@ -45,6 +65,7 @@ import { createBrowserProject } from './vitest-browser-project';
 // 387965810 (globalThis.navigator.gpu global pollution preventing node
 // process exit).
 export default defineConfig({
+  root: REPOSITORY_ROOT,
   test: {
     globals: false,
     passWithNoTests: true,
@@ -53,9 +74,10 @@ export default defineConfig({
       // -- unit layer: existing per-package + apps + scripts --
       'packages/*',
       'apps/*',
+      'apps/showcase/*',
       // game-default owns small pure contract tests for authored template
       // assets; browser-marked HUD tests remain owned by the browser project.
-      'templates/game-default',
+      resolve(REPOSITORY_ROOT, 'apps/game-capability-lab'),
       // feat-20260515 M4 D-6: nested learn-render workspaces register
       // through the dual-segment glob (pnpm-workspace.yaml#packages
       // mirror). The vitest config form points at each workspace's
@@ -68,6 +90,26 @@ export default defineConfig({
       // #1 SSOT).
       'apps/learn-render/1.getting-started/*/vite.config.ts',
       'apps/hello/triangle',
+      {
+        test: {
+          name: '@forgeax/hello-boss-lightning',
+          include: [
+            'apps/hello/boss-lightning/src/__tests__/*.unit.test.ts',
+            'apps/hello/boss-lightning/src/__tests__/*.integration.test.ts',
+          ],
+        },
+      },
+      // The nested hello workspace is not covered by the `apps/*` glob. Keep
+      // the physical-material contract tests in a Node-only project so the
+      // unit gate does not load its Vite/WebGPU application entrypoint.
+      {
+        test: {
+          name: '@forgeax/hello-physical-material',
+          include: ['apps/hello/physical-material/src/__tests__/*.test.ts'],
+          environment: 'node',
+          typecheck: { enabled: false },
+        },
+      },
       'scripts',
       // K-3 naming anchor (marker; passWithNoTests means `--project unit`
       // does not produce a failure signal, it only acts as the SSOT
@@ -106,7 +148,10 @@ export default defineConfig({
         test: {
           name: 'render-perf',
           environment: 'node',
-          include: ['packages/render/src/**/*.perf.test.ts'],
+          include: [
+            'packages/render/src/**/*.perf.test.ts',
+            'packages/render/src/**/render-perf/*.bench.test.ts',
+          ],
         },
       },
       createBrowserProject(),
@@ -131,7 +176,7 @@ export default defineConfig({
           ],
           browser: {
             enabled: true,
-            provider: playwright({
+            provider: playwrightWithBackgroundPages({
               launchOptions: {
                 channel: 'chrome-beta',
                 args: [
@@ -172,11 +217,15 @@ export default defineConfig({
           // the first attempt passes). Scoped to the dawn project only.
           testTimeout: 30000,
           retry: 2,
-          // Dawn tests use a shared software Vulkan backend. Do not derive the
-          // fork count from the host CPU count: the 96-vCPU heavy runners can
-          // otherwise launch dozens of GPU processes and lose workers under
-          // lavapipe contention.
-          maxWorkers: 2,
+          // Native Dawn queue/device teardown can take longer than the root
+          // 500 ms budget on the heavy runner after a dense carrier finishes.
+          // Keep the bound tight but allow the worker to close cleanly instead
+          // of turning completed assertions into a Vitest worker-exit error.
+          teardownTimeout: 5000,
+          // Dawn tests use a shared software Vulkan backend. Keep this project
+          // to one worker: the 96-vCPU heavy runners can otherwise launch
+          // multiple GPU processes and lose workers under lavapipe contention.
+          maxWorkers: 1,
           include: [
             '**/*.dawn.test.ts',
             'packages/rhi-wgpu/src/__tests__/**/*.dawn.test.ts',
@@ -187,15 +236,20 @@ export default defineConfig({
             // (plan-tasks w32), so list it explicitly here and let it skipIf
             // navigator.gpu is absent under the per-package unit project.
             'packages/runtime/src/__tests__/equirect-bc6h.integration.test.ts',
+            R32FLOAT_CAPABILITY_GENERATION_TEST,
           ],
           exclude: [
             '**/node_modules/**',
             '**/dist/**',
-            '**/.forgeax-harness/**',
+            '**/artifacts/**',
+            '**/.forgeax-harness*/**',
             '**/.worktrees/**',
             '**/.claude/worktrees/**',
+            ...(RUNNING_DIRECT_LIGHT_PARTITION ? [] : [DIRECT_LIGHT_DAWN_TEST_FILE]),
+            ...(RUNNING_DAWN_ISOLATED ? [] : DAWN_ISOLATED_TEST_FILES),
+            ...(RUNNING_DAWN_COMPACT ? [] : DAWN_COMPACT_TEST_FILES),
           ],
-          setupFiles: ['./vitest.setup-webgpu.ts'],
+          setupFiles: ['./config/vitest.setup-webgpu.ts'],
         },
       },
     ],

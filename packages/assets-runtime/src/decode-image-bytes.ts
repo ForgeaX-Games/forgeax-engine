@@ -10,8 +10,8 @@
 //   3. Map `DecodedImage` -> `TextureAsset` POD; `format` derives from
 //      `opts.colorSpace` (srgb -> 'rgba8unorm-srgb' / linear ->
 //      'rgba8unorm', mirrors `image-importer.ts` colorSpaceToFormat); when
-//      `opts.mipmap !== false`, `mipLevelCount` derives from
-//      `numMipLevels({width,height})` (charter Derive-Don't-Duplicate).
+//      `opts.mipmap !== false`, the mip policy derives from the decoded shape
+//      (charter Derive-Don't-Duplicate).
 //
 // decode-image-bytes.ts is the SINGLE assets-runtime file allowed to
 // statically import @forgeax/engine-image (charter D-2; the
@@ -24,7 +24,6 @@ import { decodeImageInBrowser } from '@forgeax/engine-image';
 import type { ImageError, Result, TextureAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { makeImageError } from './image-error';
-import { numMipLevels } from './mipmap-generator';
 
 /** v1 mime whitelist -- PNG / JPEG only (charter P1 progressive disclosure). */
 const SUPPORTED_MIMES = ['image/png', 'image/jpeg'] as const;
@@ -60,8 +59,8 @@ function isSupportedMime(mime: string): mime is SupportedMime {
  * @param opts - Optional decode overrides:
  *   - `colorSpace`: `'srgb'` (default) or `'linear'`. Derives POD `format`:
  *     `srgb -> 'rgba8unorm-srgb'`, `linear -> 'rgba8unorm'`.
- *   - `mipmap`: `true` (default) or `false`. When true, `mipLevelCount` is
- *     computed via `numMipLevels({ width, height })`; when false, forced 1.
+ *   - `mipmap`: `true` (default) or `false`. When true, the producer requests
+ *     generated mips; when false, it keeps one authored level.
  * @returns `ok(TextureAsset)` on success; `err(ImageError)` on failure.
  *
  * @example
@@ -110,17 +109,13 @@ export async function decodeImageBytes(
 
   const dec = decoded.value;
   const format: GPUTextureFormat = colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm';
-  const mipLevelCount = mipmap ? numMipLevels({ width: dec.width, height: dec.height }) : 1;
-
   const pod: TextureAsset = {
     kind: 'texture',
-    width: dec.width,
-    height: dec.height,
+    shape: { viewDimension: '2d', extent: { width: dec.width, height: dec.height } },
     format,
     data: dec.bytes,
     colorSpace,
-    mipmap,
-    mipLevelCount,
+    mips: mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
   return ok(pod);
 }

@@ -7,9 +7,9 @@
 // @forgeax/engine-math (Vec2 / Vec3 / Quat),
 // @forgeax/engine-types (type utilities).
 
-export type { CollisionEventPayload } from './collision-event';
-export { CollisionEvent } from './collision-event';
-export type { ColliderShape, RigidBodyType } from './components';
+export type { CollisionEventPayload } from './collision-event.js';
+export { CollisionEvent } from './collision-event.js';
+export type { ColliderShape, RigidBodyType } from './components.js';
 export {
   CharacterController,
   COLLIDER_SHAPE_CAPSULE,
@@ -26,11 +26,42 @@ export {
   RigidBodyTypeValue,
   registerPhysicsComponents,
   rigidBodyTypeFromF32,
-} from './components';
-export type { PhysicsErrorCode, PhysicsErrorDetail } from './errors';
+} from './components.js';
+export type {
+  DerivedPhysicsCandidate,
+  DerivedPhysicsCandidateInput,
+  DerivedPhysicsCandidateState,
+  DerivedPhysicsErrorCode,
+  DerivedPhysicsErrorDetail,
+  DerivedPhysicsFailure,
+  DerivedPhysicsMotion,
+  DerivedPhysicsPublication,
+  DerivedPhysicsSnapshot,
+  DerivedShapeSeamInput,
+  DerivedShapeState,
+  PhysicsConstraintBodyDependency,
+  PhysicsConstraintInput,
+  PhysicsContactObservation,
+  PhysicsMassProperties,
+  PhysicsQuaternion,
+  PhysicsVector,
+  PhysicsVelocityPolicy,
+  VoxelCell,
+  VoxelShapeInput,
+} from './derived-physics.js';
+export {
+  cloneDerivedPhysicsInput,
+  DERIVED_PHYSICS_LIMITS,
+  DerivedPhysicsError,
+  estimateDerivedPhysicsInputBytes,
+  normalizeVoxelShapeInput,
+  preserveCenterOfMassVelocity,
+  validateMassProperties,
+} from './derived-physics.js';
+export type { PhysicsErrorCode, PhysicsErrorDetail } from './errors.js';
 
-export { PHYSICS_ERROR_HINTS, PhysicsError } from './errors';
-export type { PhysicsWorld, PhysicsWorld2D, RaycastHit, RaycastHit2D } from './physics-world';
-export type { PhysicsBackend } from './plugin-factory';
-export { physicsPlugin } from './plugin-factory';
-export { PhysicsSet } from './system-set';
+export { PHYSICS_ERROR_HINTS, PhysicsError } from './errors.js';
+export type { PhysicsWorld, PhysicsWorld2D, RaycastHit, RaycastHit2D } from './physics-world.js';
+export type { PhysicsBackend } from './plugin-factory.js';
+export { physicsComponentsPlugin, physicsPlugin } from './plugin-factory.js';
+export { PhysicsSet } from './system-set.js';

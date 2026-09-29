@@ -151,7 +151,7 @@ test('source-only recipe has no Engine Actions API or release hydration path', (
   }
 });
 
-test('Engine core-build and the reusable Editor action bind to the canonical CLI contract', () => {
+test('Editor action keeps the source-only contract while Engine CI owns its fast artifact producer', () => {
   const workflow = readFileSync(resolve(ENGINE_ROOT, '.github/workflows/ci.yml'), 'utf8');
   const action = readFileSync(
     resolve(ENGINE_ROOT, '.github/actions/editor-prerequisite-build/action.yml'),
@@ -160,12 +160,12 @@ test('Engine core-build and the reusable Editor action bind to the canonical CLI
   const coreStart = workflow.indexOf('  core-build:');
   const nextJob = workflow.indexOf('\n  shared-app-inputs:', coreStart);
   const coreBuild = workflow.slice(coreStart, nextJob);
-  assert.match(coreBuild, /build-editor-prerequisite\.mjs --contract-check/);
-  assert.match(coreBuild, /build-editor-prerequisite\.mjs \\\n\s+--source-only/);
-  assert.match(coreBuild, /--payload-classes engine-dist,wgpu-wasm,fbx-wasm,wasm-codec/);
-  assert.doesNotMatch(coreBuild, /ensure-wasm\.mjs/);
-  assert.doesNotMatch(coreBuild, /Hydrate .*pkg\/ from release/);
-  assert.doesNotMatch(coreBuild, /Build package JavaScript once/);
+  assert.doesNotMatch(coreBuild, /build-editor-prerequisite\.mjs/);
+  assert.match(coreBuild, /uses: \.\/\.github\/actions\/prepare-wgpu-wasm/);
+  assert.match(coreBuild, /Hydrate fbx \+ codec pkg\/ from release \(best-effort\)/);
+  assert.match(coreBuild, /Build package JavaScript once/);
+  assert.match(coreBuild, /Stage core artifact classes[\s\S]*packages\/\*\/dist/);
+  assert.match(coreBuild, /Bind core artifact to the checked-out Engine source/);
   assert.match(action, /build-editor-prerequisite\.mjs/);
   assert.match(action, /--source-only/);
   assert.match(action, /--engine-sha "\$ENGINE_SHA"/);

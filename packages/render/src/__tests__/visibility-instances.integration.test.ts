@@ -6,7 +6,7 @@ import { Instances } from '../components/instances';
 import { MeshFilter } from '../components/mesh-filter';
 import { MeshRenderer } from '../components/mesh-renderer';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
-import { extractFrames } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 

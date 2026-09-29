@@ -144,12 +144,11 @@ function configuredStore(probe: CowProbe): GpuResidencyCache {
 function texturePod(w = 2, h = 2): TextureAsset {
   return {
     kind: 'texture',
-    width: w,
-    height: h,
+    shape: { viewDimension: '2d', extent: { width: w, height: h } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array(w * h * 4).fill(188),
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 

@@ -7,50 +7,63 @@ export {
   collectMaterialCookRefs,
   createMaterialArtifactDigest,
   createMaterialCookIdentity,
+  createMaterialProgramSetDigest,
+  isStandardMaterialRecord,
+  isStandardRootModule,
   type MaterialCookArtifact,
   type MaterialCookIdentity,
   type MaterialCookIdentityExpectation,
   type MaterialCookIdentityInput,
+  type MaterialCookProgram,
+  type MaterialCookProgramContext,
+  type MaterialCookRasterContext,
+  type MaterialCookRayContext,
   type MaterialCookReceipt,
   type MaterialCookRecordError,
   type MaterialCookRefs,
   type MaterialCookWasmProvenance,
+  materialLayerPlanIdentity,
+  materialProgramContextKey,
   projectCookedMaterialRecord,
   serializeCookedMaterialRecord,
   serializeMaterialCookReceipt,
   validateCookedMaterialRecord,
+  validateMaterialCookProgramContext,
   validateMaterialCookReceipt,
 } from './evidence/material-cook.js';
 export { buildOfflineAssetEvidence, packageVerification } from './evidence/offline-evidence.js';
 export {
+  AssetGuid,
+  isValidAssetGuidString,
+  isValidPackSourceKey,
+  PACK_SOURCE_KEY_RE,
+  PackageId,
+} from './guid.js';
+export {
   decodeMeshBinHeader,
+  decodeMeshBinMorphs,
   MESH_BIN_DIGEST_BYTES,
-  MESH_BIN_HEADER_V4_BYTES,
+  MESH_BIN_HEADER_BYTES,
+  MESH_BIN_MORPH_CHANNELS,
   MESH_BIN_PROJECTION_VERSION,
   MESH_BIN_VERSION,
   type MeshBinContractError,
+  type MeshBinHeader,
   type MeshBinHeaderResult,
-  type MeshBinHeaderV4,
   writeMeshBinHeader,
 } from './mesh-bin-contract.js';
+export * from './pack-authoring.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 export {
   type AssetReader,
   isScriptablePackAssetKind,
-  projectScriptablePackMeta,
+  projectScriptablePackSceneComponents,
   SCRIPTABLE_PACK_ASSET_KINDS,
-  type ScriptablePackAssetDeclaration,
-  type ScriptablePackAssetDeclarations,
-  type ScriptablePackAssetFor,
   type ScriptablePackAssetKind,
-  type ScriptablePackDefinition,
-  type ScriptablePackError,
-  type ScriptablePackExternalAssets,
-  type ScriptablePackMetaJson,
-  type ScriptablePackOutputs,
-  type ScriptablePackPublicationEnvelope,
   type ScriptablePackReadError,
-  validateScriptablePackDefinition,
+  type ScriptablePackSceneComponent,
+  type ScriptablePackSceneComponentInput,
+  type ScriptablePackSourceClosureEntry,
 } from './scriptable-pack.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';
 
@@ -106,5 +119,3 @@ export function parsePackV2(value: unknown): Result<PackV2, PackV2Error> {
 
   return ok(value);
 }
-
-export { type AuthoredImportAsset, validateAuthoredImport } from './authored-import.js';

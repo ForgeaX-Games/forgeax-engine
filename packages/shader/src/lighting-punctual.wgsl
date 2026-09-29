@@ -31,13 +31,18 @@
 //   - evalSpot(lightPos, lightDir, colorTimesIntensity, cosInner, cosOuter,
 //              invRangeSquared, ...) -> vec3<f32>
 
-#import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
+#import forgeax_pbr::brdf::{standardOpaqueBrdf}
+#import forgeax_pbr::lighting_spot_modifiers::{spotModifierProduct}
+
+// extendedLighting is one closed resource topology for IES, Cookie, and
+// probe factors. The ordinary path supplies identity factors.
+#import forgeax_pbr::lighting_attenuation::{evalDistanceAttenuation, evalSpotAttenuation, projectSpotUv}
 // feat-20260625-spot-light-shadow-mapping M3 / w15 (plan-strategy D-3 + D-5):
 // spot shadow sampling reuses the shared 2D 9-tap PCF core (sample_shadow_2d)
 // and the always-on `spotShadowMap` (binding 8) + `shadowSampler` (binding 4).
 // `shadowSampler` is imported UNCONDITIONALLY here (spot is always-on, D-5):
 // the point-shadow #ifdef block below must NOT re-import it (double import).
-#import forgeax_pbr::shadow_pcf::{sample_shadow_2d}
+#import forgeax_pbr::shadow_pcf::{sample_shadow_2d_kernel}
 #import forgeax_view::common::{spotShadowMap, shadowSampler}
 #ifdef POINT_SHADOW_AVAILABLE
 #import forgeax_pbr::shadow_pcf::{sample_shadow_cube_hw2x2}
@@ -48,9 +53,42 @@
 #import forgeax_view::common::{shadowAtlas}
 #endif
 
-// Shared punctual BRDF body returning (diffuse + specular) *
+// Volume lighting uses the same host-derived range and cone facts as surface
+// lighting. These wrappers intentionally return radiance factors only; the
+// volume integrator owns density, phase, transmittance, and accumulation.
+fn evalVolumePoint(
+  lightPos            : vec3<f32>,
+  colorTimesIntensity : vec3<f32>,
+  invRangeSquared     : f32,
+  worldPos            : vec3<f32>,
+) -> vec3<f32> {
+  let toLight = lightPos - worldPos;
+  let dSquared = max(dot(toLight, toLight), 1e-4);
+  let safeDistance = max(dSquared, 1e-4);
+  return colorTimesIntensity * evalDistanceAttenuation(safeDistance, invRangeSquared);
+}
+
+fn evalVolumeSpot(
+  lightPos            : vec3<f32>,
+  lightDir            : vec3<f32>,
+  colorTimesIntensity : vec3<f32>,
+  cosInner            : f32,
+  cosOuter            : f32,
+  invRangeSquared     : f32,
+  worldPos            : vec3<f32>,
+) -> vec3<f32> {
+  return colorTimesIntensity * evalSpotAttenuation(
+    lightPos, lightDir, worldPos, cosInner, cosOuter, invRangeSquared,
+  );
+}
+
+// Shared punctual BRDF body returning brdf *
 // colorTimesIntensity * nDotL * attenuation. Cone factor is applied by the
-// caller (evalSpot only).
+// caller (evalSpot only). `transmission` is the diffuse-transmission albedo
+// (KHR_materials_diffuse_transmission): a Lambertian BTDF lobe on the
+// hemisphere opposite the shading normal, lit by the same light and
+// attenuation. N.L and -N.L are mutually exclusive, so the lobe adds no
+// extra light iteration; opaque callers pass zero.
 fn evalPunctualBody(
   lightPos            : vec3<f32>,
   colorTimesIntensity : vec3<f32>,
@@ -62,22 +100,22 @@ fn evalPunctualBody(
   metallic            : f32,
   alphaSq             : f32,
   F0                  : vec3<f32>,
+  transmission        : vec3<f32>,
 ) -> vec3<f32> {
   let toLight = lightPos - worldPos;
   let dSquared = max(dot(toLight, toLight), 1e-4);
   let l = toLight / sqrt(dSquared);
   let h = normalize(viewDir + l);
-  let nDotL = max(dot(normal, l), 0.0);
+  let signedNDotL = dot(normal, l);
+  let nDotL = max(signedNDotL, 0.0);
   let nDotV = max(dot(normal, viewDir), 1e-5);
   let nDotH = max(dot(normal, h), 0.0);
   let vDotH = max(dot(viewDir, h), 0.0);
-  let f = f_schlick(vDotH, F0);
-  let specular = d_ggx(nDotH, alphaSq) * v_smith(nDotV, nDotL, alphaSq) * f;
-  let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
-  let diffuse = kd * baseColor / 3.14159265;
-  let factor = max(min(1.0 - (dSquared * invRangeSquared) * (dSquared * invRangeSquared), 1.0), 0.0);
-  let attenuation = factor * factor / dSquared;
-  return (diffuse + specular) * colorTimesIntensity * nDotL * attenuation;
+  let brdf = standardOpaqueBrdf(baseColor, metallic, alphaSq, F0, nDotV, nDotL, nDotH, vDotH);
+  let attenuation = evalDistanceAttenuation(dSquared, invRangeSquared);
+  let transmitted = transmission * (max(-signedNDotL, 0.0) / 3.14159265);
+  return brdf * colorTimesIntensity * nDotL * attenuation
+    + transmitted * colorTimesIntensity * attenuation;
 }
 
 // Omnidirectional point light: no cone factor.
@@ -92,11 +130,56 @@ fn evalPoint(
   metallic            : f32,
   alphaSq             : f32,
   F0                  : vec3<f32>,
+  transmission        : vec3<f32>,
 ) -> vec3<f32> {
   return evalPunctualBody(
     lightPos, colorTimesIntensity, invRangeSquared,
-    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0,
+    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0, transmission,
   );
+}
+
+// Flat 2D punctual evaluators share the range/cone math with the clustered
+// path, but intentionally skip the 3D BRDF normal term.
+// Sprite-lit treats every quad as an omnidirectional receiver; keeping this
+// owner here prevents URP and Cluster from drifting when the light lies in the
+// sprite plane (the common 2D flashlight setup).
+fn evalFlatRangeAttenuation(dSquared : f32, invRangeSquared : f32) -> f32 {
+  let factor = max(min(1.0 - (dSquared * invRangeSquared) * (dSquared * invRangeSquared), 1.0), 0.0);
+  return factor * factor / dSquared;
+}
+
+fn evalPointFlat(
+  lightPos            : vec3<f32>,
+  colorTimesIntensity : vec3<f32>,
+  invRangeSquared     : f32,
+  worldPos            : vec3<f32>,
+  baseColor           : vec3<f32>,
+) -> vec3<f32> {
+  // The flat 2D path shares the same finite-range attenuation owner as the
+  // clustered and direct Standard paths; its only intentional difference is
+  // that a sprite is an omnidirectional receiver.
+  let toLight = lightPos - worldPos;
+  let dSquared = max(dot(toLight, toLight), 1e-4);
+  return baseColor * colorTimesIntensity * evalFlatRangeAttenuation(dSquared, invRangeSquared);
+}
+
+fn evalSpotFlat(
+  lightPos            : vec3<f32>,
+  lightDir            : vec3<f32>,
+  colorTimesIntensity : vec3<f32>,
+  cosInner            : f32,
+  cosOuter            : f32,
+  invRangeSquared     : f32,
+  worldPos            : vec3<f32>,
+  baseColor           : vec3<f32>,
+) -> vec3<f32> {
+  let toLight = lightPos - worldPos;
+  let dSquared = max(dot(toLight, toLight), 1e-4);
+  let l = toLight / sqrt(dSquared);
+  let cone = smoothstep(cosOuter, cosInner, dot(l, -lightDir));
+  return evalPointFlat(
+    lightPos, colorTimesIntensity, invRangeSquared, worldPos, baseColor,
+  ) * cone;
 }
 
 #ifdef POINT_SHADOW_AVAILABLE
@@ -109,7 +192,8 @@ fn evalPoint(
 // projection (research L0.5 Bevy pattern); the caller passes `near` / `far`
 // directly so both pipelines route the same constants without owning the
 // upstream binding (URP reads them from `shadowParams[layer]` at @group(0)
-// binding 6; HDRP unpacks them off `LightSlot.kind_and_pad.zw` per
+// binding 6; the shared DirectLightSlot metadata remains the identity owner
+// while this shadow-parameter buffer carries the reconstruction constants per
 // plan-strategy §D-8).
 //
 // Caller responsibility: gate this on `shadowAtlasLayer >= 0` so the
@@ -126,6 +210,7 @@ fn evalPointShadowed(
   metallic            : f32,
   alphaSq             : f32,
   F0                  : vec3<f32>,
+  transmission        : vec3<f32>,
   shadowAtlasLayer    : i32,
   near                : f32,
   far                 : f32,
@@ -134,30 +219,32 @@ fn evalPointShadowed(
 ) -> vec3<f32> {
   let lit = evalPunctualBody(
     lightPos, colorTimesIntensity, invRangeSquared,
-    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0,
+    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0, transmission,
   );
-  // Fragment-to-light direction; cubemap sample uses the local-space
-  // direction (research L0.5: Bevy convention). For a right-handed world,
-  // the cubemap convention flips Z so the +Z face look direction matches.
+  // Bevy fetch_point_shadow: bias the receiver in world space. The normal
+  // offset is normalBias cube texels at this distance (the host pre-scales it
+  // by the face texel angle), pushed toward the lit hemisphere so a
+  // transmitting thin surface does not self-shadow its backlight; depthBias
+  // shortens the light-axis distance in world units and never passes the
+  // near plane.
   let toLight = lightPos - worldPos;
-  // Cubemap sample direction is from-fragment-to-light (Bevy + LearnOpenGL),
-  // negated to fragment-from-light when reconstructing the depth ref.
-  let lightLocal = vec3<f32>(toLight.x, toLight.y, -toLight.z);
-  // Reconstruct [0,1] NDC depth from world-space distance: largest-axis
-  // projection (research L0.5). Match the per-face perspective near / far
-  // configured by buildPointShadowMatrices (PointLightShadow.nearPlane /
-  // farPlane on the host).
-  let absV = abs(vec3<f32>(toLight.x, toLight.y, toLight.z));
-  let largestAxis = max(absV.x, max(absV.y, absV.z));
-  // Perspective z-NDC reconstruction for the largest axis as the eye-space
-  // -z component (cube face look direction is the +axis the absolute value
-  // selected). z_ndc = far * (largest - near) / (largest * (far - near)).
+  let distanceToLight = length(toLight);
+  let facing = select(-normal, normal, dot(normal, toLight) >= 0.0);
+  let offsetPos = worldPos + facing * (normalBias * distanceToLight);
+  // The atlas uses the shared CubeCamera face directions. The raster matrices
+  // reflect clip-space X to preserve authored front-face winding, so sampling
+  // must use the corresponding raw light-to-fragment direction.
+  let fromLight = offsetPos - lightPos;
+  let lightLocal = fromLight;
+  // Reconstruct [0,1] NDC depth from the largest-axis distance, matching the
+  // per-face perspective near / far of buildPointShadowMatrices:
+  // z_ndc = near * (far - largest) / (largest * (far - near)).
+  let absV = abs(fromLight);
+  let largestAxis = max(max(absV.x, max(absV.y, absV.z)) - depthBias, near);
   let denom = max(largestAxis * (far - near), 1e-6);
-  let depthRef = clamp(far * (largestAxis - near) / denom, 0.0, 1.0);
-  let nDotL = max(dot(normal, normalize(toLight)), 0.0);
+  let depthRef = clamp(near * (far - largestAxis) / denom, 0.0, 1.0);
   let shadowFactor = sample_shadow_cube_hw2x2(
-    shadowAtlas, shadowSampler, lightLocal, shadowAtlasLayer,
-    depthRef, depthBias, normalBias, nDotL,
+    shadowAtlas, shadowSampler, lightLocal, shadowAtlasLayer, depthRef,
   );
   return lit * shadowFactor;
 }
@@ -180,15 +267,16 @@ fn evalSpot(
   metallic            : f32,
   alphaSq             : f32,
   F0                  : vec3<f32>,
+  transmission        : vec3<f32>,
 ) -> vec3<f32> {
   let body = evalPunctualBody(
     lightPos, colorTimesIntensity, invRangeSquared,
-    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0,
+    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0, transmission,
   );
   let toLight = lightPos - worldPos;
   let l = normalize(toLight);
   let cone = smoothstep(cosOuter, cosInner, dot(l, -lightDir));
-  return body * cone;
+  return body * spotModifierProduct(1.0, 1.0, cone, 1.0, 1.0, 1.0);
 }
 
 // feat-20260625-spot-light-shadow-mapping M3 / w15 (plan-strategy D-3 + D-4 +
@@ -230,14 +318,17 @@ fn evalSpotShadowed(
   metallic            : f32,
   alphaSq             : f32,
   F0                  : vec3<f32>,
+  transmission        : vec3<f32>,
   lightViewProj       : mat4x4<f32>,
   shadowAtlasTile     : i32,
   depthBias           : f32,
   normalBias          : f32,
+  pcfKernelSize       : f32,
+  shadowIntensity     : f32,
 ) -> vec3<f32> {
   let body = evalSpot(
     lightPos, lightDir, colorTimesIntensity, cosInner, cosOuter, invRangeSquared,
-    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0,
+    worldPos, normal, viewDir, baseColor, metallic, alphaSq, F0, transmission,
   );
 
   // Project the fragment into the spot's light clip space.
@@ -245,30 +336,26 @@ fn evalSpotShadowed(
   // Perspective divide; guard a zero/near-zero w (fragment behind the light or
   // a degenerate matrix) so the OOB gate below catches it as fully lit.
   let invW = select(1.0 / splane.w, 0.0, abs(splane.w) < 1e-6);
-  let ndcXY = splane.xy * invW;
+  let clipUv = projectSpotUv(lightViewProj, worldPos);
   let depthRef = splane.z * invW;
-  // Clip-space [-1,1] -> texture UV [0,1] with the standard Y flip.
-  let clipUv = vec2<f32>(ndcXY.x * 0.5 + 0.5, ndcXY.y * -0.5 + 0.5);
-
   // OOB / NaN gate: outside the light frustum (or NaN from a degenerate matrix)
   // returns fully lit. Mirrors the directional `>= 0 && <= 1` NaN-safe form.
-  if (!(clipUv.x >= 0.0 && clipUv.x <= 1.0 && clipUv.y >= 0.0 && clipUv.y <= 1.0 && depthRef <= 1.0)) {
+  if (!(clipUv.x >= 0.0 && clipUv.x <= 1.0 && clipUv.y >= 0.0 && clipUv.y <= 1.0 && depthRef >= 0.0 && depthRef <= 1.0)) {
     return body;
   }
 
-  // Map the [0,1] light-clip UV into the spot's 2x2 atlas tile sub-rect.
-  let col = f32(shadowAtlasTile % 2);
-  let row = f32(shadowAtlasTile / 2);
-  let tileOrigin = vec2<f32>(col, row) * 0.5;
-  let atlasUv = clipUv * 0.5 + tileOrigin;
+  // Each shadow-casting spot owns layer `shadowAtlasTile` of the array.
+  let layerDims = vec2<f32>(textureDimensions(spotShadowMap, 0));
+  let texel = vec2<f32>(1.0, 1.0) / layerDims;
 
-  // texel step within the half-resolution sub-rect (atlas is 2x tile size).
-  let atlasDims = vec2<f32>(textureDimensions(spotShadowMap, 0));
-  let texel = vec2<f32>(1.0, 1.0) / atlasDims;
-
-  let nDotL = max(dot(normal, normalize(lightPos - worldPos)), 0.0);
-  let shadowFactor = sample_shadow_2d(
-    spotShadowMap, shadowSampler, atlasUv, texel, depthRef, normalBias, depthBias, nDotL,
+  // Same light-facing receiver bias as evalPointShadowed.
+  let nDotL = abs(dot(normal, normalize(lightPos - worldPos)));
+  let shadowFactor = sample_shadow_2d_kernel(
+    spotShadowMap, shadowSampler, clipUv, shadowAtlasTile, texel, depthRef, normalBias, depthBias, nDotL,
+    pcfKernelSize,
   );
-  return body * shadowFactor;
+  // Three's SpotLight.shadow.intensity is the opacity of the shadow, not a
+  // multiplier on the light's candela radiance. A value of 1 keeps the
+  // sampled visibility fully opaque; 0 leaves the unshadowed body intact.
+  return body * mix(1.0, shadowFactor, clamp(shadowIntensity, 0.0, 1.0));
 }

@@ -50,7 +50,8 @@ import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shade
 import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SpriteInstances } from '../../../render/src/components';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 interface CollectedError {
   readonly code: string;
@@ -349,7 +350,7 @@ describe('render-system-extract material color boundary', () => {
 describe('render-system-extract spot direction owner', () => {
   it('normalizes one spot snapshot in extract and keeps one spot query', async () => {
     const source = await readFile(
-      new URL('../../../render/src/render-system-extract.ts', import.meta.url),
+      new URL('../../../render/src/extract/world-environment.ts', import.meta.url),
       'utf8',
     );
 

@@ -15,7 +15,7 @@
 //       time-separated captures, proving video frames advance over time.
 //
 // Falsification pass (EXECUTABLE, not just documented): the same probes are run
-// against `?falsify=1`, which makes the demo SKIP the VideoElementProvider
+// against `?falsify=1`, which makes the demo SKIP the VideoSourceProvider
 // registration. With no host element the engine binds the default view, the quad
 // shows no live video, and at least one probe MUST go RED. If the falsify pass were
 // to PASS, the probes would be vacuous (e.g. tripping on the HUD) — so a GREEN
@@ -39,6 +39,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { createRequire } from 'node:module';
+import { observeViteHttpReadiness } from '../../../../scripts/lib/vite-http-readiness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
@@ -71,23 +72,18 @@ const viteProc = spawn('pnpm', ['-F', '@forgeax/video-texture', 'dev'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-let portUrl = null;
-viteProc.stdout.on('data', (chunk) => {
-  const s = chunk.toString();
-  process.stdout.write(`[vite] ${s}`);
-  const m = s.match(/Local:\s+(http:\/\/[^\s]+)/);
-  if (m) portUrl = m[1];
+const viteReadiness = observeViteHttpReadiness(viteProc, {
+  timeoutEnvName: 'FORGEAX_VIDEO_TEXTURE_SERVER_READINESS_TIMEOUT_MS',
 });
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
-
-const deadline = Date.now() + 30000;
-while (!portUrl && Date.now() < deadline) await sleep(200);
-if (!portUrl) {
-  console.error('FAIL: vite did not become ready in 30s');
+let portUrl;
+let serverReadyElapsedMs;
+try {
+  ({ origin: portUrl, elapsedMs: serverReadyElapsedMs } = await viteReadiness.wait());
+} catch (error) {
+  console.error(`FAIL: ${error instanceof Error ? error.message : String(error)}`);
   viteProc.kill();
   process.exit(2);
 }
-portUrl = portUrl.replace(/\/$/, '');
 console.log(`[smoke-browser] using ${portUrl}`);
 
 // --- 2. Launch Chrome with WebGPU + autoplay ---------------------------------
@@ -213,6 +209,11 @@ async function runOnce(query, label) {
     if (msg.type() === 'error') errors.push(`CONSOLE-ERR: ${msg.text()}`);
   });
   await page.goto(`${portUrl}/${query}`, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.waitForFunction(
+    () => Number(document.querySelector('#app')?.dataset.forgeaxCompletedFrames ?? 0) >= 2,
+    undefined,
+    { timeout: 30000 },
+  );
   await page.waitForTimeout(5000);
   const png1 = await page.screenshot({ type: 'png' });
   await page.waitForTimeout(3000);
@@ -251,8 +252,16 @@ async function runRecoveryJourney() {
       { timeout: 30000 },
     );
     controlsReady = true;
+    await page.waitForFunction(
+      () => Number(document.querySelector('#app')?.dataset.forgeaxCompletedFrames ?? 0) >= 2,
+      undefined,
+      { timeout: 30000 },
+    );
     await page.waitForTimeout(5000);
 
+    // Drain submitted work and hold new frames while taking the reference.
+    // Otherwise the screenshot can precede several already-queued video uploads.
+    await page.evaluate(() => globalThis.__forgeaxVideoTextureRecovery.pauseFrames());
     const healthy = await page.evaluate(() => globalThis.__forgeaxVideoTextureRecovery.inspect());
     const before = await capturePage(page, 'video-texture-recovery-before.png');
     const beforeMean = healthy ? (before.stats.avg[0] + before.stats.avg[1] + before.stats.avg[2]) / 3 : 0;
@@ -282,6 +291,7 @@ async function runRecoveryJourney() {
     const healthyUnsupported = unsupportedCount(healthy);
 
     await page.evaluate(() => globalThis.__forgeaxVideoTextureRecovery.removeProvider());
+    await page.evaluate(() => globalThis.__forgeaxVideoTextureRecovery.resumeFrames());
     await page.waitForTimeout(1200);
     const lost = await page.evaluate(() => globalThis.__forgeaxVideoTextureRecovery.inspect());
     const duringLoss = await capturePage(page, 'video-texture-recovery-during-loss.png');
@@ -376,9 +386,8 @@ async function runRecoveryJourney() {
 const BLACK_FLOOR = 18; // mean channel <= this => effectively black (quad not drawn)
 const UNIFORM_DEV = 12; // maxDev <= this => near-uniform fill (default texture, no video)
 const ADVANCE_DELTA = 6; // center avg must move at least this much L1 between frames
-// One already-submitted copyExternalImageToTexture may finish after the host
-// removes the provider. Allow that one-frame GPU settle, then require stable
-// pixels while the provider remains absent.
+// Preserve the original boundary-sampling tolerance. The healthy reference now
+// drains queued uploads; repeated samples must remain stable while absent.
 const LKG_SETTLE_DELTA = 48;
 function evaluate(run) {
   const failures = [];
@@ -475,6 +484,6 @@ if (verdictFailures.length > 0) {
 console.log(
   `\n[smoke-browser] GREEN — normal pass shows live advancing video at canvas center ` +
     `(avg1=${normal.s1.avg} -> avg2=${normal.s2.avg}), and the falsify control correctly went RED. ` +
-    'Video upload -> GPU texture -> shader -> swapchain chain is live and probe-calibrated.',
+    `Video upload -> GPU texture -> shader -> swapchain chain is live and probe-calibrated; serverReadyElapsedMs=${serverReadyElapsedMs}.`,
 );
 process.exit(0);

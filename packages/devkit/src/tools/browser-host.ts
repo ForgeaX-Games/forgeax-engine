@@ -16,11 +16,31 @@ import {
   type ToolDomainFailure,
   validatePreviewArtifactManifest,
 } from '@forgeax/engine-tool-runtime';
-import { type Browser, chromium, type Page } from 'playwright';
+import {
+  type Browser,
+  type ConsoleMessage,
+  chromium,
+  type Frame,
+  type Page,
+  type Response,
+} from 'playwright';
 import { createServer, type ViteDevServer } from 'vite';
 import type { BootstrapRoot } from '../host/base-host.js';
 import { createViteConfig } from '../host.js';
 import { readProjectFacts } from '../project.js';
+import {
+  browserLaunchArgs,
+  captureBrowserExecutionSurface,
+  resolveBrowserExecutable,
+} from '../software-capture.js';
+import type { CaptureBackend } from '../types.js';
+import {
+  acquireBrowserCarrierPage,
+  type BrowserCarrierAdapter,
+  type BrowserCarrierAttachment,
+  type BrowserCarrierRunIdentity,
+  type BrowserExecutionTarget,
+} from './display-carrier.js';
 import type { PreviewHostResult } from './preview-host.js';
 
 export type BrowserHostResult =
@@ -62,6 +82,63 @@ export interface ResourcePreviewReportInput {
 
 export interface BrowserHostOptions {
   readonly publish?: boolean;
+  /** Select the browser adapter lane. `auto` starts on hardware flags. */
+  readonly backend?: CaptureBackend;
+  /** Override the recipe's hidden/visible default for private browser pages. */
+  readonly headless?: boolean;
+  /** Optional already-open display carrier for a visible capture page. */
+  readonly carrier?: BrowserCarrierAdapter;
+  readonly carrierRun?: BrowserCarrierRunIdentity;
+  readonly carrierGeneration?: number;
+}
+
+type BrowserBackendObserved = 'software' | 'hardware' | 'unknown';
+
+function classifyBrowserAdapter(adapter: Record<string, unknown> | null): BrowserBackendObserved {
+  if (adapter === null) return 'unknown';
+  const witness = Object.values(adapter)
+    .map((value) => String(value).toLowerCase())
+    .join(' ');
+  return ['swiftshader', 'llvmpipe', 'lavapipe', 'software'].some((token) =>
+    witness.includes(token),
+  )
+    ? 'software'
+    : 'hardware';
+}
+
+async function observeBrowserAdapter(realm: Page | Frame): Promise<{
+  readonly observed: BrowserBackendObserved;
+  readonly adapter: Record<string, unknown> | null;
+}> {
+  return realm
+    .evaluate(async () => {
+      try {
+        const gpuAdapter = await navigator.gpu?.requestAdapter();
+        if (gpuAdapter === null || gpuAdapter === undefined)
+          return { observed: 'unknown', adapter: null };
+        const info = gpuAdapter.info;
+        return {
+          observed: 'unknown',
+          adapter: {
+            vendor: info.vendor,
+            architecture: info.architecture,
+            device: info.device,
+            description: info.description,
+          },
+        };
+      } catch {
+        return { observed: 'unknown', adapter: null };
+      }
+    })
+    .then((result) => {
+      const adapter =
+        result.adapter !== null &&
+        typeof result.adapter === 'object' &&
+        !Array.isArray(result.adapter)
+          ? result.adapter
+          : null;
+      return { observed: classifyBrowserAdapter(adapter), adapter };
+    });
 }
 
 /** @internal Vite treats port 0 as its default 5173, not as an OS-assigned port. */
@@ -270,6 +347,20 @@ function browserFailure(
   cause: unknown,
   pageErrors: readonly string[] = [],
 ): BrowserHostResult {
+  if (
+    cause !== null &&
+    typeof cause === 'object' &&
+    (cause as { readonly code?: unknown }).code === 'tool-preview-capability-unavailable'
+  ) {
+    const failure = cause as ToolDomainFailure;
+    return {
+      ok: false,
+      error: {
+        ...failure,
+        detail: failure.detail as never,
+      },
+    };
+  }
   return {
     ok: false,
     error: {
@@ -285,6 +376,34 @@ function browserFailure(
   };
 }
 
+function skinCapabilityFailure(
+  resourceKind: ToolPreviewResourceRequest['kind'] | undefined,
+  errors: readonly unknown[] | undefined,
+): ToolDomainFailure | undefined {
+  if (resourceKind !== 'material') return undefined;
+  if (!Array.isArray(errors)) return undefined;
+  const cause = errors.find(isSkinCapabilityError);
+  if (cause === undefined) return undefined;
+  return {
+    code: 'tool-preview-capability-unavailable',
+    expected: 'a skinned material preview mesh with skinIndex, skinWeight, and Skin bindings',
+    hint: 'Preview this material through a scene or mesh that supplies the skinning contract.',
+    detail: { phase: 'capture-render', cause: transportCause(cause) },
+  };
+}
+
+function isSkinCapabilityError(error: unknown): boolean {
+  return (
+    (error !== null &&
+      typeof error === 'object' &&
+      (error as { readonly code?: unknown }).code === 'material-skin-attr-missing') ||
+    (typeof error === 'string' &&
+      /\[RenderSystem\.extract \(material-skin-attr-missing\)\]\s*MaterialSkinAttrMissingError:/.test(
+        error,
+      ))
+  );
+}
+
 export async function runBrowserPreviewHost(
   projectRoot: string,
   recipe: ToolPreviewRecipe,
@@ -298,14 +417,21 @@ export async function runBrowserPreviewHost(
   const facts = await readProjectFacts(projectRoot);
   if (!facts.ok)
     return { ok: false, error: { ...facts.error, detail: facts.error.detail as never } };
+  if (signal.aborted) throw new Error('Browser Host aborted before configuration');
   const config = await createViteConfig(facts.value, 'serve', '/', { bootstrapRoot });
+  // Configuration may load project cookers and execute Pack discovery before a
+  // Vite server exists. A timed-out caller must not continue into server
+  // creation after that work completes.
+  if (signal.aborted) throw new Error('Browser Host aborted before server creation');
   // A Browser Host is a disposable Vite realm. A shared cache lets adjacent
   // coverage groups observe a partially-written optimized dependency graph.
   // Keep the cache inside the project lifecycle and remove it with the Host.
   const cacheDir = await mkdtemp(join(facts.value.root, '.forgeax', '.browser-host-vite-'));
   let server: ViteDevServer;
   try {
+    if (signal.aborted) throw new Error('Browser Host aborted before server creation');
     const port = await allocateLoopbackPort();
+    if (signal.aborted) throw new Error('Browser Host aborted before server creation');
     server = await createServer({
       ...config,
       cacheDir,
@@ -325,6 +451,10 @@ export async function runBrowserPreviewHost(
         strictPort: true,
       },
     });
+    if (signal.aborted) {
+      await server.close();
+      throw new Error('Browser Host aborted before server listen');
+    }
   } catch (cause) {
     await rm(cacheDir, { recursive: true, force: true });
     throw cause;
@@ -333,54 +463,94 @@ export async function runBrowserPreviewHost(
   let phase = 'server-listen';
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let carrierAttachment: BrowserCarrierAttachment | undefined;
+  let carrierFallbackReason: string | undefined;
   let pageErrors: string[] = [];
-  let responseDiagnostics: Promise<void>[] = [];
-  const launchBrowser = (headless: boolean): Promise<Browser> =>
+  let removePageListeners: () => void = () => {};
+  const requestedBackend = options.backend ?? 'auto';
+  const launchBackend: CaptureBackend = requestedBackend === 'software' ? 'software' : 'hardware';
+  const headless = options.headless ?? recipe.presentation === 'hidden';
+  const channel = process.env.FORGEAX_CHROME_CHANNEL;
+  const executablePath =
+    channel === undefined ? await resolveBrowserExecutable(undefined) : undefined;
+  const launchBrowser = (headlessMode: boolean, backend: CaptureBackend): Promise<Browser> =>
     chromium.launch({
-      channel: process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome',
-      headless,
+      ...(channel === undefined ? {} : { channel }),
+      ...(executablePath === undefined ? {} : { executablePath }),
+      headless: headlessMode,
       args: [
-        '--enable-unsafe-webgpu',
-        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-        '--use-vulkan=swiftshader',
-        '--use-angle=swiftshader',
-        '--disable-vulkan-surface',
-        '--ignore-gpu-blocklist',
-        '--disable-gpu-driver-bug-workarounds',
-        '--disable-dawn-features=disallow_unsafe_apis',
+        ...browserLaunchArgs(backend, 'development', false),
         '--autoplay-policy=no-user-gesture-required',
       ],
+      ...(backend === 'software'
+        ? {
+            env: {
+              ...Object.fromEntries(
+                Object.entries(process.env).filter(
+                  (entry): entry is [string, string] => entry[1] !== undefined,
+                ),
+              ),
+              LIBGL_ALWAYS_SOFTWARE: '1',
+            },
+          }
+        : {}),
     });
-  const observePage = (target: Page): void => {
-    target.on('pageerror', (error) => pageErrors.push(error.message));
-    target.on('console', (message) => {
-      if (message.type() === 'error' || message.type() === 'warning') {
-        pageErrors.push(`${message.type()}: ${message.text()}`);
+  const observePage = (target: Page, execution: BrowserExecutionTarget): void => {
+    removePageListeners();
+    const targetFrame = execution.kind === 'frame' ? execution.realm : undefined;
+    const onPageError = (error: Error) => {
+      // Playwright's PageError has no frame accessor. Never classify an
+      // unrelated workspace error as a borrowed display-frame failure.
+      if (targetFrame === undefined) pageErrors.push(error.message);
+    };
+    const onConsole = (message: ConsoleMessage) => {
+      if (message.type() !== 'error' && message.type() !== 'warning') return;
+      if (targetFrame !== undefined) {
+        const location = message.location().url;
+        const targetUrl = typeof targetFrame.url === 'function' ? targetFrame.url() : '';
+        if (location !== '' && targetUrl !== '' && location !== targetUrl) return;
       }
-    });
-    target.on('response', (response) => {
+      pageErrors.push(`${message.type()}: ${message.text()}`);
+    };
+    const onResponse = (response: Response) => {
+      if (targetFrame !== undefined && response.frame() !== targetFrame) return;
       if (response.status() >= 400) {
-        responseDiagnostics.push(
-          response
-            .text()
-            .then((body) => {
-              pageErrors.push(`HTTP ${response.status()}: ${response.url()} ${body}`);
-            })
-            .catch(() => {
-              pageErrors.push(`HTTP ${response.status()}: ${response.url()}`);
-            }),
-        );
+        // A failed response is diagnostic evidence, not part of the Host
+        // lifecycle. Reading an error body through a live Vite/WebSocket
+        // response can remain pending and otherwise block a valid capture.
+        pageErrors.push(`HTTP ${response.status()}: ${response.url()}`);
       }
-    });
+    };
+    target.on('pageerror', onPageError);
+    target.on('console', onConsole);
+    target.on('response', onResponse);
+    removePageListeners = () => {
+      target.off?.('pageerror', onPageError);
+      target.off?.('console', onConsole);
+      target.off?.('response', onResponse);
+      removePageListeners = () => {};
+    };
   };
-  const closeBrowserProcess = async (): Promise<void> => {
-    await page?.close().catch(() => undefined);
+  const closeBrowserProcess = async (releaseCarrier = false): Promise<void> => {
+    const activePage = page;
+    const activeBrowser = browser;
+    const activeCarrier = carrierAttachment;
     page = undefined;
-    await browser?.close().catch(() => undefined);
     browser = undefined;
+    removePageListeners();
+    if (releaseCarrier) carrierAttachment = undefined;
+    await Promise.allSettled([
+      ...(activeCarrier === undefined && activePage !== undefined
+        ? [activePage.close().catch(() => undefined)]
+        : []),
+      activeBrowser?.close(),
+      ...(releaseCarrier && activeCarrier !== undefined
+        ? [activeCarrier.close('tool-preview-close')]
+        : []),
+    ]);
   };
   const abort = (): void => {
-    void closeBrowserProcess();
+    void closeBrowserProcess(true);
     void server.close();
   };
   signal.addEventListener('abort', abort, { once: true });
@@ -398,22 +568,60 @@ export async function runBrowserPreviewHost(
       throw new Error('Vite Browser Host entry transform returned no module');
     }
 
-    phase = 'capture-browser-launch';
-    browser = await launchBrowser(recipe.presentation === 'hidden');
-    phase = 'capture-page-bootstrap';
-    page = await browser.newPage({
-      viewport: recipe.viewport,
-      deviceScaleFactor: 1,
-    });
-    observePage(page);
     const captureUrl = new URL(`http://127.0.0.1:${address.port}/`);
     captureUrl.searchParams.set('forgeax-tool-recipe', JSON.stringify(recipe));
     captureUrl.searchParams.set('forgeax-tool-snapshot', JSON.stringify(snapshot));
     captureUrl.searchParams.set('forgeax-tool-run-id', runId);
     if (resource !== undefined)
       captureUrl.searchParams.set('forgeax-resource-preview', JSON.stringify(resource));
-    await page.goto(captureUrl.href, { waitUntil: 'networkidle', timeout: 45_000 });
-    await page.waitForFunction(
+    if (!headless && recipe.presentation !== 'hidden' && options.carrier !== undefined) {
+      if (options.carrierRun === undefined || options.carrierGeneration === undefined) {
+        throw new Error(
+          'browser host carrier requires carrierRun and carrierGeneration for a visible page',
+        );
+      }
+      phase = 'capture-carrier-select';
+      const acquired = await acquireBrowserCarrierPage(
+        options.carrier,
+        {
+          run: options.carrierRun,
+          generation: options.carrierGeneration,
+          headless: false,
+          gpu: 'auto',
+          width: recipe.viewport.width,
+          height: recipe.viewport.height,
+          url: captureUrl.href,
+        },
+        { signal, releaseReason: 'tool-preview-attach-failed' },
+      );
+      carrierAttachment = acquired.attachment;
+      carrierFallbackReason = acquired.fallbackReason;
+      if (carrierAttachment !== undefined) page = carrierAttachment.page;
+    }
+    if (page === undefined) {
+      phase = 'capture-browser-launch';
+      browser = await launchBrowser(headless, launchBackend);
+      phase = 'capture-page-bootstrap';
+      page = await browser.newPage({
+        viewport: recipe.viewport,
+        deviceScaleFactor: 1,
+      });
+    }
+    const capturePage = page;
+    if (capturePage === undefined) throw new Error('Browser Host did not provide a capture page');
+    const captureExecution: BrowserExecutionTarget = carrierAttachment?.execution ?? {
+      kind: 'page',
+      ownerPage: capturePage,
+      realm: capturePage,
+    };
+    const captureRealm = captureExecution.realm;
+    observePage(capturePage, captureExecution);
+    // Vite keeps a development WebSocket open for the host bridge, so
+    // `networkidle` is not a lifecycle signal here. The generated page marks
+    // the actual Engine Host ready below; wait for DOM parsing and that owner
+    // signal instead of waiting for a connection that is intentionally live.
+    await captureRealm.goto(captureUrl.href, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await captureRealm.waitForFunction(
       () =>
         (
           globalThis as unknown as {
@@ -424,7 +632,7 @@ export async function runBrowserPreviewHost(
       { timeout: 45_000 },
     );
     phase = 'capture-run';
-    const captured = await page.evaluate(async () => {
+    const captured = await captureRealm.evaluate(async () => {
       const host = (
         globalThis as unknown as {
           __forgeaxToolHost: {
@@ -449,35 +657,75 @@ export async function runBrowserPreviewHost(
         ),
       ) as Awaited<ReturnType<typeof host.capture>>;
     });
-    await Promise.all(responseDiagnostics);
     if (!captured.ok) return browserFailure('capture-run', captured.error, pageErrors);
-    if (pageErrors.length > 0)
-      return browserFailure('capture-page-runtime', pageErrors[0], pageErrors);
-    const capturePng = await page.screenshot({ type: 'png' });
+    const captureCapabilityFailure = skinCapabilityFailure(resource?.kind, [
+      ...(Array.isArray(captured.result.appErrors) ? captured.result.appErrors : []),
+      ...pageErrors,
+    ]);
+    // The render system reports a known resource capability limit through the
+    // App error channel. That same error is also surfaced as a console error
+    // by the browser page, but it does not invalidate the capture: the RHI
+    // tape, profile, and canvas have already been produced and the replay
+    // phase can still make them durable. Keep unrelated page errors fatal;
+    // native-preview will return the capability failure after publishing the
+    // complete capture bundle without a success report.
+    const unexpectedPageErrors =
+      captureCapabilityFailure === undefined
+        ? pageErrors
+        : pageErrors.filter((error) => !isSkinCapabilityError(error));
+    if (unexpectedPageErrors.length > 0)
+      return browserFailure('capture-page-runtime', unexpectedPageErrors[0], unexpectedPageErrors);
+    const observedCapture = await observeBrowserAdapter(captureRealm);
+    if (requestedBackend !== 'auto' && observedCapture.observed !== requestedBackend) {
+      return {
+        ok: false,
+        error: {
+          code: 'tool-preview-backend-unavailable',
+          expected: `the explicitly requested ${requestedBackend} browser adapter`,
+          hint: 'Use backend: auto to allow fallback, or repair the requested browser backend.',
+          detail: {
+            requested: requestedBackend,
+            actual: observedCapture.observed,
+            adapter: observedCapture.adapter as JsonValue,
+          },
+        },
+      };
+    }
+    const canvasCaptureUri = captured.result.capturePng?.uri;
+    const reuseCanvasCapture =
+      resource !== undefined && canvasCaptureUri?.startsWith('data:image/png;base64,') === true;
+    const capturePng = reuseCanvasCapture
+      ? dataUriBytes(canvasCaptureUri)
+      : await captureBrowserExecutionSurface(
+          captureExecution,
+          Date.now() + 45_000,
+          recipe.viewport,
+        );
     const capturedResult: ToolPreviewCaptureResult = {
       ...captured.result,
       capturePng: {
-        uri: `data:image/png;base64,${capturePng.toString('base64')}`,
-        width: recipe.viewport.width,
-        height: recipe.viewport.height,
+        uri: `data:image/png;base64,${Buffer.from(capturePng).toString('base64')}`,
+        width: reuseCanvasCapture ? captured.result.capturePng.width : recipe.viewport.width,
+        height: reuseCanvasCapture ? captured.result.capturePng.height : recipe.viewport.height,
       },
     };
 
     await closeBrowserProcess();
     pageErrors = [];
-    responseDiagnostics = [];
 
     phase = 'replay-browser-launch';
-    browser = await launchBrowser(true);
+    const replayBackend: CaptureBackend =
+      observedCapture.observed === 'software' ? 'software' : launchBackend;
+    browser = await launchBrowser(true, replayBackend);
     phase = 'replay-page-bootstrap';
     page = await browser.newPage({
       viewport: recipe.viewport,
       deviceScaleFactor: 1,
     });
-    observePage(page);
+    observePage(page, { kind: 'page', ownerPage: page, realm: page });
     const replayUrl = new URL(`http://127.0.0.1:${address.port}/`);
     replayUrl.searchParams.set('forgeax-tool-replay', '1');
-    await page.goto(replayUrl.href, { waitUntil: 'networkidle', timeout: 45_000 });
+    await page.goto(replayUrl.href, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await page.waitForFunction(
       () =>
         (
@@ -513,7 +761,6 @@ export async function runBrowserPreviewHost(
     }, JSON.stringify(capturedResult))) as
       | { readonly ok: true; readonly result: PreviewHostResult }
       | { readonly ok: false; readonly error: ToolDomainFailure };
-    await Promise.all(responseDiagnostics);
     if (!result.ok) return browserFailure('replay-run', result.error, pageErrors);
     if (pageErrors.length > 0)
       return browserFailure('replay-page-runtime', pageErrors[0], pageErrors);
@@ -549,7 +796,21 @@ export async function runBrowserPreviewHost(
               unattributedMs: 0,
             }),
       },
-      actualCarrier: recipe.presentation === 'hidden' ? 'headless-private' : 'headed-private',
+      actualCarrier: headless
+        ? 'headless-private'
+        : carrierAttachment === undefined
+          ? 'headed-private'
+          : 'visible-consumer',
+      ...(carrierAttachment === undefined ? {} : { carrierTarget: carrierAttachment.target }),
+      ...(carrierFallbackReason === undefined ? {} : { carrierFallbackReason }),
+      backendRequested: requestedBackend,
+      backendObserved: observedCapture.observed,
+      ...(captureCapabilityFailure === undefined
+        ? {}
+        : { capabilityFailure: captureCapabilityFailure }),
+      ...(requestedBackend === 'auto' && observedCapture.observed === 'software'
+        ? { backendFallbackReason: 'browser adapter reported a software implementation' }
+        : {}),
     };
     phase = 'artifact-publish';
     return {
@@ -560,11 +821,10 @@ export async function runBrowserPreviewHost(
           : await publishPreviewArtifacts(projectRoot, runId, value),
     };
   } catch (cause) {
-    await Promise.all(responseDiagnostics);
     return browserFailure(phase, cause, pageErrors);
   } finally {
     signal.removeEventListener('abort', abort);
-    await closeBrowserProcess();
+    await closeBrowserProcess(true);
     await server.close().catch(() => undefined);
     await rm(cacheDir, { recursive: true, force: true });
   }

@@ -13,6 +13,15 @@ describe('render schema parity', () => {
     expect(MeshFilter.fields.assetHandle.type).toBe('shared<MeshAsset>');
     expect(DirectionalLight.fields.direction.type).toBe('array<f32, 3>');
     expect(DirectionalLight.fields.castShadow.default).toBe(true);
+    expect(DirectionalLight.fields.shadowFilter.labels).toEqual({
+      pcf1: 1,
+      pcf3: 2,
+      pcf5: 3,
+      pcssMedium: 4,
+      pcssHigh: 5,
+    });
+    expect(DirectionalLight.fields.shadowFilter.default).toBe(2);
+    expect('pcfKernelSize' in DirectionalLight.fields).toBe(false);
     expect(MeshRenderer.fields.materials.type).toBe('array<shared<MaterialAsset>>');
   });
 

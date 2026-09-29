@@ -49,4 +49,4 @@ transition after `video.onended`; a no-overlay edit must fail the visual gate.
 This example intentionally uses a host DOM video instead of introducing a
 video asset or renderer feature. It does not demonstrate audio bus routing,
 authored scene import, or gameplay state transitions; those contracts belong to
-the corresponding focused demos and to `templates/game-default`.
+the corresponding focused demos and to `templates/game-3d`.

@@ -46,11 +46,10 @@ export { EngineEnvironmentError } from './errors/environment';
 // -- render cluster --
 // -- skin cluster --
 
-// ─── ECS render bridge (feat-20260509-ecs-render-bridge-mvp) ────────────────
-//
-// Single-import surface for the 5-component schema set + builtin asset handles
-// (charter proposition 1 progressive disclosure + plan-strategy 7.4
-// discoverability "AI users see 8 core symbols in one read").
+// The declarations below are explicit Runtime entries or identity-preserving
+// forwards. Domain components, render systems, pipeline vocabulary, and builtin
+// asset handles remain owned by their focused packages; this barrel history is
+// not a promise of a broader schema or registry surface.
 
 /**
  * RHI error-model surface (feat-20260511-tetris-retro-followups verify minor-edit).
@@ -71,32 +70,23 @@ export { EngineEnvironmentError } from './errors/environment';
  * Read both fields directly through typed property access after the
  * `code === 'limit-exceeded'` discriminant narrows `err.detail`.
  *
- * The `Renderer.subscribe` channel projects renderer-owned failures through
- * one `RendererEvent` union. The public operation error is always `RenderError`;
- * lower-layer causes remain structured in its detail instead of creating a
- * second listener/error authority.
+ * `Renderer.subscribe` delivers `RendererEvent`. Its `kind: 'error'` arm
+ * carries the public Render-owned `RenderError` union. RHI and Asset error
+ * codes belong to their direct APIs (for example, `acquireCanvasContext`
+ * returns a `Result` with an `RhiError`); they are not alternate
+ * `Renderer.subscribe` arms. Read the typed Render detail for the selected
+ * code and keep lower-layer causes inside that detail.
  *
  * @example
- *   import {
- *     RhiError, type RhiErrorCode, type LimitExceededDetail,
- *   } from '@forgeax/engine-runtime';
- *   import { type RenderError } from '@forgeax/engine-render';
+ *   import type { RenderError } from '@forgeax/engine-render';
  *   renderer.subscribe((event) => {
  *     if (event.kind !== 'error') return;
- *     const e: RenderError = event.error;
- *     switch (e.code) {
- *       case 'limit-exceeded': {
- *         const detail = e.detail as LimitExceededDetail;
- *         // detail.maxStorageBufferBindingSize vs detail.requestedBytes
- *         break;
- *       }
- *       case 'equirect-projection-failed': {
- *         // renderer error arm — e narrows to EquirectProjectionFailedError
- *         const detail: EquirectProjectionFailedDetail = e.detail;
- *         // detail.handle — the equirect handle whose projection failed
- *         break;
- *       }
+ *     const error: RenderError = event.error;
+ *     if (error.code === 'renderer-contract-failed') {
+ *       report(error.detail.operation, error.detail.cause);
+ *       return;
  *     }
+ *     report(error.code, error.hint);
  *   });
  */
 export {
@@ -106,6 +96,7 @@ export {
   type RhiErrorCode,
   type RhiErrorDetail,
   type RhiShaderCompileDetail,
+  type RhiWebgpuRuntimeCause,
   type RhiWebgpuRuntimeDetail,
 } from '@forgeax/engine-rhi';
 /**
@@ -211,23 +202,9 @@ export { createDevImportTransport } from './dev-import-transport';
 // (pick / pickVertex / pickVertexOnEntity / pickTile + PickHit / VertexHit /
 // PickError / PickErrorCode / PickTileError / PickTileHit) moved to
 // @forgeax/engine-picking (AC-204). Zero shim -- import from that package.
-/**
- * RenderSystem (D-S2 — feat-20260509-ecs-render-bridge-mvp).
- *
- * Engine-internal phase that walks the World query graph (Extract /
- * Prepare / Record three stages). RenderSystem is **not** registered to
- * the ECS schedule (AC-09); `Renderer.draw(worlds, options)` invokes it once per
- * frame.
- *
- * AI users see this re-export so the F-1 single-import contract holds:
- *
- * @example
- *   import {
- *     Camera, DirectionalLight, MeshFilter, MeshRenderer,
- *   } from '@forgeax/engine-render';
- *   import { Transform } from '@forgeax/engine-scene';
- *   import { AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
- */
+// Render-domain declarations and scene traversal primitives are not Runtime
+// exports. Import them from their owning focused package instead of inferring
+// an export from an old Runtime comment.
 // feat-20260705-runtime-tier2-decomposition M1 / w14: resolveAssetHandle moved
 // to @forgeax/engine-assets-runtime (AC-105).
 export type { SpriteParamValues } from './sprite-param-values';
@@ -281,7 +258,7 @@ export { spriteAnimationTickSystem } from './systems/sprite-animation-tick';
 // entry, S12).
 // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — chunk-extract system
 // feat-20260705-runtime-tier2-decomposition M3 / w31: the video cluster
-// (VIDEO_ELEMENT_PROVIDER_KEY / VideoElementProvider / videoLoader / VideoPlayer
+// (VIDEO_SOURCE_PROVIDER_KEY / VideoSourceProvider / videoLoader / VideoPlayer
 // / probeVideoHighPerfUpload / VideoCapabilityDevice) moved to
 // @forgeax/engine-graphics-extras (AC-303). Zero shim -- import from that
 // package.
@@ -340,41 +317,7 @@ export {
 // never rendered). One barrel entry => one module copy => one registry shared by
 // createDebugDrawOnReady (the writer) and attachDebugOverlayPass (the reader).
 // feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3): the third error
-// re-export block (HdrpCapsInsufficientError / HdrpIndexListOverflowError /
-// HdrpLightBudgetExceededError) is folded into the render-cluster class
+// re-export block (Standard Cluster error classes) is folded into the render-cluster class
 // re-export block above -- they are render-cluster members sourced from
 // ./errors/render.
-// feat-20260608-cluster-lighting M2 / w10 + verify F-1/F-2: HDRP cluster-forward
-// pipeline exports — full barrel surface (4 error classes + 4 sizing constants
-// + pipeline + grid validator).
-// feat-20260615-pipeline-spec-ssot: PipelineSpec 4-axis SSOT public surface
-// (charter F1 single-entry indexability + P2 schema-as-contract). All 6 pure
-// derive functions + the closed PipelineSpecErrorCode union + getOrBuildPipeline
-// entrypoint reachable through the engine-runtime barrel so AI users follow
-// `import { ... } from '@forgeax/engine-runtime'` without spelunking subpaths.
-// Implementation SSOT: packages/runtime/src/pipeline-spec.ts.
-// Round-2 [F-3] feat-20260612-hdrp-ssao: PostProcessError surfaces SSAO
-// failures (storageBuffer-unavailable / radius-non-positive / bias-negative)
-// alongside the existing fullscreen post-process register / not-found /
-// reads-not-found codes. AI users `switch (err.code)` over the closed
-// 6-member union without `default`; .detail narrows per-code per charter P3.
-// feat-20260604 M3 / w19: render-graph-primitives — low-level typed record helpers
-// used by the Standard feature graph. Graph topology is declared by RenderFeaturePlan;
-// recordSsao* and encodeFullscreenPass remain the executable RHI-facing leaves.
-// feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend M1.
-/**
- * Render surface. The renderer host assembles one Standard pipeline and
- * accepts closed RenderFeature declarations at App construction. Pipelines,
- * device handles, and asset registries remain owner-internal implementation
- * details rather than renderer methods.
- *
- * @example
- *   import type {
- *     RenderFeaturePlan,
- *   } from '@forgeax/engine-render';
- */
-// RenderPipelineContext is barrel-exported for typed pass encode closures.
-// feat-20260701-rootstosceneasset verify minor-edit (F2): collectSubtree is a
-// reusable "BFS a subtree along Children" primitive (the forgeax-engine-ecs
-// skill documents importing it from the barrel) — re-export so that claim holds.
 // cache-bust-marker for feat-20260615-fbx-importer-via-sdk PR-CI run on bf1d383f / 05a331cd (post-rebase tsbuildinfo restore-keys staleness)

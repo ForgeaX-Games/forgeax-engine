@@ -99,15 +99,15 @@ test('ms/it > 200 and it >= 3: pass (large file exemption)', async () => {
   assert.strictEqual(results.exitCode, 0, 'large file with >= 3 tests should pass');
 });
 
-test('ms/it > 200 and it < 3: fail with hint containing "merge into"', async () => {
+test('ms/it > 200 and it < 3: report with hint containing "merge into"', async () => {
   const results = runGuard([
     {
       testResults: [makeFile('packages/foo/src/__tests__/slow-tiny.test.ts', 500, [makeIt(500)])],
     },
   ]);
-  assert.strictEqual(results.exitCode, 1, 'slow tiny file should fail');
+  assert.strictEqual(results.exitCode, 0, 'slow tiny file should remain advisory');
   const parsed = JSON.parse(results.stdout);
-  assert.strictEqual(parsed.code, 'ci-perf-regression-guard');
+  assert.strictEqual(parsed.code, 'ci-test-consolidation-candidate');
   assert.ok(
     parsed.hint && (parsed.hint.includes('merge into') || parsed.hint.includes('merged')),
     'hint should mention "merge into"',
@@ -190,7 +190,7 @@ test('derives omitted file duration from valid Vitest timestamps', () => {
       ],
     },
   ]);
-  assert.equal(results.exitCode, 1, 'derived duration should still enforce the budget');
+  assert.equal(results.exitCode, 0, 'derived duration should still report a candidate');
   assert.match(results.stdout, /slow-tiny/);
 });
 
@@ -250,7 +250,7 @@ test('ms/it exactly 200: boundary pass', async () => {
   assert.strictEqual(results.exitCode, 0, 'ms/it = 200 should pass (not > 200)');
 });
 
-test('two files, one slow-tiny, one fast: fail on slow-tiny', async () => {
+test('two files, one slow-tiny, one fast: report slow-tiny', async () => {
   const results = runGuard([
     {
       testResults: [
@@ -259,8 +259,27 @@ test('two files, one slow-tiny, one fast: fail on slow-tiny', async () => {
       ],
     },
   ]);
-  assert.strictEqual(results.exitCode, 1, 'should fail if any file violates');
+  assert.strictEqual(results.exitCode, 0, 'should report candidates without rejecting the run');
   const parsed = JSON.parse(results.stdout);
-  assert.strictEqual(parsed.code, 'ci-perf-regression-guard');
+  assert.strictEqual(parsed.code, 'ci-test-consolidation-candidate');
   assert.ok(parsed.actual.includes('slow-tiny'), 'actual should name the violating file');
+});
+
+// A variable-speed coverage run must not turn a layout suggestion into a
+// correctness failure or hide candidates after the first slow file.
+test('reports every candidate under shared-runner timing variation', () => {
+  for (const duration of [201, 230, 2000]) {
+    const result = runGuard([
+      {
+        testResults: [
+          makeFile('first.test.ts', duration, [makeIt(duration)]),
+          makeFile('second.test.ts', duration, [makeIt(duration)]),
+        ],
+      },
+    ]);
+    assert.equal(result.exitCode, 0);
+    const candidates = result.stdout.split('\n').map((line) => JSON.parse(line));
+    assert.equal(candidates.length, 2);
+    assert.ok(candidates[1].actual.includes('second.test.ts'));
+  }
 });

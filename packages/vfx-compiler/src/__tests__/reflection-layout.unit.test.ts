@@ -32,15 +32,16 @@ fn use_values() {
 `;
 
 describe('VFX reflection layout', () => {
-  it('reflects supported values in stable order with WGSL alignment and defaults', () => {
+  it('preserves authored member order with WGSL alignment and defaults', () => {
     const result = reflectVfxLayout({ root: moduleSource });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
     expect(result.value.parameters.fields.map((field) => field.name)).toEqual([
-      'amount',
+      'unused',
       'direction',
       'index',
+      'amount',
       'scale',
       'unsigned',
     ]);
@@ -51,7 +52,7 @@ describe('VFX reflection layout', () => {
           type: 'f32',
           alignment: 4,
           size: 4,
-          offset: 0,
+          offset: 32,
           defaultValue: 0.5,
         }),
         expect.objectContaining({
@@ -67,21 +68,23 @@ describe('VFX reflection layout', () => {
           type: 'vec2<f32>',
           alignment: 8,
           size: 8,
-          offset: 32,
+          offset: 40,
         }),
         expect.objectContaining({
           name: 'unsigned',
           type: 'u32',
           alignment: 4,
           size: 4,
-          offset: 40,
+          offset: 48,
         }),
       ]),
     );
-    expect(result.value.parameters.size).toBe(48);
+    expect(result.value.parameters.size).toBe(64);
     expect(result.value.custom.fields.map((field) => field.name)).toEqual(['tint', 'velocity']);
     expect(result.value.custom.size).toBe(32);
-    expect(result.value.parameters.fields.some((field) => field.name === 'unused')).toBe(false);
+    expect(result.value.parameters.fields).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'unused', offset: 0, size: 4 })]),
+    );
     expect(result.value.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 

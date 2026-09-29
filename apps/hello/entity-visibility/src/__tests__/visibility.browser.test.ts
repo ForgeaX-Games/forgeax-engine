@@ -40,6 +40,24 @@ class RetryableBrowserDeviceLoss extends Error {
   }
 }
 
+function describeStructuredError(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return String(error);
+  const candidate = error as {
+    readonly code?: unknown;
+    readonly expected?: unknown;
+    readonly hint?: unknown;
+    readonly detail?: unknown;
+    readonly message?: unknown;
+  };
+  return JSON.stringify({
+    code: candidate.code,
+    expected: candidate.expected,
+    hint: candidate.hint,
+    detail: candidate.detail,
+    message: candidate.message,
+  });
+}
+
 async function decodePng(bytes: Uint8Array): Promise<DecodedPng> {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
@@ -131,8 +149,15 @@ describe('entity visibility browser visual red test', () => {
       let unsubscribeLost: (() => void) | undefined;
       try {
         if (navigator.gpu === undefined) {
-          throw new Error("code: 'webgpu-unavailable'; hint: launch headed Chrome with unsafe WebGPU");
+          throw new Error(
+            JSON.stringify({
+              code: 'webgpu-unavailable',
+              expected: 'navigator.gpu is available',
+              hint: 'launch headed Chrome with unsafe WebGPU',
+            }),
+          );
         }
+        await page.viewport(800, 600);
         canvas = document.createElement('canvas');
         canvas.width = CANVAS_WIDTH;
         canvas.height = CANVAS_HEIGHT;
@@ -142,8 +167,7 @@ describe('entity visibility browser visual red test', () => {
 
         const created = await createRenderer(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
         if (!created.ok) {
-          const reason = 'code' in created.error ? created.error.code : created.error.reason;
-          throw new Error(`createRenderer failed: ${reason}`);
+          throw new Error(`createRenderer failed: ${describeStructuredError(created.error)}`);
         }
         renderer = created.value;
         unsubscribeLost = renderer.subscribe((event) => {
@@ -152,17 +176,19 @@ describe('entity visibility browser visual red test', () => {
             lostMessage = 'renderer entered device-lost state';
           } else if (event.kind === 'error') {
             lostReason = event.error.code;
-            lostMessage = event.error.hint;
+            lostMessage = describeStructuredError(event.error);
           }
         });
         const scene = createVisibilityDemoWorld();
         const attached = renderer.attach(scene.world);
-        if (!attached.ok) throw new Error(`renderer.attach failed: ${attached.error.code}`);
+        if (!attached.ok)
+          throw new Error(`renderer.attach failed: ${describeStructuredError(attached.error)}`);
         await createWorldContext(scene.world, [scenePlugin()]);
 
         const draw = async () => {
           const updateResult = scene.world.update(1 / 60);
-          if (!updateResult.ok) throw new Error(`world.update failed: ${updateResult.error.code}`);
+          if (!updateResult.ok)
+            throw new Error(`world.update failed: ${describeStructuredError(updateResult.error)}`);
           const result = renderer?.draw({
             leases: [attached.value],
             camera: { lease: attached.value },
@@ -170,11 +196,14 @@ describe('entity visibility browser visual red test', () => {
           });
           if (result === undefined || !result.ok) {
             throw new Error(
-              `renderer.draw failed: ${result?.ok === false ? result.error.code : 'missing-result'}`,
+              `renderer.draw failed: ${result?.ok === false ? describeStructuredError(result.error) : 'missing-result'}`,
             );
           }
           const completed = await result.value.completed;
-          if (!completed.ok) throw new Error(`renderer submission failed: ${completed.error.code}`);
+          if (!completed.ok)
+            throw new Error(
+              `renderer submission failed: ${describeStructuredError(completed.error)}`,
+            );
           await new Promise<void>((resolve) => setTimeout(resolve, 120));
           if (lostReason !== undefined) {
             if (lostReason === 'destroyed') {
@@ -207,6 +236,7 @@ describe('entity visibility browser visual red test', () => {
       decodePng(restoredPng),
       decodePng(childOverridePng),
     ]);
+    expect([baseline.width, baseline.height]).toEqual([CANVAS_WIDTH, CANVAS_HEIGHT]);
     const targetRed = {
       baseline: colorCount(baseline, TARGET_ROI, 'red'),
       hidden: colorCount(hidden, TARGET_ROI, 'red'),

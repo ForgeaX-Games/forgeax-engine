@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // msaa-sprite-pixel-diff.dawn.test.ts -
 // feat-20260604-learn-render-4-10-anti-aliasing-msaa-engine-wiring / M2 / w9 [F-1 fixup].
 //
@@ -63,9 +64,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function doReadPixels(device: GPUDevice, renderTarget: GPUTexture): Promise<Uint8Array> {
   const bytesPerPixel = 4;
@@ -260,12 +259,11 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     const synth = buildSyntheticRgba();
     const synthPod = {
       kind: 'texture' as const,
-      width: synth.width,
-      height: synth.height,
+      shape: { viewDimension: '2d' as const, extent: { width: synth.width, height: synth.height } },
       format: 'rgba8unorm-srgb' as const,
       data: synth.data,
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     };
     const TEX_GUID = '00000000-0000-7000-8000-0000000005a1';
     const SAMPLER_GUID = '00000000-0000-7000-8000-0000000005a2';

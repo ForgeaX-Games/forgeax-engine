@@ -25,7 +25,8 @@ function camera(): CameraSnapshot {
     bloom: 'off',
     bloomThreshold: 1,
     bloomIntensity: 1,
-    bloomBlurRadius: 4,
+    bloomSoftKnee: 0.5,
+    bloomScatter: 0.7,
     clearColor: [0, 0, 0, 1],
   };
 }
@@ -60,7 +61,7 @@ describe('Points/Lines per-draw view slots', () => {
       640,
       360,
       secondModel,
-      { kind: 'lines', widthPx: 4 },
+      { kind: 'lines', widthPx: 4, dashSize: 3, gapSize: 2, dashOffset: -1 },
       POINTS_LINES_VIEW_SLOT_STRIDE,
     );
 
@@ -68,6 +69,7 @@ describe('Points/Lines per-draw view slots', () => {
     expect(writes[0]?.payload[28]).toBe(2);
     expect(writes[1]?.payload[28]).toBe(-2);
     expect(writes[0]?.payload.slice(36, 40)).toEqual(new Float32Array([16, 0, 1, 0]));
+    expect(writes[1]?.payload.slice(40, 44)).toEqual(new Float32Array([3, 2, -1, 0]));
     expect(writes[1]?.payload.slice(36, 40)).toEqual(new Float32Array([4, 1, 0, 0]));
   });
 });

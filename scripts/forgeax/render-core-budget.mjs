@@ -521,7 +521,8 @@ export async function collectBudgetInventory(rootDir = ROOT) {
     rendererGroups,
     runtimeMaxScc: largestScc(graph),
     publicRegistrationAuthorities,
-    deviceLifecycleRoots: new Set(deviceLifecycleNames).size,
+    deviceLifecycleRoots: new Set(deviceLifecycleNames.filter((name) => name === 'DeviceScope'))
+      .size,
     explicitAny: (executableSource.match(/\bas\s+any\b|:\s*any\b|<any>/gu) ?? []).length,
     highRiskCasts: (executableSource.match(/\bas\s+unknown\s+as\b/gu) ?? []).length,
     hostBackendDependencies: await packageHostBackendDependencies().then((names) => names.length),

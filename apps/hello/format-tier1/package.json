@@ -39,6 +39,6 @@
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10"
+    "vite": "8.0.16"
   }
 }

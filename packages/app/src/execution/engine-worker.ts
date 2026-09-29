@@ -8,13 +8,14 @@ import type {
   ExecutionReadyMessage,
   HostToEngineMessage,
 } from './protocol';
+import { shutdownWorker } from './worker-shutdown';
 
 export interface EngineWorkerSession {
   readonly worker: Worker;
   readonly ready: ExecutionReadyMessage;
   post(message: HostToEngineMessage, transfer?: Transferable[]): void;
   listen(listener: (message: EngineToHostMessage) => void): () => void;
-  dispose(): void;
+  dispose(): Promise<Result<void, AppErrorType>>;
 }
 
 export interface StartEngineWorkerOptions {
@@ -24,9 +25,11 @@ export interface StartEngineWorkerOptions {
   readonly bootstrapPort?: MessagePort;
   readonly assetCatalog?: import('./types').ExecutionAssetCatalog;
   readonly shaderManifestUrl?: string;
+  readonly build?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
+  readonly diagnostics?: import('./types').ExecutionDiagnosticsOptions;
   readonly timeoutMs: number;
-  readonly tier: import('./types').ExecutionTier;
+  readonly workers: import('./types').ExecutionSelection;
   readonly workerFactory?: () => Worker;
 }
 
@@ -127,6 +130,7 @@ export async function startEngineWorker(
   const offscreen = options.canvas.transferControlToOffscreen();
   const init: ExecutionInitMessage = {
     kind: 'init',
+    startupTimeoutMs: options.timeoutMs,
     canvas: offscreen,
     bootstrapUrl: options.bootstrapUrl,
     ...(options.bootstrapData === undefined ? {} : { bootstrapData: options.bootstrapData }),
@@ -135,15 +139,18 @@ export async function startEngineWorker(
     ...(options.shaderManifestUrl !== undefined
       ? { shaderManifestUrl: options.shaderManifestUrl }
       : {}),
+    ...(options.build !== undefined ? { build: options.build } : {}),
     ...(options.time !== undefined ? { time: options.time } : {}),
-    tier: options.tier,
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+    workers: options.workers,
   };
-  worker.postMessage(init, [
+  worker.postMessage(init as ExecutionInitMessage, [
     offscreen,
     ...(options.bootstrapPort === undefined ? [] : [options.bootstrapPort]),
   ]);
   const ready = await readyPromise;
   if (!ready.ok) return ready;
+  let disposal: Promise<Result<void, AppErrorType>> | undefined;
   return ok({
     worker,
     ready: ready.value,
@@ -151,13 +158,14 @@ export async function startEngineWorker(
       worker.postMessage(message, transfer);
     },
     listen(listener): () => void {
-      listeners.add(listener);
+      if (disposal === undefined) listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    dispose(): void {
-      worker.postMessage({ kind: 'dispose' } satisfies HostToEngineMessage);
-      worker.terminate();
+    dispose() {
+      // Retire public delivery immediately; the shutdown helper owns its ACK listener.
       listeners.clear();
+      disposal ??= shutdownWorker(worker, 10_000);
+      return disposal;
     },
   });
 }

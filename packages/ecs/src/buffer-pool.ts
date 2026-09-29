@@ -1,45 +1,7 @@
-// @forgeax/engine-ecs - BufferPool (M2, plan-decisions D-5 / D-6 / D-7).
-//
-// Backing store for `buffer:<bytes>` schema-vocab fields. Each `buffer:<N>`
-// slot is a managed Uint8Array view; the pool keeps eight size-class
-// free-lists (radix 4) and uses ArrayBuffer.transfer for cross-bucket
-// growth. The integer `id` returned by `alloc` is the runtime stand-in for
-// the buffer slot; archetype columns store the `id` as u32 (M4 carry-over
-// reuses this id across archetype migrate without copying bytes).
-//
-// §contract — managed handles are operational, not persistent
-//   Spec: docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md §3.3.
-//   The slot id never escapes ECS internals — there is no public Handle<Buffer>
-//   surface today. There is no generation tag on BufferPool; `release` is
-//   typed `Result<void, never>` (no stale-slot error arm) and the dual
-//   guards live at packages/ecs/src/__tests__/buffer-pool.test-d.ts (compile
-//   time) + packages/ecs/README.md §"Managed handles are operational, not
-//   persistent" (AI-user-facing). Should a future feat introduce a public
-//   Handle<Buffer> surface, this design (no gen tag) MUST be re-debated —
-//   the silent-resolve contract that UniqueRefStore tolerates relies on
-//   the holder being a single ECS field, not a free-floating cache; a
-//   public Handle<Buffer> changes that calculus.
-//
-// Design contract (frozen by plan-decisions):
-//   D-5  size-class 8 buckets (radix 4):
-//          16 / 64 / 256 / 1K / 4K / 16K / 64K / 256K bytes.
-//        Allocation rounds up to the smallest bucket >= byteLength; alloc(0)
-//        is legal and returns a zero-length view (no bucket touched).
-//        Requests > 256K surface 'managed-buffer-out-of-bounds'.
-//   D-6  grow(id, newBytes) returns Result<Uint8Array, EcsError> - never
-//        throws, never mutates the prior view in place. Cross-bucket growth
-//        detaches the old ArrayBuffer (ES2024 transfer when available, copy
-//        fallback otherwise) and installs a fresh view backed by the new
-//        bucket's ArrayBuffer; same-bucket growth re-slices the existing
-//        backing buffer to the new byteLength.
-//   D-7  v1 forbids shrink (newBytes < current -> err); newBytes == current
-//        is a legal no-op that returns the same view. Bucket free-lists are
-//        NEVER trimmed - released slots stay parked on their bucket forever
-//        in v1 (memory bloat is acceptable until M5/M6 telemetry).
-//
-// The pool is a `class` rather than a frozen module-level singleton because
-// World owns one BufferPool per instance; M2 wires it into the release loop
-// alongside UniqueRefStore (D-2 - per-World lifecycle).
+// World-owned managed array storage. Small fields use eight radix-4 free
+// lists; larger fields allocate dedicated buffers and drop them on release.
+// Pooling policy never limits a field to the largest pooled class. Slot IDs
+// remain private to ECS and survive archetype migration and growth.
 
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { ManagedBufferOutOfBoundsError, ManagedBufferShrinkNotSupportedError } from './errors';
@@ -50,8 +12,7 @@ import { ManagedBufferOutOfBoundsError, ManagedBufferShrinkNotSupportedError } f
  *
  * `alloc(byteLength)` rounds up to `SIZE_CLASSES[i]` for the smallest `i`
  * with `byteLength <= SIZE_CLASSES[i]`. byteLength === 0 is the special path
- * (no bucket); byteLength > SIZE_CLASSES[7] (262_144) returns
- * `managed-buffer-out-of-bounds`.
+ * (no bucket); larger requests use dedicated, unpooled allocations.
  */
 export const SIZE_CLASSES: readonly number[] = Object.freeze([
   16, 64, 256, 1024, 4096, 16384, 65536, 262144,
@@ -77,7 +38,7 @@ const HAS_TRANSFER: boolean =
   typeof (ArrayBuffer.prototype as { transfer?: unknown }).transfer === 'function';
 
 interface SlotState {
-  /** Bucket index in SIZE_CLASSES, or -1 for the alloc(0) zero-length slot. */
+  /** Bucket index, SIZE_CLASSES.length for dedicated storage, or -1 for zero length. */
   sizeClassIdx: number;
   /** Underlying ArrayBuffer for the slot's current bucket (zero-length for sizeClassIdx === -1). */
   buffer: ArrayBuffer;
@@ -92,8 +53,7 @@ interface SlotState {
 /**
  * Round `byteLength` up to a bucket index. Returns -1 for the legal zero
  * path; returns `SIZE_CLASSES.length` (out-of-range) for byteLength larger
- * than the top bucket so the caller can route a clean
- * `managed-buffer-out-of-bounds` error.
+ * than the top bucket so the caller can use a dedicated allocation.
  */
 function bucketIndex(byteLength: number): number {
   if (byteLength === 0) return -1;
@@ -130,10 +90,10 @@ export class BufferPool {
    * Allocate a managed buffer slot of at least `byteLength` bytes.
    *
    * Routes:
-   *   - byteLength < 0  -> not in current contract (caller responsibility).
+   *   - invalid byteLength -> structured out-of-bounds error.
    *   - byteLength == 0 -> ok({ id, view: zero-length Uint8Array }) (no bucket).
    *   - byteLength <= 262144 -> ok({ id, view }), bucket = smallest >= byteLength.
-   *   - byteLength  > 262144 -> err(managed-buffer-out-of-bounds).
+   *   - byteLength > 262144 -> a dedicated allocation; allocation failure is structured.
    *
    * D-5: size classes are radix-4 (16 / 64 / 256 / 1K / 4K / 16K / 64K / 256K).
    * Free-list pop reuses the most recently released slot id at the same bucket;
@@ -147,11 +107,22 @@ export class BufferPool {
       this.slots.set(id, { sizeClassIdx: -1, buffer, view, byteLength: 0, live: true });
       return ok({ id, view });
     }
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+      return err(new ManagedBufferOutOfBoundsError(byteLength, 0));
+    }
     const idx = bucketIndex(byteLength);
     if (idx === SIZE_CLASSES.length) {
-      return err(
-        new ManagedBufferOutOfBoundsError(byteLength, SIZE_CLASSES[SIZE_CLASSES.length - 1] ?? 0),
-      );
+      // Large fields are dedicated allocations, not permanently retained
+      // pool buckets. Small fields keep exactly the existing allocation cost.
+      try {
+        const buffer = new ArrayBuffer(byteLength);
+        const view = new Uint8Array(buffer);
+        const id = this.nextId++;
+        this.slots.set(id, { sizeClassIdx: idx, buffer, view, byteLength, live: true });
+        return ok({ id, view });
+      } catch {
+        return err(new ManagedBufferOutOfBoundsError(byteLength, 0));
+      }
     }
     const bucketBytes = SIZE_CLASSES[idx];
     /* istanbul ignore next -- bucketIndex returns < SIZE_CLASSES.length here */
@@ -204,7 +175,7 @@ export class BufferPool {
    *     the caller become detached / orphaned - callers must use `pool.view(id)`
    *     after grow to read the refreshed view (the `release` loop refreshes
    *     automatically).
-   *   - newBytes > 262144 -> err(managed-buffer-out-of-bounds).
+   *   - newBytes beyond the last pooled class -> dedicated allocation.
    */
   grow(
     id: number,
@@ -222,13 +193,11 @@ export class BufferPool {
     if (newBytes === slot.byteLength) {
       return ok(slot.view);
     }
-    const newIdx = bucketIndex(newBytes);
-    if (newIdx === SIZE_CLASSES.length) {
-      return err(
-        new ManagedBufferOutOfBoundsError(newBytes, SIZE_CLASSES[SIZE_CLASSES.length - 1] ?? 0),
-      );
+    if (!Number.isSafeInteger(newBytes) || newBytes < 0) {
+      return err(new ManagedBufferOutOfBoundsError(newBytes, slot.buffer.byteLength));
     }
-    if (newIdx === slot.sizeClassIdx) {
+    const newIdx = bucketIndex(newBytes);
+    if (newBytes <= slot.buffer.byteLength) {
       // Same bucket: re-slice the existing backing ArrayBuffer to the new
       // logical length. No transfer; old view stays valid until next grow.
       slot.byteLength = newBytes;
@@ -236,19 +205,23 @@ export class BufferPool {
       return ok(slot.view);
     }
     // Cross-bucket: detach old buffer + carry old bytes into the new bucket.
-    const newBucketBytes = SIZE_CLASSES[newIdx] as number;
+    const newBucketBytes = SIZE_CLASSES[newIdx] ?? Math.max(newBytes, slot.buffer.byteLength * 2);
     const oldByteLength = slot.byteLength;
     let nextBuffer: ArrayBuffer;
-    if (HAS_TRANSFER) {
-      // ES2024 transfer: copy contents into a fresh ArrayBuffer of the new
-      // bucket size and detach the source. The transferred buffer keeps the
-      // old prefix bytes intact.
-      nextBuffer = (
-        slot.buffer as unknown as { transfer(newByteLength: number): ArrayBuffer }
-      ).transfer(newBucketBytes);
-    } /* istanbul ignore next -- fallback only on runtimes without ES2024 transfer() */ else {
-      nextBuffer = new ArrayBuffer(newBucketBytes);
-      new Uint8Array(nextBuffer).set(new Uint8Array(slot.buffer, 0, oldByteLength));
+    try {
+      if (HAS_TRANSFER) {
+        // ES2024 transfer: copy contents into a fresh ArrayBuffer of the new
+        // bucket size and detach the source. The transferred buffer keeps the
+        // old prefix bytes intact.
+        nextBuffer = (
+          slot.buffer as unknown as { transfer(newByteLength: number): ArrayBuffer }
+        ).transfer(newBucketBytes);
+      } /* istanbul ignore next -- fallback only on runtimes without ES2024 transfer() */ else {
+        nextBuffer = new ArrayBuffer(newBucketBytes);
+        new Uint8Array(nextBuffer).set(new Uint8Array(slot.buffer, 0, oldByteLength));
+      }
+    } catch {
+      return err(new ManagedBufferOutOfBoundsError(newBytes, slot.buffer.byteLength));
     }
     slot.sizeClassIdx = newIdx;
     slot.buffer = nextBuffer;
@@ -268,11 +241,11 @@ export class BufferPool {
     if (slot === undefined) return ok(undefined);
     if (!slot.live) return ok(undefined);
     slot.live = false;
-    if (slot.sizeClassIdx >= 0) {
+    if (slot.sizeClassIdx >= 0 && slot.sizeClassIdx < SIZE_CLASSES.length) {
       const bucket = this.freeBuckets[slot.sizeClassIdx];
       if (bucket !== undefined) bucket.push(id);
     } else {
-      // Zero-length slot: nothing to park; drop the slot record entirely so
+      // Zero-length or dedicated slot: drop the slot record entirely so
       // the id is not retained.
       this.slots.delete(id);
     }
@@ -301,7 +274,7 @@ export class BufferPool {
     const slot = this.slots.get(id);
     if (slot === undefined || !slot.live) return 0;
     if (slot.sizeClassIdx < 0) return 0;
-    return SIZE_CLASSES[slot.sizeClassIdx] ?? 0;
+    return slot.buffer.byteLength;
   }
 
   /**
@@ -334,7 +307,7 @@ export class BufferPool {
       }
       return err(new ManagedBufferOutOfBoundsError(newByteLength, 0));
     }
-    const bucketBytes = SIZE_CLASSES[slot.sizeClassIdx] ?? 0;
+    const bucketBytes = slot.buffer.byteLength;
     if (newByteLength > bucketBytes) {
       return err(new ManagedBufferOutOfBoundsError(newByteLength, bucketBytes));
     }

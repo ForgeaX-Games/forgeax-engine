@@ -20,6 +20,34 @@ export interface PluginBuildContext {
   readonly cookedCurrentProjection: Record<string, unknown>;
   readonly directCurrentProjection: Record<string, unknown>;
   readonly authoredCookedCurrentProjection: Record<string, unknown>;
+  readonly onPack?: (url: string, body: string) => void;
+  readonly onPublication?: (inventory: Awaited<ReturnType<typeof buildCatalogResult>>) => void;
+  readonly onInventory?: (
+    inventory: Awaited<ReturnType<typeof buildCatalogResult>>,
+  ) => void | Promise<void>;
+}
+
+async function scanBuildInventory(
+  roots: readonly string[],
+  context: PluginBuildContext,
+): Promise<Awaited<ReturnType<typeof buildCatalogResult>>> {
+  const scanOptions = {
+    // Build inventory needs source metadata only; the build producer acquires
+    // a fresh definition lease when it evaluates each authored source.
+    scriptablePack: {
+      ...STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
+      metadataOnly: true,
+    },
+    ...(context.opts.ignorePath === undefined ? {} : { ignorePath: context.opts.ignorePath }),
+  };
+  return buildCatalogResult(
+    roots,
+    context.transportBase,
+    context.registeredImporterKeys,
+    scanOptions,
+    context.catalogVisibility,
+    context.opts.sourceIdentityFor,
+  );
 }
 
 async function buildProduction(
@@ -27,17 +55,7 @@ async function buildProduction(
   roots: readonly string[],
   context: PluginBuildContext,
 ): Promise<void> {
-  const scanOptions = {
-    scriptablePack: STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
-    ...(context.opts.ignorePath === undefined ? {} : { ignorePath: context.opts.ignorePath }),
-  };
-  const inventory = await buildCatalogResult(
-    roots,
-    context.transportBase,
-    context.registeredImporterKeys,
-    scanOptions,
-    context.catalogVisibility,
-  );
+  const inventory = await scanBuildInventory(roots, context);
   if (inventory.authority !== 'authoritative') {
     throw structuredPluginError({
       code: 'catalog-degraded',
@@ -65,7 +83,12 @@ async function buildProduction(
       ? {}
       : { runtimeBinding: context.opts.runtimeBinding }),
     sink: {
-      emitFile: (asset) => plugin.emitFile(asset),
+      emitFile: (asset) => {
+        if (asset.fileName?.endsWith('.pack.json') && typeof asset.source === 'string') {
+          context.onPack?.(projectPackIndexUrl(basePrefix, asset.fileName), asset.source);
+        }
+        return plugin.emitFile(asset);
+      },
       getFileName: (referenceId) => plugin.getFileName(referenceId),
       fileUrl: (fileName) => projectPackIndexUrl(basePrefix, fileName),
     },
@@ -77,6 +100,7 @@ async function buildProduction(
     removed: [],
   });
   if (!catalogValidation.ok) throw structuredPluginError(catalogValidation.error);
+  context.onPublication?.({ ...inventory, entries: productionCatalog });
   plugin.emitFile({
     type: 'asset',
     fileName: 'pack-index.json',
@@ -86,6 +110,7 @@ async function buildProduction(
 
 export function createPluginBuild(context: PluginBuildContext) {
   let buildTask: Promise<void> | undefined;
+  let command: 'build' | 'serve' | undefined;
 
   async function generateBundle(this: MinimalPluginContext): Promise<void> {
     const { roots } = resolvePackBuildInputs({
@@ -100,6 +125,26 @@ export function createPluginBuild(context: PluginBuildContext) {
   }
 
   return {
+    configResolved(config: { readonly command: 'build' | 'serve' }): void {
+      command = config.command;
+    },
+    async buildStart(this: MinimalPluginContext): Promise<void> {
+      // The dev session already scans and publishes an authoritative Catalog
+      // during configureServer. Vite also calls buildStart for serve; scanning
+      // again here delays listen and can replace its accepted publication rows.
+      if (command === 'serve') return;
+      const { roots } = resolvePackBuildInputs({
+        roots: context.opts.roots,
+        base: context.transportBase,
+      });
+      await assertBuildRoots(roots);
+      const inventory = await scanBuildInventory(roots, context);
+      await context.onInventory?.(inventory);
+      if (command === 'build') {
+        buildTask = buildProduction(this, roots, context);
+        await buildTask;
+      }
+    },
     generateBundle,
     async closeBundle(): Promise<void> {
       buildTask = undefined;

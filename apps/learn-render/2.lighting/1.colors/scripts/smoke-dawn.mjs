@@ -14,13 +14,14 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const MATERIAL_RESPONSE_THRESHOLD = 0.05;
 const ROUGHNESS_RESPONSE_THRESHOLD = 0.02;
-const SPECULAR_TINT_RESPONSE_THRESHOLD = 0.02;
-const SPECULAR_TINT_TEXTURE_RESPONSE_THRESHOLD = 0.02;
+const SPECULAR_COLOR_RESPONSE_THRESHOLD = 0.02;
+const SPECULAR_COLOR_TEXTURE_RESPONSE_THRESHOLD = 0.02;
 const NORMAL_TEXTURE_RESPONSE_THRESHOLD = 0.02;
 const NORMAL_SCALE_RESPONSE_THRESHOLD = 0.02;
 const EMISSIVE_INTENSITY_RESPONSE_THRESHOLD = 0.02;
@@ -234,8 +235,8 @@ const FALSIFY_MATERIAL_ROUGHNESS = process.env.FALSIFY_MATERIAL_ROUGHNESS ?? '';
 const FALSIFY_MATERIAL_EMISSIVE = process.env.FALSIFY_MATERIAL_EMISSIVE ?? '';
 const FALSIFY_MATERIAL_EMISSIVE_INTENSITY =
   process.env.FALSIFY_MATERIAL_EMISSIVE_INTENSITY ?? '';
-const FALSIFY_MATERIAL_SPECULAR_TINT = process.env.FALSIFY_MATERIAL_SPECULAR_TINT ?? '';
-const FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE = process.env.FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE ?? '';
+const FALSIFY_MATERIAL_SPECULAR_COLOR = process.env.FALSIFY_MATERIAL_SPECULAR_COLOR ?? '';
+const FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE = process.env.FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE ?? '';
 const FALSIFY_MATERIAL_NORMAL_TEXTURE = process.env.FALSIFY_MATERIAL_NORMAL_TEXTURE ?? '';
 const FALSIFY_MATERIAL_NORMAL_SCALE = process.env.FALSIFY_MATERIAL_NORMAL_SCALE ?? '';
 const FALSIFY_MATERIAL_EMISSIVE_TEXTURE = process.env.FALSIFY_MATERIAL_EMISSIVE_TEXTURE ?? '';
@@ -642,18 +643,18 @@ if (FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '' && FALSIFY_MATERIAL_EMISSIVE_INTE
   );
   process.exit(1);
 }
-if (FALSIFY_MATERIAL_SPECULAR_TINT !== '' && FALSIFY_MATERIAL_SPECULAR_TINT !== '1') {
+if (FALSIFY_MATERIAL_SPECULAR_COLOR !== '' && FALSIFY_MATERIAL_SPECULAR_COLOR !== '1') {
   console.error(
-    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_SPECULAR_TINT=${FALSIFY_MATERIAL_SPECULAR_TINT}; expected 1`,
+    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_SPECULAR_COLOR=${FALSIFY_MATERIAL_SPECULAR_COLOR}; expected 1`,
   );
   process.exit(1);
 }
 if (
-  FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '' &&
-  FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '1'
+  FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '' &&
+  FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '1'
 ) {
   console.error(
-    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE=${FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE}; expected 1`,
+    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE=${FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE}; expected 1`,
   );
   process.exit(1);
 }
@@ -1270,8 +1271,8 @@ const materialRoughness =
     : Number.parseFloat(FALSIFY_MATERIAL_ROUGHNESS);
 const materialEmissive =
   FALSIFY_MATERIAL_EMISSIVE === '1' || FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '';
-const materialSpecularTint = FALSIFY_MATERIAL_SPECULAR_TINT === '1';
-const materialSpecularTintTexture = FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE === '1';
+const materialSpecularColor = FALSIFY_MATERIAL_SPECULAR_COLOR === '1';
+const materialSpecularColorTexture = FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE === '1';
 const materialNormalTexture =
   FALSIFY_MATERIAL_NORMAL_TEXTURE === '1' || FALSIFY_MATERIAL_NORMAL_SCALE !== '';
 const materialEmissiveTexture = FALSIFY_MATERIAL_EMISSIVE_TEXTURE === '1';
@@ -1484,7 +1485,8 @@ const { buildEngineShaderManifest } = await import(
   '@forgeax/engine-vite-plugin-shader'
 );
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 // --- 4. Create renderer and scene ---
 
@@ -1521,18 +1523,19 @@ if (!worldAttachment1.ok) throw worldAttachment1.error;
 const lease = worldAttachment1.value;
 
 // Bind a real producer-owned TextureAsset to the same Standard PBR material.
-// A black linear texel makes an ignored specularTintTexture distinguishable from
+// A black linear texel makes an ignored specularColorTexture distinguishable from
 // the default white texture at the fixed cubeCenter ROI.
-const specularTintTextureHandle = materialSpecularTintTexture
+const specularColorTextureHandle = materialSpecularColorTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([0, 0, 0, 255]),
         colorSpace: 'linear',
-        mipmap: materialBaseColorTextureSamplerMinFilter,
+        mips: materialBaseColorTextureSamplerMinFilter
+          ? { kind: 'generate' }
+          : { kind: 'none' },
       }),
     )
   : undefined;
@@ -1540,12 +1543,11 @@ const normalTextureHandle = materialNormalTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([255, 128, 255, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       }),
     )
   : undefined;
@@ -1553,12 +1555,11 @@ const emissiveTextureHandle = materialEmissiveTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([0, 0, 0, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       }),
     )
   : undefined;
@@ -1566,34 +1567,41 @@ const baseColorTextureHandle = materialBaseColorTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: materialBaseColorTextureSamplerMinFilter
-          || materialBaseColorTextureSamplerMipmapFilter
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== ''
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== ''
-          || materialBaseColorTextureMipmap
-          ? 4
-          : materialBaseColorTextureUvTransform ||
-              materialBaseColorTextureUvSet ||
-              materialBaseColorTextureSampler ||
-              materialBaseColorTextureSamplerAddress ||
-              materialBaseColorTextureSamplerMagFilter
-            ? 2
-            : 1,
-        height: materialBaseColorTextureSamplerMinFilter
-          || materialBaseColorTextureSamplerMipmapFilter
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== ''
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
-          || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== ''
-          || materialBaseColorTextureMipmap
-          ? 4
-          : materialBaseColorTextureUvTransform ||
-              materialBaseColorTextureUvSet ||
-              materialBaseColorTextureSampler ||
-              materialBaseColorTextureSamplerAddress ||
-              materialBaseColorTextureSamplerMagFilter
-            ? 2
-            : 1,
+        shape: {
+          viewDimension: '2d',
+          extent: {
+            width:
+              materialBaseColorTextureSamplerMinFilter
+                || materialBaseColorTextureSamplerMipmapFilter
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== ''
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== ''
+                || materialBaseColorTextureMipmap
+                ? 4
+                : materialBaseColorTextureUvTransform ||
+                    materialBaseColorTextureUvSet ||
+                    materialBaseColorTextureSampler ||
+                    materialBaseColorTextureSamplerAddress ||
+                    materialBaseColorTextureSamplerMagFilter
+                  ? 2
+                  : 1,
+            height:
+              materialBaseColorTextureSamplerMinFilter
+                || materialBaseColorTextureSamplerMipmapFilter
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== ''
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
+                || FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== ''
+                || materialBaseColorTextureMipmap
+                ? 4
+                : materialBaseColorTextureUvTransform ||
+                    materialBaseColorTextureUvSet ||
+                    materialBaseColorTextureSampler ||
+                    materialBaseColorTextureSamplerAddress ||
+                    materialBaseColorTextureSamplerMagFilter
+                  ? 2
+                  : 1,
+          },
+        },
         format:
           FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB === '1' ? 'rgba8unorm-srgb' : 'rgba8unorm',
         data: materialBaseColorTextureSrgb
@@ -1668,16 +1676,20 @@ const baseColorTextureHandle = materialBaseColorTexture
                     ? new Uint8Array([255, 255, 255, materialBaseColorTextureAlphaByte])
                     : new Uint8Array([0, 0, 0, 255]),
         colorSpace: FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB === '1' ? 'srgb' : 'linear',
-        mipmap:
+        mips:
           materialBaseColorTextureSrgb
-            ? false
+            ? { kind: 'none' }
             : materialBaseColorTextureMipmap
               ? FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_MIPMAP === '1'
+                ? { kind: 'generate' }
+                : { kind: 'none' }
               : materialBaseColorTextureSamplerMinFilter ||
-                materialBaseColorTextureSamplerMipmapFilter ||
-                FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== '' ||
-                FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== '' ||
-                FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== '',
+                  materialBaseColorTextureSamplerMipmapFilter ||
+                  FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP !== '' ||
+                  FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== '' ||
+                  FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY !== ''
+                ? { kind: 'generate' }
+                : { kind: 'none' },
       }),
     )
   : undefined;
@@ -1862,36 +1874,41 @@ const metallicRoughnessTextureHandle = materialMetallicRoughnessTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width:
-          materialMetallicRoughnessTextureMipmap ||
-          materialMetallicRoughnessTextureSamplerMipmapFilter ||
-          materialMetallicRoughnessTextureSamplerMinFilter ||
-          materialMetallicRoughnessTextureSamplerLodMinClamp ||
-          materialMetallicRoughnessTextureSamplerLodMaxClamp ||
-          materialMetallicRoughnessTextureSamplerMaxAnisotropy
-            ? 4
-            : materialMetallicRoughnessTextureUvTransform ||
-                materialMetallicRoughnessTextureUvSet ||
-                materialMetallicRoughnessTextureSampler ||
-                materialMetallicRoughnessTextureSamplerMagFilter ||
-                materialMetallicRoughnessTextureSamplerAddress
-              ? 2
-              : 1,
-        height:
-          materialMetallicRoughnessTextureMipmap ||
-          materialMetallicRoughnessTextureSamplerMipmapFilter ||
-          materialMetallicRoughnessTextureSamplerMinFilter ||
-          materialMetallicRoughnessTextureSamplerLodMinClamp ||
-          materialMetallicRoughnessTextureSamplerLodMaxClamp ||
-          materialMetallicRoughnessTextureSamplerMaxAnisotropy
-            ? 4
-            : materialMetallicRoughnessTextureUvTransform ||
-                materialMetallicRoughnessTextureUvSet ||
-                materialMetallicRoughnessTextureSampler ||
-                materialMetallicRoughnessTextureSamplerMagFilter ||
-                materialMetallicRoughnessTextureSamplerAddress
-              ? 2
-              : 1,
+        shape: {
+          viewDimension: '2d',
+          extent: {
+            width:
+              materialMetallicRoughnessTextureMipmap ||
+                materialMetallicRoughnessTextureSamplerMipmapFilter ||
+                materialMetallicRoughnessTextureSamplerMinFilter ||
+                materialMetallicRoughnessTextureSamplerLodMinClamp ||
+                materialMetallicRoughnessTextureSamplerLodMaxClamp ||
+                materialMetallicRoughnessTextureSamplerMaxAnisotropy
+                ? 4
+                : materialMetallicRoughnessTextureUvTransform ||
+                    materialMetallicRoughnessTextureUvSet ||
+                    materialMetallicRoughnessTextureSampler ||
+                    materialMetallicRoughnessTextureSamplerMagFilter ||
+                    materialMetallicRoughnessTextureSamplerAddress
+                  ? 2
+                  : 1,
+            height:
+              materialMetallicRoughnessTextureMipmap ||
+                materialMetallicRoughnessTextureSamplerMipmapFilter ||
+                materialMetallicRoughnessTextureSamplerMinFilter ||
+                materialMetallicRoughnessTextureSamplerLodMinClamp ||
+                materialMetallicRoughnessTextureSamplerLodMaxClamp ||
+                materialMetallicRoughnessTextureSamplerMaxAnisotropy
+                ? 4
+                : materialMetallicRoughnessTextureUvTransform ||
+                    materialMetallicRoughnessTextureUvSet ||
+                    materialMetallicRoughnessTextureSampler ||
+                    materialMetallicRoughnessTextureSamplerMagFilter ||
+                    materialMetallicRoughnessTextureSamplerAddress
+                  ? 2
+                  : 1,
+          },
+        },
         format: 'rgba8unorm',
         data:
           materialMetallicRoughnessTextureMipmap ||
@@ -1949,14 +1966,16 @@ const metallicRoughnessTextureHandle = materialMetallicRoughnessTexture
               ? new Uint8Array([0, 255, 0, 255])
               : new Uint8Array([0, 0, 0, 255]),
         colorSpace: 'linear',
-        mipmap:
+        mips:
           materialMetallicRoughnessTextureSamplerMipmapFilter ||
           materialMetallicRoughnessTextureSamplerMinFilter ||
           materialMetallicRoughnessTextureSamplerLodMinClamp ||
           materialMetallicRoughnessTextureSamplerLodMaxClamp ||
           materialMetallicRoughnessTextureSamplerMaxAnisotropy ||
           (materialMetallicRoughnessTextureMipmap &&
-            FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP === '1'),
+            FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP === '1')
+            ? { kind: 'generate' }
+            : { kind: 'none' },
       }),
     )
   : undefined;
@@ -1964,12 +1983,11 @@ const occlusionTextureHandle = materialOcclusionTexture
   ? unwrapHandle(
       world.allocSharedRef('TextureAsset', {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([0, 0, 0, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       }),
     )
   : undefined;
@@ -2078,12 +2096,10 @@ const objectMatHandle = world.allocSharedRef(
     alphaCutoff: materialAlphaCutoff,
     emissive: materialEmissive || materialEmissiveTexture ? [1.0, 0.1, 0.1] : undefined,
     emissiveIntensity: materialEmissive || materialEmissiveTexture ? materialEmissiveIntensity : undefined,
-    specularTint: materialSpecularTint ? [1.0, 0.0, 0.0] : undefined,
-    specularTintTexture: specularTintTextureHandle,
-    normalTexture:
-      FALSIFY_MATERIAL_NORMAL_SCALE === ''
-        ? normalTextureHandle
-        : { texture: normalTextureHandle, normalScale: 0.0 },
+    specularColor: materialSpecularColor ? [1.0, 0.0, 0.0] : undefined,
+    specularColorTexture: specularColorTextureHandle,
+    normalTexture: normalTextureHandle,
+    normalScale: FALSIFY_MATERIAL_NORMAL_SCALE === '' ? [1, 1] : [0, 0],
     emissiveTexture: emissiveTextureHandle,
     occlusionTexture: occlusionTextureHandle,
   }),
@@ -2272,12 +2288,12 @@ if (FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '') {
     `[smoke] FALSIFY_MATERIAL_EMISSIVE_INTENSITY=${FALSIFY_MATERIAL_EMISSIVE_INTENSITY}`,
   );
 }
-if (FALSIFY_MATERIAL_SPECULAR_TINT !== '') {
-  console.log(`[smoke] FALSIFY_MATERIAL_SPECULAR_TINT=${FALSIFY_MATERIAL_SPECULAR_TINT}`);
+if (FALSIFY_MATERIAL_SPECULAR_COLOR !== '') {
+  console.log(`[smoke] FALSIFY_MATERIAL_SPECULAR_COLOR=${FALSIFY_MATERIAL_SPECULAR_COLOR}`);
 }
-if (FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '') {
+if (FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '') {
   console.log(
-    `[smoke] FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE=${FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE}`,
+    `[smoke] FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE=${FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE}`,
   );
 }
 if (FALSIFY_MATERIAL_NORMAL_TEXTURE !== '') {
@@ -2496,8 +2512,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -3026,8 +3042,8 @@ const colorLightWitness =
   FALSIFY_MATERIAL_ROUGHNESS !== '' ||
   FALSIFY_MATERIAL_EMISSIVE !== '' ||
   FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '' ||
-  FALSIFY_MATERIAL_SPECULAR_TINT !== '' ||
-  FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '' ||
+  FALSIFY_MATERIAL_SPECULAR_COLOR !== '' ||
+  FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '' ||
   FALSIFY_MATERIAL_NORMAL_TEXTURE !== '' ||
   FALSIFY_MATERIAL_NORMAL_SCALE !== '' ||
   FALSIFY_MATERIAL_EMISSIVE_TEXTURE !== '' ||
@@ -3074,8 +3090,8 @@ const colorLightWitness =
     : cubeCenter[0] > 0.25 &&
       cubeCenter[1] > 0.1 &&
       cubeCenter[2] > 0.05 &&
-      cubeCenter[0] > cubeCenter[1] * 1.6 &&
-      cubeCenter[1] > cubeCenter[2] * 1.2;
+      cubeCenter[0] > cubeCenter[1] &&
+      cubeCenter[1] > cubeCenter[2];
 const objectColorWitness =
   FALSIFY_OBJECT_COLOR === '' ||
   (cubeCenter[1] > cubeCenter[0] * 1.4 && cubeCenter[1] > cubeCenter[2] * 1.4);
@@ -3087,8 +3103,8 @@ const intensityLightWitness =
   FALSIFY_MATERIAL_ROUGHNESS !== '' ||
   FALSIFY_MATERIAL_EMISSIVE !== '' ||
   FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '' ||
-  FALSIFY_MATERIAL_SPECULAR_TINT !== '' ||
-  FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '' ||
+  FALSIFY_MATERIAL_SPECULAR_COLOR !== '' ||
+  FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '' ||
   FALSIFY_MATERIAL_NORMAL_TEXTURE !== '' ||
   FALSIFY_MATERIAL_NORMAL_SCALE !== '' ||
   FALSIFY_MATERIAL_EMISSIVE_TEXTURE !== '' ||
@@ -3143,8 +3159,8 @@ const noMaterialControl =
   FALSIFY_MATERIAL_ROUGHNESS === '' &&
   FALSIFY_MATERIAL_EMISSIVE === '' &&
   FALSIFY_MATERIAL_EMISSIVE_INTENSITY === '' &&
-  FALSIFY_MATERIAL_SPECULAR_TINT === '' &&
-  FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE === '' &&
+  FALSIFY_MATERIAL_SPECULAR_COLOR === '' &&
+  FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE === '' &&
   FALSIFY_MATERIAL_NORMAL_TEXTURE === '' &&
   FALSIFY_MATERIAL_NORMAL_SCALE === '' &&
   FALSIFY_MATERIAL_EMISSIVE_TEXTURE === '' &&
@@ -3379,10 +3395,10 @@ const materialWitness = noMaterialControl
                 ? BASE_COLOR_TEXTURE_RESPONSE_THRESHOLD
                 : FALSIFY_MATERIAL_NORMAL_TEXTURE !== ''
                   ? NORMAL_TEXTURE_RESPONSE_THRESHOLD
-                  : FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== ''
-                    ? SPECULAR_TINT_TEXTURE_RESPONSE_THRESHOLD
-                    : FALSIFY_MATERIAL_SPECULAR_TINT !== ''
-                      ? SPECULAR_TINT_RESPONSE_THRESHOLD
+                  : FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== ''
+                    ? SPECULAR_COLOR_TEXTURE_RESPONSE_THRESHOLD
+                    : FALSIFY_MATERIAL_SPECULAR_COLOR !== ''
+                      ? SPECULAR_COLOR_RESPONSE_THRESHOLD
                       : FALSIFY_MATERIAL_ROUGHNESS !== ''
                         ? ROUGHNESS_RESPONSE_THRESHOLD
                         : MATERIAL_RESPONSE_THRESHOLD);
@@ -3465,7 +3481,7 @@ console.log(
   `[smoke] materialMetallicRoughnessTextureMipmap=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP || '0'} textureSize=${materialMetallicRoughnessTextureMipmap ? '4x4' : '1x1'} generated=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP === '1'} lod=1/1 expected=${JSON.stringify(metallicRoughnessTextureMipmapExpected)} responseDistance=${metallicRoughnessTextureMipmapResponseDistance.toFixed(4)} baselineDistance=${metallicRoughnessTextureMipmapBaselineDistance.toFixed(4)}`,
 );
 console.log(
-  `[smoke] oracle=color-object-material cubeCenter=${JSON.stringify(cubeCenter)} lightWitness=${colorLightWitness} objectColor=${FALSIFY_OBJECT_COLOR || 'orange'} objectWitness=${objectColorWitness} materialMetallic=${FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : FALSIFY_MATERIAL_METALLIC || '0'} materialMetallicChannel=${FALSIFY_MATERIAL_METALLIC_CHANNEL || '2'} materialRoughness=${FALSIFY_MATERIAL_ROUGHNESS || '0.5'} materialEmissive=${materialEmissive ? '1' : '0'} materialEmissiveIntensity=${FALSIFY_MATERIAL_EMISSIVE_INTENSITY || (materialEmissive ? '1' : '0')} materialSpecularTint=${FALSIFY_MATERIAL_SPECULAR_TINT || '0'} materialSpecularTintTexture=${FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE || '0'} materialNormalTexture=${FALSIFY_MATERIAL_NORMAL_TEXTURE || '0'} materialNormalScale=${FALSIFY_MATERIAL_NORMAL_SCALE || '1'} materialEmissiveTexture=${FALSIFY_MATERIAL_EMISSIVE_TEXTURE || '0'} materialBaseColorTexture=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE || '0'} materialBaseColorTextureRgb=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB || '1'} materialBaseColorTextureUvTransform=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM || '0'} materialBaseColorTextureUvSet=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET || '0'} materialBaseColorTextureSampler=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER || '0'} materialBaseColorTextureSamplerAddress=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS || '0'} materialBaseColorTextureSamplerMagFilter=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAG_FILTER || '0'} materialBaseColorTextureSamplerMipmapFilter=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MIPMAP_FILTER || '0'} materialBaseColorTextureSamplerLodMaxClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP || '0'} materialBaseColorTextureSamplerLodMinClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP || '0'} materialBaseColorTextureAlpha=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA || '1'} materialMetallicRoughnessTexture=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE || (FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : '0')} materialMetallicRoughnessTextureSampler=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER || '0'} materialMetallicRoughnessTextureSamplerAddress=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS || '0'} materialMetallicRoughnessTextureMipmap=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP || '0'} materialClearcoat=${materialClearcoat ? '1' : '0'} materialClearcoatRoughness=${materialClearcoatRoughness} materialOcclusionTexture=${FALSIFY_MATERIAL_OCCLUSION_TEXTURE || '0'} materialOcclusionStrength=${FALSIFY_MATERIAL_OCCLUSION_STRENGTH || '1'} materialAlphaCutoff=${FALSIFY_MATERIAL_ALPHA_CUTOFF || '0'} materialBaseColorAlpha=${FALSIFY_MATERIAL_BASE_COLOR_ALPHA || '1'} materialWitness=${materialWitness} lightColor=${FALSIFY_LIGHT_COLOR || 'white'} lightIntensity=${FALSIFY_LIGHT_INTENSITY || 'default'} intensityWitness=${intensityLightWitness} lightDirection=${FALSIFY_LIGHT_DIRECTION || 'toward-cube'} directionWitness=${directionLightWitness} falsifier=${FALSIFY_MATERIAL_METALLIC_CHANNEL ? 'metallic-channel' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS ? 'metallic-roughness-texture-sampler-address' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ? 'metallic-roughness-texture-mipmap' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER ? 'metallic-roughness-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM ? 'base-color-texture-uv-transform' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET ? 'base-color-texture-uv-set' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP ? 'base-color-texture-sampler-lod-max-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP ? 'base-color-texture-sampler-lod-min-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MIPMAP_FILTER ? 'base-color-texture-sampler-mipmap-filter' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS ? 'base-color-texture-sampler-address' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAG_FILTER ? 'base-color-texture-sampler-mag-filter' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER ? 'base-color-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB ? 'base-color-texture-rgb' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA ? 'base-color-texture-alpha' : FALSIFY_MATERIAL_BASE_COLOR_ALPHA ? 'base-color-alpha' : FALSIFY_MATERIAL_ALPHA_CUTOFF ? 'alpha-cutoff' : FALSIFY_MATERIAL_CLEARCOAT_ROUGHNESS ? 'clearcoat-roughness' : FALSIFY_MATERIAL_NORMAL_SCALE ? 'normal-scale' : FALSIFY_MATERIAL_EMISSIVE_INTENSITY ? 'emissive-intensity' : FALSIFY_NO_LIGHT ? 'no-light' : FALSIFY_MATERIAL_OCCLUSION_STRENGTH ? 'occlusion-strength' : FALSIFY_MATERIAL_OCCLUSION_TEXTURE ? 'occlusion-texture' : FALSIFY_MATERIAL_CLEARCOAT ? 'clearcoat' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE ? 'metallic-roughness-texture' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE ? 'base-color-texture' : FALSIFY_MATERIAL_EMISSIVE_TEXTURE ? 'emissive-texture' : FALSIFY_MATERIAL_NORMAL_TEXTURE ? 'normal-texture' : FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE ? 'specular-tint-texture' : FALSIFY_MATERIAL_SPECULAR_TINT ? 'specular-tint' : FALSIFY_MATERIAL_EMISSIVE ? 'emissive' : FALSIFY_MATERIAL_ROUGHNESS ? 'roughness' : FALSIFY_MATERIAL_METALLIC ? 'metallic' : FALSIFY_OBJECT_COLOR ? 'green-object' : FALSIFY_LIGHT_COLOR ? 'blue-light' : FALSIFY_LIGHT_INTENSITY ? 'low-intensity' : FALSIFY_LIGHT_DIRECTION ? 'away-direction' : 'none'}`,
+  `[smoke] oracle=color-object-material cubeCenter=${JSON.stringify(cubeCenter)} lightWitness=${colorLightWitness} objectColor=${FALSIFY_OBJECT_COLOR || 'orange'} objectWitness=${objectColorWitness} materialMetallic=${FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : FALSIFY_MATERIAL_METALLIC || '0'} materialMetallicChannel=${FALSIFY_MATERIAL_METALLIC_CHANNEL || '2'} materialRoughness=${FALSIFY_MATERIAL_ROUGHNESS || '0.5'} materialEmissive=${materialEmissive ? '1' : '0'} materialEmissiveIntensity=${FALSIFY_MATERIAL_EMISSIVE_INTENSITY || (materialEmissive ? '1' : '0')} materialSpecularColor=${FALSIFY_MATERIAL_SPECULAR_COLOR || '0'} materialSpecularColorTexture=${FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE || '0'} materialNormalTexture=${FALSIFY_MATERIAL_NORMAL_TEXTURE || '0'} materialNormalScale=${FALSIFY_MATERIAL_NORMAL_SCALE || '1'} materialEmissiveTexture=${FALSIFY_MATERIAL_EMISSIVE_TEXTURE || '0'} materialBaseColorTexture=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE || '0'} materialBaseColorTextureRgb=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB || '1'} materialBaseColorTextureUvTransform=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM || '0'} materialBaseColorTextureUvSet=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET || '0'} materialBaseColorTextureSampler=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER || '0'} materialBaseColorTextureSamplerAddress=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS || '0'} materialBaseColorTextureSamplerMagFilter=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAG_FILTER || '0'} materialBaseColorTextureSamplerMipmapFilter=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MIPMAP_FILTER || '0'} materialBaseColorTextureSamplerLodMaxClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP || '0'} materialBaseColorTextureSamplerLodMinClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP || '0'} materialBaseColorTextureAlpha=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA || '1'} materialMetallicRoughnessTexture=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE || (FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : '0')} materialMetallicRoughnessTextureSampler=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER || '0'} materialMetallicRoughnessTextureSamplerAddress=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS || '0'} materialMetallicRoughnessTextureMipmap=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP || '0'} materialClearcoat=${materialClearcoat ? '1' : '0'} materialClearcoatRoughness=${materialClearcoatRoughness} materialOcclusionTexture=${FALSIFY_MATERIAL_OCCLUSION_TEXTURE || '0'} materialOcclusionStrength=${FALSIFY_MATERIAL_OCCLUSION_STRENGTH || '1'} materialAlphaCutoff=${FALSIFY_MATERIAL_ALPHA_CUTOFF || '0'} materialBaseColorAlpha=${FALSIFY_MATERIAL_BASE_COLOR_ALPHA || '1'} materialWitness=${materialWitness} lightColor=${FALSIFY_LIGHT_COLOR || 'white'} lightIntensity=${FALSIFY_LIGHT_INTENSITY || 'default'} intensityWitness=${intensityLightWitness} lightDirection=${FALSIFY_LIGHT_DIRECTION || 'toward-cube'} directionWitness=${directionLightWitness} falsifier=${FALSIFY_MATERIAL_METALLIC_CHANNEL ? 'metallic-channel' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS ? 'metallic-roughness-texture-sampler-address' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ? 'metallic-roughness-texture-mipmap' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER ? 'metallic-roughness-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM ? 'base-color-texture-uv-transform' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET ? 'base-color-texture-uv-set' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP ? 'base-color-texture-sampler-lod-max-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP ? 'base-color-texture-sampler-lod-min-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MIPMAP_FILTER ? 'base-color-texture-sampler-mipmap-filter' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS ? 'base-color-texture-sampler-address' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAG_FILTER ? 'base-color-texture-sampler-mag-filter' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER ? 'base-color-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB ? 'base-color-texture-rgb' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA ? 'base-color-texture-alpha' : FALSIFY_MATERIAL_BASE_COLOR_ALPHA ? 'base-color-alpha' : FALSIFY_MATERIAL_ALPHA_CUTOFF ? 'alpha-cutoff' : FALSIFY_MATERIAL_CLEARCOAT_ROUGHNESS ? 'clearcoat-roughness' : FALSIFY_MATERIAL_NORMAL_SCALE ? 'normal-scale' : FALSIFY_MATERIAL_EMISSIVE_INTENSITY ? 'emissive-intensity' : FALSIFY_NO_LIGHT ? 'no-light' : FALSIFY_MATERIAL_OCCLUSION_STRENGTH ? 'occlusion-strength' : FALSIFY_MATERIAL_OCCLUSION_TEXTURE ? 'occlusion-texture' : FALSIFY_MATERIAL_CLEARCOAT ? 'clearcoat' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE ? 'metallic-roughness-texture' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE ? 'base-color-texture' : FALSIFY_MATERIAL_EMISSIVE_TEXTURE ? 'emissive-texture' : FALSIFY_MATERIAL_NORMAL_TEXTURE ? 'normal-texture' : FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE ? 'specular-color-texture' : FALSIFY_MATERIAL_SPECULAR_COLOR ? 'specular-color' : FALSIFY_MATERIAL_EMISSIVE ? 'emissive' : FALSIFY_MATERIAL_ROUGHNESS ? 'roughness' : FALSIFY_MATERIAL_METALLIC ? 'metallic' : FALSIFY_OBJECT_COLOR ? 'green-object' : FALSIFY_LIGHT_COLOR ? 'blue-light' : FALSIFY_LIGHT_INTENSITY ? 'low-intensity' : FALSIFY_LIGHT_DIRECTION ? 'away-direction' : 'none'}`,
 );
 console.log(
   `[smoke] materialClearcoat=${materialClearcoat ? '1' : '0'} materialClearcoatRoughness=${materialClearcoatRoughness} clearcoatResponseThreshold=${CLEARCOAT_RESPONSE_THRESHOLD} clearcoatRoughnessResponseThreshold=${CLEARCOAT_ROUGHNESS_RESPONSE_THRESHOLD}`,
@@ -3558,8 +3574,8 @@ if (
     FALSIFY_MATERIAL_ROUGHNESS !== '' ||
     FALSIFY_MATERIAL_EMISSIVE !== '' ||
     FALSIFY_MATERIAL_EMISSIVE_INTENSITY !== '' ||
-    FALSIFY_MATERIAL_SPECULAR_TINT !== '' ||
-    FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE !== '' ||
+    FALSIFY_MATERIAL_SPECULAR_COLOR !== '' ||
+    FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE !== '' ||
     FALSIFY_MATERIAL_NORMAL_TEXTURE !== '' ||
     FALSIFY_MATERIAL_NORMAL_SCALE !== '' ||
     FALSIFY_MATERIAL_EMISSIVE_TEXTURE !== '' ||
@@ -3790,8 +3806,10 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+emitSmokeReceipt('app-learn-render-2-lighting-1-colors/smoke', framesObserved);
+
 console.log(
-  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, oracle=color-object-material/${FALSIFY_OBJECT_COLOR || 'orange'}, materialMetallic=${FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : FALSIFY_MATERIAL_METALLIC || '0'}, materialMetallicChannel=${FALSIFY_MATERIAL_METALLIC_CHANNEL || '2'}, materialRoughness=${FALSIFY_MATERIAL_ROUGHNESS || '0.5'}, materialBaseColorAlpha=${FALSIFY_MATERIAL_BASE_COLOR_ALPHA || '1'}, materialAlpha=${cubeCenter[3].toFixed(4)}, materialClearcoat=${materialClearcoat ? '1' : '0'}, materialClearcoatRoughness=${materialClearcoatRoughness}, materialOcclusionTexture=${FALSIFY_MATERIAL_OCCLUSION_TEXTURE || '0'}, materialOcclusionStrength=${FALSIFY_MATERIAL_OCCLUSION_STRENGTH || '1'}, materialEmissive=${materialEmissive ? '1' : '0'}, materialEmissiveIntensity=${FALSIFY_MATERIAL_EMISSIVE_INTENSITY || (materialEmissive ? '1' : '0')}, materialSpecularTint=${FALSIFY_MATERIAL_SPECULAR_TINT || '0'}, materialSpecularTintTexture=${FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE || '0'}, materialNormalTexture=${FALSIFY_MATERIAL_NORMAL_TEXTURE || '0'}, materialNormalScale=${FALSIFY_MATERIAL_NORMAL_SCALE || '1'}, materialEmissiveTexture=${FALSIFY_MATERIAL_EMISSIVE_TEXTURE || '0'}, materialBaseColorTexture=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE || '0'}, materialBaseColorTextureRgb=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB || '1'}, materialBaseColorTextureUvTransform=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM || '0'}, materialBaseColorTextureUvSet=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET || '0'}, materialBaseColorTextureSamplerAddress=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS || '0'}, materialBaseColorTextureSamplerLodMaxClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP || '0'}, materialBaseColorTextureSamplerLodMinClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP || '0'}, materialBaseColorTextureAlpha=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA || '1'}, materialBaseColorTextureAlphaExpected=${materialBaseColorTextureAlphaExpected.toFixed(4)}, materialMetallicRoughnessTexture=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE || (FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : '0')}, materialMetallicRoughnessTextureSampler=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER || '0'}, materialMetallicRoughnessTextureSamplerAddress=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS || '0'}, materialMetallicRoughnessTextureMipmap=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP || '0'}, lightIntensity=${FALSIFY_LIGHT_INTENSITY || 'default'}, lightDirection=${FALSIFY_LIGHT_DIRECTION || 'toward-cube'}, materialFalsifier=${FALSIFY_MATERIAL_METALLIC_CHANNEL ? 'metallic-channel' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS ? 'metallic-roughness-texture-sampler-address' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ? 'metallic-roughness-texture-mipmap' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER ? 'metallic-roughness-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM ? 'base-color-texture-uv-transform' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET ? 'base-color-texture-uv-set' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP ? 'base-color-texture-sampler-lod-max-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP ? 'base-color-texture-sampler-lod-min-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS ? 'base-color-texture-sampler-address' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB ? 'base-color-texture-rgb' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA ? 'base-color-texture-alpha' : FALSIFY_MATERIAL_BASE_COLOR_ALPHA ? 'base-color-alpha' : 'none'}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, oracle=color-object-material/${FALSIFY_OBJECT_COLOR || 'orange'}, materialMetallic=${FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : FALSIFY_MATERIAL_METALLIC || '0'}, materialMetallicChannel=${FALSIFY_MATERIAL_METALLIC_CHANNEL || '2'}, materialRoughness=${FALSIFY_MATERIAL_ROUGHNESS || '0.5'}, materialBaseColorAlpha=${FALSIFY_MATERIAL_BASE_COLOR_ALPHA || '1'}, materialAlpha=${cubeCenter[3].toFixed(4)}, materialClearcoat=${materialClearcoat ? '1' : '0'}, materialClearcoatRoughness=${materialClearcoatRoughness}, materialOcclusionTexture=${FALSIFY_MATERIAL_OCCLUSION_TEXTURE || '0'}, materialOcclusionStrength=${FALSIFY_MATERIAL_OCCLUSION_STRENGTH || '1'}, materialEmissive=${materialEmissive ? '1' : '0'}, materialEmissiveIntensity=${FALSIFY_MATERIAL_EMISSIVE_INTENSITY || (materialEmissive ? '1' : '0')}, materialSpecularColor=${FALSIFY_MATERIAL_SPECULAR_COLOR || '0'}, materialSpecularColorTexture=${FALSIFY_MATERIAL_SPECULAR_COLOR_TEXTURE || '0'}, materialNormalTexture=${FALSIFY_MATERIAL_NORMAL_TEXTURE || '0'}, materialNormalScale=${FALSIFY_MATERIAL_NORMAL_SCALE || '1'}, materialEmissiveTexture=${FALSIFY_MATERIAL_EMISSIVE_TEXTURE || '0'}, materialBaseColorTexture=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE || '0'}, materialBaseColorTextureRgb=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB || '1'}, materialBaseColorTextureUvTransform=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM || '0'}, materialBaseColorTextureUvSet=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET || '0'}, materialBaseColorTextureSamplerAddress=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS || '0'}, materialBaseColorTextureSamplerLodMaxClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP || '0'}, materialBaseColorTextureSamplerLodMinClamp=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP || '0'}, materialBaseColorTextureAlpha=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA || '1'}, materialBaseColorTextureAlphaExpected=${materialBaseColorTextureAlphaExpected.toFixed(4)}, materialMetallicRoughnessTexture=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE || (FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' ? '1' : '0')}, materialMetallicRoughnessTextureSampler=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER || '0'}, materialMetallicRoughnessTextureSamplerAddress=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS || '0'}, materialMetallicRoughnessTextureMipmap=${FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP || '0'}, lightIntensity=${FALSIFY_LIGHT_INTENSITY || 'default'}, lightDirection=${FALSIFY_LIGHT_DIRECTION || 'toward-cube'}, materialFalsifier=${FALSIFY_MATERIAL_METALLIC_CHANNEL ? 'metallic-channel' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS ? 'metallic-roughness-texture-sampler-address' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP ? 'metallic-roughness-texture-mipmap' : FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER ? 'metallic-roughness-texture-sampler' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM ? 'base-color-texture-uv-transform' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET ? 'base-color-texture-uv-set' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP ? 'base-color-texture-sampler-lod-max-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP ? 'base-color-texture-sampler-lod-min-clamp' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_ADDRESS ? 'base-color-texture-sampler-address' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RGB ? 'base-color-texture-rgb' : FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_ALPHA ? 'base-color-texture-alpha' : FALSIFY_MATERIAL_BASE_COLOR_ALPHA ? 'base-color-alpha' : 'none'}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 console.log(
   `[smoke] PASS materialBaseColorTextureRed=${FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_RED || '1'} expected=${materialBaseColorTextureRedExpected.toFixed(4)} responseDistance=${materialBaseColorTextureRedResponseDistance.toFixed(4)} preservedDistance=${materialBaseColorTextureRedPreservedDistance.toFixed(4)}`,

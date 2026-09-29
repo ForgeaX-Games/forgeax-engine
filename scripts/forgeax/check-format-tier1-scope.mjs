@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
@@ -17,6 +18,90 @@ const EXPECTED_ROWS = [8, 18, 26];
 const MATRIX_PATH =
   '.forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/support-matrix.json';
 const CSV_PATH = '.forgeax-harness/docs/forgeax-format-classification.csv';
+
+const M0_COHESION_FILES = Object.freeze({
+  devkitIndex: 'packages/devkit/src/index.ts',
+  packIndex: 'packages/pack/src/index.ts',
+  sceneInstances: 'packages/scene/src/instances/scene-instances.ts',
+  typesIndex: 'packages/types/src/index.ts',
+});
+
+const M0_COHESION_BASELINE = Object.freeze({
+  devkitRootExports: 38,
+  packInventoryExportModules: 2,
+  sceneInstanceLines: 1564,
+  typesIndexLines: 4856,
+});
+
+function countLinesInText(source) {
+  return source.split('\n').length - 1;
+}
+
+function countRootExportDeclarations(source) {
+  return [...source.matchAll(/^\s*export\b/gm)].length;
+}
+
+function countPackInventoryExportModules(root) {
+  const source = readFileSync(resolve(root, M0_COHESION_FILES.packIndex), 'utf8');
+  return new Set(
+    [...source.matchAll(/from\s+['"](\.\/[^'"]+)['"]/g)]
+      .map((match) => match[1])
+      .filter(
+        (path) =>
+          path === './scanner.js' ||
+          path === './producer-contract.js' ||
+          path === './inventory/index.js',
+      ),
+  ).size;
+}
+
+/** Return the small, JSON-safe M0 before/after cohesion snapshot. */
+export function collectM0CohesionSnapshot(root = process.cwd()) {
+  const devkitIndex = readFileSync(resolve(root, M0_COHESION_FILES.devkitIndex), 'utf8');
+  const sceneInstances = readFileSync(resolve(root, M0_COHESION_FILES.sceneInstances), 'utf8');
+  const typesIndex = readFileSync(resolve(root, M0_COHESION_FILES.typesIndex), 'utf8');
+  return {
+    schemaVersion: 1,
+    files: M0_COHESION_FILES,
+    metrics: {
+      devkitRootExports: countRootExportDeclarations(devkitIndex),
+      packInventoryExportModules: countPackInventoryExportModules(root),
+      sceneInstanceLines: countLinesInText(sceneInstances),
+      typesIndexLines: countLinesInText(typesIndex),
+      assetReferenceDeclarations: [
+        ...typesIndex.matchAll(/^export\s+interface\s+Asset(?:Ref|Envelope)\b/gm),
+      ].map((match) => match[0]).length,
+    },
+  };
+}
+
+/** Compare a frozen pre-migration snapshot with the current checkout. */
+export function compareM0CohesionSnapshots(before, after) {
+  const beforeMetrics = before?.metrics ?? before;
+  const afterMetrics = after?.metrics ?? after;
+  const changes = Object.fromEntries(
+    Object.keys(M0_COHESION_BASELINE).map((key) => [
+      key,
+      {
+        before: beforeMetrics[key],
+        after: afterMetrics[key],
+        delta: afterMetrics[key] - beforeMetrics[key],
+      },
+    ]),
+  );
+  const reductions = [
+    changes.devkitRootExports.delta < 0,
+    changes.packInventoryExportModules.delta < 0,
+    changes.sceneInstanceLines.delta < 0,
+    changes.typesIndexLines.delta < 0,
+  ];
+  return {
+    schemaVersion: 1,
+    baseline: M0_COHESION_BASELINE,
+    changes,
+    status: reductions.every(Boolean) ? 'pass' : 'blocked',
+  };
+}
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');

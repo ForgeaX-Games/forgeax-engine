@@ -1,3 +1,4 @@
+import { materialAssetOutputProducer } from '@forgeax/engine-import';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 
@@ -7,6 +8,67 @@ const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 describe('registry load graph', () => {
+  it('preserves zero and integer child values through production, JSON and recursive Pack loading', async () => {
+    const registry = new AssetRegistry({} as never);
+    registry.configurePackIndex('/pack-index.json');
+    const values = { emissionStrength: 0, pigmentStrength: 0, surfaceMetallic: 0, bandCount: 1 };
+    const root = await materialAssetOutputProducer.produce({
+      guid: A,
+      sourceKey: 'root',
+      asset: {
+        kind: 'material',
+        passes: [{ name: 'Forward', program: { module: 'test::toon' } }],
+        parameters: Object.keys(values).map((name) => ({ name, type: 'f32' as const })),
+        values: { emissionStrength: 2, pigmentStrength: 2, surfaceMetallic: 2, bandCount: 2 },
+      },
+    });
+    const child = await materialAssetOutputProducer.produce({
+      guid: B,
+      sourceKey: 'child',
+      asset: { kind: 'material', parent: registry.parseGuid(A), values },
+    });
+    expect(root.ok && child.ok).toBe(true);
+    if (!root.ok || !child.ok) return;
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        { guid: A, kind: 'material', ...root.value, refs: root.value.refs.map((ref) => ref.guid) },
+        {
+          guid: B,
+          kind: 'material',
+          ...child.value,
+          refs: child.value.refs.map((ref) => ref.guid),
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (url: string) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith('pack-index.json')
+                ? [A, B].map((guid) => ({
+                    guid,
+                    kind: 'material',
+                    packageUrl: '/materials.pack.json',
+                    sourcePath: guid,
+                  }))
+                : pack,
+            ),
+          ),
+      ),
+    );
+    try {
+      const result = await registry.loadByGuid(registry.parseGuid(B));
+      expect(result).toMatchObject({ ok: true, value: { kind: 'material', values } });
+      expect(registry.lookup(A)).toBeDefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('restores descriptor payloads through the production Pack path', async () => {
     const registry = new AssetRegistry({} as never);
     registry.configurePackIndex('/pack-index.json');
@@ -17,7 +79,11 @@ describe('registry load graph', () => {
         {
           guid: C,
           kind: 'render-pipeline',
-          payload: { kind: 'render-pipeline', pipelineId: 'forgeax::urp' },
+          payload: {
+            kind: 'render-pipeline',
+            pipelineId: 'forgeax::standard',
+            renderPath: 'forward',
+          },
           refs: [],
           artifacts: {},
         },

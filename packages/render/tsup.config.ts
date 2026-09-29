@@ -1,5 +1,5 @@
 import { defineConfig } from 'tsup';
-import { baseTsupConfig } from '../../tsup.base';
+import { baseTsupConfig } from '../../config/tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
@@ -7,6 +7,7 @@ export default defineConfig({
     'src/index.ts',
     'src/authoring.ts',
     'src/internal.ts',
+    'src/temporal/index.ts',
     'src/construct-renderer.ts',
   ],
   splitting: true,

@@ -8,7 +8,11 @@ import {
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import WebSocket, { WebSocketServer } from 'ws';
-import { BoundedEventQueue, DEFAULT_MAX_QUEUED_EVENTS } from './event-queue';
+import {
+  BoundedEventQueue,
+  DEFAULT_MAX_QUEUED_BYTES,
+  DEFAULT_MAX_QUEUED_EVENTS,
+} from './event-queue';
 import type { WebSocketConstructor } from './websocket-client-core';
 import { createWebSocketConnectorAdapter } from './websocket-connector';
 
@@ -16,6 +20,8 @@ export interface ListenWebSocketEndpointOptions {
   readonly port: number;
   readonly host?: string;
   readonly maxPeers?: number;
+  readonly maxQueuedBytes?: number;
+  readonly maxBufferedBytes?: number;
   readonly maxQueuedEvents?: number | undefined;
 }
 
@@ -65,30 +71,55 @@ export function listenWebSocketEndpoint(
   return new Promise((resolve) => {
     const host = options.host ?? '127.0.0.1';
     const address = `ws://${host}:${options.port}`;
-    let queue: BoundedEventQueue;
+    const maxQueuedEvents = options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS;
+    const maxPeers = options.maxPeers ?? 128;
+    const maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
+    const maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
     try {
-      queue = new BoundedEventQueue(options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS);
+      new BoundedEventQueue(maxQueuedEvents, maxQueuedBytes);
+      if (!Number.isSafeInteger(maxBufferedBytes) || maxBufferedBytes < 1)
+        throw new RangeError('maxBufferedBytes must be a positive safe integer');
+      if (!Number.isSafeInteger(maxPeers) || maxPeers < 1) {
+        throw new RangeError('maxPeers must be a positive safe integer');
+      }
     } catch (cause) {
       resolve(connectionFailed(address, cause));
       return;
     }
 
-    const terminalEvents: EndpointEvent[] = [];
-    const peers = new Map<PeerId, WebSocket>();
-    const disconnectedPeers = new Set<PeerId>();
-    const sockets = new Map<WebSocket, PeerId>();
-    const maxPeers = options.maxPeers ?? Number.POSITIVE_INFINITY;
+    // A disconnected peer occupies its slot until its terminal event is polled.
+    // This bounds both data and unconsumed terminal notifications by maxPeers.
+    const peers = new Map<PeerId, { socket: WebSocket; queue: BoundedEventQueue }>();
     let nextPeerId = 1;
     let settled = false;
     let closed = false;
-    const server = new WebSocketServer({ host, port: options.port, perMessageDeflate: false });
+    const server = new WebSocketServer({
+      host,
+      port: options.port,
+      perMessageDeflate: false,
+      maxPayload: maxQueuedBytes,
+    });
 
     const endpoint: NetEndpoint = {
-      poll: () => [...queue.drain(), ...terminalEvents.splice(0)],
+      poll: () => {
+        const events: EndpointEvent[] = [];
+        for (const [peerId, peer] of peers) {
+          events.push(...peer.queue.drain());
+          if (peer.queue.closed && peer.socket.readyState === peer.socket.CLOSED) {
+            events.push({ kind: 'peer-disconnected', peerId });
+            peers.delete(peerId);
+          }
+        }
+        return events;
+      },
       send: (peerId, data) => {
         if (closed) return alreadyClosed('The WebSocket listener endpoint is closed.');
-        const socket = peers.get(peerId);
-        if (!socket && disconnectedPeers.has(peerId))
+        const peer = peers.get(peerId);
+        const socket = peer?.socket;
+        if (
+          peer?.queue.closed ||
+          (!socket && Number.isInteger(peerId) && peerId > 0 && peerId < nextPeerId)
+        )
           return err(
             new EndpointError({
               code: 'connection-closed',
@@ -116,6 +147,8 @@ export function listenWebSocketEndpoint(
             }),
           );
         try {
+          if (socket.bufferedAmount + data.byteLength > maxBufferedBytes)
+            throw new Error('maxBufferedBytes exceeded; retry after the socket drains');
           socket.send(data, { binary: true });
           return ok(undefined);
         } catch (cause) {
@@ -132,18 +165,13 @@ export function listenWebSocketEndpoint(
       close: () => {
         if (closed) return alreadyClosed('The WebSocket listener endpoint is already closed.');
         closed = true;
-        for (const socket of peers.values()) socket.close();
+        for (const peer of peers.values()) {
+          peer.queue.close('Listener closed.');
+          peer.socket.close();
+        }
         server.close();
         return ok(undefined);
       },
-    };
-
-    const enqueue = (event: EndpointEvent, socket?: WebSocket): void => {
-      if (queue.enqueue(event)) return;
-      if (event.kind !== 'peer-disconnected') {
-        terminalEvents.push({ kind: 'peer-disconnected', peerId: event.peerId });
-      }
-      socket?.close();
     };
 
     server.on('connection', (socket) => {
@@ -152,10 +180,11 @@ export function listenWebSocketEndpoint(
         return;
       }
       const peerId = nextPeerId++ as PeerId;
-      peers.set(peerId, socket);
-      sockets.set(socket, peerId);
-      enqueue({ kind: 'peer-connected', peerId }, socket);
+      const queue = new BoundedEventQueue(maxQueuedEvents, maxQueuedBytes);
+      peers.set(peerId, { socket, queue });
+      queue.enqueue({ kind: 'peer-connected', peerId });
       socket.on('message', (data, isBinary) => {
+        if (queue.closed) return;
         if (!isBinary) {
           socket.close();
           return;
@@ -165,14 +194,9 @@ export function listenWebSocketEndpoint(
           socket.close();
           return;
         }
-        enqueue({ kind: 'message', peerId, data: bytes }, socket);
+        if (!queue.enqueue({ kind: 'message', peerId, data: bytes })) socket.close();
       });
-      socket.on('close', () => {
-        if (!peers.delete(peerId)) return;
-        disconnectedPeers.add(peerId);
-        sockets.delete(socket);
-        enqueue({ kind: 'peer-disconnected', peerId });
-      });
+      socket.on('close', () => queue.close('Socket closed.'));
       socket.on('error', () => socket.close());
     });
     server.on('error', (cause) => {

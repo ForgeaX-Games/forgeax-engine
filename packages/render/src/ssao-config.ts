@@ -1,22 +1,25 @@
 // @forgeax/engine-render - SSAO parameter authority.
 
-import { err, ok, type Result } from '@forgeax/engine-types';
+import { err, ok, type RenderPipelineAsset, type Result } from '@forgeax/engine-types';
 import { PostProcessError } from './post-process-errors';
 
 export const SSAO_DEFAULT_RADIUS = 0.5;
 export const SSAO_DEFAULT_BIAS = 0.025;
 export const SSAO_DEFAULT_INTENSITY = 1.0;
 
-export interface SsaoParameterConfig {
-  readonly radius?: number | undefined;
-  readonly bias?: number | undefined;
-  readonly intensity?: number | undefined;
-}
+export type SsaoParameterConfig = Omit<
+  NonNullable<NonNullable<RenderPipelineAsset['config']>['ssao']>,
+  'enabled'
+>;
+
+export const SSAO_SAMPLE_COUNTS = { low: 16, medium: 32, high: 64 } as const;
 
 export interface ResolvedSsaoParameters {
+  readonly algorithm: 'ssao' | 'gtao';
   readonly radius: number;
   readonly bias: number;
   readonly intensity: number;
+  readonly quality: 'low' | 'medium' | 'high';
 }
 
 /**
@@ -26,9 +29,11 @@ export interface ResolvedSsaoParameters {
  */
 export function getSsaoParameters(config: SsaoParameterConfig | undefined): ResolvedSsaoParameters {
   return {
+    algorithm: config?.algorithm ?? 'ssao',
     radius: config?.radius ?? SSAO_DEFAULT_RADIUS,
     bias: config?.bias ?? SSAO_DEFAULT_BIAS,
     intensity: config?.intensity ?? SSAO_DEFAULT_INTENSITY,
+    quality: config?.quality ?? 'high',
   };
 }
 
@@ -41,7 +46,15 @@ export function resolveSsaoParameters(
   config: SsaoParameterConfig | undefined,
 ): Result<ResolvedSsaoParameters, PostProcessError> {
   const resolved = getSsaoParameters(config);
-  if (resolved.radius <= 0) {
+  if (resolved.algorithm !== 'ssao' && resolved.algorithm !== 'gtao') {
+    return err(
+      new PostProcessError({
+        code: 'ssao-parameter-invalid',
+        detail: { paramName: 'algorithm', value: resolved.algorithm },
+      }),
+    );
+  }
+  if (!Number.isFinite(resolved.radius) || resolved.radius <= 0) {
     return err(
       new PostProcessError({
         code: 'ssao-radius-non-positive',
@@ -49,11 +62,25 @@ export function resolveSsaoParameters(
       }),
     );
   }
-  if (resolved.bias < 0) {
+  if (!Number.isFinite(resolved.bias) || resolved.bias < 0) {
     return err(
       new PostProcessError({
         code: 'ssao-bias-negative',
         detail: { paramName: 'bias', value: resolved.bias },
+      }),
+    );
+  }
+  if (
+    !Number.isFinite(resolved.intensity) ||
+    resolved.intensity < 0 ||
+    !Object.hasOwn(SSAO_SAMPLE_COUNTS, resolved.quality)
+  ) {
+    const paramName =
+      !Number.isFinite(resolved.intensity) || resolved.intensity < 0 ? 'intensity' : 'quality';
+    return err(
+      new PostProcessError({
+        code: 'ssao-parameter-invalid',
+        detail: { paramName, value: resolved[paramName] },
       }),
     );
   }

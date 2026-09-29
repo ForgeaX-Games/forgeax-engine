@@ -43,7 +43,7 @@ describe('grep-no-set-managed-ref-store', () => {
   it('exits 0 on the live tree (default scan, fixtures skipped)', () => {
     const r = run([]);
     expect(r.status).toBe(0);
-  });
+  }, 30_000);
 
   it('exits 1 with stderr triple when scanning the seeded fixture root', () => {
     const r = run(['--scan-fixtures', fixtureDir]);

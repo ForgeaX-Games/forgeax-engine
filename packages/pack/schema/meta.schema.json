@@ -10,7 +10,7 @@
   "properties": {
     "schemaVersion": {
       "oneOf": [{ "type": "string" }, { "type": "integer" }],
-      "description": "Schema version. Strings (e.g. '1.0.0') for hand-authored .meta.json; integers (1, 2, ...) for importer-emitted .meta.json (forgeax-engine-remote-asset import writes schemaVersion: 1 as the wire format SSOT, GltfMetaJson literal type)."
+      "description": "Schema version. Strings (e.g. '1.0.0') for hand-authored .meta.json; integers (1, 2, ...) for importer-emitted .meta.json (forgeax asset import writes schemaVersion: 1 as the wire format SSOT, GltfMetaJson literal type)."
     },
     "kind": {
       "type": "string",
@@ -35,12 +35,12 @@
     "importer": {
       "type": "string",
       "minLength": 1,
-      "description": "Open importer key (feat-20260603-asset-import-loader-injection M2): the @forgeax/engine-import runner dispatches the sidecar to the Importer registered under this key. Replaces the former closed `assetType` enum (one-cut migration, no shim). Known keys: 'image' (engine-image importer, single-image source), 'gltf' (engine-gltf importer, .gltf/.glb source), 'audio' (engine-audio-webaudio import path), 'font' (engine-font bake path), and the reserved 'shader' key consumed by engine-vite-plugin-shader's orthogonal transform pipeline (the import runner explicitly skips it). Adding a new importer needs only a registered Importer under a new key - no schema enum edit. Orthogonal to subAssets[].kind which identifies per-sub-asset payload kind."
+      "description": "Open importer key (feat-20260603-asset-import-loader-injection M2): the @forgeax/engine-import runner dispatches the sidecar to the Importer registered under this key. Replaces the former closed `assetType` enum (one-cut migration, no shim). Known keys: 'image' (engine-image importer, single-image source), 'gltf' (engine-gltf importer, .gltf/.glb source), 'fbx' (engine-fbx importer, .fbx source), 'audio' (engine-audio-webaudio import path), 'font' (engine-font bake path), and the reserved 'shader' key consumed by engine-vite-plugin-shader's orthogonal transform pipeline (the import runner explicitly skips it). Adding a new importer needs only a registered Importer under a new key - no schema enum edit. Orthogonal to subAssets[].kind which identifies per-sub-asset payload kind."
     },
     "source": {
       "type": "string",
       "minLength": 1,
-      "description": "Optional. Omit to derive the companion file in the same directory (strip .meta.json suffix from the meta filename). Or write @<name>/<rest> to reference a declared path table entry (see package.json#forgeax.assets.paths). Existing relative paths remain unchanged."
+      "description": "Optional. Omit to derive the companion file in the same directory (strip .meta.json suffix from the meta filename). An explicit source is resolved relative to this sidecar."
     },
     "importSettings": {
       "type": "object",

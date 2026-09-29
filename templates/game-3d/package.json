@@ -2,17 +2,15 @@
   "name": "@forgeax/template-game-3d",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@11.7.0",
   "type": "module",
-  "description": "Clean ForgeaX 3D lighting starter with pack.ts-only assets.",
+  "description": "Minimal ForgeaX third-person 3D reference with physics, skinning, animation, and UI.",
   "license": "Apache-2.0",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "forgeax project build --out-dir .forgeax/typecheck-dist --json && tsc --noEmit"
   },
   "forgeax": {
-    "assets": {
-      "roots": ["assets"]
-    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

@@ -42,7 +42,8 @@ export function encodeTape(
   const blobs: WireBlob[] = [];
   let offset = 0;
   for (const blob of tape.blobs) {
-    const raw = new Uint8Array(blob.bytes);
+    // Encoding is synchronous; borrow until the final container owns its copy.
+    const raw = blob.bytes;
     const payload = compression === 'gzip' ? pako.gzip(raw) : raw;
     payloads.push(payload);
     blobs.push({
@@ -215,6 +216,12 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function digestBytes(bytes: Uint8Array): string {
+export function digestBytes(bytes: Uint8Array): string {
   return `sha256:${bytesToHex(sha256(bytes))}`;
+}
+
+/** Snapshot hashing yields so bounded capture cancellation can run during large seeds. */
+export async function digestBytesAsync(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return `sha256:${bytesToHex(new Uint8Array(hash))}`;
 }

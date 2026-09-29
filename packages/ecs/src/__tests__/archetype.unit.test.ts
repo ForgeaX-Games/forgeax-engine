@@ -395,17 +395,45 @@ function appendEntity(table: Table, entity: number): number {
         expect(refreshed.byteLength).toBe(4096);
       });
 
-      it('alloc(beyond max bucket) returns err(managed-buffer-out-of-bounds)', () => {
+      it('allocates beyond the pooled classes without retaining a large free bucket', () => {
         const pool = new BufferPool();
-        const top = SIZE_CLASSES[SIZE_CLASSES.length - 1];
-        if (top === undefined) throw new Error('SIZE_CLASSES empty');
-        const overshoot = top + 1;
-        const r = pool.alloc(overshoot);
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected err alloc');
-        expect(r.error.code).toBe('managed-buffer-out-of-bounds');
-        if (r.error.code !== 'managed-buffer-out-of-bounds') throw new Error('narrow');
-        expect(r.error.detail.index).toBe(overshoot);
+        const bytes = 20_000 * 64;
+        const large = pool.alloc(bytes).unwrap();
+        expect(large.view.byteLength).toBe(bytes);
+        expect(pool.byteCapacity(large.id)).toBe(bytes);
+        large.view[0] = 42;
+        pool.grow(large.id, bytes * 2).unwrap();
+        expect(pool.view(large.id)[0]).toBe(42);
+        pool.setLogicalLength(large.id, 0).unwrap();
+        expect(pool.byteCapacity(large.id)).toBe(bytes * 2);
+        pool.release(large.id).unwrap();
+        expect(pool.byteCapacity(large.id)).toBe(0);
+        expect(pool.view(large.id)).toHaveLength(0);
+        expect(pool.alloc(bytes).unwrap().id).not.toBe(large.id);
+        expect(SIZE_CLASSES.at(-1)).toBe(262_144);
+      });
+
+      it('grows from a small pooled field into a dedicated large field', () => {
+        const pool = new BufferPool();
+        const small = pool.alloc(128).unwrap();
+        small.view[127] = 71;
+        const grown = pool.grow(small.id, 20_000 * 64).unwrap();
+        expect(grown[127]).toBe(71);
+        expect(grown[128]).toBe(0);
+        expect(pool._liveCount()).toBe(1);
+        pool.release(small.id).unwrap();
+        expect(pool._liveCount()).toBe(0);
+      });
+
+      it.each([
+        -1,
+        1.5,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+      ])('rejects invalid allocation size %s', (bytes) => {
+        const result = new BufferPool().alloc(bytes);
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe('managed-buffer-out-of-bounds');
       });
 
       it('M4 prelude: distinct ids on consecutive alloc with no release in between', () => {

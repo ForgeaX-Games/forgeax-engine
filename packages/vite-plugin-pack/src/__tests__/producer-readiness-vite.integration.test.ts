@@ -1,6 +1,12 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import {
+  type DdcEntry,
+  DdcEntryStore,
+  DdcGenerationSession,
+  ddcOutputDigest,
+} from '@forgeax/engine-ddc';
 import { createStandaloneRuntimeAssetBinding, type Importer } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
@@ -101,10 +107,17 @@ const fixtureImporter: Importer = {
 
 describe('producer readiness in the Vite serve lifecycle', () => {
   const roots: string[] = [];
+  const pluginClosers: Array<() => Promise<void>> = [];
   const originalCwd = process.cwd();
+
+  function ownPlugin<T extends { closeBundle(): Promise<void> }>(plugin: T): T {
+    pluginClosers.push(() => plugin.closeBundle());
+    return plugin;
+  }
 
   afterEach(async () => {
     process.chdir(originalCwd);
+    await Promise.all(pluginClosers.splice(0).map((close) => close()));
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
@@ -128,11 +141,13 @@ describe('producer readiness in the Vite serve lifecycle', () => {
     );
 
     const target = server();
-    const plugin = pluginPack({
-      roots: [assets],
-      importers: [fixtureImporter],
-      producerReadiness: 'before-consume',
-    });
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [fixtureImporter],
+        producerReadiness: 'before-consume',
+      }),
+    );
     plugin.configureServer(target);
     const binding = createStandaloneRuntimeAssetBinding('producer-readiness');
     await plugin.rebind(binding, [assets]);
@@ -169,6 +184,201 @@ describe('producer readiness in the Vite serve lifecycle', () => {
       ),
     ).rejects.toMatchObject({ code: 'ENOENT' });
     await plugin.closeBundle();
+  });
+
+  it('rehydrates an accepted Pack and artifact closure in a fresh plugin process', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-producer-readiness-cross-process-'));
+    roots.push(root);
+    const assets = join(root, 'assets');
+    const ddcRoot = join(root, '.forgeax', 'ddc', 'v2');
+    await mkdir(assets);
+    await writeFile(join(assets, 'scene.fixture'), 'fixture');
+    await writeFile(
+      join(assets, 'scene.fixture.meta.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'fixture',
+        source: 'scene.fixture',
+        importSettings: {},
+        subAssets: [{ guid: GUID, sourceIndex: 0, kind: 'fixture-mesh' }],
+      }),
+    );
+    const binding = createStandaloneRuntimeAssetBinding('producer-readiness-cross-process');
+    const firstTarget = server();
+    const firstPlugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [fixtureImporter],
+        producerReadiness: 'on-demand',
+        runtimeBinding: binding,
+        ddc: { projectDdcRoot: ddcRoot },
+      }),
+    );
+    firstPlugin.configureServer(firstTarget);
+    const firstIndex = JSON.parse(
+      String((await request(firstTarget, binding.catalogUrl)).body),
+    ) as {
+      entries: Array<{ guid: string; packageUrl: string }>;
+    };
+    const firstRow = firstIndex.entries.find((entry) => entry.guid.toLowerCase() === GUID);
+    expect(firstRow).toBeDefined();
+    const imported = await request(firstTarget, `${binding.importUrlBase}/${GUID}`, 'POST');
+    expect(imported.statusCode).toBe(200);
+    const firstPackResponse = await request(firstTarget, firstRow?.packageUrl ?? '');
+    expect(firstPackResponse.statusCode).toBe(200);
+    const firstPack = JSON.parse(String(firstPackResponse.body)) as {
+      assets: Array<{ artifacts: Record<string, { path: string }> }>;
+    };
+    const artifactPath = firstPack.assets[0]?.artifacts.body?.path;
+    expect(artifactPath).toBeDefined();
+    if (artifactPath === undefined) return;
+    const artifactUrl = new URL(artifactPath, `http://forgeax.test${firstRow?.packageUrl ?? ''}`)
+      .pathname;
+    const runtimeDdcRoot = join(ddcRoot, 'runtime', 'producer-readiness-cross-process-1');
+    const ddcStore = new DdcEntryStore(runtimeDdcRoot);
+    const ddcKeys = await ddcStore.listKeys();
+    expect(ddcKeys).toHaveLength(1);
+    const ddcEntry = await ddcStore.read(ddcKeys[0] ?? '');
+    expect(ddcEntry?.artifacts).toHaveProperty(`${GUID}/body.bin`);
+
+    await firstPlugin.closeBundle();
+
+    let importCalls = 0;
+    const secondImporter: Importer = {
+      key: 'fixture',
+      import: async () => {
+        importCalls += 1;
+        throw new Error('fresh process must use the accepted DDC closure');
+      },
+    };
+    const secondTarget = server();
+    const secondPlugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [secondImporter],
+        producerReadiness: 'on-demand',
+        runtimeBinding: binding,
+        ddc: { projectDdcRoot: ddcRoot },
+      }),
+    );
+    secondPlugin.configureServer(secondTarget);
+    const secondIndex = JSON.parse(
+      String((await request(secondTarget, binding.catalogUrl)).body),
+    ) as {
+      entries: Array<{ guid: string; packageUrl: string }>;
+    };
+    const secondRow = secondIndex.entries.find((entry) => entry.guid.toLowerCase() === GUID);
+    const secondPackResponse = await request(secondTarget, secondRow?.packageUrl ?? '');
+    expect(secondPackResponse.statusCode).toBe(200);
+    expect(JSON.parse(String(secondPackResponse.body))).toEqual(firstPack);
+    const secondArtifactResponse = await request(secondTarget, artifactUrl);
+    expect(secondArtifactResponse.statusCode).toBe(200);
+    expect(secondArtifactResponse.body).toEqual(new Uint8Array([1, 2, 3]));
+    expect(importCalls).toBe(0);
+  });
+
+  it('repairs an incomplete accepted DDC closure before serving a fresh artifact request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-producer-readiness-incomplete-'));
+    roots.push(root);
+    const assets = join(root, 'assets');
+    const ddcRoot = join(root, '.forgeax', 'ddc', 'v2');
+    await mkdir(assets);
+    await writeFile(join(assets, 'scene.fixture'), 'fixture');
+    await writeFile(
+      join(assets, 'scene.fixture.meta.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'fixture',
+        source: 'scene.fixture',
+        importSettings: {},
+        subAssets: [{ guid: GUID, sourceIndex: 0, kind: 'fixture-mesh' }],
+      }),
+    );
+
+    const stalePack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: GUID,
+          kind: 'fixture-mesh',
+          payload: { kind: 'fixture-mesh', revision: 'stale' },
+          refs: [],
+          artifacts: {
+            body: {
+              path: `${GUID}/body.bin`,
+              mediaType: 'application/octet-stream',
+              contentEncoding: 'identity',
+              byteLength: 3,
+              integrity: { algorithm: 'sha256', digest: `sha256:${'0'.repeat(64)}` },
+            },
+          },
+        },
+      ],
+    };
+    const staleKey = 'a'.repeat(64);
+    const staleEntry: DdcEntry = {
+      key: staleKey,
+      guid: GUID,
+      payload: stalePack,
+      refs: [],
+      artifacts: {},
+      receipt: {
+        guid: GUID,
+        key: staleKey,
+        producer: 'test/incomplete-closure',
+        inputFingerprint: staleKey,
+        outputDigest: ddcOutputDigest({
+          guid: GUID,
+          payload: stalePack,
+          refs: [],
+          artifacts: {},
+        }),
+      },
+    };
+    const runtimeDdcRoot = join(ddcRoot, 'runtime', 'producer-readiness-incomplete-1');
+    const seedSession = new DdcGenerationSession(runtimeDdcRoot, { generation: 1 });
+    const seedCandidate = await seedSession.stageEntry(staleEntry);
+    await seedSession.commitEntry(seedCandidate, staleKey);
+    await seedSession.close();
+
+    let importCalls = 0;
+    const repairingImporter: Importer = {
+      key: 'fixture',
+      import: async (context) => {
+        importCalls += 1;
+        const source = await context.readSource();
+        if (!source.ok) throw new Error('fixture source read failed');
+        return fixtureImporter.import(context);
+      },
+    };
+    const binding = createStandaloneRuntimeAssetBinding('producer-readiness-incomplete');
+    const target = server();
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [repairingImporter],
+        producerReadiness: 'on-demand',
+        runtimeBinding: binding,
+        ddc: { projectDdcRoot: ddcRoot },
+      }),
+    );
+    plugin.configureServer(target);
+    const index = JSON.parse(String((await request(target, binding.catalogUrl)).body)) as {
+      entries: Array<{ guid: string; packageUrl: string }>;
+    };
+    const row = index.entries.find((entry) => entry.guid.toLowerCase() === GUID);
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    const artifactUrl = new URL(`${GUID}/body.bin`, `http://forgeax.test${row.packageUrl}`)
+      .pathname;
+    const response = await request(target, artifactUrl);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual(new Uint8Array([1, 2, 3]));
+    expect(importCalls).toBe(1);
   });
 
   it('waits for before-consume startup before a scoped import request', async () => {
@@ -225,12 +435,14 @@ describe('producer readiness in the Vite serve lifecycle', () => {
     };
     const binding = createStandaloneRuntimeAssetBinding('producer-readiness-route');
     const target = server();
-    const plugin = pluginPack({
-      roots: [assets],
-      importers: [delayedImporter],
-      producerReadiness: 'before-consume',
-      runtimeBinding: binding,
-    });
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [delayedImporter],
+        producerReadiness: 'before-consume',
+        runtimeBinding: binding,
+      }),
+    );
     plugin.configureServer(target);
 
     await importStarted;
@@ -305,12 +517,14 @@ describe('producer readiness in the Vite serve lifecycle', () => {
     };
     const binding = createStandaloneRuntimeAssetBinding('producer-readiness-close');
     const target = server();
-    const plugin = pluginPack({
-      roots: [assets],
-      importers: [delayedImporter],
-      producerReadiness: 'on-demand',
-      runtimeBinding: binding,
-    });
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [delayedImporter],
+        producerReadiness: 'on-demand',
+        runtimeBinding: binding,
+      }),
+    );
     plugin.configureServer(target);
     await plugin.rebind(binding, [assets]);
 
@@ -381,11 +595,13 @@ describe('producer readiness in the Vite serve lifecycle', () => {
       },
     };
     const target = server();
-    const plugin = pluginPack({
-      roots: [assets],
-      importers: [multipleImporter],
-      producerReadiness: 'before-consume',
-    });
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [multipleImporter],
+        producerReadiness: 'before-consume',
+      }),
+    );
     plugin.configureServer(target);
     const binding = createStandaloneRuntimeAssetBinding('producer-readiness-multiple');
     await plugin.rebind(binding, [assets]);
@@ -400,7 +616,7 @@ describe('producer readiness in the Vite serve lifecycle', () => {
     await plugin.closeBundle();
   });
 
-  it('keeps the prior Pack body and retries a refused newer DDC write on the same import route', async () => {
+  it('keeps the prior Pack body until an explicit rebuild succeeds', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-producer-readiness-ddc-retry-'));
     roots.push(root);
     process.chdir(root);
@@ -463,11 +679,13 @@ describe('producer readiness in the Vite serve lifecycle', () => {
       },
     };
     const target = server();
-    const plugin = pluginPack({
-      roots: [assets],
-      importers: [retryImporter],
-      producerReadiness: 'before-consume',
-    });
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [retryImporter],
+        producerReadiness: 'before-consume',
+      }),
+    );
     plugin.configureServer(target);
     const binding = createStandaloneRuntimeAssetBinding('producer-readiness-ddc-retry');
     await plugin.rebind(binding, [assets]);
@@ -503,14 +721,14 @@ describe('producer readiness in the Vite serve lifecycle', () => {
       expect(JSON.parse(String(refused.body))).toEqual(
         expect.arrayContaining([expect.objectContaining({ guid: GUID })]),
       );
-      expect(warning).toHaveBeenCalledWith(
-        '[forgeax-pack] persist DDC pack failed:',
-        expect.objectContaining({
-          code: 'source-package-ddc-persistence-failed',
-          guid: GUID,
-          packageUrl: expect.stringContaining(`${GUID}.pack.json`),
-        }),
-      );
+      // Publication now treats DDC plus transport as one transaction. A
+      // refused transport restores the previous LKG and returns its route;
+      // the old post-commit warning would falsely imply the new DDC was live.
+      expect(
+        warning.mock.calls.filter(
+          ([message]) => message === '[forgeax-pack] persist DDC pack failed:',
+        ).length,
+      ).toBe(0);
       expect(await readFile(primaryPackPath, 'utf8')).toBe(oldPrimaryBody);
       expect(JSON.parse(await readFile(primaryPackPath, 'utf8')).assets[0].payload.revision).toBe(
         'revision-old',
@@ -523,14 +741,19 @@ describe('producer readiness in the Vite serve lifecycle', () => {
       expect(
         JSON.parse(String((await request(target, failedRow?.packageUrl ?? '')).body)).assets[0]
           .payload.revision,
-      ).toBe('revision-new');
+      ).toBe('revision-old');
       expect(await readFile(siblingPackPath, 'utf8')).toBe(stableSiblingBody);
     } finally {
       warning.mockRestore();
       await chmod(packDirectory, 0o755);
     }
 
-    const retried = await request(target, `${binding.importUrlBase}/${GUID}`, 'POST');
+    // The failed transaction leaves the accepted LKG imported. A normal
+    // lookup must continue serving it; recovery explicitly requests a new
+    // producer generation after the sidecar destination is repaired.
+    const retried = await request(target, `${binding.importUrlBase}/${GUID}`, 'POST', {
+      'x-forgeax-import-mode': 'rebuild',
+    });
     expect(retried.statusCode).toBe(200);
     const repairedBody = await readFile(primaryPackPath, 'utf8');
     expect(JSON.parse(repairedBody).assets[0].payload.revision).toBe('revision-new');
@@ -541,6 +764,100 @@ describe('producer readiness in the Vite serve lifecycle', () => {
     await expect(readFile(join(packDirectory, `${GUID}.meta.pack.bin`))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+    await plugin.closeBundle();
+  });
+
+  it('coalesces a watcher generation before materializing an overlapping route request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-producer-readiness-overlap-'));
+    roots.push(root);
+    process.chdir(root);
+    const assets = join(root, 'assets');
+    await mkdir(assets);
+    const sourcePath = join(assets, 'overlap.fixture');
+    const metaPath = join(assets, 'overlap.fixture.meta.json');
+    await writeFile(sourcePath, 'revision-old');
+    const writeMeta = (revision: string) =>
+      writeFile(
+        metaPath,
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'fixture-overlap',
+          source: 'overlap.fixture',
+          importSettings: { revision },
+          subAssets: [{ guid: GUID, sourceIndex: 0, kind: 'fixture-mesh' }],
+        }),
+      );
+    await writeMeta('old');
+    let releaseRebuild!: () => void;
+    let sawRebuild = false;
+    let markRebuildStarted!: () => void;
+    const rebuildStarted = new Promise<void>((resolve) => {
+      markRebuildStarted = resolve;
+    });
+    const rebuildRelease = new Promise<void>((resolve) => {
+      releaseRebuild = resolve;
+    });
+    const overlapImporter: Importer = {
+      key: 'fixture-overlap',
+      import: async (context) => {
+        const source = await context.readSource();
+        if (!source.ok) throw new Error('fixture source read failed');
+        const revision = new TextDecoder().decode(source.value);
+        if (revision === 'revision-new' && !sawRebuild) {
+          sawRebuild = true;
+          markRebuildStarted();
+          await rebuildRelease;
+        }
+        return {
+          ok: true,
+          value: {
+            assets: [
+              {
+                guid: GUID,
+                kind: 'fixture-mesh',
+                payload: { kind: 'fixture-mesh', vertexCount: 3, revision },
+                refs: [],
+                artifacts: {
+                  body: { mediaType: 'application/octet-stream', bytes: new Uint8Array([7, 8, 9]) },
+                },
+              },
+            ],
+            sourceDependencies: [],
+          },
+        };
+      },
+    };
+    const target = server();
+    const plugin = ownPlugin(
+      pluginPack({
+        roots: [assets],
+        importers: [overlapImporter],
+        producerReadiness: 'before-consume',
+      }),
+    );
+    plugin.configureServer(target);
+    const binding = createStandaloneRuntimeAssetBinding('producer-readiness-overlap');
+    await plugin.rebind(binding, [assets]);
+    await writeFile(sourcePath, 'revision-new');
+    await writeMeta('new');
+    const pending = request(target, `${binding.importUrlBase}/${GUID}`, 'POST');
+    await rebuildStarted;
+    expect(sawRebuild).toBe(true);
+    releaseRebuild();
+    const response = await pending;
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(String(response.body))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ guid: GUID })]),
+    );
+    const packPath = join(
+      root,
+      'node_modules/.cache/forgeax-ddc/runtime/producer-readiness-overlap-1',
+      `${GUID}.pack.json`,
+    );
+    expect(JSON.parse(await readFile(packPath, 'utf8')).assets[0].payload.revision).toBe(
+      'revision-new',
+    );
     await plugin.closeBundle();
   });
 });

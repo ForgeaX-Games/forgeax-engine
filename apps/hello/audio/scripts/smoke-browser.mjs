@@ -43,6 +43,7 @@ const watchdog = setTimeout(() => {
 }, WATCHDOG_MS);
 let portUrl;
 let viteOutput = '';
+let viteSpawnError;
 viteProc.stdout.on('data', (chunk) => {
   const text = chunk.toString();
   viteOutput += text;
@@ -50,6 +51,9 @@ viteProc.stdout.on('data', (chunk) => {
   portUrl ??= extractViteLocalUrl(viteOutput);
 });
 viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
+viteProc.once('error', (error) => {
+  viteSpawnError = error;
+});
 
 function countChangedPixels(beforePath, afterPath) {
   const before = PNG.sync.read(readFileSync(beforePath));
@@ -148,9 +152,20 @@ async function readPageDiagnostics(page) {
 
 let failed = false;
 try {
-  const deadline = Date.now() + 30_000;
-  while (!portUrl && Date.now() < deadline) await sleep(200);
-  if (!portUrl) throw new Error('vite did not become ready in 30s');
+  const readinessStartedAt = Date.now();
+  while (!portUrl && viteSpawnError === undefined && !viteExited() && Date.now() - readinessStartedAt < READINESS_TIMEOUT_MS) {
+    await sleep(200);
+  }
+  const readinessDiagnostics = JSON.stringify({
+    elapsedMs: Date.now() - readinessStartedAt,
+    pid: viteProc.pid ?? null,
+    exitCode: viteProc.exitCode,
+    signalCode: viteProc.signalCode,
+    spawnError: viteSpawnError === undefined ? null : String(viteSpawnError),
+    output: viteOutput.trim() || 'none',
+  });
+  if (viteSpawnError !== undefined) throw new Error(`vite failed to start; diagnostics=${readinessDiagnostics}`);
+  if (!portUrl) throw new Error(`vite did not become ready within ${READINESS_TIMEOUT_MS}ms; diagnostics=${readinessDiagnostics}`);
   portUrl = portUrl.replace(/\/$/, '');
 
   const browser = await chromium.launch({
@@ -161,7 +176,7 @@ try {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
       '--disable-dawn-features=disallow_unsafe_apis',
@@ -320,7 +335,9 @@ try {
     });
 
     try {
-      await page.goto(`${portUrl}/`, { waitUntil: 'networkidle', timeout: 30_000 });
+      // Vite/live traffic can remain active after the application is ready.
+      // The following overlay and audio-state gates own runtime readiness.
+      await page.goto(`${portUrl}/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await page.waitForFunction(
         () => document.querySelector('#overlay')?.textContent?.includes('distance ='),
         undefined,

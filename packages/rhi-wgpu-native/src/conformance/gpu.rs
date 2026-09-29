@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
-const WGPU_TAG_COMMIT: &str = "8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1";
+const WGPU_TAG_COMMIT: &str = "40f4a34ebaf56f9a046231f54125ad046239d3f3";
 const RAY_COUNT: usize = 4;
 const OBSERVATION_SIZE: usize = 176;
 

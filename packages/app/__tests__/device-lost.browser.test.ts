@@ -171,6 +171,10 @@ describe('device-lost path 1 -- heartbeat retained + simulation frozen', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app = result.value;
+    const received: Array<AppError | RenderError> = [];
+    const unsubscribe = app.onError((error) => {
+      received.push(error);
+    });
     try {
       const startResult = app.start();
       expect(startResult.ok).toBe(true);
@@ -181,6 +185,12 @@ describe('device-lost path 1 -- heartbeat retained + simulation frozen', () => {
 
       // fire device-lost via the fake renderer
       state.fireDeviceLost();
+      expect(
+        received.some(
+          (error) =>
+            error.code === 'device-operation-failed' && error.detail.cause.code === 'device-lost',
+        ),
+      ).toBe(true);
 
       // Device loss is recoverable at the renderer boundary, so the App remains
       // started and an accidental second start is rejected as already-running.
@@ -194,6 +204,7 @@ describe('device-lost path 1 -- heartbeat retained + simulation frozen', () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       expect(state.drawCalls).toBe(drawCallsBefore);
     } finally {
+      unsubscribe();
       app.stop();
     }
   });
@@ -301,7 +312,18 @@ describe('device-lost path 4 -- explicit dispose owns cleanup (R-4)', () => {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const drawCallsBefore = state.drawCalls;
 
+    const received: Array<AppError | RenderError> = [];
+    const unsubscribe = app.onError((error) => {
+      received.push(error);
+    });
+
     state.fireDeviceLost();
+    expect(
+      received.some(
+        (error) =>
+          error.code === 'device-operation-failed' && error.detail.cause.code === 'device-lost',
+      ),
+    ).toBe(true);
 
     // During device-lost, the rAF heartbeat remains armed but no draws are
     // submitted until recovery.
@@ -312,6 +334,7 @@ describe('device-lost path 4 -- explicit dispose owns cleanup (R-4)', () => {
     expect(stopResult.ok).toBe(true);
     const disposeResult = await app.dispose();
     expect(disposeResult.ok).toBe(true);
+    unsubscribe();
   });
 
   it('canvas dispose lets the input Fiber remove its scan system exactly once', async () => {

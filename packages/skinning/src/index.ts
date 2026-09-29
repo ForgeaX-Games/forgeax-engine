@@ -10,6 +10,7 @@ export {
   SkinJointDespawnedError,
   SkinJointPathUnresolvedError,
 } from './errors';
+export { type FitShadowCapsulesOptions, fitShadowCapsules } from './fit-shadow-capsules';
 export { skinningPlugin } from './plugin';
 export { resolveSkinJoints } from './resolve-skin-joints';
 export { Skin } from './skin';

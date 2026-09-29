@@ -44,6 +44,24 @@
         }
       }
     },
-    "sourceFailureAndStaleOutputAreDistinct": { "const": true }
+    "sourceFailureAndStaleOutputAreDistinct": { "const": true },
+    "cohesion": {
+      "$ref": "#/$defs/m0CohesionReport"
+    }
+  },
+  "$defs": {
+    "m0CohesionReport": {
+      "type": "object",
+      "required": ["schemaVersion", "milestone", "before", "after", "comparison", "gates"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "milestone": { "const": "M0" },
+        "before": { "type": "object" },
+        "after": { "type": "object" },
+        "comparison": { "type": "object" },
+        "gates": { "type": "array" }
+      },
+      "additionalProperties": true
+    }
   }
 }

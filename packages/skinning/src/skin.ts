@@ -27,7 +27,7 @@
 // ## Transform contract (post-bug-20260615 fix)
 //
 // **Old (buggy) implicit contract (pre-bug-20260615):** The Skin entity's
-// Transform.world was double-applied during skinning -- the shader computed
+// GlobalTransform.world was double-applied during skinning -- the shader computed
 // `world = meshes[0].worldFromLocal x palette x pos`, so any non-identity
 // Transform on the Skin entity (or its non-joint ancestors) caused doubled
 // motion (translation 2x, rotation 2x). Holders had to manually pin the Skin

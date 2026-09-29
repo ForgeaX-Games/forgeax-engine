@@ -33,7 +33,7 @@ const { createVfxRuntimeHost } = await import('../../../packages/vfx-render/dist
 const manifest = JSON.parse(readFileSync(resolve(DIST, 'shaders/manifest.json'), 'utf8'));
 const world = new World();
 let cameraEntity;
-const camera = { read(currentWorld) { const transform = currentWorld.get(cameraEntity, Transform); const value = currentWorld.get(cameraEntity, Camera); if (!transform.ok || !value.ok) return undefined; return { position: new Float32Array(transform.value.pos), right: new Float32Array([1, 0, 0]), up: new Float32Array([0, 1, 0]), viewProjection: mat4.computeViewProj(mat4.create(), transform.value.pos, [0, 0, 0], [0, 1, 0], value.value.fov, value.value.aspect, value.value.near, value.value.far) }; } };
+const camera = { read(currentWorld) { const transform = currentWorld.get(cameraEntity, Transform); const value = currentWorld.get(cameraEntity, Camera); if (!transform.ok || !value.ok) return undefined; return { position: new Float32Array(transform.value.pos), right: new Float32Array([1, 0, 0]), up: new Float32Array([0, 1, 0]), viewProjection: mat4.multiply(mat4.create(), mat4.perspectiveReverseZ(mat4.create(), value.value.fov, value.value.aspect, value.value.near, value.value.far), mat4.lookAt(mat4.create(), transform.value.pos, [0, 0, 0], [0, 1, 0])) }; } };
 const host = createVfxRuntimeHost({ camera });
 const renderer = await createRenderer(shim.mockCanvas, { features: [host.feature] }, { shaderManifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}` });
 const attachment = renderer.attach(world);

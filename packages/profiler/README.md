@@ -37,7 +37,7 @@ Pass the same `profiler` to `createApp({ renderer, world, profiler })` or to the
 | Finish and retain the artifact | `session.finish()` | `Result<ProfileCapture, ProfilerError>` |
 | Validate persisted JSON | `validateProfileCapture(value)` | schema and semantic validation |
 | Build an offline summary | `buildProfileModel(capture)` | frame and phase projections |
-| Query from a shell | `pnpm --filter @forgeax/engine-profiler run cli summary --file artifact.json` | structured JSON on stdout |
+| Query from a shell | `forgeax debug profile summary --artifact artifact.json --json` | structured JSON on stdout |
 
 `ProfileCapture` is the portable boundary. It carries the fixed version, time unit, bounded frame and event evidence, owner phase catalog, and `completeness` status. `complete`, `partial`, and `overflow` are explicit outcomes; an overflow artifact remains useful and records its affected frame range.
 
@@ -86,10 +86,10 @@ const started = profiler.startCapture({
 ## Offline and CLI workflow
 
 ```sh
-pnpm --filter @forgeax/engine-profiler run cli summary --file profile-capture.json
-pnpm --filter @forgeax/engine-profiler run cli frame --file profile-capture.json --frame-id 12
-pnpm --filter @forgeax/engine-profiler run cli phase --file profile-capture.json --source render --phase record
-pnpm --filter @forgeax/engine-profiler run cli compare --left-file before.json --right-file after.json
+forgeax debug profile summary --artifact profile-capture.json --json
+forgeax debug profile frame --artifact profile-capture.json --frame-id 12 --json
+forgeax debug profile phase --artifact profile-capture.json --source render --phase record --json
+forgeax debug profile compare --left-file before.json --right-file after.json --json
 ```
 
 The CLI reads one `ProfileCapture` JSON object from `--file` or two objects from
@@ -149,6 +149,14 @@ Expected failures return `Result`; inspect `.ok`, then use `.error.code`, `.erro
 
 Profiler owns capture records, bounds, allocation evidence, and offline projections. It does not own GPU timestamps, ECS scheduling, a browser UI, a network method, or a live trace service. Remote exposure remains the host's explicit `profiler` root opt-in through the existing `eval` and `introspect` methods.
 
+GPU pass timing stays outside `ProfileCapture`. The Render package owns the
+opt-in, `draw()` receipt, receipt-bound observation, pass facts, and recovery;
+the benchmark package owns its separate fail-closed validator. App and Runtime
+may transparently forward `gpuPassTiming`, but they do not create a session or
+second controller. Membership timing is producer-specific and is not generic
+accepted evidence. Keep CPU phase names, units, and schema unchanged when a
+GPU timing capability is present.
+
 ## Public surface
 
 | Entry | Purpose |
@@ -161,4 +169,4 @@ Profiler owns capture records, bounds, allocation evidence, and offline projecti
 | `compareProfileCaptures(left, right)` | Projects two validated captures into side summaries and a deterministic phase union. |
 | `createProfileClock()` | Supplies the default monotonic microsecond clock. |
 
-The package root is the only supported import path for these entries. See `schema/profile-capture.schema.json` for the artifact contract and `scripts/bench/profiler-overhead.mjs` for the deterministic D-6 consumer gate.
+The package root is the only supported import path for these entries. See `schema/profile-capture.schema.json` for the artifact contract and `scripts/bench/profiler-overhead.mjs` for the deterministic D-6 consumer gate. The gate alternates profiler-off/on windows, warms each new capture before sampling, keeps finalization outside the measured window, and uses $median(((p95_{on,i} - p95_{off,i}) / p95_{off,i}) \times 100)$ across paired groups. The owner-mode ceiling is 20%; allocation, overflow, and phase-catalog evidence remain hard-failing.

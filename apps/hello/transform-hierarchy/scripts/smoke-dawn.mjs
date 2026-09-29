@@ -12,13 +12,13 @@
 //      parent cube, a child cube carrying ChildOf{parent} + a local +Y offset,
 //      and a static reference sphere that is NOT in the hierarchy.
 //   4. Frame A (parent at rest): world.update(1 / 60).unwrap() (runs propagateTransforms so
-//      the child's Transform.world is composed) -> renderer.draw -> readback
+//      the child's GlobalTransform.world is composed) -> renderer.draw -> readback
 //      pixelsA.
 //   5. Stability re-render: world.update(1 / 60).unwrap() + draw + readback pixelsAA WITHOUT
 //      moving the parent. Assert pixelsA ~= pixelsAA (parent-static reference
 //      frame is stable; AC-08 "parent stationary reference frame is stable").
 //   6. Frame B (parent moved): world.set(parent, Transform, { pos: [..., 0, 0]}) ->
-//      world.update(1 / 60).unwrap() (re-runs propagate; child's Transform.world follows the
+//      world.update(1 / 60).unwrap() (re-runs propagate; child's GlobalTransform.world follows the
 //      parent) -> draw -> readback pixelsB.
 //   7. Diff A vs B: per-pixel byte comparison. Assert diffCount > 0.1% of
 //      total pixels -- this is the machine proof that moving the PARENT moved
@@ -41,6 +41,21 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createReceipt } from './dataflow-receipt.mjs';
+import { smokeFrameBudget } from '../../../shared/scripts/smoke-receipt.mjs';
+
+const FLEET_FRAME_COUNT = smokeFrameBudget();
+
+if (process.argv.includes('--receipt')) {
+  console.log(JSON.stringify(createReceipt({
+    workloadId: 'hierarchy-dynamic',
+    backend: 'unavailable',
+    reasonCode: 'dawn-probe-not-run',
+    detail: 'Receipt-only mode does not create a native Dawn device.',
+    retryHint: 'Run this script without --receipt on a Dawn-enabled runner.',
+  }), null, 2));
+  process.exit(0);
+}
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const WIDTH = 200;
@@ -146,13 +161,14 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
-const {
+const { GlobalTransform,
   ChildOf,
   projectHierarchy,
   propagateTransforms,
   Transform,
   registerPropagateTransforms,
 } = await import('@forgeax/engine-scene');
+const { setMalformedParentEdge } = await import('./malformed-hierarchy-edge.mjs');
 const {
   HANDLE_CUBE,
   HANDLE_SPHERE,
@@ -214,7 +230,7 @@ if (!device) {
 // --- 4. Build the ONE World with the hierarchy consume path wired -----------
 
 // The line that makes the hierarchy take effect: propagate derives every
-// entity's Transform.world each frame (the world mat4 lives on Transform).
+// entity's GlobalTransform.world each frame (the required C-carrier output).
 registerPropagateTransforms(world);
 
 const PARENT_X_REST = -0.6;
@@ -234,7 +250,7 @@ const parent = world
 
 // Child: ChildOf{parent} + local +Y offset. No Transform write happens to the
 // child between frames -- its rendered world position changes ONLY because the
-// parent's Transform.world propagates down the ChildOf edge.
+// parent's GlobalTransform.world propagates down the ChildOf edge.
 const child = world
   .spawn(
     {
@@ -336,7 +352,7 @@ async function doReadPixels() {
 }
 
 function readWorld(entity) {
-  return Array.from(world.get(entity, Transform).unwrap().world);
+  return Array.from(world.get(entity, GlobalTransform).unwrap().world);
 }
 
 function setParentIfNeeded(entity, nextParent) {
@@ -381,12 +397,15 @@ renderer.subscribe((event) => {
 
 // --- 7. Frame A (parent at rest) -------------------------------------------
 
-world.update(1 / 60).unwrap(); // runs propagateTransforms so child Transform.world is composed
+let framesObserved = 0;
+world.update(1 / 60).unwrap(); // runs propagateTransforms so child GlobalTransform.world is composed
 const drawARes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawARes.ok) {
   console.error(`[smoke] FAIL - draw (frame A) failed: ${drawARes.error.code}`);
   process.exit(1);
 }
+(await drawARes.value.completed).unwrap();
+framesObserved += 1;
 await device.queue.onSubmittedWorkDone();
 const pixelsA = await doReadPixels();
 
@@ -399,9 +418,12 @@ const baselineStaticWorld = readWorld(staticSphere);
 // and retire a real entity so the hierarchy projection exercises liveness.
 const staleParent = world.spawn({ component: Transform, data: {} }).unwrap();
 world.despawn(staleParent).unwrap();
-const staleSet = world.set(child, ChildOf, { parent: staleParent });
-const firstCycleEdge = world.set(cycleA, ChildOf, { parent: cycleB });
-const secondCycleEdge = world.set(cycleB, ChildOf, { parent: cycleA });
+// Public World.set rejects stale targets and cycles. The test-owned internal
+// fixture below deliberately damages only the source column, preserving the
+// production write boundary while exercising Scene diagnostics/recovery.
+setMalformedParentEdge(world, child, staleParent, ChildOf);
+setMalformedParentEdge(world, cycleA, cycleB, ChildOf);
+setMalformedParentEdge(world, cycleB, cycleA, ChildOf);
 const faultHierarchy = projectHierarchy(world);
 const faultPropagation = propagateTransforms(world, faultHierarchy);
 const drawFaultRes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
@@ -409,6 +431,8 @@ if (!drawFaultRes.ok) {
   console.error(`[smoke] FAIL - draw (fault frame) failed: ${drawFaultRes.error.code}`);
   process.exit(1);
 }
+(await drawFaultRes.value.completed).unwrap();
+framesObserved += 1;
 await device.queue.onSubmittedWorkDone();
 const pixelsFault = await doReadPixels();
 
@@ -428,6 +452,8 @@ if (!drawRepairedRes.ok) {
   console.error(`[smoke] FAIL - draw (repaired frame) failed: ${drawRepairedRes.error.code}`);
   process.exit(1);
 }
+(await drawRepairedRes.value.completed).unwrap();
+framesObserved += 1;
 await device.queue.onSubmittedWorkDone();
 const pixelsRepaired = await doReadPixels();
 const repeatedCleanup = [
@@ -462,6 +488,8 @@ if (!drawAARes.ok) {
   console.error(`[smoke] FAIL - draw (stability frame) failed: ${drawAARes.error.code}`);
   process.exit(1);
 }
+(await drawAARes.value.completed).unwrap();
+framesObserved += 1;
 await device.queue.onSubmittedWorkDone();
 const pixelsAA = await doReadPixels();
 
@@ -472,14 +500,32 @@ if (!setRes.ok) {
   console.error(`[smoke] FAIL - world.set(parent move) failed: ${setRes.error.code}`);
   process.exit(1);
 }
-world.update(1 / 60).unwrap(); // re-runs propagateTransforms; child Transform.world follows parent
+world.update(1 / 60).unwrap(); // re-runs propagateTransforms; child GlobalTransform.world follows parent
 const drawBRes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawBRes.ok) {
   console.error(`[smoke] FAIL - draw (frame B) failed: ${drawBRes.error.code}`);
   process.exit(1);
 }
+(await drawBRes.value.completed).unwrap();
+framesObserved += 1;
 await device.queue.onSubmittedWorkDone();
 const pixelsB = await doReadPixels();
+
+for (let frame = framesObserved; frame < FLEET_FRAME_COUNT; frame += 1) {
+  world.update(1 / 60).unwrap();
+  const draw = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
+  if (!draw.ok) {
+    console.error(`[smoke] FAIL - fleet frame ${frame + 1} failed: ${draw.error.code}`);
+    process.exit(1);
+  }
+  (await draw.value.completed).unwrap();
+  framesObserved += 1;
+}
+console.log(`[smoke] frames observed=${framesObserved}`);
 
 // --- 11. Verdict -----------------------------------------------------------
 
@@ -504,8 +550,9 @@ for (const [label, px] of [
 }
 
 // (c) RhiError must be zero. The "hierarchy wired" guard is the parent-move
-// diff below: with the unified Transform the world column always exists, so a
-// child always follows once propagate runs (no misconfig error class to catch).
+// diff below: Transform's generic requirement materializes the derived world
+// column for every authored transform, so a child always follows once
+// propagation runs without a scene-specific insertion scan.
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
@@ -549,15 +596,12 @@ if (diffCount <= DIFF_THRESHOLD) {
     `(f) parent-move pixel diff ${diffCount} <= threshold ${DIFF_THRESHOLD} (${diffPct}%)` +
       ` -- child did NOT follow the parent's world displacement` +
       ` (charter P3: check registerPropagateTransforms(world) is wired and the` +
-      ` extract stage reads Transform.world for ChildOf entities)`,
+      ` extract stage reads GlobalTransform.world for ChildOf entities)`,
   );
 }
 
 const faultDiff = countDiff(pixelsA, pixelsFault);
 const recoveryDiff = countDiff(pixelsA, pixelsRepaired);
-if (!staleSet.ok || !firstCycleEdge.ok || !secondCycleEdge.ok) {
-  failures.push('(g) public World.set could not inject the stale edge and bounded cycle');
-}
 if (faultPropagation.ok || brokenDiagnostics.length !== 1 || cycleDiagnostics.length !== 2) {
   failures.push('(g) malformed hierarchy did not produce both structured diagnostic families');
 }

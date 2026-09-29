@@ -466,6 +466,7 @@ function sampleRun(runId, runAttempt, overrides = {}) {
       'smoke-fleet-0',
       'smoke-fleet-1',
       'smoke-fleet-2',
+      'smoke-fleet-3',
       'bevy-smoke-fleet',
       'bevy-smoke-fleet-0',
       'bevy-smoke-fleet-1',

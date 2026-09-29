@@ -286,7 +286,7 @@ export function preflight(rootDirectory) {
     inventory: { total: rows.length, channels: Object.keys(channelCounts), channelCounts },
     packageChecks,
     tsconfigReferences: references.sort(),
-    metricsSchema: statSafe(join(root, 'forgeax-metrics.schema.json')),
+    metricsSchema: statSafe(join(root, 'schemas/forgeax-metrics.schema.json')),
     followUp: [
       'm6t5 consumer cutover',
       'm6t6 documentation and routing',

@@ -1,3 +1,4 @@
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { ScriptablePackSceneComponent } from '@forgeax/engine-pack/source';
 import type {
@@ -21,7 +22,7 @@ import type {
   VideoAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createStandardAssetOutputProducerRegistry } from '../scriptable-pack-output-producers.js';
+import { createStandardAssetOutputProducerRegistry } from '../standard-output-producers.js';
 
 function guid(value: string): AssetGuidType {
   const parsed = AssetGuid.parse(value);
@@ -57,7 +58,7 @@ function canonicalAttributes(vertexCount: number): MeshAsset['attributes'] {
 }
 
 const particleProgram = {
-  format: 'forgeax-vfx-program-2',
+  format: 'forgeax-vfx-program-4',
   fingerprint: 'sha256:scriptable-pack-matrix',
   emitters: [
     {
@@ -86,15 +87,14 @@ const matrixAssets = [
     materialSlots: [],
   } satisfies MeshAsset,
   { kind: 'material', values: { roughness: 0.5 } } satisfies MaterialAsset,
-  { kind: 'scene', entities: [] } satisfies SceneAsset,
+  { kind: 'scene', entities: {} } satisfies SceneAsset,
   {
     kind: 'texture',
-    width: 1,
-    height: 1,
-    format: 'rgba8unorm',
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
+    format: 'rgba8unorm-srgb',
     data: new Uint8Array([255, 255, 255, 255]),
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   } satisfies TextureAsset,
   {
     kind: 'equirect',
@@ -119,7 +119,11 @@ const matrixAssets = [
       atlasHeight: 1,
     },
   } satisfies FontAsset,
-  { kind: 'render-pipeline', pipelineId: 'forgeax::urp' } satisfies RenderPipelineAsset,
+  {
+    kind: 'render-pipeline',
+    pipelineId: 'forgeax::standard',
+    renderPath: 'forward',
+  } satisfies RenderPipelineAsset,
   {
     kind: 'tileset',
     atlases: [AssetGuid.format(ATLAS_GUID)],
@@ -155,7 +159,7 @@ const matrixAssets = [
   } satisfies AudioClipAsset,
   {
     kind: 'particle-effect',
-    schemaVersion: 2,
+    schemaVersion: 3,
     programFingerprint: particleProgram.fingerprint,
     emitters: [{ id: 'default', capacity: 16 }],
     program: particleProgram,
@@ -163,6 +167,49 @@ const matrixAssets = [
 ] as const satisfies readonly Asset[];
 
 describe('standard ScriptablePack output producers', () => {
+  it('publishes the deduplicated renderer dependency closure of a particle effect', async () => {
+    const material = AssetGuid.format(MATERIAL_GUID);
+    const mesh = AssetGuid.format(MESH_GUID);
+    const asset: ParticleEffectAsset = {
+      kind: 'particle-effect',
+      schemaVersion: 3,
+      programFingerprint: particleProgram.fingerprint,
+      emitters: [{ id: 'default', capacity: 16 }],
+      program: {
+        ...particleProgram,
+        emitters: [
+          {
+            ...particleProgram.emitters[0],
+            renderers: [
+              { kind: 'billboard', material },
+              { kind: 'mesh', material, mesh },
+            ],
+          },
+        ],
+      },
+    };
+    const producer = createStandardAssetOutputProducerRegistry().get('particle-effect');
+    if (producer === undefined) throw new Error('Missing particle producer');
+    const result = await producer.produce({
+      guid: AssetGuid.format(OUTPUT_GUID),
+      sourceKey: 'vfx/closure',
+      asset,
+    });
+    if (!result.ok) throw result.error;
+    expect(result.value.refs.map((ref) => ref.guid)).toEqual([material, mesh].sort());
+    expect(result.value.payload).toMatchObject({
+      program: {
+        emitters: [
+          {
+            renderers: [
+              { kind: 'billboard', material },
+              { kind: 'mesh', material, mesh },
+            ],
+          },
+        ],
+      },
+    });
+  });
   it('registers the production producer versions for all ordinary Asset kinds', () => {
     const registry = createStandardAssetOutputProducerRegistry();
     expect(registry.versions()).toEqual({
@@ -171,15 +218,17 @@ describe('standard ScriptablePack output producers', () => {
       audio: 'ordinary-pod/1',
       equirect: 'ordinary-pod/1',
       font: 'ordinary-pod/1',
-      material: 'material-pack/1',
-      mesh: 'mesh-binary/4',
-      'particle-effect': 'ordinary-pod/1',
+      'ies-profile': 'ordinary-pod/1',
+      material: 'material-pack/2',
+      mesh: 'mesh-binary/5',
+      'particle-effect': 'particle-effect/2',
+      plugin: 'plugin-definition/1',
       'render-pipeline': 'ordinary-pod/1',
       sampler: 'ordinary-pod/1',
       scene: 'scene-pack/3',
       skeleton: 'ordinary-pod/1',
       skin: 'ordinary-pod/1',
-      texture: 'ordinary-pod/1',
+      texture: 'texture-pack/1',
       tileset: 'ordinary-pod/1',
       video: 'ordinary-pod/1',
     });
@@ -203,7 +252,9 @@ describe('standard ScriptablePack output producers', () => {
       'animation-clip',
       'animation-graph',
       'audio',
+      'ies-profile',
       'particle-effect',
+      'plugin',
     ] as const;
 
     expect(Object.keys(registry.versions()).sort()).toEqual([...expectedKinds].sort());
@@ -265,9 +316,8 @@ describe('standard ScriptablePack output producers', () => {
 
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        hero: {
           components: {
             ScriptablePackTestMeshFilter: { assetHandle: AssetGuid.format(MESH_GUID) },
             ScriptablePackTestMeshRenderer: {
@@ -275,7 +325,7 @@ describe('standard ScriptablePack output producers', () => {
             },
           },
         },
-      ],
+      },
     };
     const result = await producer.produce({
       guid: '019ffa97-3000-7000-8000-000000000003',
@@ -286,15 +336,14 @@ describe('standard ScriptablePack output producers', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.payload).toMatchObject({
-      entities: [
-        {
-          localId: 0,
+      entities: {
+        hero: {
           components: {
             ScriptablePackTestMeshFilter: { assetHandle: 0 },
             ScriptablePackTestMeshRenderer: { materials: [1] },
           },
         },
-      ],
+      },
     });
     expect(result.value.refs).toEqual([
       {
@@ -303,7 +352,7 @@ describe('standard ScriptablePack output producers', () => {
           componentName: 'ScriptablePackTestMeshFilter',
           fieldName: 'assetHandle',
         },
-        sceneEntityId: 0,
+        sceneEntityKey: 'hero',
       },
       {
         guid: AssetGuid.format(MATERIAL_GUID),
@@ -312,7 +361,7 @@ describe('standard ScriptablePack output producers', () => {
           fieldName: 'materials',
           arrayIndex: 0,
         },
-        sceneEntityId: 0,
+        sceneEntityKey: 'hero',
       },
     ]);
   });
@@ -328,7 +377,7 @@ describe('standard ScriptablePack output producers', () => {
       sourceKey: 'scene/unknown-component',
       asset: {
         kind: 'scene',
-        entities: [{ localId: 0 as never, components: { Mystery: { asset: 'not-a-ref' } } }],
+        entities: { mystery: { components: { Mystery: { asset: 'not-a-ref' } } } },
       },
     });
 
@@ -356,16 +405,14 @@ describe('standard ScriptablePack output producers', () => {
       sourceKey: 'scene/environment',
       asset: {
         kind: 'scene',
-        entities: [
-          {
-            localId: 0 as never,
+        entities: {
+          skylight: {
             components: { Skylight: { equirect: AssetGuid.format(EQUIRECT_GUID) } },
           },
-          {
-            localId: 1 as never,
+          skybox: {
             components: { SkyboxBackground: { equirect: AssetGuid.format(EQUIRECT_GUID) } },
           },
-        ],
+        },
       },
     });
 
@@ -374,10 +421,10 @@ describe('standard ScriptablePack output producers', () => {
     expect(result.value.refs).toHaveLength(1);
     expect(result.value.refs[0]?.guid).toBe(AssetGuid.format(EQUIRECT_GUID));
     expect(result.value.payload).toMatchObject({
-      entities: [
-        { components: { Skylight: { equirect: 0 } } },
-        { components: { SkyboxBackground: { equirect: 0 } } },
-      ],
+      entities: {
+        skylight: { components: { Skylight: { equirect: 0 } } },
+        skybox: { components: { SkyboxBackground: { equirect: 0 } } },
+      },
     });
   });
 
@@ -435,26 +482,7 @@ describe('standard ScriptablePack output producers', () => {
       {
         guid: AssetGuid.format(MESH_GUID),
         sourceKey: 'mesh/generated',
-        asset: {
-          kind: 'mesh' as const,
-          vertices: new Float32Array([
-            0, 0, 0, 0, 0, 1, 0.5, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0.5, 1, 0, 0, 0, 1, 1, 0, 0, 0,
-            0, 1, 1, 1, 0, 0, 0, 1,
-          ]),
-          indices: new Uint16Array([0, 1, 2]),
-          attributes: canonicalAttributes(3),
-          aabb: new Float32Array([0, 0, 0, 1, 1, 0]),
-          submeshes: [
-            {
-              topology: 'triangle-list' as const,
-              indexOffset: 0,
-              indexCount: 3,
-              vertexCount: 3,
-              materialSlot: 0,
-            },
-          ],
-          materialSlots: [{ slotName: 'Default' }],
-        },
+        asset: createBoxGeometry(1, 1, 1).unwrap(),
         producer: mesh,
       },
       {
@@ -466,7 +494,7 @@ describe('standard ScriptablePack output producers', () => {
       {
         guid: AssetGuid.format(guid('019ffa97-3000-7000-8000-000000000003')),
         sourceKey: 'scene/generated',
-        asset: { kind: 'scene' as const, entities: [] },
+        asset: { kind: 'scene' as const, entities: {} },
         producer: scene,
       },
     ];

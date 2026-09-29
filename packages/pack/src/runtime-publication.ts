@@ -1,9 +1,31 @@
-import { createHash } from 'node:crypto';
+import type { ToolCommandContract } from '@forgeax/engine-tool-runtime';
 import type {
   AssetPublicationEnvelope,
   AssetPublicationExternalEvidence,
   AssetPublicationOutput,
+  CatalogEntry,
+  PackV2,
+  PluginBuildTarget,
 } from '@forgeax/engine-types';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+import type { PackBlob } from './blob.js';
+import type { PackProgram } from './program.js';
+
+/** Portable delivered bytes. Decoding and dependency readiness remain loader responsibilities. */
+export interface FixedPackExecution {
+  readonly programs: Readonly<Record<string, PackProgram>>;
+  /** Membership is the producer's explicit executable plugin projection for this target. */
+  readonly tools: Readonly<Record<string, ToolCommandContract>>;
+}
+
+export interface FixedPackPublication {
+  readonly pack: PackV2;
+  readonly rows: readonly CatalogEntry[];
+  /** Original transport bytes keyed by the unchanged package-relative artifact path. */
+  readonly blobs: Readonly<Record<string, PackBlob>>;
+  readonly executions?: Readonly<Partial<Record<PluginBuildTarget, FixedPackExecution>>>;
+}
 
 export interface RuntimePackAssetInput {
   readonly guid: string;
@@ -48,11 +70,63 @@ export interface RuntimePackPublicationInput {
   readonly digest?: string;
   readonly generation?: number;
   readonly outputs?: readonly AssetPublicationOutput[];
+  /** Author/producer keys by normalized GUID when deriving output rows. */
+  readonly sourceKeys?: ReadonlyMap<string, string>;
   readonly externalEvidence?: readonly AssetPublicationExternalEvidence[];
 }
 
+function isRuntimePackEnvelope(value: unknown): value is RuntimePackEnvelope {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.schemaVersion === '2.0.0' &&
+    record.kind === 'internal-text-package' &&
+    typeof record.scopeId === 'string' &&
+    record.scopeId.length > 0 &&
+    typeof record.generation === 'number' &&
+    Number.isSafeInteger(record.generation) &&
+    record.generation > 0 &&
+    Array.isArray(record.assets)
+  );
+}
+
+/**
+ * Return the immutable Pack content used by DDC identity.  Runtime scope and
+ * publication generation fence a live consumer, but do not change the
+ * cooked asset bytes represented by an immutable DDC key.
+ */
+export function stripRuntimePackLifecycle(value: unknown): unknown {
+  if (!isRuntimePackEnvelope(value)) return value;
+  const { scopeId: _scopeId, generation: _generation, ...semantic } = value;
+  return semantic;
+}
+
+/** Rehydrate a DDC Pack payload into the active runtime scope for transport. */
+export function bindRuntimePackScope(value: unknown, scopeId: string, generation: number): unknown {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    (value as { readonly schemaVersion?: unknown }).schemaVersion !== '2.0.0' ||
+    (value as { readonly kind?: unknown }).kind !== 'internal-text-package' ||
+    !Array.isArray((value as { readonly assets?: unknown }).assets)
+  ) {
+    return value;
+  }
+  // The accepted Catalog tuple is authoritative for a live transport. This
+  // also repairs a legacy DDC body whose publication generation predates the
+  // current accepted candidate.
+  return { ...(value as Record<string, unknown>), scopeId, generation };
+}
+
 function stable(value: unknown): string {
-  if (value instanceof Uint8Array) return `bytes:${Buffer.from(value).toString('base64')}`;
+  if (value instanceof Uint8Array) {
+    let binary = '';
+    for (let offset = 0; offset < value.length; offset += 8192) {
+      binary += String.fromCharCode(...value.subarray(offset, offset + 8192));
+    }
+    return `bytes:${btoa(binary)}`;
+  }
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const record = value as Record<string, unknown>;
@@ -65,7 +139,7 @@ function stable(value: unknown): string {
 }
 
 function digest(value: unknown): string {
-  return `sha256:${createHash('sha256').update(stable(value)).digest('hex')}`;
+  return `sha256:${bytesToHex(sha256(new TextEncoder().encode(stable(value))))}`;
 }
 
 function normalizedAssets(pack: RuntimePackInput): readonly RuntimePackAsset[] {
@@ -88,10 +162,10 @@ function normalizedAssets(pack: RuntimePackInput): readonly RuntimePackAsset[] {
   });
 }
 
-function outputFor(asset: RuntimePackAsset): AssetPublicationOutput {
+function outputFor(asset: RuntimePackAsset, sourceKey?: string): AssetPublicationOutput {
   return {
     guid: asset.guid.toLowerCase(),
-    sourceKey: asset.guid.toLowerCase(),
+    sourceKey: sourceKey ?? asset.guid.toLowerCase(),
     kind: asset.kind,
     digest: digest({
       guid: asset.guid.toLowerCase(),
@@ -122,13 +196,9 @@ function publicationGeneration(
   valueDigest: string,
   outputs: string,
 ): number {
-  const value = createHash('sha256')
-    .update(sourceRevision)
-    .update('\n')
-    .update(valueDigest)
-    .update('\n')
-    .update(outputs)
-    .digest('hex');
+  const value = bytesToHex(
+    sha256(new TextEncoder().encode(`${sourceRevision}\n${valueDigest}\n${outputs}`)),
+  );
   const generation = Number.parseInt(value.slice(0, 8), 16);
   return generation > 0 ? generation : 1;
 }
@@ -145,7 +215,9 @@ export function createRuntimePackPublication(
     ),
   };
   const valueDigest = input.digest ?? digest(semantic);
-  const outputs = input.outputs ?? assets.map(outputFor);
+  const outputs =
+    input.outputs ??
+    assets.map((asset) => outputFor(asset, input.sourceKeys?.get(asset.guid.toLowerCase())));
   const outputDigest = outputSetDigest(outputs);
   const generation =
     input.generation ?? publicationGeneration(input.sourceRevision, valueDigest, outputDigest);

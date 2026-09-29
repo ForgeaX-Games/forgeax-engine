@@ -1,4 +1,5 @@
 // w18 — Integration: compression ratio
+// @perf-budget-skip: intentional multi-megabyte zstd compression-ratio gate.
 //
 // AC-05 compression ratio: compress a programmatic ~3.2MB f32 vertex
 //       fixture with zstd, assert compressedSize / originalSize <= 0.70

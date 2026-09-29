@@ -5,16 +5,22 @@ import {
   GPU_SHADER_STAGE_FRAGMENT,
   GPU_SHADER_STAGE_VERTEX,
 } from '../gpu-stage';
+import { createHdrpBindGroupLayoutDescriptor } from '../pbr-pipeline';
 
 const ownerSource = readFileSync(new URL('../gpu-stage.ts', import.meta.url), 'utf8');
 const computeConsumerSources = [
   readFileSync(new URL('../hdrp-buffers.ts', import.meta.url), 'utf8'),
 ];
+const pbrPipelineSource = readFileSync(new URL('../pbr-pipeline.ts', import.meta.url), 'utf8');
+const iblPipelineCacheSource = readFileSync(
+  new URL('../ibl/IblPipelineCache.ts', import.meta.url),
+  'utf8',
+);
 const fragmentConsumerSources = [
-  readFileSync(new URL('../pbr-pipeline.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../ibl/IblPipelineCache.ts', import.meta.url), 'utf8'),
+  pbrPipelineSource,
+  iblPipelineCacheSource,
   readFileSync(new URL('../ibl/skylight-bind-group.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../assembly/factory.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../assembly/webgpu-renderer.ts', import.meta.url), 'utf8'),
 ];
 
 describe('shader stage owner', () => {
@@ -37,7 +43,16 @@ describe('shader stage owner', () => {
     for (const source of computeConsumerSources) {
       expect(source).toContain('GPU_SHADER_STAGE_COMPUTE');
     }
-    expect(fragmentConsumerSources[0]).toContain('GPU_SHADER_STAGE_VERTEX');
-    expect(fragmentConsumerSources[1]).toContain('GPU_SHADER_STAGE_VERTEX');
+    expect(pbrPipelineSource).toContain('GPU_SHADER_STAGE_VERTEX');
+    expect(iblPipelineCacheSource).toContain('GPU_SHADER_STAGE_VERTEX');
+  });
+
+  it('keeps HDRP mesh storage visible to both mesh consumers', () => {
+    const group2 = createHdrpBindGroupLayoutDescriptor().entries?.find(
+      (entry) => entry.binding === 0,
+    );
+
+    expect(group2?.visibility).toBe(GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT);
+    expect(group2?.buffer?.type).toBe('read-only-storage');
   });
 });

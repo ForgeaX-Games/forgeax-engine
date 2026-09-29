@@ -14,7 +14,7 @@ import {
 const ownerSource = readFileSync(new URL('../gpu-usage.ts', import.meta.url), 'utf8');
 const meshSsboSource = readFileSync(new URL('../record/mesh-ssbo.ts', import.meta.url), 'utf8');
 const rendererFactorySource = readFileSync(
-  new URL('../assembly/factory.ts', import.meta.url),
+  new URL('../assembly/webgpu-ready.ts', import.meta.url),
   'utf8',
 );
 const consumerSources = [
@@ -23,6 +23,10 @@ const consumerSources = [
   rendererFactorySource,
 ];
 const featureBufferSources = [
+  {
+    source: readFileSync(new URL('../record/target-capture-lighting.ts', import.meta.url), 'utf8'),
+    names: ['GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
+  },
   {
     source: readFileSync(new URL('../hdrp-buffers.ts', import.meta.url), 'utf8'),
     names: ['GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_STORAGE', 'GPU_BUFFER_USAGE_COPY_DST'],
@@ -48,15 +52,11 @@ const featureBufferSources = [
     names: ['GPU_BUFFER_USAGE_STORAGE', 'GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
   },
   {
-    source: readFileSync(new URL('../record/shadow-pass.ts', import.meta.url), 'utf8'),
-    names: ['GPU_BUFFER_USAGE_STORAGE', 'GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
-  },
-  {
     source: readFileSync(new URL('../systems/skin-palette-allocator.ts', import.meta.url), 'utf8'),
     names: ['GPU_BUFFER_USAGE_STORAGE', 'GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
   },
   {
-    source: readFileSync(new URL('../render-system.ts', import.meta.url), 'utf8'),
+    source: readFileSync(new URL('../assembly/post-process-params.ts', import.meta.url), 'utf8'),
     names: ['GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
   },
 ];
@@ -71,7 +71,7 @@ describe('render buffer usage owner', () => {
     expect(GPU_BUFFER_USAGE_UNIFORM).toBe(0x40);
     expect(GPU_BUFFER_USAGE_STORAGE).toBe(0x80);
     expect(GPU_BUFFER_USAGE_MAP_READ).toBe(0x01);
-    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(8);
+    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(9);
   });
 
   it('routes mesh descriptor, update, and bootstrap consumers through the owner', () => {

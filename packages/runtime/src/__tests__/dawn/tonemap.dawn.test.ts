@@ -9,7 +9,7 @@
 // This tier asserts the TS-side derivation that the host writes into the
 // `TonemapParams` UBO + the post-process fragment stage consumes; the
 // fullscreen-pass GPU readback path is covered by the apps/hello/tonemap
-// smoke gate (T-M4.2 dawn-node + chromium 300 frames) and the AC-07/08/09
+// smoke gate (T-M4.2 dawn-node + chromium 60 frames) and the AC-07/08/09
 // pixel-parity checks land there.
 //
 // Tier discipline mirrors mesh-ssbo-normal-matrix.dawn.test.ts: real GPU

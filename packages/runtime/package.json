@@ -61,10 +61,17 @@
     "@forgeax/engine-vfx": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-naga": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
+    "@forgeax/engine-vfx-compiler": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@types/node": "^20.14.0"
   },
   "forgeax": {

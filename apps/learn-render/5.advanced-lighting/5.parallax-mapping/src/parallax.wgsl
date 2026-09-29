@@ -1,6 +1,6 @@
 #define_import_path learn_render::5_5_parallax
 
-#import forgeax_view::common::{View, Mesh, view, meshes}
+#import forgeax_view::common::{transformNormal, View, Mesh, view, meshes}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg}
 
 // parallax.wgsl — LearnOpenGL 5.5 Parallax Mapping (basic / steep / POM).
@@ -76,7 +76,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   // perpendicular to its normal, and LO computes the whole lighting in this
   // tangent space). transpose(mat3(T,B,N)) maps world-space -> tangent space
   // (D-5: TBN built in-shader, no geometry change).
-  let n = normalize(meshes[idx].normalMatrix * in.normal);
+  let n = normalize(transformNormal(meshes[idx].worldFromLocal, in.normal));
   let t = normalize((meshes[idx].worldFromLocal * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
   let b = cross(n, t) * in.tangent.w;
   let worldToTangent = transpose(mat3x3<f32>(t, b, n));

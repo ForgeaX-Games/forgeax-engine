@@ -6,7 +6,7 @@
 // as the import function from the calling module scope is injected.
 //
 // CONTRACT (the one an AI user holds): the script IS the body of an async
-// function with `world` / `renderer` / `assets` / `rhiCapture` / `simulation` / `_import`
+// function with `world` / `renderer` / `assets` / `rhiCapture` / `simulation` / `plugins` / `_import`
 // in scope. So all of these Just Work, un-wrapped:
 //   - a bare expression:            `renderer.backend`            -> auto-returned
 //   - top-level await:              `await _import('engine-module')`
@@ -48,6 +48,8 @@ export type ExecuteContext = {
   readonly simulation?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
+  /** Read-only projection of the live plugin Entry/Fiber tree. */
+  readonly plugins?: unknown;
   readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 
@@ -59,7 +61,7 @@ export type ExecuteResult = { ok: true; value: unknown } | { ok: false; error: R
 // package stays package-neutral: a host may inject a capability projection
 // through ExecuteContext.importModule, but the transport does not own any
 // engine package vocabulary.
-const _import = async (specifier: string): Promise<unknown> => import(specifier);
+const _import = async (specifier: string): Promise<unknown> => import(/* @vite-ignore */ specifier);
 
 // Compile the script as an async function body. Tries expression mode first
 // (auto-return a lone expression), falling back to statement mode on a
@@ -74,6 +76,7 @@ function compile(script: string): FunctionConstructor['prototype'] {
     'simulation',
     'profiler',
     'execution',
+    'plugins',
     '_import',
   ] as const;
   try {
@@ -118,6 +121,7 @@ export async function executeScript(script: string, ctx: ExecuteContext): Promis
       ctx.simulation,
       ctx.profiler,
       ctx.execution,
+      ctx.plugins,
       ctx.importModule ?? _import,
     );
 

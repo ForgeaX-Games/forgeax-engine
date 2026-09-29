@@ -19,6 +19,7 @@
     "dist",
     "src",
     "README.md",
+    "NOTICE",
     "LICENSE"
   ],
   "scripts": {
@@ -29,6 +30,9 @@
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@webgpu/types": "^0.1.71"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*"
   },
   "forgeax": {
     "metrics": {

@@ -64,6 +64,27 @@ function withDeviceOverrides(
 }
 
 describe('ReplaySession fail-closed executor', () => {
+  it('rejects an unenabled WGSL feature before creating replay resources', async () => {
+    const shader = vi.fn(createShaderModule);
+    const result = await openReplay(
+      tape([
+        {
+          kind: 'createShaderModule',
+          handleId: 'shader:1',
+          wgslCode:
+            'enable primitive_index; @fragment fn main(@builtin(primitive_index) p:u32) -> @location(0) u32 { return p; }',
+        },
+      ]),
+      { device: await device(), createShaderModule: shader },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.error).toMatchObject({
+        code: 'replay-capability-mismatch',
+        detail: { stage: 'replay', cause: 'missing device features: primitive-index' },
+      });
+    expect(shader).not.toHaveBeenCalled();
+  });
   it('reports create failure with location and does not execute later work', async () => {
     const base = await device();
     const laterCreate = vi.fn(() => base.createBuffer({ size: 16, usage: 8 }));

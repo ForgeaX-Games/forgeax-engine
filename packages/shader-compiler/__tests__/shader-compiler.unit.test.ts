@@ -14,6 +14,7 @@
 //   - packages/shader-compiler/src/__tests__/errors.test.ts
 //   - packages/shader-compiler/src/__tests__/reflection.test.ts
 //   - packages/shader-compiler/__tests__/pbr-uniform-fallback-compile.test.ts
+//   - packages/shader-compiler/__tests__/standard-cluster-projector-compose.unit.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
@@ -22,7 +23,8 @@
 import { describe, expect, it, test, expectTypeOf, beforeAll } from 'vitest';
 import type { BindGroupLayoutDescriptor } from '@forgeax/engine-types';
 import { checkBindGroupOverflow } from '../src/compare-param-schema.js';
-import { compileShader } from '../src/index.js';
+import { compileShader, generateParameterModule } from '../src/index.js';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '../../shader/src/material-schemas.js';
 import { detectCycle } from '../src/cycle-detect.js';
 import { scanDefineConflicts } from '../src/define-scan.js';
 import { mapWasmError } from '../src/error-mapper.js';
@@ -292,6 +294,33 @@ describe('compileShader composition fixtures (M3 T-17 / AC-18.c)', () => {
     if (r.ok) {
       expect(r.value.deps).toContain('forgeax_util::outer');
       expect(r.value.deps).toContain('forgeax_util::inner');
+    }
+  });
+
+  it('(b2) namespaced import cycle — lab::cyc_a <-> lab::cyc_b is a circular import', async () => {
+    const a = [
+      '#define_import_path lab::cyc_a',
+      '#import lab::cyc_b::fb',
+      'fn fa() -> f32 { return fb(); }',
+    ].join('\n');
+    const b = [
+      '#define_import_path lab::cyc_b',
+      '#import lab::cyc_a::fa',
+      'fn fb() -> f32 { return fa(); }',
+    ].join('\n');
+    const entry = [
+      '#import lab::cyc_a::fa',
+      '@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(fa()); }',
+    ].join('\n');
+    const r = await compileShader(entry, {
+      imports: { 'lab::cyc_a': a, 'lab::cyc_b': b },
+      defines: {},
+      id: 'lab::cyc_root',
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('shader-circular-import');
+      expect(r.error.detail).toMatchObject({ cycle: ['lab::cyc_a', 'lab::cyc_b', 'lab::cyc_a'] });
     }
   });
 
@@ -1104,7 +1133,11 @@ let readSrc!: (file: string) => string;
 let PBR_ENTRY_IMPORTS!: Record<string, string>;
 let UNLIT_ENTRY_IMPORTS!: Record<string, string>;
 
-const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
+const GENERATED_STANDARD_INTERFACE = generateParameterModule(DEFAULT_STANDARD_PBR_PARAM_SCHEMA, {
+  includeResources: false,
+});
+
+const PRAGMA_RE = /^\s*#pragma\s+(?!material_slot\b)\S.*$/gm;
 
 /** Strip #pragma lines -- naga_oil leaves them in composed output and naga rejects `#` tokens. */
 function stripPragmas(source: string): string {
@@ -1135,32 +1168,67 @@ beforeAll(async () => {
   const TBN = readSrc('tbn.wgsl');
   const LIGHTING_DIRECTIONAL = readSrc('lighting-directional.wgsl');
   const LIGHTING_PUNCTUAL = readSrc('lighting-punctual.wgsl');
+  const LIGHTING_ATTENUATION = readSrc('lighting-attenuation.wgsl');
   const IBL_SAMPLING = readSrc('ibl-sampling.wgsl');
   const COMMON = readSrc('common.wgsl');
-  // bug-20260610: rebase onto main brought in `#import forgeax_hdrp::cluster_forward`
-  // in default-standard-pbr.wgsl (HDRP feat #341). The fixture must surface
-  // the same module so naga_oil can resolve the import.
-  const HDRP_CLUSTER_FORWARD = readSrc('hdrp-cluster-forward.wgsl');
+  const SCENE_TEMPORAL = readSrc('scene-temporal.wgsl');
+  // Standard lit and skinned consumers share one cluster module. Keep this
+  // fixture on the canonical source/import path so the compiler contract
+  // cannot drift back to the removed HDRP-only owner.
+  const STANDARD_CLUSTER = readSrc('standard-cluster.wgsl');
   // feat-20260612-point-light-shadows-urp-hdrp M2 / T-M2-1 (plan-strategy D-4):
   // lighting-directional.wgsl now imports forgeax_pbr::shadow_pcf (shared PCF core).
   const SHADOW_PCF = readSrc('shadow-pcf.wgsl');
 
   PBR_ENTRY_IMPORTS = {
+    'forgeax_material::displacement': readSrc('standard-displacement.wgsl'),
+    'forgeax_material::standard_surface': readSrc('standard-surface.wgsl'),
+    'forgeax_clipping::planes': readSrc('clipping.wgsl'),
     'forgeax_view::common': COMMON,
+    forgeax_scene_temporal: SCENE_TEMPORAL,
     'forgeax_view::fog': readSrc('fog.wgsl'),
+    'forgeax_cloud::layer': readSrc('cloud.wgsl'),
     'forgeax_pbr::brdf': BRDF,
+    'forgeax_pbr::specular_aa': readSrc('specular-aa.wgsl'),
+    'forgeax_material::alpha_hash': readSrc('alpha-hash.wgsl'),
+    'forgeax_material::oit': readSrc('oit.wgsl'),
+    'forgeax_shadow::surface': readSrc('shadow-surface.wgsl'),
     'forgeax_pbr::temporal': PBR_TEMPORAL,
     'forgeax_pbr::ibl_shared': IBL_SHARED,
     'forgeax_pbr::ibl_sampling': IBL_SAMPLING,
     'forgeax_pbr::tbn': TBN,
     'forgeax_pbr::lighting_directional': LIGHTING_DIRECTIONAL,
     'forgeax_pbr::lighting_punctual': LIGHTING_PUNCTUAL,
-    'forgeax_hdrp::cluster_forward': HDRP_CLUSTER_FORWARD,
+    'forgeax_pbr::lighting_probe': readSrc('lighting-probe.wgsl'),
+    'forgeax_pbr::standard_lighting': readSrc('standard-lighting.wgsl'),
+    'forgeax_pbr::gbuffer': readSrc('standard-gbuffer.wgsl'),
+    'forgeax_pbr::gbuffer_output': readSrc('standard-gbuffer-output.wgsl'),
+    'forgeax_pbr::lighting_spot_modifiers': readSrc('lighting-spot-modifiers.wgsl'),
+    'forgeax_pbr::lighting_rect_area': readSrc('lighting-rect-area.wgsl'),
+    'forgeax_pbr::lighting_attenuation': LIGHTING_ATTENUATION,
+    'forgeax_pbr::lighting_spot_projector': readSrc('lighting-spot-projector.wgsl'),
+    'forgeax_standard::cluster': STANDARD_CLUSTER,
     'forgeax_pbr::shadow_pcf': SHADOW_PCF,
+    'forgeax_pbr::clearcoat': readSrc('material/physical/clearcoat.wgsl'),
+    'forgeax_pbr::anisotropy': readSrc('material/physical/anisotropy.wgsl'),
+    'forgeax_pbr::sheen': readSrc('material/physical/sheen.wgsl'),
+    'forgeax_pbr::iridescence': readSrc('material/physical/iridescence.wgsl'),
+    'forgeax_material::surface_v1': readSrc('surface_v1.wgsl'),
+    'forgeax_material::surface_sampling': readSrc('surface-sampling.wgsl'),
+    'forgeax_material::default_standard_surface': readSrc('default_standard_surface.wgsl'),
+    'forgeax_material::slot::surface': readSrc('default_standard_surface.wgsl').replace(
+      /^\s*#define_import_path\s+[^\n]+/m,
+      '#define_import_path forgeax_material::slot::surface',
+    ),
   };
 
   UNLIT_ENTRY_IMPORTS = {
+    'forgeax_clipping::planes': readSrc('clipping.wgsl'),
+    'forgeax_material::alpha_hash': readSrc('alpha-hash.wgsl'),
+    'forgeax_material::oit': readSrc('oit.wgsl'),
+    'forgeax_shadow::surface': readSrc('shadow-surface.wgsl'),
     'forgeax_view::common': COMMON,
+    forgeax_scene_temporal: SCENE_TEMPORAL,
     'forgeax_view::fog': readSrc('fog.wgsl'),
   };
 });
@@ -1173,10 +1241,16 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
   const STORAGE_AVAILABLE_DEFINES = {
     STORAGE_BUFFER_AVAILABLE: true,
     PER_INSTANCE_REGION: false,
+    CLUSTER_FORWARD_AVAILABLE: false,
+    TRANSMISSION_AVAILABLE: false,
+    GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
   };
   const STORAGE_UNAVAILABLE_DEFINES = {
     STORAGE_BUFFER_AVAILABLE: false,
     PER_INSTANCE_REGION: false,
+    CLUSTER_FORWARD_AVAILABLE: false,
+    TRANSMISSION_AVAILABLE: false,
+    GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
   };
 
   it('STORAGE_BUFFER_AVAILABLE=true compose succeeds (storage path)', async () => {
@@ -1185,6 +1259,7 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
       id: 'forgeax::default-standard-pbr',
       imports: PBR_ENTRY_IMPORTS,
       defines: STORAGE_AVAILABLE_DEFINES,
+      generatedParameters: GENERATED_STANDARD_INTERFACE,
     });
     expect(r.ok, `storage-path compose failed: ${r.ok ? '' : r.error.message}`).toBe(true);
     if (r.ok) {
@@ -1199,6 +1274,7 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
       id: 'forgeax::default-standard-pbr',
       imports: PBR_ENTRY_IMPORTS,
       defines: STORAGE_UNAVAILABLE_DEFINES,
+      generatedParameters: GENERATED_STANDARD_INTERFACE,
     });
     expect(r.ok, `uniform-path compose failed: ${r.ok ? '' : r.error.message}`).toBe(true);
     if (r.ok) {
@@ -1213,7 +1289,13 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
 // ============================================================================
 
 describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILABLE=false)', () => {
-  const UNIFORM_DEFINES = { STORAGE_BUFFER_AVAILABLE: false, PER_INSTANCE_REGION: false };
+  const UNIFORM_DEFINES = {
+    STORAGE_BUFFER_AVAILABLE: false,
+    PER_INSTANCE_REGION: false,
+    CLUSTER_FORWARD_AVAILABLE: false,
+    TRANSMISSION_AVAILABLE: false,
+    GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+  };
 
   it('forgeax::default-standard-pbr uniform variant compose succeeds', async () => {
     const entry = stripPragmas(readSrc('default-standard-pbr.wgsl'));
@@ -1221,6 +1303,7 @@ describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILA
       id: 'forgeax::default-standard-pbr',
       imports: PBR_ENTRY_IMPORTS,
       defines: UNIFORM_DEFINES,
+      generatedParameters: GENERATED_STANDARD_INTERFACE,
     });
     expect(r.ok, `pbr uniform compose failed: ${r.ok ? '' : r.error.message}`).toBe(true);
     if (r.ok) {
@@ -1234,6 +1317,7 @@ describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILA
       id: 'forgeax::pbr-skin',
       imports: PBR_ENTRY_IMPORTS,
       defines: UNIFORM_DEFINES,
+      generatedParameters: GENERATED_STANDARD_INTERFACE,
     });
     expect(r.ok, `pbr-skin uniform compose failed: ${r.ok ? '' : r.error.message}`).toBe(true);
     if (r.ok) {
@@ -1251,6 +1335,33 @@ describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILA
     expect(r.ok, `unlit uniform compose failed: ${r.ok ? '' : r.error.message}`).toBe(true);
     if (r.ok) {
       expect(r.value.wgsl).toBeTruthy();
+    }
+  });
+});
+
+// Keep this compiler-heavy clustered-projector regression in the consolidated
+// shader compiler suite. It exercises the same composer/import map as the
+// neighboring standard variants without creating a one-test perf-budget file.
+describe('standard clustered projector composition', () => {
+  it('keeps both projector resource layouts compilable across extension capability pairs', async () => {
+    const cluster = readSrc('standard-cluster.wgsl');
+    for (const extendedLighting of [false, true]) {
+      for (const projector of [false, true]) {
+        const result = await compileShader(cluster, {
+          id: `forgeax_standard::cluster#extended=${extendedLighting},projector=${projector}`,
+          imports: PBR_ENTRY_IMPORTS,
+          defines: {
+            CLUSTER_FORWARD_AVAILABLE: true,
+            EXTENDED_LIGHTING_AVAILABLE: extendedLighting,
+            PROJECTOR_AVAILABLE: projector,
+            STORAGE_BUFFER_AVAILABLE: true,
+          },
+        });
+        expect(
+          result.ok,
+          result.ok ? '' : `${extendedLighting}/${projector}: ${result.error.message}`,
+        ).toBe(true);
+      }
     }
   });
 });

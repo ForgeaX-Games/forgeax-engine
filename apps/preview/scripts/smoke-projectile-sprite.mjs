@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const ARTIFACT_DIR = resolve(process.env.FORGEAX_PROJECTILE_SPRITE_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/projectile-sprite'));
+const ARTIFACT_DIR = resolve(process.env.FORGEAX_PROJECTILE_SPRITE_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/projectile-sprite'));
 const PORT = Number.parseInt(process.env.FORGEAX_PROJECTILE_SPRITE_PORT ?? '5190', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 

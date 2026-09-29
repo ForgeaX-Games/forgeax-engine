@@ -1,5 +1,4 @@
-import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
-import { createWorldProjection } from '@forgeax/engine-ecs/projection';
+import { Entity, type EntityHandle, type Query, type World } from '@forgeax/engine-ecs';
 import { ChildOf } from '../components/child-of';
 import type { SceneErrorCode, SceneErrorDetail } from '../errors';
 
@@ -17,7 +16,8 @@ export interface SceneHierarchySnapshot {
 }
 
 interface HierarchyProjectionCacheEntry {
-  readonly changes: ReturnType<typeof createWorldProjection>;
+  readonly structureEpoch: number;
+  readonly childOfChanges: Query;
   readonly snapshot: SceneHierarchySnapshot;
 }
 
@@ -29,6 +29,18 @@ interface HierarchyProjectionCacheEntry {
 // runtime-only component writes may advance it every frame. Direct table
 // writes are internal-only and must not mutate authored hierarchy state.
 const HIERARCHY_PROJECTION_CACHE = new WeakMap<World, HierarchyProjectionCacheEntry>();
+
+function createChildOfChangeQuery(world: World): Query {
+  const result = world.query({ changed: [ChildOf] });
+  if (!result.ok) throw result.error;
+  return result.value;
+}
+
+function drainChanges(query: Query): boolean {
+  let changed = false;
+  for (const span of query.spans().unwrap()) changed ||= span.length > 0;
+  return changed;
+}
 
 function diagnostic(
   code: SceneErrorCode,
@@ -54,10 +66,12 @@ function diagnostic(
 /** Build the only World-local projection of ChildOf parent facts. */
 export function projectHierarchy(world: World): SceneHierarchySnapshot {
   const cached = HIERARCHY_PROJECTION_CACHE.get(world);
-  const changes = cached?.changes ?? createWorldProjection(world, { components: [ChildOf] });
-  if (cached !== undefined) {
-    const evidence = changes.poll();
-    if (evidence.status === 'delta' && evidence.changes.length === 0) return cached.snapshot;
+  if (
+    cached !== undefined &&
+    cached.structureEpoch === world.getStructureEpoch() &&
+    !drainChanges(cached.childOfChanges)
+  ) {
+    return cached.snapshot;
   }
   const liveEntities = new Set<EntityHandle>();
   const authoredParents = new Map<EntityHandle, EntityHandle>();
@@ -126,8 +140,11 @@ export function projectHierarchy(world: World): SceneHierarchySnapshot {
       return stableParentOf.get(entity);
     },
   };
+  const childOfChanges = createChildOfChangeQuery(world);
+  drainChanges(childOfChanges);
   HIERARCHY_PROJECTION_CACHE.set(world, {
-    changes,
+    structureEpoch: world.getStructureEpoch(),
+    childOfChanges,
     snapshot,
   });
   return snapshot;

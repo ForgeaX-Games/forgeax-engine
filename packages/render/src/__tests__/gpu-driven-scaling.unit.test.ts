@@ -1,8 +1,16 @@
-import { mat4 } from '@forgeax/engine-math';
+import { mat4, vec3 } from '@forgeax/engine-math';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { BatchTopology } from '../gpu-driven/batch-topology';
+import {
+  BatchTopology,
+  batchLodLevelCount,
+  batchVisibleSpan,
+  projectedHeightForCandidate,
+} from '../gpu-driven/batch-topology';
+import { deriveGpuDrivenViewBufferCapacities } from '../gpu-driven/view-gpu';
+import { makeZeroCameraFallbackSnapshot } from '../record/frame-snapshot';
 import type { MaterialSnapshot, RenderableSnapshot } from '../render-system-extract';
 import { RenderScene } from '../scene/render-scene';
+import { projectedHeight as measureProjectedHeight } from '../scene/visibility/lod-selector';
 
 const ENTITY_COUNT = 100_000;
 const material = {
@@ -59,9 +67,7 @@ describe('GPU-driven scaling contract', () => {
 
     const moved = mat4.identity(mat4.create());
     moved[12] = 3;
-    delta = projection.apply([
-      { kind: 'update-transform', worldId: 0, entityKey: 50_000, world: moved },
-    ]);
+    delta = projection.apply([{ kind: 'update', worldId: 0, entityKey: 50_000, world: moved }]);
     topologyChanged = topology.apply(delta);
   });
 
@@ -70,6 +76,33 @@ describe('GPU-driven scaling contract', () => {
       candidateCount: ENTITY_COUNT,
       visibleCapacity: ENTITY_COUNT,
       batches: [{ visibleCapacity: ENTITY_COUNT }],
+    });
+  });
+
+  it('keeps 100k LOD candidates dense in one shared-chain batch with per-level segments', () => {
+    const lodProjection = new RenderScene();
+    lodProjection.reset(
+      Array.from({ length: ENTITY_COUNT }, (_, index) => ({
+        ...snapshot(index),
+        lods: [{ mesh: '00000000-0000-7000-8000-000000000001' as never, screenCoverage: 0.5 }],
+      })),
+    );
+    const lodTopology = new BatchTopology();
+    lodTopology.rebuild(lodProjection.slotsSnapshot());
+    const plan = lodTopology.plan();
+    expect(plan.candidateCount).toBe(ENTITY_COUNT);
+    expect(plan.batches).toHaveLength(1);
+    const batch = plan.batches[0];
+    if (batch === undefined) throw new Error('missing LOD batch');
+    expect(batchLodLevelCount(batch)).toBe(2);
+    expect(plan.visibleCapacity).toBe(batchVisibleSpan(batch));
+    // Sharing the chain replaces 100k singleton batches (8M visible slots)
+    // with two level segments of one aligned capacity.
+    expect(deriveGpuDrivenViewBufferCapacities(plan)).toEqual({
+      candidate: 131_072,
+      visible: 262_144,
+      batch: 1,
+      indirect: 2,
     });
   });
 
@@ -83,5 +116,44 @@ describe('GPU-driven scaling contract', () => {
     expect(topologyChanged).toBe(false);
     expect(topology.plan()).toBe(stablePlan);
     expect(topology.inspect()).toMatchObject({ patches: 0, candidateCount: ENTITY_COUNT });
+  });
+
+  it('projects the candidate AABB through world scale and rotation', () => {
+    const camera = {
+      ...makeZeroCameraFallbackSnapshot(),
+      position: vec3.create(0, 0, 5),
+    };
+    const projectedHeight = (world: Float32Array): number => {
+      const scene = new RenderScene();
+      scene.reset([{ ...snapshot(0), transform: { world } }]);
+      const slot = scene.slotsSnapshot()[0];
+      if (slot === undefined) throw new Error('projection fixture did not create a slot');
+      return projectedHeightForCandidate(slot, camera);
+    };
+
+    const identity = new Float32Array(mat4.identity(mat4.create()));
+    const halfScale = new Float32Array(identity);
+    halfScale[0] = 0.5;
+    halfScale[5] = 0.5;
+    halfScale[10] = 0.5;
+    expect(projectedHeight(halfScale)).toBeCloseTo(projectedHeight(identity) * 0.5, 6);
+
+    // Column-major matrix: a 90-degree Z rotation with signed, non-uniform
+    // scales. The transformed AABB radius is the conservative world-space
+    // bound, not the unscaled local radius.
+    const rotatedScaled = new Float32Array(16);
+    rotatedScaled[1] = 2;
+    rotatedScaled[4] = -3;
+    rotatedScaled[10] = -0.5;
+    rotatedScaled[15] = 1;
+    const expectedRadius = Math.hypot(1.5, 1, 0.25);
+    const expectedHeight = measureProjectedHeight({
+      radius: expectedRadius,
+      depth: 5,
+      projection: camera.projection,
+      fov: camera.fov,
+      orthoHeight: camera.orthoTop - camera.orthoBottom,
+    });
+    expect(projectedHeight(rotatedScaled)).toBeCloseTo(expectedHeight, 6);
   });
 });

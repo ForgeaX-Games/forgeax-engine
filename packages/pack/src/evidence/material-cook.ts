@@ -2,14 +2,25 @@ import type {
   MaterialAsset,
   MaterialParameter,
   MaterialPass,
+  MaterialProgramAbi,
+  MaterialProgramAddress,
+  MaterialSurfaceDeclaration,
   MaterialTextureReference,
   MaterialTextureValue,
   MaterialValue,
   Result,
 } from '@forgeax/engine-types';
-import { err, MATERIAL_TEXTURE_SLOTS, ok } from '@forgeax/engine-types';
+import {
+  deriveStandardLayerPlan,
+  err,
+  isMaterialProgramAbi,
+  isMaterialSurfaceDeclaration,
+  MATERIAL_TEXTURE_SLOTS,
+  ok,
+} from '@forgeax/engine-types';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import { AssetGuid } from '../guid.js';
 
 export interface MaterialCookRefs {
   readonly parent: readonly string[];
@@ -23,6 +34,50 @@ export interface MaterialCookArtifact {
   readonly path: string;
   readonly digest: string;
   readonly bytes: Uint8Array;
+}
+
+/** Domain-owned inputs used to compile and select a material program. */
+export interface MaterialCookRasterContext {
+  readonly backend: 'webgpu' | 'webgl2' | 'wgpu-native';
+  readonly capability: 'storage-buffer' | 'uniform-fallback';
+  readonly pipeline: 'forward' | 'deferred';
+  /** Absent is the ordinary material ABI; enabled by the receiving renderer. */
+  readonly visibleSurface?: true;
+  readonly geometry: 'mesh' | 'skinned' | 'sprite' | 'sprite-instances';
+  readonly pass: 'forward' | 'shadow' | 'depth';
+  readonly profile: 'forgeax-material-wgsl-v1';
+  readonly toolchain: 'naga-oil';
+  readonly instrumentation: 'none' | 'validation';
+}
+
+/** The same authored Surface evaluated at a ray hit, with no raster address ABI. */
+export interface MaterialCookRayContext {
+  readonly backend: 'webgpu' | 'wgpu-native';
+  readonly capability: 'storage-buffer';
+  readonly pipeline: 'ray';
+  readonly geometry: 'mesh';
+  readonly pass: 'ray-hit';
+  readonly profile: 'forgeax-material-ray-v1';
+  readonly toolchain: 'naga-oil';
+  readonly instrumentation: 'none';
+}
+
+export type MaterialCookProgramContext = MaterialCookRasterContext | MaterialCookRayContext;
+
+/** Programs are derived artifacts, never independently authored assets. */
+export interface MaterialCookProgram {
+  readonly specializationKey: string;
+  readonly artifact: MaterialCookArtifact;
+  readonly selections: readonly {
+    readonly pass: string;
+    readonly context: MaterialCookProgramContext;
+    /** Renderer submission address selected by this publication. */
+    readonly address?: MaterialProgramAddress;
+    /** Actual entry point paired with the selected address. */
+    readonly entry?: string;
+    /** Producer-reflected ABI facts for the selected artifact/entry. */
+    readonly abi?: MaterialProgramAbi;
+  }[];
 }
 
 export interface MaterialCookWasmProvenance {
@@ -51,12 +106,16 @@ export interface MaterialCookIdentity {
 export type MaterialCookIdentityInput = Omit<MaterialCookIdentity, 'cookIdentity'>;
 
 export interface MaterialCookReceipt {
-  readonly schemaVersion: 'material-cook/3';
+  readonly schemaVersion: 'material-cook/4';
   readonly sourceClosure: readonly string[];
   readonly profile: string;
   readonly compilerVersion: string;
   readonly identity: MaterialCookIdentity;
-  readonly derivedInterface: { readonly layoutIdentity: string };
+  readonly derivedInterface: {
+    readonly layoutIdentity: string;
+    /** Build-time Standard physical lowering identity, when the root is Standard. */
+    readonly layerPlanIdentity?: string;
+  };
 }
 
 export interface MaterialParameterContract {
@@ -65,12 +124,14 @@ export interface MaterialParameterContract {
 }
 
 export interface CookedMaterialRecord {
-  readonly schemaVersion: 'material-cook/3';
+  readonly schemaVersion: 'material-cook/4';
   readonly guid: string;
   readonly authored?: MaterialAsset;
   readonly materialGuid?: string;
   readonly publicationGeneration?: number;
   readonly specializationKey?: string;
+  readonly programs: readonly MaterialCookProgram[];
+  /** Digest of the complete program/Pass/context manifest. */
   readonly artifactDigest?: string;
   readonly sourceClosure?: readonly string[];
   readonly parameterContract?: MaterialParameterContract;
@@ -78,9 +139,9 @@ export interface CookedMaterialRecord {
     readonly passes: readonly MaterialPass[];
     readonly parameters: readonly MaterialParameter[];
     readonly values: Readonly<Record<string, MaterialValue | null>>;
+    readonly surface?: MaterialSurfaceDeclaration;
   };
   readonly refs: MaterialCookRefs;
-  readonly artifact: MaterialCookArtifact;
   readonly receipt: MaterialCookReceipt;
 }
 
@@ -101,14 +162,42 @@ export interface MaterialCookIdentityExpectation {
   readonly inputDigest?: string;
 }
 
+const STANDARD_ROOT_MODULES = new Set([
+  'forgeax::default-standard-pbr',
+  'forgeax::pbr-skin',
+  'forgeax_material::standard',
+  'forgeax_material::pbr-skin',
+]);
+
+/** Shared ownership predicate for the built-in Standard material root. */
+export function isStandardRootModule(module: string): boolean {
+  return STANDARD_ROOT_MODULES.has(module);
+}
+
+export function isStandardMaterialRecord(record: Pick<CookedMaterialRecord, 'resolved'>): boolean {
+  return record.resolved.passes.some((pass) => isStandardRootModule(pass.program.module));
+}
+
+/**
+ * Recompute the Standard layer identity from the admitted resolved root.
+ * Material admission and runtime loading share this owner so a stale receipt
+ * cannot select a different physical layer plan after cooking.
+ */
+export function materialLayerPlanIdentity(
+  record: Pick<CookedMaterialRecord, 'resolved'>,
+): string | undefined {
+  if (!isStandardMaterialRecord(record)) {
+    return undefined;
+  }
+  return deriveStandardLayerPlan(record.resolved.parameters, record.resolved.passes).identity;
+}
+
 function unique(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort();
 }
 
 function guidText(value: string | Uint8Array): string {
-  return typeof value === 'string'
-    ? value
-    : Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return typeof value === 'string' ? value : AssetGuid.format(value as AssetGuid);
 }
 
 function cookGuidText(value: MaterialTextureReference): string | undefined {
@@ -139,7 +228,9 @@ export function collectMaterialCookRefs(material: Partial<MaterialAsset>): Mater
       ? new Set<string>(MATERIAL_TEXTURE_SLOTS)
       : new Set(
           material.parameters
-            .filter((parameter) => parameter.type === 'texture')
+            .filter(
+              (parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube',
+            )
             .map((parameter) => parameter.name),
         );
   const textures = textureValues(material.values, textureFields);
@@ -158,7 +249,10 @@ export function collectMaterialCookRefs(material: Partial<MaterialAsset>): Mater
         return guid === undefined ? [] : [guid];
       }),
     ),
-    modules: unique((material.passes ?? []).map((pass) => pass.program.module)),
+    modules: unique([
+      ...(material.passes ?? []).map((pass) => pass.program.module),
+      ...(material.surface === undefined ? [] : [material.surface.module]),
+    ]),
   };
 }
 
@@ -212,7 +306,7 @@ export function serializeMaterialCookReceipt(receipt: MaterialCookReceipt): stri
 function invalid(field: string, actual?: unknown): Result<never, MaterialCookRecordError> {
   return err({
     code: 'material-cook-record-invalid',
-    expected: 'a complete material-cook/3 record with layered identity and provenance',
+    expected: 'a complete material-cook/4 record with layered identity and provenance',
     hint: 're-cook the material and publish its record, artifact, references, and receipt together',
     detail: {
       field,
@@ -220,6 +314,17 @@ function invalid(field: string, actual?: unknown): Result<never, MaterialCookRec
       action: 'inspect the named field and recook the material generation',
     },
   });
+}
+
+function normalizeArtifactBytes(value: unknown): Uint8Array | undefined {
+  if (Array.isArray(value)) {
+    return value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+      ? Uint8Array.from(value)
+      : undefined;
+  }
+  if (!ArrayBuffer.isView(value)) return undefined;
+  const view = value as ArrayBufferView;
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice();
 }
 
 const IDENTITY_FIELDS = [
@@ -272,7 +377,7 @@ export function validateMaterialCookReceipt(
 ): Result<MaterialCookReceipt, MaterialCookRecordError> {
   if (value === null || typeof value !== 'object') return invalid('receipt');
   const candidate = value as Record<string, unknown>;
-  if (candidate.schemaVersion !== 'material-cook/3')
+  if (candidate.schemaVersion !== 'material-cook/4')
     return invalid('receipt.schemaVersion', candidate.schemaVersion);
   const identityResult = validateIdentity(candidate.identity);
   if (!identityResult.ok) return identityResult;
@@ -283,6 +388,16 @@ export function validateMaterialCookReceipt(
   const derivedInterface = candidate.derivedInterface as Record<string, unknown>;
   if (derivedInterface.layoutIdentity !== identity.layoutIdentity) {
     return invalid('receipt.derivedInterface.layoutIdentity', derivedInterface.layoutIdentity);
+  }
+  if (
+    derivedInterface.layerPlanIdentity !== undefined &&
+    (typeof derivedInterface.layerPlanIdentity !== 'string' ||
+      derivedInterface.layerPlanIdentity.length === 0)
+  ) {
+    return invalid(
+      'receipt.derivedInterface.layerPlanIdentity',
+      derivedInterface.layerPlanIdentity,
+    );
   }
   for (const field of ['sourceClosure', 'profile', 'compilerVersion']) {
     const fieldValue = candidate[field];
@@ -313,12 +428,17 @@ export function validateMaterialCookReceipt(
     return invalid('receipt.identity.cookIdentity', identity.cookIdentity);
   }
   return ok({
-    schemaVersion: 'material-cook/3',
+    schemaVersion: 'material-cook/4',
     sourceClosure: candidate.sourceClosure as string[],
     profile: candidate.profile as string,
     compilerVersion: candidate.compilerVersion as string,
     identity,
-    derivedInterface: { layoutIdentity: derivedInterface.layoutIdentity as string },
+    derivedInterface: {
+      layoutIdentity: derivedInterface.layoutIdentity as string,
+      ...(derivedInterface.layerPlanIdentity === undefined
+        ? {}
+        : { layerPlanIdentity: derivedInterface.layerPlanIdentity as string }),
+    },
   });
 }
 
@@ -327,7 +447,7 @@ export function validateCookedMaterialRecord(
 ): Result<CookedMaterialRecord, MaterialCookRecordError> {
   if (value === null || typeof value !== 'object') return invalid('record');
   const candidate = value as Record<string, unknown>;
-  if (candidate.schemaVersion !== 'material-cook/3')
+  if (candidate.schemaVersion !== 'material-cook/4')
     return invalid('schemaVersion', candidate.schemaVersion);
   if (typeof candidate.guid !== 'string' || !candidate.guid) return invalid('guid');
   if (candidate.materialGuid !== undefined && typeof candidate.materialGuid !== 'string')
@@ -339,6 +459,8 @@ export function validateCookedMaterialRecord(
     return invalid('publicationGeneration', candidate.publicationGeneration);
   if (candidate.specializationKey !== undefined && typeof candidate.specializationKey !== 'string')
     return invalid('specializationKey');
+  if ('artifact' in candidate || 'variants' in candidate || 'variantContext' in candidate)
+    return invalid('programs', 'legacy single-artifact publication');
   if (candidate.artifactDigest !== undefined && typeof candidate.artifactDigest !== 'string')
     return invalid('artifactDigest');
   if (
@@ -363,39 +485,205 @@ export function validateCookedMaterialRecord(
   if (candidate.resolved === null || typeof candidate.resolved !== 'object')
     return invalid('resolved');
   if (candidate.refs === null || typeof candidate.refs !== 'object') return invalid('refs');
-  if (candidate.artifact === null || typeof candidate.artifact !== 'object')
-    return invalid('artifact');
   if (candidate.receipt === null || typeof candidate.receipt !== 'object')
     return invalid('receipt');
-  const artifact = candidate.artifact as Record<string, unknown>;
+  const resolved = candidate.resolved as Record<string, unknown>;
+  if (!Array.isArray(resolved.passes)) return invalid('resolved.passes', resolved.passes);
+  if (!Array.isArray(resolved.parameters))
+    return invalid('resolved.parameters', resolved.parameters);
   if (
-    typeof artifact.digest !== 'string' ||
-    (!Array.isArray(artifact.bytes) && !ArrayBuffer.isView(artifact.bytes))
-  ) {
-    return invalid('artifact');
+    resolved.values === null ||
+    typeof resolved.values !== 'object' ||
+    Array.isArray(resolved.values)
+  )
+    return invalid('resolved.values', resolved.values);
+  if (resolved.surface !== undefined && !isMaterialSurfaceDeclaration(resolved.surface))
+    return invalid('resolved.surface', resolved.surface);
+  const passes = resolved.passes as MaterialPass[];
+  const passNames = new Set<string>();
+  for (const [index, pass] of passes.entries()) {
+    if (
+      pass === null ||
+      typeof pass !== 'object' ||
+      typeof pass.name !== 'string' ||
+      !pass.name ||
+      passNames.has(pass.name) ||
+      pass.program === null ||
+      typeof pass.program !== 'object' ||
+      typeof pass.program.module !== 'string'
+    )
+      return invalid(`resolved.passes[${index}]`);
+    passNames.add(pass.name);
   }
+  if (!Array.isArray(candidate.programs) || candidate.programs.length === 0)
+    return invalid('programs');
+  const programs: MaterialCookProgram[] = [];
+  const programKeys = new Set<string>();
+  const selections = new Set<string>();
+  const submissionSelections = new Map<string, Set<MaterialProgramAddress>>();
+  let modernPublication = false;
+  let legacySelectionField: string | undefined;
+  const selectedPasses = new Set<string>();
+  for (const [index, entry] of candidate.programs.entries()) {
+    const field = `programs[${index}]`;
+    if (entry === null || typeof entry !== 'object') return invalid(field);
+    const program = entry as Record<string, unknown>;
+    if (
+      typeof program.specializationKey !== 'string' ||
+      !program.specializationKey ||
+      programKeys.has(program.specializationKey)
+    )
+      return invalid(`${field}.specializationKey`);
+    programKeys.add(program.specializationKey);
+    if (program.artifact === null || typeof program.artifact !== 'object')
+      return invalid(`${field}.artifact`);
+    const artifact = program.artifact as Record<string, unknown>;
+    const bytes = normalizeArtifactBytes(artifact.bytes);
+    if (
+      artifact.mediaType !== 'text/wgsl' ||
+      typeof artifact.path !== 'string' ||
+      !artifact.path ||
+      typeof artifact.digest !== 'string' ||
+      !artifact.digest ||
+      bytes === undefined
+    )
+      return invalid(`${field}.artifact`);
+    if (!Array.isArray(program.selections) || program.selections.length === 0)
+      return invalid(`${field}.selections`);
+    const programSelections: MaterialCookProgram['selections'][number][] = [];
+    for (const [selectionIndex, rawSelection] of program.selections.entries()) {
+      const selectionField = `${field}.selections[${selectionIndex}]`;
+      if (rawSelection === null || typeof rawSelection !== 'object') return invalid(selectionField);
+      const selection = rawSelection as Record<string, unknown>;
+      if (typeof selection.pass !== 'string' || !passNames.has(selection.pass))
+        return invalid(selectionField);
+      const context = validateMaterialCookProgramContext(selection.context);
+      if (!context.ok)
+        return invalid(
+          `${selectionField}.${context.error.detail.field}`,
+          context.error.detail.actual,
+        );
+      if (context.value.pipeline === 'ray') {
+        if (selection.address !== undefined || selection.abi !== undefined)
+          return invalid(
+            selectionField,
+            'ray-hit programs have no raster submission address or ABI',
+          );
+        if (selection.entry !== 'cs_surface')
+          return invalid(`${selectionField}.entry`, 'ray-hit Surface entry must be cs_surface');
+        const key = JSON.stringify([selection.pass, materialProgramContextKey(context.value)]);
+        if (selections.has(key)) return invalid(selectionField, 'ambiguous Pass/context selection');
+        selections.add(key);
+        programSelections.push({
+          pass: selection.pass,
+          context: context.value,
+          entry: 'cs_surface',
+        });
+        continue;
+      }
+      const address = selection.address === undefined ? 'direct' : selection.address;
+      if (address !== 'direct' && address !== 'scene-index')
+        return invalid(`${selectionField}.address`, selection.address);
+      const hasAddressFacts =
+        selection.address !== undefined ||
+        selection.entry !== undefined ||
+        selection.abi !== undefined;
+      modernPublication ||= hasAddressFacts;
+      if (!hasAddressFacts) legacySelectionField ??= selectionField;
+      const rawEntry = selection.entry;
+      const entry = typeof rawEntry === 'string' ? rawEntry : undefined;
+      if (hasAddressFacts && selection.address === undefined)
+        return invalid(
+          `${selectionField}.address`,
+          'modern ABI selections require an explicit address',
+        );
+      if (hasAddressFacts && (entry === undefined || entry.length === 0))
+        return invalid(`${selectionField}.entry`, rawEntry);
+      if (hasAddressFacts && !isMaterialProgramAbi(selection.abi))
+        return invalid(`${selectionField}.abi`, selection.abi);
+      if (hasAddressFacts) {
+        const abi = selection.abi as MaterialProgramAbi;
+        const expectedEntry = address === 'direct' ? abi.directEntry : abi.sceneIndexEntry;
+        if (entry !== expectedEntry)
+          return invalid(`${selectionField}.entry`, 'entry does not match published ABI');
+        const submissionKey = JSON.stringify([
+          selection.pass,
+          materialProgramContextKey(context.value),
+        ]);
+        const addresses =
+          submissionSelections.get(submissionKey) ?? new Set<MaterialProgramAddress>();
+        addresses.add(address);
+        submissionSelections.set(submissionKey, addresses);
+      }
+      const key = JSON.stringify([
+        selection.pass,
+        materialProgramContextKey(context.value),
+        address,
+      ]);
+      if (selections.has(key)) return invalid(selectionField, 'ambiguous Pass/context selection');
+      selections.add(key);
+      selectedPasses.add(selection.pass);
+      programSelections.push({
+        pass: selection.pass,
+        context: context.value,
+        ...(selection.address === undefined ? {} : { address }),
+        ...(entry === undefined ? {} : { entry }),
+        ...(selection.abi === undefined ? {} : { abi: selection.abi as MaterialProgramAbi }),
+      });
+    }
+    programs.push({
+      specializationKey: program.specializationKey,
+      artifact: { mediaType: 'text/wgsl', path: artifact.path, digest: artifact.digest, bytes },
+      selections: programSelections,
+    });
+  }
+  if (modernPublication && legacySelectionField !== undefined) {
+    return invalid(
+      legacySelectionField,
+      'modern material publications require address, entry, and ABI facts on every selection',
+    );
+  }
+  for (const [selectionKey, addresses] of submissionSelections) {
+    if (addresses.size !== 2) {
+      return invalid('programs.selections', `incomplete submission address pair: ${selectionKey}`);
+    }
+  }
+  if ([...passNames].some((pass) => !selectedPasses.has(pass)))
+    return invalid('programs.selections', 'unpublished Pass');
+  const manifestDigest = createMaterialProgramSetDigest(programs, passes);
   const receiptResult = validateMaterialCookReceipt(candidate.receipt, {
-    artifactDigest: artifact.digest as string,
+    artifactDigest: manifestDigest,
   });
   if (!receiptResult.ok) return receiptResult;
-  if (candidate.artifactDigest !== undefined && candidate.artifactDigest !== artifact.digest)
+  let expectedLayerPlanIdentity: string | undefined;
+  try {
+    expectedLayerPlanIdentity = materialLayerPlanIdentity({
+      resolved: resolved as unknown as CookedMaterialRecord['resolved'],
+    });
+  } catch (error) {
+    return invalid('resolved.layerPlanIdentity', error instanceof Error ? error.message : error);
+  }
+  if (
+    expectedLayerPlanIdentity !== undefined &&
+    receiptResult.value.derivedInterface.layerPlanIdentity !== expectedLayerPlanIdentity
+  ) {
+    return invalid(
+      'receipt.derivedInterface.layerPlanIdentity',
+      receiptResult.value.derivedInterface.layerPlanIdentity,
+    );
+  }
+  if (candidate.artifactDigest !== undefined && candidate.artifactDigest !== manifestDigest)
     return invalid('artifactDigest', candidate.artifactDigest);
   if (
     candidate.publicationGeneration !== undefined &&
     receiptResult.value.identity.cookGeneration !== candidate.publicationGeneration
   )
     return invalid('receipt.identity.cookGeneration', receiptResult.value.identity.cookGeneration);
-  const normalized = {
+  return ok({
     ...candidate,
-    artifact: {
-      ...artifact,
-      bytes: ArrayBuffer.isView(artifact.bytes)
-        ? Uint8Array.from(artifact.bytes as Uint8Array)
-        : Uint8Array.from(artifact.bytes as number[]),
-    },
+    programs,
     receipt: receiptResult.value,
-  } as CookedMaterialRecord;
-  return ok(normalized);
+  } as unknown as CookedMaterialRecord);
 }
 
 export function projectCookedMaterialRecord(
@@ -404,8 +692,104 @@ export function projectCookedMaterialRecord(
   return {
     resolved: record.resolved,
     refs: record.refs,
-    artifact: record.artifact,
+    programs: record.programs,
     receipt: record.receipt,
     schemaVersion: record.schemaVersion,
   };
+}
+
+/** Canonical context key shared by publication validation and runtime selection. */
+export function materialProgramContextKey(context: MaterialCookProgramContext): string {
+  return JSON.stringify(jsonValue(context));
+}
+
+/** One pass-domain projection for both the cooker and runtime selector. */
+export function materialProgramContextForPass(
+  context: MaterialCookRasterContext,
+  lightMode: string,
+): MaterialCookRasterContext {
+  const pass = /shadow/i.test(lightMode)
+    ? 'shadow'
+    : /depth/i.test(lightMode)
+      ? 'depth'
+      : 'forward';
+  const { visibleSurface, ...base } = context;
+  return {
+    ...base,
+    pipeline: /deferred|gbuffer/i.test(lightMode) ? 'deferred' : context.pipeline,
+    pass,
+    ...(pass === 'forward' && visibleSurface === true ? { visibleSurface: true } : {}),
+  };
+}
+
+export function validateMaterialCookProgramContext(
+  value: unknown,
+): Result<MaterialCookProgramContext, MaterialCookRecordError> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return invalid('context', value);
+  const context = value as Record<string, unknown>;
+  if (context.pipeline === 'ray') {
+    const fields = {
+      backend: ['webgpu', 'wgpu-native'],
+      capability: ['storage-buffer'],
+      pipeline: ['ray'],
+      geometry: ['mesh'],
+      pass: ['ray-hit'],
+      profile: ['forgeax-material-ray-v1'],
+      toolchain: ['naga-oil'],
+      instrumentation: ['none'],
+    };
+    for (const field of Object.keys(context))
+      if (!(field in fields)) return invalid(`context.${field}`, context[field]);
+    for (const [field, allowed] of Object.entries(fields))
+      if (!allowed.includes(context[field] as string))
+        return invalid(`context.${field}`, context[field]);
+    return ok({ ...context } as unknown as MaterialCookRayContext);
+  }
+  const fields = {
+    backend: ['webgpu', 'webgl2', 'wgpu-native'],
+    capability: ['storage-buffer', 'uniform-fallback'],
+    pipeline: ['forward', 'deferred'],
+    geometry: ['mesh', 'skinned', 'sprite', 'sprite-instances'],
+    pass: ['forward', 'shadow', 'depth'],
+    profile: ['forgeax-material-wgsl-v1'],
+    toolchain: ['naga-oil'],
+    instrumentation: ['none', 'validation'],
+  };
+  for (const field of Object.keys(context)) {
+    if (field === 'visibleSurface') {
+      if (context[field] !== true) return invalid(`context.${field}`, context[field]);
+    } else if (!(field in fields)) return invalid(`context.${field}`, context[field]);
+  }
+  for (const [field, allowed] of Object.entries(fields)) {
+    if (!allowed.includes(context[field] as string))
+      return invalid(`context.${field}`, context[field]);
+  }
+  return ok({ ...context } as unknown as MaterialCookProgramContext);
+}
+
+/** Covers every selection and artifact while excluding transport copies of the bytes. */
+export function createMaterialProgramSetDigest(
+  programs: readonly MaterialCookProgram[],
+  passes: readonly MaterialPass[],
+): string {
+  const manifest = {
+    passes,
+    programs: programs
+      .map((program) => ({
+        specializationKey: program.specializationKey,
+        artifact: {
+          path: program.artifact.path,
+          mediaType: program.artifact.mediaType,
+          digest: program.artifact.digest,
+        },
+        selections: [...program.selections].sort((a, b) =>
+          JSON.stringify(jsonValue(a)).localeCompare(JSON.stringify(jsonValue(b))),
+        ),
+      }))
+      .sort((a, b) => a.specializationKey.localeCompare(b.specializationKey)),
+  };
+  return createMaterialArtifactDigest(
+    new TextEncoder().encode(JSON.stringify(jsonValue(manifest))),
+  );
 }

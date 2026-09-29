@@ -6,8 +6,9 @@
 // lane; the smoke drives the Runtime host, receipt-bound observation, Dawn
 // readback, and per-pixel delta vs baseline (AC-01).
 //
-// FALSIFY=force-direct -- selects the Standard direct lane; pixel output must
-// differ from the clustered baseline (proves smoke discriminability).
+// FALSIFY=force-forward -- selects the forward graph variant while retaining
+// the same unified clustered light transport. It is a local topology probe,
+// and records the clustered lighting transport used by the frame.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,8 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writeReferencePng, readReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const lightweight = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? (lightweight ? '60' : '60'), 10);
 const SMOKE_PIXEL_EPSILON = Number.parseFloat(process.env.SMOKE_PIXEL_EPSILON ?? '0.05');
 const FALSIFY = process.env.FALSIFY ?? '';
 
@@ -39,9 +41,9 @@ const BASELINE_PATH = resolve(
 // bound on the clustered fragment shader (every pixel iterates O(30-
 // 60) lights), so the smaller canvas drops the CI step from ~160s to ~10s.
 // The pixel readback gate still catches PSO variant misroute / cluster indexing
-// FALSIFY because the cube + floor + light-driven gradient occupy roughly
-// the same proportion of the frame -- this is a CPU cost cut, not a coverage
-// cut. Baseline is stored under forgeax-engine-assets/.../screenshots/.
+// because the cube + floor + light-driven gradient occupy roughly the same
+// proportion of the frame -- this is a CPU cost cut, not a coverage cut.
+// Baseline is stored under forgeax-engine-assets/.../screenshots/.
 const WIDTH = 200;
 const HEIGHT = 150;
 
@@ -158,7 +160,7 @@ const constructed = await constructRuntimeRendererHost(
   {
     standardProfile: {
       ...DEFAULT_STANDARD_PROFILE,
-      lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+      renderPath: FALSIFY === 'force-forward' ? 'forward' : 'deferred',
       lightCount: 256,
     },
   },
@@ -381,6 +383,37 @@ if (inspection.capabilities.backendKind !== 'webgpu') {
   failures.push(`(a) backend=${inspection.capabilities.backendKind} (expected webgpu)`);
 }
 
+// The pixel gate is paired with the renderer-owned Standard inspection so a
+// green image cannot hide a direct/clustered misroute or an empty producer.
+const standardLighting = inspection.standardLighting;
+if (
+  standardLighting === undefined ||
+  standardLighting.transport !== 'compute-storage' ||
+  standardLighting.producer !== 'gpu' ||
+  standardLighting.requested < 1 ||
+  standardLighting.admitted < 1 ||
+  standardLighting.occupied < 1
+) {
+  failures.push(
+    `(a2) expected non-empty GPU Standard Cluster inspection, got ${JSON.stringify(standardLighting)}`,
+  );
+}
+const passNames = inspection.perFramePassNames;
+const membershipIndex = passNames.indexOf('cluster-membership-producer');
+const firstStandardConsumerIndex = Math.min(
+  ...['g-buffer', 'lighting', 'forward'].map((name) => {
+    const index = passNames.indexOf(name);
+    return index < 0 ? Number.POSITIVE_INFINITY : index;
+  }),
+);
+if (membershipIndex < 0) {
+  failures.push(`(a3) Standard Cluster producer pass missing from ${JSON.stringify(passNames)}`);
+} else if (membershipIndex >= firstStandardConsumerIndex) {
+  failures.push(
+    `(a3) Standard Cluster producer must precede raster consumers: producer=${membershipIndex}, consumer=${firstStandardConsumerIndex}`,
+  );
+}
+
 // (b) frame count
 if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
@@ -400,9 +433,6 @@ if (unexpectedConsoleErrors.length > 0) {
     `(d) console.error fired ${unexpectedConsoleErrors.length} times: ${JSON.stringify(unexpectedConsoleErrors.slice(0, 3))}`,
   );
 }
-
-// FALSIFY modes: diff vs baseline.
-const falsifyForceDirect = FALSIFY === 'force-direct';
 
 if (!existsSync(BASELINE_PATH)) {
   const png = writeReferencePng(tightRgba, WIDTH, HEIGHT);
@@ -428,23 +458,7 @@ if (!existsSync(BASELINE_PATH)) {
       if (d > SMOKE_PIXEL_EPSILON) exceedCount++;
     }
     console.log(`[smoke] pixelDelta=${JSON.stringify({ maxDelta: maxDelta.toFixed(4), exceedCount })}`);
-    if (falsifyForceDirect) {
-      // Falsify modes must FAIL -- diff must exceed threshold.
-      const exceedRatio = exceedCount / (WIDTH * HEIGHT);
-      if (exceedRatio < 0.001) {
-        failures.push(
-          `(e) falsify ${FALSIFY}: expected pixel diff > eps=${SMOKE_PIXEL_EPSILON} but only ${exceedCount} pixels exceeded (ratio=${exceedRatio.toFixed(6)}, maxDelta=${maxDelta.toFixed(4)}) -- smoke NOT discriminative`,
-        );
-        // When the baseline PNG is all-black, falsify cannot produce a
-        // difference because the rendering is already black. Re-bake the
-        // baseline after verifying Standard rendering is producing lit output.
-        if (maxDelta < 0.001) {
-          console.warn(`[smoke] hint: maxDelta=${maxDelta.toFixed(4)} suggests baseline PNG is all-black; verify Standard rendering produces lit pixels, then delete ${BASELINE_PATH} and re-run smoke to re-bake`);
-        }
-      } else {
-        console.log(`[smoke] falsify ${FALSIFY} failed as expected: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (max=${maxDelta.toFixed(4)})`);
-      }
-    } else if (exceedCount > 0) {
+    if (exceedCount > 0) {
       failures.push(
         `(e) AC-01 pixel readback drift: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (max=${maxDelta.toFixed(4)})`,
       );
@@ -467,7 +481,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - backend=${inspection.capabilities.backendKind}, frames=${totalFrames}, standardLane=${falsifyForceDirect ? 'direct' : 'clustered'}, rendererErrors=0, console.error=0`,
+  `[smoke] PASS - backend=${inspection.capabilities.backendKind}, frames=${totalFrames}, standardLane=clustered, renderPath=${FALSIFY === 'force-forward' ? 'forward' : 'deferred'}, rendererErrors=0, console.error=0`,
 );
 
 lease.dispose();

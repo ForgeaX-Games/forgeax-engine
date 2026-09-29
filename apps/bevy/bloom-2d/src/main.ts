@@ -1,6 +1,6 @@
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
-import { BLOOM_DISABLED, BLOOM_ENABLED, Camera } from '@forgeax/engine-render';
+import { BLOOM_DISABLED, BLOOM_ENABLED, Camera } from '@forgeax/engine/render';
 import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildBloom2dWorld } from './bloom-2d';

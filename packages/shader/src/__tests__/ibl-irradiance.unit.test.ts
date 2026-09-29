@@ -27,17 +27,29 @@ beforeAll(async () => {
 });
 
 describe('IBL irradiance payload contract', () => {
-  it('records that convolution produces E times pi before the Lambert divide', () => {
-    expect(irradianceSource).toContain('IRRADIANCE_PAYLOAD_E_TIMES_PI');
+  it('records that convolution stores Lambert-normalized E over pi', () => {
+    expect(irradianceSource).toContain('IRRADIANCE_PAYLOAD_E_OVER_PI');
     expect(irradianceSource).toMatch(/irradiance\s*=\s*PI\s*\*\s*irradiance/);
   });
 
   it('keeps the constant-environment analytic oracle finite and explicit', () => {
     const environment = 0.72;
-    const convolvedPayload = environment * Math.PI;
-    const diffuseRadiance = convolvedPayload / Math.PI;
+    // The hemisphere integral is E=pi*L for a constant environment. The
+    // convolution shader's PI*sampleAverage stores E/pi=L directly, which is
+    // the Lambert diffuse radiance consumed by the material shader.
+    const convolvedPayload = environment;
+    const diffuseRadiance = convolvedPayload;
 
     expect(diffuseRadiance).toBeCloseTo(environment, 12);
     expect(Number.isFinite(diffuseRadiance)).toBe(true);
+  });
+
+  it('rejects NaN and infinity before a sample reaches the accumulation sum', () => {
+    expect(irradianceSource).toMatch(/const IRRADIANCE_SAMPLE_DELTA:\s*f32\s*=\s*0\.05/);
+    expect(irradianceSource).toContain('fn irradianceFiniteScalar');
+    expect(irradianceSource).toContain('abs(value) <= 65504.0');
+    expect(irradianceSource).toMatch(
+      /irradianceFiniteVec3\(sampleVec\)[\s\S]*irradianceFiniteVec3\(sampleColor\)[\s\S]*irradianceFiniteScalar\(sampleWeight\)/,
+    );
   });
 });

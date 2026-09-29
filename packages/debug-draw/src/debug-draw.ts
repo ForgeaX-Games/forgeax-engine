@@ -177,6 +177,10 @@ export class DebugDraw implements DebugDrawInterface {
     return this.capVal;
   }
 
+  hasWork(): boolean {
+    return !this.isDestroyed && this.stagingLen > 0;
+  }
+
   /** @internal Whether destroy() has been called. */
   get _destroyed(): boolean {
     return this.isDestroyed;
@@ -632,7 +636,7 @@ export async function createDebugDraw(
       ? {
           format: (depthFormat ?? 'depth24plus') as GPUTextureFormat,
           depthWriteEnabled: false,
-          depthCompare: 'less-equal',
+          depthCompare: 'greater-equal',
         }
       : undefined;
 

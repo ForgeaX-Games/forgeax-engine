@@ -52,6 +52,7 @@
 //     introduced in feat-20260612 M1 / w1).
 
 import type { Buffer, Result, RhiDevice, RhiError, Texture } from '@forgeax/engine-rhi';
+import type { DeviceScope } from './device/device-scope';
 
 /**
  * Runtime wrapper around an RHI `Buffer` opaque handle that exposes
@@ -81,10 +82,17 @@ export class GpuBuffer {
   // BUFFER_META_MAP. This local flag is a derived view written only on
   // the success branch of `device.destroyBuffer(...)`; charter §F1.
   private destroyed = false;
+  private releaseScope: (() => void) | undefined;
 
-  constructor(device: RhiDevice, handle: Buffer) {
+  constructor(device: RhiDevice, handle: Buffer, scope?: DeviceScope) {
     this.device = device;
     this.handle = handle;
+    if (scope !== undefined) {
+      const ref = scope._adopt('buffer', this, (value) => {
+        if (!value.isDestroyed) value.destroy();
+      });
+      this.releaseScope = () => scope._release(ref);
+    }
   }
 
   get isDestroyed(): boolean {
@@ -101,6 +109,8 @@ export class GpuBuffer {
     const r = this.device.destroyBuffer(this.handle);
     if (r.ok) {
       this.destroyed = true;
+      this.releaseScope?.();
+      this.releaseScope = undefined;
     }
     return r;
   }
@@ -126,10 +136,17 @@ export class GpuTexture {
   readonly device: RhiDevice;
   readonly handle: Texture;
   private destroyed = false;
+  private releaseScope: (() => void) | undefined;
 
-  constructor(device: RhiDevice, handle: Texture) {
+  constructor(device: RhiDevice, handle: Texture, scope?: DeviceScope) {
     this.device = device;
     this.handle = handle;
+    if (scope !== undefined) {
+      const ref = scope._adopt('texture', this, (value) => {
+        if (!value.isDestroyed) value.destroy();
+      });
+      this.releaseScope = () => scope._release(ref);
+    }
   }
 
   get isDestroyed(): boolean {
@@ -144,6 +161,8 @@ export class GpuTexture {
     const r = this.device.destroyTexture(this.handle);
     if (r.ok) {
       this.destroyed = true;
+      this.releaseScope?.();
+      this.releaseScope = undefined;
     }
     return r;
   }

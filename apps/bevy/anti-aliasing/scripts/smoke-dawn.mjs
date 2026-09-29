@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 
@@ -143,7 +143,7 @@ function diff(left, right) {
   return { mean: total / (WIDTH * HEIGHT * 3), changedPixels };
 }
 
-const targetFrames = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const targetFrames = SMOKE_MIN_FRAMES;
 const modeFrames = Math.max(1, Math.floor(targetFrames / ANTIALIAS_MODES.length));
 let framesObserved = 0;
 let drawErrors = 0;

@@ -42,13 +42,21 @@ export function loadEngineImportsMap(roots: readonly string[]): Record<string, s
       continue;
     }
     for (const entry of entries) {
-      if (extname(entry) !== '.wgsl') continue;
       const filePath = join(root, entry);
+      let nestedEntries: string[] | undefined;
+      try {
+        nestedEntries = readdirSync(filePath);
+      } catch {
+        nestedEntries = undefined;
+      }
+      if (nestedEntries !== undefined) {
+        Object.assign(map, loadEngineImportsMap([filePath]));
+        continue;
+      }
+      if (extname(entry) !== '.wgsl') continue;
       const source = readFileSync(filePath, 'utf8');
       const match = DEFINE_IMPORT_PATH_RE.exec(source);
-      if (match?.[1] !== undefined) {
-        map[match[1]] = source;
-      }
+      if (match?.[1] !== undefined) map[match[1]] = source;
     }
   }
   _cache.set(cacheKey, map);

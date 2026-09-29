@@ -1,4 +1,4 @@
-import { defineToolPlugin } from '@forgeax/engine-plugin';
+import { type Plugin, registerTools } from '@forgeax/engine-plugin';
 import type {
   JsonValue,
   ToolContribution,
@@ -172,13 +172,26 @@ function toJsonValue(value: unknown): JsonValue {
   return String(value);
 }
 
+// Keep emitted preview declarations tied to the declared Engine plugin owner.
+// Inferred Cordis types can resolve a different ancestor dependency in consumers.
+export interface NativePreviewPlugin extends Plugin.Object {
+  name: string;
+  inject: string[];
+}
+
 export function nativePreviewPlugin(
   kind: PreviewSubjectKind,
   contribution: ToolContribution<ResourcePreviewArgs, unknown>,
-) {
-  return defineToolPlugin({ name: `forgeax-preview-${kind}`, apply() {} }, [
-    contribution as ToolContribution<unknown, unknown>,
-  ]);
+): NativePreviewPlugin {
+  return {
+    name: `forgeax-preview-${kind}`,
+    inject: ['toolApi', previewHostCapability.id],
+    apply(ctx) {
+      ctx.effect(() =>
+        registerTools(ctx, [contribution as ToolContribution<unknown, unknown>], { realm: 'host' }),
+      );
+    },
+  };
 }
 
 export async function failUnboundSubject(

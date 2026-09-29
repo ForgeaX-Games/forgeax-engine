@@ -5,6 +5,7 @@
 import type { Result, RhiDevice } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
+import { digestBytesAsync } from '../protocol/codec';
 import {
   readbackBufferBytes,
   readbackBufferBytesBatch,
@@ -20,22 +21,32 @@ import {
   _topoSortClosure,
 } from './closure';
 import {
-  isDepthOrStencilFormat,
   isMappableBuffer,
-  isSnapshottableColorTexture,
+  isSnapshottableTexture,
   pushSnapshotEvent,
   type RecorderInternal,
   RecorderState,
   reconcileSwapchainViewFormats,
   SNAPSHOT_RESOURCE_BATCH_SIZE,
+  SNAPSHOT_STAGING_BYTES,
   SNAPSHOT_TIMEOUT_MS,
+  snapshotProgressDetail,
+  snapshotResourceBytes,
   snapshotStageOf,
   snapshotTimeoutDetail,
-  storeBlob,
   TAPE_FORMAT_VERSION,
 } from './core';
 
 export function createRecorderLifecycle(s: RecorderInternal) {
+  async function storeSnapshotBlob(bytes: ArrayBuffer, isCurrent: () => boolean) {
+    const hash = await digestBytesAsync(new Uint8Array(bytes));
+    // Hash completion can arrive after timeout, device loss or a new capture.
+    // Only the generation that requested these bytes may publish them.
+    if (!isCurrent()) return undefined;
+    if (!s.blobPool.has(hash)) s.blobPool.set(hash, bytes);
+    return hash;
+  }
+
   function arm(frames: number): Result<void, RhiDebugError> {
     if (
       s.state === RecorderState.Armed ||
@@ -299,7 +310,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
    *
    * Reads the resource shape from the descriptor registry, copies the bytes
    * back from the GPU via readbackBufferBytes (buffer) / readbackTexturePixels
-   * (texture), stores them in the blobPool (djb2 hash-dedup), and pushes an
+   * (texture), stores them in the blobPool (SHA-256 deduplication), and pushes an
    * `initialData` event into the stream. The snapshot's own copy/submit are
    * wrapped in `_skipRecord = true` so they never leak into the tape event
    * stream (D-8 isolation).
@@ -387,7 +398,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
           entry.mipLevelCount ?? 1,
         );
         if (layout === undefined) {
-          // Should not happen: the snapshot loop's isSnapshottableColorTexture
+          // Should not happen: the snapshot loop's isSnapshottableTexture
           // gate already excludes formats with no texel size. Fail fast rather
           // than emit a corrupt seed.
           return fail(
@@ -414,15 +425,13 @@ export function createRecorderLifecycle(s: RecorderInternal) {
                 blockHeight: layout.blockHeight,
                 mipLevel: slice.mip,
                 baseArrayLayer: slice.layer,
+                ...(entry.format === 'depth32float' ? { aspect: 'depth-only' as const } : {}),
               },
             );
             if (!snapshotIsActive()) return cancelled();
             blob.set(sub.subarray(0, slice.byteLength), slice.byteOffset);
           }
-          bytes = blob.buffer.slice(
-            blob.byteOffset,
-            blob.byteOffset + blob.byteLength,
-          ) as ArrayBuffer;
+          bytes = blob.buffer as ArrayBuffer;
         } catch (e) {
           return fail(
             'copy',
@@ -443,16 +452,18 @@ export function createRecorderLifecycle(s: RecorderInternal) {
 
     if (!snapshotIsActive()) return cancelled();
 
-    // storeBlob: djb2 hash-dedup into the unified blobPool (D-1, no separate
+    // SHA-256 dedup takes ownership of the detached readback (no separate
     // init-data pool). Reuses the same tag space as writeBuffer/writeTexture.
     let dataHash: string;
     try {
-      dataHash = storeBlob(s, bytes);
+      const hash = await storeSnapshotBlob(bytes, snapshotIsActive);
+      if (hash === undefined) return cancelled();
+      dataHash = hash;
     } catch (e) {
       return fail(
         'store',
-        'storeBlob to hash + insert the snapshot bytes',
-        `storeBlob failed: ${String(e)}`,
+        'native SHA-256 to hash and retain the current snapshot bytes',
+        `snapshot digest failed: ${String(e)}`,
       );
     }
 
@@ -513,10 +524,20 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       }
       return result;
     } catch (error) {
+      const progress =
+        s.snapshotGeneration === snapshotGeneration
+          ? snapshotProgressDetail(s.snapshotProgress)
+          : undefined;
       if (s.state === RecorderState.Snapshotting && s.snapshotGeneration === snapshotGeneration) {
         transitionToError();
       }
-      throw error;
+      return makeErr(
+        createRhiDebugError('capture-snapshot-failed', {
+          stage: 'snapshot',
+          cause: String(error),
+          ...(progress === undefined ? {} : { progress }),
+        }),
+      );
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -565,7 +586,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     }
 
     const liveEntries = [...s.descriptorTable.entries()];
-    const candidates = liveEntries.filter(([handleId, entry]) => {
+    const candidates = liveEntries.filter(([, entry]) => {
       // Mappable buffers are staging scratch, not seedable authored resources.
       if (entry.kind === 'buffer' && isMappableBuffer(entry.usage)) {
         if (s.snapshotProgress !== undefined) {
@@ -576,24 +597,11 @@ export function createRecorderLifecycle(s: RecorderInternal) {
         }
         return false;
       }
-      // Depth/stencil and multisample textures cannot be faithfully re-seeded.
+      // Only formats with an exact snapshot and restore path may be seeded.
       if (
         entry.kind === 'texture' &&
-        (isDepthOrStencilFormat(entry.format) ||
-          !isSnapshottableColorTexture(entry.format, entry.size, entry.sampleCount))
+        !isSnapshottableTexture(entry.format, entry.size, entry.sampleCount)
       ) {
-        if (s.snapshotProgress !== undefined) {
-          s.snapshotProgress = {
-            ...s.snapshotProgress,
-            skippedResources: s.snapshotProgress.skippedResources + 1,
-          };
-        }
-        return false;
-      }
-      // Preserve the existing transient-texture policy: a texture destroyed
-      // before its turn is skipped, while a resource already admitted to a
-      // batch retains its seed even if it is released during that batch.
-      if (entry.kind === 'texture' && !s.descriptorTable.has(handleId)) {
         if (s.snapshotProgress !== undefined) {
           s.snapshotProgress = {
             ...s.snapshotProgress,
@@ -648,15 +656,32 @@ export function createRecorderLifecycle(s: RecorderInternal) {
         if (first === undefined) break;
         const kind = first[1].kind;
         const batchEntries: typeof candidates = [];
+        let stagingBytes = 0;
         while (
           offset < candidates.length &&
           batchEntries.length < SNAPSHOT_RESOURCE_BATCH_SIZE &&
           candidates[offset]?.[1].kind === kind
         ) {
           const candidate = candidates[offset];
-          if (candidate !== undefined) batchEntries.push(candidate);
+          // Earlier batches await GPU work, allowing graph retirement to
+          // remove later candidates. Recheck at the synchronous copy-admission
+          // boundary so the recorder never submits a destroyed resource.
+          if (candidate !== undefined) {
+            if (s.descriptorTable.has(candidate[0])) {
+              const bytes = snapshotResourceBytes(candidate[1]).staging;
+              if (batchEntries.length > 0 && stagingBytes + bytes > SNAPSHOT_STAGING_BYTES) break;
+              batchEntries.push(candidate);
+              stagingBytes += bytes;
+            } else if (s.snapshotProgress !== undefined) {
+              s.snapshotProgress = {
+                ...s.snapshotProgress,
+                skippedResources: s.snapshotProgress.skippedResources + 1,
+              };
+            }
+          }
           offset += 1;
         }
+        if (batchEntries.length === 0) continue;
 
         if (s.snapshotProgress !== undefined) {
           s.snapshotProgress = {
@@ -719,7 +744,8 @@ export function createRecorderLifecycle(s: RecorderInternal) {
                 }),
               );
             }
-            const dataHash = storeBlob(s, bytes);
+            const dataHash = await storeSnapshotBlob(bytes, snapshotIsActive);
+            if (dataHash === undefined) return cancelledResult();
             pushSnapshotEvent(s, { kind: 'initialData', handleId, dataHash });
             s.snapshotSeededHandles.add(handleId);
           }
@@ -739,6 +765,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
             return {
               handleId,
               texture: entry.resource,
+              ...(entry.format === 'depth32float' ? { aspect: 'depth-only' as const } : {}),
               bytesPerBlock: layout.bytesPerBlock,
               blockWidth: layout.blockWidth,
               blockHeight: layout.blockHeight,
@@ -789,7 +816,8 @@ export function createRecorderLifecycle(s: RecorderInternal) {
                 }),
               );
             }
-            const dataHash = storeBlob(s, bytes);
+            const dataHash = await storeSnapshotBlob(bytes, snapshotIsActive);
+            if (dataHash === undefined) return cancelledResult();
             pushSnapshotEvent(s, { kind: 'initialData', handleId, dataHash });
             s.snapshotSeededHandles.add(handleId);
             if (s.snapshotProgress !== undefined) {

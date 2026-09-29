@@ -2,7 +2,7 @@
 
 // @forgeax/engine-shader - atmosphere-background.wgsl
 //
-// Background composition is deliberately separate from the Preetham cube.
+// Background composition is deliberately separate from the Daylight cube.
 // The sun disc is added exactly once at the background consumer and is never
 // part of the sky-cube or IBL producer output.
 
@@ -21,7 +21,8 @@ struct AtmosphereBackgroundParams {
   mieDirectionalG: f32,
   sunAngularRadius: f32,
   sunDiscEnabled: f32,
-  _tailPad: vec2<f32>,
+  circumsolarStrength: f32,
+  circumsolarWidth: f32,
 };
 
 @group(0) @binding(0) var sky: texture_cube<f32>;
@@ -48,16 +49,16 @@ fn atmosphere_sun_disc_radiance(
 
 @vertex
 fn atmosphere_background_vs(@builtin(vertex_index) vertexIndex: u32) -> FullscreenOutput {
-  // Keep the fullscreen primitive at the far plane. The render graph binds
-  // the existing depth authority read-only, so fixed-function less-equal
-  // rejects background fragments covered by geometry without sampling depth.
+  // Initialize the far-plane background before scene draws. The shared
+  // geometry depth authority preserves occlusion and transparent blending;
+  // background never samples depth or overwrites a later foreground.
   var output = fullscreen_triangle(vertexIndex);
-  output.position.z = 1.0;
+  output.position.z = 0.0;
   return output;
 }
 
 fn atmosphere_background_direction(uv: vec2<f32>) -> vec3<f32> {
-  let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
+  let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
   let world = view.inverseViewProj * ndc;
   return normalize(world.xyz / world.w - view.cameraPos);
 }

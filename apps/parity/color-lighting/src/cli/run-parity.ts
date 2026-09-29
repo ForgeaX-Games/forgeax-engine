@@ -1,5 +1,5 @@
 import type { CaptureEnvelope } from '../capture/named-capture';
-import type { ForgeaxAdapter } from '../adapters/forgeax-adapter';
+import type { ForgeaxAdapter, ForgeaxSurfaceEvidence } from '../adapters/forgeax-adapter';
 import type { ThreeAdapter } from '../adapters/three-adapter';
 import type { CaseReport, ParityProvenance, PrimaryMetric, SceneCase } from '../contracts/types';
 import { type ColorLightingParityError, parityError } from '../errors';
@@ -14,6 +14,7 @@ export interface CaseRunResult {
   readonly report: CaseReport;
   readonly errorCode?: string;
   readonly expectedErrorCode?: string;
+  readonly surfaceEvidence?: ForgeaxSurfaceEvidence;
 }
 
 export interface ParityMatrixResult {
@@ -187,6 +188,7 @@ async function runCase(
       passed: expected,
       report: expectedFailureReport(sceneCase, fallbackForgeax, fallbackThree, error),
       errorCode: error.code,
+      ...(fallbackForgeax.surfaceEvidence === undefined ? {} : { surfaceEvidence: fallbackForgeax.surfaceEvidence }),
       ...(expectedErrorCode === undefined ? {} : { expectedErrorCode }),
     };
   }
@@ -223,6 +225,7 @@ async function runCase(
       passed: expectedErrorCode === error.code,
       report,
       errorCode: error.code,
+      ...(forgeax.surfaceEvidence === undefined ? {} : { surfaceEvidence: forgeax.surfaceEvidence }),
       ...(expectedErrorCode === undefined ? {} : { expectedErrorCode }),
     };
   }
@@ -250,6 +253,7 @@ async function runCase(
     caseId: sceneCase.caseId,
     passed,
     report: enrichedReport,
+    ...(forgeax.surfaceEvidence === undefined ? {} : { surfaceEvidence: forgeax.surfaceEvidence }),
     ...(evaluated.ok ? {} : { errorCode: evaluated.error.code }),
     ...(expectedErrorCode === undefined ? {} : { expectedErrorCode }),
   };

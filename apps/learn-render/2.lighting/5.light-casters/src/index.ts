@@ -8,7 +8,12 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
@@ -110,7 +115,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     importTransport: createRuntimeAssetImportTransport(runtimeBinding),
   };
   const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
-    overrideBackend === undefined
+      overrideBackend === undefined
       ? await createApp(target, {}, bundler)
       : await createFirstPersonControls(target, overrideBackend, bundler);
   if (!appRes.ok) {
@@ -120,6 +125,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const app = appRes.value;
   const world = app.world;
+  const inspection = app.renderer.inspect();
+  target.dataset.renderPath = inspection.profile.renderPath;
+  target.dataset.backend = inspection.capabilities.backendKind;
+  target.dataset.passCount = String(inspection.perFramePassNames.length);
+  console.warn(
+    `[learn-render 2.5 light-casters] renderPath=${inspection.profile.renderPath} ` +
+      `backend=${inspection.capabilities.backendKind} passes=${inspection.perFramePassNames.length}`,
+  );
   app.onError((error) => {
     console.error('[learn-render 2.5 light-casters] app.onError:', error.code, error.hint);
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;

@@ -1,3 +1,4 @@
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 // apps/shadertoy/happy-blob/src/index.ts
 //
 // Original raymarched SDF creature (no third-party shader code). A blobby
@@ -7,7 +8,7 @@
 //   - createPlaneGeometry(1, 1) is a unit plane; the custom vertex shader
 //     scales it x2 to fill NDC [-1, 1] and bypasses the camera transform.
 //   - iResolution (vec2) + iTime (f32) ride in the @group(1) @binding(0)
-//     material UBO via paramSchema; the raf loop mutates iTime per frame.
+//     material UBO via paramSchema; World publishes iTime per frame.
 //
 // A Camera entity is spawned only so the engine runs the forward pass; its pose
 // is irrelevant because the custom vertex shader emits clip-space directly.
@@ -86,10 +87,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', program: { module: BLOB_SHADER_PATH }, renderState: { ...{ cullMode: 'none' }, tags: { LightMode: 'Forward' }, queue: 2000 } },
+      {
+        name: 'Forward',
+        program: { module: BLOB_SHADER_PATH },
+        renderState: {
+          cullMode: 'none',
+          depthCompare: 'always',
+          depthWriteEnabled: false,
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      },
     ],
     values,
   });
+
+  const timeValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iTime', value: [0] } }).unwrap();
+  const resolutionValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iResolution', kind: 2, value: [target.width, target.height] } }).unwrap();
 
   const planeRes = createPlaneGeometry(1, 1);
   if (!planeRes.ok) {
@@ -119,14 +133,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const h = target.clientHeight || cssH;
       target.width = Math.max(1, Math.floor(w * renderScale));
       target.height = Math.max(1, Math.floor(h * renderScale));
-      values.iResolution = [target.width, target.height];
+      world.set(resolutionValue, RuntimeMaterialValue, { value: [target.width, target.height] }).unwrap();
     });
   }
 
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    values.iTime = (now - startTime) / 1000;
+    world.set(timeValue, RuntimeMaterialValue, { value: [(now - startTime) / 1000] }).unwrap();
     world.update().unwrap();
     const r = renderer.draw(frameRequest);
     if (!r.ok) console.error('[happy-blob] draw error:', r.error);

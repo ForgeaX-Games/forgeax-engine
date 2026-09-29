@@ -6,6 +6,8 @@ import {
   err,
   MATERIAL_TEXTURE_SLOTS,
   type MaterialAsset,
+  type MaterialChildAsset,
+  type MaterialRootAsset,
   ok,
   type RenderPipelineAsset,
   type SamplerAsset,
@@ -31,6 +33,12 @@ function validMaterial(value: unknown): value is MaterialAsset {
   }
   if (value.passes !== undefined && !Array.isArray(value.passes)) return false;
   if (value.parameters !== undefined && !Array.isArray(value.parameters)) return false;
+  if (
+    value.parent !== undefined &&
+    ['colorSpace', 'passes', 'parameters'].some((field) => Object.hasOwn(value, field))
+  ) {
+    return false;
+  }
   return value.values === undefined || record(value.values);
 }
 
@@ -60,23 +68,29 @@ function resolveMaterialWireRefs(
   if (refs.length === 0) return ok(value);
 
   let changed = false;
-  let parent = value.parent;
+  const wire = value as unknown as { readonly parent?: unknown };
+  let parent = wire.parent;
   if (typeof parent === 'number') {
     const resolved = resolveMaterialWireRef(parent, refs, 'parent', guid);
     if (!resolved.ok) return resolved;
-    parent = resolved.value as unknown as MaterialAsset['parent'];
+    parent = resolved.value;
     changed = true;
   }
 
   if (value.values === undefined) {
-    return changed ? ok({ ...value, ...(parent === undefined ? {} : { parent }) }) : ok(value);
+    if (!changed) return ok(value);
+    if (parent !== undefined) {
+      const child = value as MaterialChildAsset;
+      return ok({ ...child, parent: parent as unknown as MaterialChildAsset['parent'] });
+    }
+    return ok(value);
   }
 
   const textureFields = new Set(
     value.parameters === undefined
       ? MATERIAL_TEXTURE_SLOTS
       : value.parameters
-          .filter((parameter) => parameter.type === 'texture')
+          .filter((parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube')
           .map((parameter) => parameter.name),
   );
   const values = { ...value.values };
@@ -105,7 +119,16 @@ function resolveMaterialWireRefs(
       values[field] = rewritten as unknown as NonNullable<MaterialAsset['values']>[string];
     }
   }
-  return ok(changed ? { ...value, ...(parent === undefined ? {} : { parent }), values } : value);
+  if (!changed) return ok(value);
+  if (parent !== undefined) {
+    const child = value as MaterialChildAsset;
+    return ok({
+      ...child,
+      parent: parent as unknown as MaterialChildAsset['parent'],
+      values,
+    });
+  }
+  return ok({ ...value, values } as MaterialRootAsset);
 }
 
 export const materialContribution: AssetDecoderContribution<MaterialAsset, 'material'> = {

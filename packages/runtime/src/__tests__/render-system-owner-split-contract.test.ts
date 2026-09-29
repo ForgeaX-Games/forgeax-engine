@@ -34,7 +34,7 @@ import { World } from '@forgeax/engine-ecs';
 import { Camera, Skylight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { extractFrames } from '../../../render/src/render-system-extract';
+import { extractFrames } from '../../../render/src/render-system-extract-tail';
 
 // The two-index owner shape w4-w6 will introduce. Declared locally so this
 // test states the contract independent of the (not-yet-updated) source type.

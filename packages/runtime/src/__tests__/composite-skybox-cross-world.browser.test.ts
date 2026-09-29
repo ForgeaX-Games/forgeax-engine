@@ -62,8 +62,10 @@ if (typeof window !== 'undefined') {
 
 const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
-const CANVAS_W = 256;
-const CANVAS_H = 256;
+// This gate checks world ownership and non-black presentation, not detail.
+// Keep all composite frames while reducing software rasterization in CI.
+const CANVAS_W = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 128 : 256;
+const CANVAS_H = CANVAS_W;
 const FRAMES = 8;
 
 // Build a bright, uniform equirect (all channels = 0.8 linear) so the projected

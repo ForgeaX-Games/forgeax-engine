@@ -17,6 +17,8 @@
     { "path": "../geometry" },
     { "path": "../pack" },
     { "path": "../scene" },
+    { "path": "../shader" },
     { "path": "../types" }
+    ,{ "path": "../tool-runtime" }
   ]
 }

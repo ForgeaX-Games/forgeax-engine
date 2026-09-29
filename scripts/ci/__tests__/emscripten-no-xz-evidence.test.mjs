@@ -144,16 +144,15 @@ test('production Emscripten bootstrap activates the compiler for later build ste
   assert.equal(setup.match(/--github-path\s+"\$GITHUB_PATH"/g)?.length, 2);
 });
 
-test('Linux nightly prepares .nvmrc Node before the no-xz helper', () => {
-  const linuxNode = stepSection(nightlyWorkflow, 'Setup Node.js for Linux Emscripten');
+test('nightly prepares .nvmrc Node before the no-xz helper', () => {
+  const linuxNode = stepSection(nightlyWorkflow, 'Setup Node.js for WASM hydration');
   const helper = stepSection(nightlyWorkflow, 'Setup Emscripten without external xz (Linux)');
-  assert.match(linuxNode, /if:\s+runner\.os\s*==\s*['"]Linux['"]/);
   assert.match(linuxNode, /node-version-file:\s*\.nvmrc/);
   assert.ok(
-    stepIndex(nightlyWorkflow, 'Setup Node.js for Linux Emscripten') <
+    stepIndex(nightlyWorkflow, 'Setup Node.js for WASM hydration') <
       stepIndex(nightlyWorkflow, 'Setup Emscripten without external xz (Linux)'),
   );
-  assert.match(helper, /if:\s+runner\.os\s*==\s*['"]Linux['"]/);
+  assert.match(helper, /if:.*runner\.os\s*==\s*['"]Linux['"]/);
 });
 
 test('production Linux cache misses prepare and pass the locked archive inputs', () => {
@@ -198,7 +197,7 @@ test('production Linux cache misses prepare and pass the locked archive inputs',
 
 test('non-Linux nightly keeps upstream Emscripten setup', () => {
   const setup = stepSection(nightlyWorkflow, 'Setup Emscripten (non-Linux upstream)');
-  assert.match(setup, /if:\s+runner\.os\s*!=\s*['"]Linux['"]/);
+  assert.match(setup, /if:.*runner\.os\s*!=\s*['"]Linux['"]/);
   assert.match(setup, /emscripten-core\/setup-emsdk@v16/);
 });
 
@@ -236,14 +235,12 @@ test('Linux custom bootstrap exports the compiler environment before consumers',
   }
 });
 
-test('macOS and Windows keep the upstream Emscripten, consumer, pnpm, Node order', () => {
+test('hosted platforms hydrate immutable WASM before install and skip source compilers', () => {
   const names = [
-    'Setup Emscripten (non-Linux upstream)',
-    'Build fbx-wasm',
-    'Build basis-wasm',
+    'Hydrate wgpu-wasm package',
+    'Hydrate fbx + codec pkg/',
     'Read pnpm version',
     'Setup pnpm',
-    'Setup Node.js (non-Linux upstream)',
   ];
   const indexes = names.map((name) => stepIndex(nightlyWorkflow, name));
   for (let index = 1; index < indexes.length; index += 1) {
@@ -253,9 +250,10 @@ test('macOS and Windows keep the upstream Emscripten, consumer, pnpm, Node order
     );
   }
   assert.match(
-    stepSection(nightlyWorkflow, 'Setup Node.js (non-Linux upstream)'),
-    /if:\s+runner\.os\s*!=\s*['"]Linux['"]/,
+    stepSection(nightlyWorkflow, 'Setup Emscripten (non-Linux upstream)'),
+    /if:.*steps\.hydrate-emcc\.outputs\.needs_build.*runner\.os\s*!=\s*['"]Linux['"]|if:.*runner\.os\s*!=\s*['"]Linux['"].*steps\.hydrate-emcc\.outputs\.needs_build/,
   );
+  assert.doesNotMatch(nightlyWorkflow, /Setup Node\.js \(non-Linux upstream\)/);
 });
 
 test('platform order audit records unavailable non-Linux runs as unproven', () => {
@@ -1241,7 +1239,10 @@ test('nightly keeps install-time harness materialization and channel allowlist',
   const install = stepIndex(nightlyWorkflow, 'Install (frozen)');
   const materialize = stepIndex(nightlyWorkflow, 'Materialize harness documentation');
   assert.ok(materialize > install, 'harness materialization must follow install');
-  assert.match(nightlyWorkflow.slice(materialize, materialize + 800), /pnpm harness:sync/);
+  assert.match(
+    nightlyWorkflow.slice(materialize, materialize + 800),
+    /node scripts\/ci\/materialize-harness-docs\.mjs/,
+  );
 
   runContract(process.execPath, ['scripts/check-ci-channel-alignment.mjs']);
   assert.doesNotMatch(

@@ -8,8 +8,9 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 
 // Standard direct-vs-clustered parity vite config.
 // Single page hosting two canvases: left Standard direct, right Standard clustered.
-// Preview port 4175 + strictPort=true: scripts/bench/pixel-parity.mjs spawns
-// this preview alongside parity-forgeax (port 4174) for the Standard lanes target.
+// Preview port 4175 + strictPort=true: scripts/bench/pixel-parity.mjs uses
+// this preview for the Standard lanes target (and tears it down before the
+// next target when BENCH_TARGET=all).
 export default defineConfig({
   plugins: [forgeaxShader() as never],
   server: {

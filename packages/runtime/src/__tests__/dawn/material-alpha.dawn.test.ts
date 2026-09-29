@@ -11,6 +11,7 @@ import { Transform } from '@forgeax/engine-scene';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { constructRuntimeRendererHost } from '../../renderer-host';
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -21,7 +22,8 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
+const LIGHTWEIGHT_DAWN = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
 
 interface AlphaCase {
   readonly caseId: string;
@@ -92,6 +94,16 @@ const CASES: readonly AlphaCase[] = [
   },
 ];
 
+const DAWN_CASES = LIGHTWEIGHT_DAWN
+  ? CASES.filter((testCase) =>
+      [
+        'material-alpha-rgba-factor',
+        'material-alpha-mask-explicit',
+        'material-alpha-blend',
+      ].includes(testCase.caseId),
+    )
+  : CASES;
+
 function textureBytes(color: readonly [number, number, number, number]): Uint8Array {
   return Uint8Array.from(color.map((channel) => Math.round(channel * 255)));
 }
@@ -99,12 +111,11 @@ function textureBytes(color: readonly [number, number, number, number]): Uint8Ar
 function makeTexture(color: readonly [number, number, number, number]): TextureAsset {
   return {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format: 'rgba8unorm-srgb',
     data: textureBytes(color),
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 
@@ -225,14 +236,12 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
         }
       : { cullMode: 'none' as const };
   const material = Materials.standard({
-    baseColor: [
+    baseColor: Materials.srgb([
       testCase.baseColor[0],
       testCase.baseColor[1],
       testCase.baseColor[2],
       testCase.baseAlpha,
-    ],
-    colorSpace: 'srgb',
-    castShadow: false,
+    ]),
     metallic: 0,
     roughness: 1,
     queue: testCase.mode === 'BLEND' ? 3000 : testCase.mode === 'MASK' ? 2450 : 2000,
@@ -282,7 +291,10 @@ function expectedVisible(testCase: AlphaCase): boolean {
 }
 
 describe('M2 runtime PBR alpha readback', () => {
-  for (const testCase of CASES) {
+  // The browser parity gate still closes all seven alpha cases. Dawn keeps
+  // one opaque, one mask, and one blend boundary on overloaded PR runners;
+  // local/nightly runs retain the complete threshold matrix.
+  for (const testCase of DAWN_CASES) {
     it(`${testCase.caseId}: Materials.standard single draw is observable`, async () => {
       const actual = await captureCase(testCase);
       const expected = testCase.clear.map((channel) => Math.round(channel * 255));

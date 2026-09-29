@@ -2,7 +2,7 @@
 //
 // TDD red-green: written BEFORE POD types are defined (t9) and BEFORE gltf
 // IR types are aligned (t10). Three grep assertions guard the SSOT boundary:
-// (a) types/src/index.ts has >=7 export type/interface *Pod;
+// (a) types/src/asset-pods.ts has >=7 export type/interface *Pod;
 // (b) packages/gltf/src/ has zero export type *Pod (only imports);
 // (c) packages/fbx/src/ has zero export type *Pod (if the src dir exists).
 //
@@ -21,7 +21,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? '.', '..', '..', '..', '..');
-const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts');
+const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'asset-pods.ts');
 const GLTF_SRC = resolve(REPO_ROOT, 'packages', 'gltf', 'src');
 const FBX_SRC = resolve(REPO_ROOT, 'packages', 'fbx', 'src');
 
@@ -41,7 +41,7 @@ function grepCount(pattern: string, fileOrDir: string): number {
 }
 
 describe('M1 sub-asset POD SSOT grep gate (AC-26)', () => {
-  it('(a) types/src/index.ts has >=7 export type *Pod definitions', () => {
+  it('(a) types/src/asset-pods.ts has >=7 export type *Pod definitions', () => {
     const count = grepCount(POD_PATTERN, TYPES_INDEX);
     expect(count).toBeGreaterThanOrEqual(7);
   });

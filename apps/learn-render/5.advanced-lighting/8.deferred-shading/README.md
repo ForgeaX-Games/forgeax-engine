@@ -28,7 +28,7 @@ const appRes = await createApp(
   {
     standardProfile: {
       ...DEFAULT_STANDARD_PROFILE,
-      lighting: 'clustered',
+      renderPath: 'deferred',
     },
   },
   forgeaxBundlerAdapter(),
@@ -45,7 +45,7 @@ pnpm --filter @forgeax/app-learn-render-5-advanced-lighting-8-deferred-shading s
 FALSIFY=force-direct pnpm --filter @forgeax/app-learn-render-5-advanced-lighting-8-deferred-shading smoke
 ```
 
-These commands use the real Dawn 300-frame path. The direct lane is the
+These commands use the real Dawn 60-frame path. The direct lane is the
 falsifier for clustered membership and must produce a measurable lane
 difference. CPU, null-backend, manual-loop, and skipped-GPU substitutes are
 not accepted.

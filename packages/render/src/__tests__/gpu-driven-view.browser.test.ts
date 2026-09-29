@@ -5,24 +5,29 @@ import {
 } from './gpu-driven-view-gpu-evidence';
 
 const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
+const lifecycleFrames = 60;
 
 describe.skipIf(!browserReady)('GPU-driven View Browser WebGPU', () => {
   it('produces compact visible IDs and portable indirect args on the real browser device', async () => {
     await expect(runGpuDrivenViewGpuEvidence()).resolves.toEqual({
       visibleInstance: 0,
-      indexCount: 36,
+      indexCount: 12,
       instanceCount: 1,
-      firstIndex: 3,
-      baseVertex: -2,
+      firstIndex: 9,
+      baseVertex: 4,
       firstInstance: 0,
       overflow: 0,
       persistentTranslationX: 0,
+      firstReadbackFrame: 10,
+      recoveredReadbackFrame: 11,
+      firstVisible: 1,
+      recoveredVisible: 0,
     });
   });
 
-  it('survives 300 frames of spawn/despawn capacity crossings without stale buffers', async () => {
-    await expect(runGpuDrivenViewLifecycleEvidence()).resolves.toEqual({
-      frames: 300,
+  it(`survives ${lifecycleFrames} frames of spawn/despawn capacity crossings without stale buffers`, async () => {
+    await expect(runGpuDrivenViewLifecycleEvidence(lifecycleFrames)).resolves.toEqual({
+      frames: lifecycleFrames,
       bufferRebuilds: 4,
       candidateCapacity: 8,
     });

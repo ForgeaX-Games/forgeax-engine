@@ -1,65 +1,75 @@
+import type { SsaoParameterConfig } from '../ssao-config';
 export const STANDARD_PIPELINE_ID = 'forgeax::standard' as const;
 export const STANDARD_LIGHT_COUNTS = [1, 32, 256] as const;
-/** Shared clustered-lighting facts consumed by pipeline, record, and buffers. */
-export const DEFAULT_CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
-export const CLUSTER_GRID_STRIDE_U32 = 2;
-export const LIGHT_INDEX_LIST_CAPACITY = 1048576;
-export const MAX_LIGHTS = 256;
+export {
+  CLUSTER_GRID_STRIDE_U32,
+  DEFAULT_CLUSTER_GRID,
+  LIGHT_INDEX_LIST_CAPACITY,
+  MAX_LIGHTS,
+} from './standard-lighting/layout';
 
 export type StandardLightCount = (typeof STANDARD_LIGHT_COUNTS)[number];
-export type StandardLightingLane = 'direct' | 'clustered';
-export type StandardFallbackLane = 'native' | 'cpu-webgl2';
 export type StandardShadowMode = 'off' | 'hard' | 'filtered';
-export type StandardTone =
-  | 'none'
-  | 'aces-filmic'
-  | 'agx'
-  | 'cineon'
-  | 'linear'
-  | 'neutral'
-  | 'reinhard'
-  | 'reinhard-extended';
-export type StandardAntialias = 'none' | 'fxaa' | 'msaa';
-export type StandardPostStage = 'transparent-blend' | 'bloom' | 'tone' | 'fxaa' | 'output';
+export type StandardVolumetricFogQuality = 'low' | 'high';
 
+/** Bounded exact-query diffuse reference lane, before cache/gather reconstruction.
+ * Raster retains direct/emissive lighting; IBL must be disabled for this lane. */
+export interface StandardDiffuseGi {
+  readonly maxBounces: number;
+  readonly maxDistance: number;
+  readonly environment: readonly [number, number, number];
+  readonly seed: number;
+  /** Omit for raw D; reconstruction never changes the ray budget. */
+  readonly reconstruction?: 'spatial' | 'temporal' | 'combined';
+}
+
+export interface StandardVolumetricFogProfile {
+  readonly quality: StandardVolumetricFogQuality;
+  readonly depth: 48 | 64;
+  readonly tileSize: 4 | 16;
+}
+
+export const STANDARD_POST_STAGE_NAMES = [
+  'transparent-blend',
+  'bloom',
+  'output-transform',
+  'fxaa',
+  'post-effect',
+  'present',
+] as const;
+export type StandardPostStage = (typeof STANDARD_POST_STAGE_NAMES)[number];
 export interface StandardProfile {
   readonly pipelineId: typeof STANDARD_PIPELINE_ID;
   readonly lightCount: StandardLightCount;
-  readonly lighting: StandardLightingLane;
+  /** Graph topology selector; all local lights use the shared Cluster path. */
+  readonly renderPath: 'forward' | 'deferred';
+  /** Rigid deferred surface identity/geometry attachment for transport and inspection. */
+  readonly visibleSurface?: boolean;
+  readonly diffuseGi?: StandardDiffuseGi;
   readonly shadows: StandardShadowMode;
   readonly pbr: boolean;
   readonly ibl: boolean;
-  readonly ssao: boolean;
-  readonly bloom: boolean;
-  readonly tone: StandardTone;
-  readonly antialias: StandardAntialias;
-  readonly sky: boolean;
-  readonly fallback: StandardFallbackLane;
-  readonly postStages: readonly ['transparent-blend', 'bloom', 'tone', 'fxaa', 'output'];
+  readonly ssao: boolean | SsaoParameterConfig;
+  /** Seeds `RenderPipelineAsset.config.gpuOcclusion`; omitted means on. */
+  readonly gpuOcclusion?: boolean | undefined;
+  /** Renderer-owned 1080p volume profile; tile width/height remain surface-derived. */
+  readonly volumetricFog?: StandardVolumetricFogProfile | undefined;
+  readonly postStages: typeof STANDARD_POST_STAGE_NAMES;
 }
 
 export const DEFAULT_STANDARD_PROFILE: StandardProfile = Object.freeze({
   pipelineId: STANDARD_PIPELINE_ID,
   lightCount: 32,
-  lighting: 'direct',
+  renderPath: 'forward',
   shadows: 'filtered',
   pbr: true,
   ibl: true,
   ssao: false,
-  bloom: true,
-  tone: 'aces-filmic',
-  antialias: 'fxaa',
-  sky: true,
-  fallback: 'native',
-  postStages: ['transparent-blend', 'bloom', 'tone', 'fxaa', 'output'] as const,
+  postStages: STANDARD_POST_STAGE_NAMES,
 });
 
-export type StandardLane = StandardLightingLane | 'cpu-webgl2';
-
-export function resolveStandardLane(
-  profile: Pick<StandardProfile, 'lighting'>,
-  capabilities: { readonly compute: boolean; readonly storageBuffer: boolean },
-): StandardLane {
-  if (!capabilities.compute || !capabilities.storageBuffer) return 'cpu-webgl2';
-  return profile.lighting;
+export function resolveVolumetricFogProfile(
+  profile: Pick<StandardProfile, 'volumetricFog'>,
+): StandardVolumetricFogProfile {
+  return profile.volumetricFog ?? { quality: 'high', depth: 64, tileSize: 4 };
 }

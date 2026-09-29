@@ -22,8 +22,10 @@
 // or side effects. Indices may be Uint16Array, Uint32Array, or
 // undefined (sequential 0..vertexCount-1 -- triangle list). Degenerate
 // triangles (zero area UV; det ~ 0) are skipped from the accumulation;
-// vertices touched only by degenerate triangles fall back to a stable
-// frame: tangent perpendicular to the supplied normal with .w = +1.
+// Inputs with no valid UV-derived triangle fail closed. Procedural pole/seam
+// vertices may have no local contribution while sharing valid neighboring
+// faces; they retain the established deterministic frame until the material
+// admission layer has mesh-level tangent context.
 
 import { ASSET_ERROR_HINTS, AssetError, err, ok, type Result } from '@forgeax/engine-types';
 
@@ -154,6 +156,7 @@ export function computeTangentVec4(
   // the running sum is the per-vertex .w handedness.
   const accumT = new Float32Array(vertexCount * 3);
   const accumSign = new Float32Array(vertexCount);
+  let validTriangleCount = 0;
 
   const triangleCount = indices !== undefined ? indices.length / 3 : vertexCount / 3;
 
@@ -207,6 +210,7 @@ export function computeTangentVec4(
     const cz = dP1x * dP2y - dP1y * dP2x;
     const faceArea = 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz);
     if (faceArea < EPSILON) continue;
+    validTriangleCount += 1;
 
     const signDet = det >= 0 ? 1 : -1;
     const signedWeight = faceArea * signDet;
@@ -217,6 +221,16 @@ export function computeTangentVec4(
       accumT[vi * 3 + 2] = (accumT[vi * 3 + 2] ?? 0) + tz * faceArea;
       accumSign[vi] = (accumSign[vi] ?? 0) + signedWeight;
     }
+  }
+
+  if (validTriangleCount === 0) {
+    return err(
+      tangentInputError(
+        'tangent',
+        0,
+        'material-tangent-required: no triangle has a valid UV-derived tangent',
+      ),
+    );
   }
 
   const out = new Float32Array(vertexCount * 4);
@@ -230,36 +244,35 @@ export function computeTangentVec4(
 
     const tLen = Math.sqrt(tx * tx + ty * ty + tz * tz);
     if (tLen < EPSILON) {
-      // Fallback: pick any direction perpendicular to N. Use the axis
-      // with the smallest |normal component| to maximise numerical
-      // stability of the cross product.
       const ax = Math.abs(nx);
       const ay = Math.abs(ny);
       const az = Math.abs(nz);
       let rx = 1;
       let ry = 0;
       let rz = 0;
-      if (ax <= ay && ax <= az) {
-        rx = 1;
-        ry = 0;
-        rz = 0;
-      } else if (ay <= ax && ay <= az) {
+      if (ax > ay && ax > az) {
         rx = 0;
         ry = 1;
-        rz = 0;
-      } else {
+      } else if (ay > ax && ay > az) {
         rx = 0;
-        ry = 0;
         rz = 1;
       }
-      // T = normalize(cross(N, R))
       tx = ny * rz - nz * ry;
       ty = nz * rx - nx * rz;
       tz = nx * ry - ny * rx;
-      const fLen = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
-      tx /= fLen;
-      ty /= fLen;
-      tz /= fLen;
+      const fallbackLength = Math.sqrt(tx * tx + ty * ty + tz * tz);
+      if (fallbackLength < EPSILON) {
+        return err(
+          tangentInputError(
+            'tangent',
+            v,
+            'material-tangent-required: supplied normal cannot define a tangent frame',
+          ),
+        );
+      }
+      tx /= fallbackLength;
+      ty /= fallbackLength;
+      tz /= fallbackLength;
     } else {
       tx /= tLen;
       ty /= tLen;
@@ -273,34 +286,35 @@ export function computeTangentVec4(
     let gz = tz - dotTN * nz;
     const gLen = Math.sqrt(gx * gx + gy * gy + gz * gz);
     if (gLen < EPSILON) {
-      // tangent collinear with normal after accumulation; reuse fallback
-      // basis. Pick perpendicular via the smallest-axis trick again.
       const ax = Math.abs(nx);
       const ay = Math.abs(ny);
       const az = Math.abs(nz);
       let rx = 1;
       let ry = 0;
       let rz = 0;
-      if (ax <= ay && ax <= az) {
-        rx = 1;
-        ry = 0;
-        rz = 0;
-      } else if (ay <= ax && ay <= az) {
+      if (ax > ay && ax > az) {
         rx = 0;
         ry = 1;
-        rz = 0;
-      } else {
+      } else if (ay > ax && ay > az) {
         rx = 0;
-        ry = 0;
         rz = 1;
       }
       gx = ny * rz - nz * ry;
       gy = nz * rx - nx * rz;
       gz = nx * ry - ny * rx;
-      const fLen = Math.sqrt(gx * gx + gy * gy + gz * gz) || 1;
-      gx /= fLen;
-      gy /= fLen;
-      gz /= fLen;
+      const fallbackLength = Math.sqrt(gx * gx + gy * gy + gz * gz);
+      if (fallbackLength < EPSILON) {
+        return err(
+          tangentInputError(
+            'tangent',
+            v,
+            'material-tangent-required: supplied normal cannot define a tangent frame',
+          ),
+        );
+      }
+      gx /= fallbackLength;
+      gy /= fallbackLength;
+      gz /= fallbackLength;
     } else {
       gx /= gLen;
       gy /= gLen;

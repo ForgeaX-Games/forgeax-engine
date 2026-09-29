@@ -2,6 +2,78 @@
 
 > **本包是 `@forgeax/engine-shader-compiler` 的 Vite 插件薄壳，对齐 Vite 4-hook 模型（load / transform / generateBundle / handleHotUpdate）全装入，约束 transform 仅 forwarding 调 `compileShader`，不重新实现编译逻辑（AC-02）。** AI 用户（含 agentic AI runtime）通过 `import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader'` 在 `vite.config.ts` 里注入 plugin，得到 build-time `.wgsl` → 三件套 + manifest 落盘 + ShaderError → RollupLog wrap（plan-strategy §S-6 + §S-7）。
 
+## Engine inputs and ABI transport
+
+Engine shader loading is kept in `src/engine-inputs/`. `load-engine-shader-entries.ts`
+owns the canonical WGSL entry and import closure; `shared-engine-inputs.ts`
+owns packaged dev/prod manifest projection. Both paths feed the same plugin
+manifest owner and the same `SHADER_MANIFEST_PATH` constant.
+
+The ray query, transport, raster-receiver and diffuse-composite entries use this same loader in
+both standalone and Vite builds. Their traversal module and imports live in
+`packages/shader/src`; test-side string insertion is not a publication path.
+
+The standalone `buildEngineShaderManifest` builder can combine the admitted
+shared engine projection with freshly compiled `materialPackages`. Custom
+materials use the same source/import/cook path and do not trigger another
+engine-wide compile. Result arrays are independent of the base manifest.
+
+Production and development publish the same versioned manifest: each WGSL source
+has one SHA-256 identity, while repeated source blocks are stored once in a
+shared fragment table. Material variants and direct entries refer to those
+identities. The individual `.wgsl` sidecars remain available for inspection.
+Standalone callers serialize `publishShaderManifest(manifest.entries,
+manifest.materialShaders)` before serving or storing a builder result. This is
+the same publication owner used by the plugin; JSON-stringifying the expanded
+builder model repeats the full source at every variant and defeats source sharing.
+
+Standalone point-shadow requests without authored packages reuse an admitted
+packaged point profile when present. Missing inputs and explicit
+`FORGEAX_ENGINE_SHADER_SOURCE_BUILD=1` requests retain source compilation;
+authored point-shadow packages also retain their source route. Invalid shared
+inputs and missing authored sources remain explicit failures.
+
+The packaged input roster contains `base-ssao` and `point-ssao`. SSAO is an
+independent fullscreen entry, so the same projection used for transferred inputs
+removes it when disabled without recompiling material shaders. All four public
+point-shadow/SSAO configurations remain available. The release producer removes
+obsolete no-SSAO copies while preserving declarations and other live profiles.
+
+Each prepared profile records `source.json` with the `engineShaderSourceDigest`
+of the `@forgeax/engine-shader` `src/` WGSL it was compiled from. The loader
+recomputes that digest over the resolved shader sources and admits the profile
+only on an exact match; a missing record or a mismatch (for example a profile
+left behind by an earlier SDK or Dawn preparation after a WGSL edit) warns once
+and compiles from source instead of publishing stale bindings.
+
+The public `VIEW_ABI` export is typed transport metadata for
+`forgeax_view::common`: group 0, binding 0, and the 1136-byte upload shape, including camera clipping planes. It contains no live WebGPU object. Consumers should use the manifest
+and reflection output; they must not add a second manifest URL or hard-code a
+carrier-side index.
+
+Authored material packages are compiled as a complete Pass set through
+`cookMaterialAsset`. Vite uses the compiler's source discovery, retains every
+module and capability variant, and publishes shared modules once. A failed
+later Pass leaves the previous complete material generation installed; a
+successful edit replaces all of that package's program rows together.
+
+Authored WGSL requests use native normalized filesystem paths for identity after
+removing Vite query/hash suffixes. Both slash forms therefore match the same
+prepared material on Windows. Absolute filesystem sources (including drive-letter
+paths) remain authored sources; non-path producer keys such as `gltf:material:Name`
+are already cooked publications and are not compiled again. At the Vite HMR
+boundary, dependency edges use Vite's slash-normalized file identities so watcher
+changes can reach the affected authored modules.
+
+Pack-owned runtime materials use `publishAuthoredMaterialShaders: false` so
+Vite supplies build artifacts without creating a second runtime material
+registration. Their cooked record remains the runtime publication authority.
+
+The plugin releases its manifest, variant, authored-material, and packaged-input
+payloads in Vite's `closeBundle` lifecycle. A subsequent `buildStart` loads its
+inputs again, including after a dev-server restart. Closed servers must not keep
+another copy of the shader fleet alive through retained plugin callbacks.
+
 ## 形态铁律
 
 - **薄壳 forwarding** —— 4 hook（`load` / `transform` / `generateBundle` / `handleHotUpdate`）全部装入，但 `transform` 仅 forwarding 调 `@forgeax/engine-shader-compiler.compileShader`，不重新实现编译逻辑（AC-02 闸门）。
@@ -15,6 +87,7 @@
 | 入口 | 说明 |
 |:--|:--|
 | `forgeaxShader(options?)` | Vite plugin factory，返回含 4 hook + `resolveId` + `load`（virtual module 通道）的 `Plugin` 对象（w14 落地 + feat-20260608 M3 扩展） |
+| `engineShaderSourceDigest(root)` / `PACKAGED_SOURCE_RECORD` | Packaged-profile provenance: SHA-256 over every `*.wgsl` under `root`, written by the release producer to `source.json` and re-derived by the loader |
 | `toRollupLog(err)` | `ShaderError` → `RollupLog`（hint 双投影，w14 落地） |
 | `ForgeaXShaderRollupLog` | RollupLog 扩展类型（`hint` 顶层投影是 forgeax 自定义字段） |
 | `virtual:forgeax/bundler` | Build-time virtual module emitting `forgeaxBundlerAdapter()` factory（feat-20260608 M3，详见下节） |
@@ -47,3 +120,5 @@ const renderer = await createRenderer(canvas, {}, bundler);
 - 决策 plan-strategy [§S-6 4 hook 分工](../../.forgeax-harness/forgeax-loop/feat-20260508-shader-pipeline-mvp/plan-strategy.md) / §S-7 ShaderError wrap（hint 双投影）/ §6 M2 范围。
 - 上游 [`@forgeax/engine-shader-compiler`](../shader-compiler/README.md) 提供 `compileShader` 纯函数 + `ShaderError` 5 字段顶层错误类。
 - 集成端 [`apps/hello/triangle/vite.config.ts`](../../apps/hello/triangle/vite.config.ts) M2 注入验证（w15）+ M3 替换 fixture 为 pbr.wgsl。
+
+SSAO is included by default, matching the runtime `StandardProfile.ssao` switch. `engineEntries.hdrpSsao: false` explicitly strips it for a producer that never supports AO; requesting AO with that manifest produces a renderer error.

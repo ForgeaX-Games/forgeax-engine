@@ -18,11 +18,11 @@
 // Runner contract (plan-tasks.json#w19 description):
 //   node scripts/metrics/run-all.mjs [--root <dir>] [--schema <path>] [--report-dir <dir>]
 //   --root       default = process.cwd()
-//   --schema     default = <root>/forgeax-metrics.schema.json
+//   --schema     default = <root>/schemas/forgeax-metrics.schema.json
 //   --report-dir default = <root>/report
 //
 // Output schema for report/<package>/<kind>.json (validated via the same
-// forgeax-metrics.schema.json $defs/runnerEntry):
+// schemas/forgeax-metrics.schema.json $defs/runnerEntry):
 //   { package: string, kind: MetricKind, enabled: true, status: 'ok'|'over'|...,
 //     value: number|null, threshold: number|null, details: object }
 //
@@ -40,7 +40,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..');
 const runner = resolve(repoRoot, 'scripts/metrics/run-all.mjs');
 const fixturesDir = resolve(__dirname, 'fixtures');
-const realSchema = resolve(repoRoot, 'forgeax-metrics.schema.json');
+const realSchema = resolve(repoRoot, 'schemas/forgeax-metrics.schema.json');
 
 interface RunResult {
   status: number;
@@ -83,14 +83,14 @@ describe('scripts/metrics/run-all.mjs generic runner (w18)', () => {
     expect(r.status, `stderr was:\n${r.stderr}`).toBe(0);
   });
 
-  it('(a2) runner-all-ok fixture: report/<package>/<kind>.json laid out by 2D grouping', () => {
+  it('(a2) runner-all-ok fixture: generic report/<package>/<kind>.json uses dispatched kinds', () => {
     const root = resolve(fixturesDir, 'runner-all-ok');
     const r = runRunner(['--root', root, '--schema', realSchema, '--report-dir', tmpReport]);
     expect(r.status, `stderr was:\n${r.stderr}`).toBe(0);
     const alphaBundlePath = resolve(tmpReport, 'alpha/bundle-size.json');
     expect(existsSync(alphaBundlePath)).toBe(true);
     const alphaGatePath = resolve(tmpReport, 'alpha/gate.json');
-    expect(existsSync(alphaGatePath)).toBe(true);
+    expect(existsSync(alphaGatePath)).toBe(false);
     const bundleEntry = JSON.parse(readFileSync(alphaBundlePath, 'utf8')) as Record<
       string,
       unknown
@@ -103,7 +103,7 @@ describe('scripts/metrics/run-all.mjs generic runner (w18)', () => {
     expect(bundleEntry.threshold).toBe(102400);
   });
 
-  it('(a3) runner-all-ok fixture: enabled=false kinds produce zero report files', () => {
+  it('(a3) runner-all-ok fixture: disabled and dedicated gate kinds produce no generic reports', () => {
     const root = resolve(fixturesDir, 'runner-all-ok');
     const r = runRunner(['--root', root, '--schema', realSchema, '--report-dir', tmpReport]);
     expect(r.status, `stderr was:\n${r.stderr}`).toBe(0);
@@ -111,7 +111,7 @@ describe('scripts/metrics/run-all.mjs generic runner (w18)', () => {
     const alphaDir = resolve(tmpReport, 'alpha');
     expect(existsSync(alphaDir)).toBe(true);
     const alphaFiles = readdirSync(alphaDir).sort();
-    expect(alphaFiles).toEqual(['bundle-size.json', 'gate.json']);
+    expect(alphaFiles).toEqual(['bundle-size.json']);
     const charlieDir = resolve(tmpReport, 'charlie');
     expect(existsSync(charlieDir)).toBe(true);
     const charlieFiles = readdirSync(charlieDir).sort();

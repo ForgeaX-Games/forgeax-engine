@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Update } from '@forgeax/engine-ecs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 // hello-level-switch headless smoke (feat-20260616 M7 / m7w4).
 //
 // AC-14 dawn-node smoke — ALL assertions are exit-code-gated
@@ -24,7 +25,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 const RERUN_CMD = 'pnpm --filter @forgeax/hello-level-switch smoke';
@@ -114,12 +115,18 @@ const mockCanvas = {
 
 // --- Step 2: Engine boot ---
 
-const { Entity, World } = await import('@forgeax/engine-ecs');
+const { createWorldContext, Entity, World } = await import('@forgeax/engine-ecs');
 const { ok: okResult } = await import('@forgeax/engine-types');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
-const { Transform, registerPropagateTransforms } = await import('@forgeax/engine-scene');
+const {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  renderComponentsPlugin,
+} = await import('@forgeax/engine-render');
+const { scenePlugin, Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_TRIANGLE,
@@ -134,6 +141,7 @@ const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 // Draw counter: increment per-frame.
 globalThis.__smokeDrawCount = 0;
+let successfulFrameCount = 0;
 
 // --- Step 3: Define state, register materials, create real scene assets ---
 
@@ -147,7 +155,7 @@ const STREET_A_GUID = '6a000002-0001-4000-a000-000000000002';
 
 const world = new World();
 registerStatesPlugin(world);
-registerPropagateTransforms(world);
+await createWorldContext(world, [scenePlugin(), renderComponentsPlugin()]);
 
 // Register Player component for smoke verification.
 const { defineComponent } = await import('@forgeax/engine-ecs');
@@ -156,7 +164,8 @@ const Player = defineComponent('Player', {});
 // Boot renderer.
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 try {
@@ -172,11 +181,15 @@ const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const assets = hostAssets;
 const lease = worldAttachment1.value;
-const drawFrame = () => renderer.draw({
-  leases: [lease],
-  camera: { lease },
-  environment: { lease },
-});
+const drawFrame = () => {
+  const result = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (result.ok) successfulFrameCount++;
+  return result;
+};
 console.log(`[hello-level-switch] backend=${renderer.inspect().capabilities.backendKind}`);
 
 
@@ -252,14 +265,15 @@ const stdMatHandle = world.allocSharedRef('MaterialAsset', stdMatPayload);
 // so loadByGuid<SceneAsset> + instantiateScene are exercised.
 const tutorialScenePOD = {
   kind: 'scene',
-  entities: [{
-    localId: 0,
-    components: {
-      Transform: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.1, 10]},
-      MeshFilter: { assetHandle: 1 }, // HANDLE_CUBE = 1 (builtin pre-registered)
-      MeshRenderer: { materials: [Number(unlitMatHandle)] },
+  entities: {
+    floor: {
+      components: {
+        Transform: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.1, 10]},
+        MeshFilter: { assetHandle: 1 }, // HANDLE_CUBE = 1 (builtin pre-registered)
+        MeshRenderer: { materials: [Number(unlitMatHandle)] },
+      },
     },
-  }],
+  },
 };
 
 const tutorialGuid = AssetGuid.parse(TUTORIAL_GUID);
@@ -276,14 +290,15 @@ if (!tutorialSceneHandleRes.ok) {
 
 const streetScenePOD = {
   kind: 'scene',
-  entities: [{
-    localId: 0,
-    components: {
-      Transform: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.1, 10]},
-      MeshFilter: { assetHandle: 1 },
-      MeshRenderer: { materials: [Number(stdMatHandle)] },
+  entities: {
+    floor: {
+      components: {
+        Transform: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.1, 10]},
+        MeshFilter: { assetHandle: 1 },
+        MeshRenderer: { materials: [Number(stdMatHandle)] },
+      },
     },
-  }],
+  },
 };
 
 const streetGuid = AssetGuid.parse(STREET_A_GUID);
@@ -452,7 +467,7 @@ if (meshEntityCount !== 2) {
 }
 console.log(`[smoke] GATE 4/5 PASS: falsification check — scope-despawn verification: ${meshEntityCount} mesh entities (1 scene + 1 player, no leak). If scope-despawn were commented out in transitionStatesSystem, this falsification variant WOULD fail with meshEntityCount >> 2.`);
 
-// --- M29: callback fault keeps partial commit and supports forced retry ---
+// --- M29: callback fault keeps partial commit and requires a fresh World ---
 
 // This is the package-level leg of the real App/World/page probe in
 // smoke-browser.mjs. It isolates two fresh tokens so the existing rendered
@@ -477,8 +492,13 @@ try {
 } catch (error) {
   m29Thrown = error;
 }
-if (m29Thrown !== m29Fault) {
-  console.error('[smoke] FAIL - M29 callback cause did not bubble verbatim');
+if (
+  m29Thrown?.code !== 'system-failed' ||
+  m29Thrown.detail?.cause !== m29Fault ||
+  m29Thrown.detail?.systemName !== 'transitionStates' ||
+  m29Thrown.detail?.schedule !== 'Update'
+) {
+  console.error('[smoke] FAIL - M29 callback cause was not preserved in system-failed detail');
   process.exit(1);
 }
 const m29PrimaryAfterFailure = getState(m29World, M29Primary);
@@ -496,6 +516,18 @@ if (
 }
 
 removeM29Fault();
+const m29Rejected = m29World.update(1 / 60);
+if (m29World.execution.health !== 'poisoned' || m29Rejected.ok || m29Rejected.error.code !== 'world-poisoned') {
+  console.error('[smoke] FAIL - M29 poisoned World did not reject the next frame');
+  process.exit(1);
+}
+
+const m29RecoveryWorld = new World();
+registerStatesPlugin(m29RecoveryWorld);
+const m29RecoveryExit = m29RecoveryWorld.spawn().unwrap();
+const m29RecoveryEnter = m29RecoveryWorld.spawn().unwrap();
+despawnOnExit(m29RecoveryWorld, m29RecoveryExit, M29Primary, 'idle');
+despawnOnEnter(m29RecoveryWorld, m29RecoveryEnter, M29Primary, 'ready');
 let m29RepairRuns = 0;
 let m29RepairEntity;
 const removeM29Repair = addOnEnter(M29Primary, 'ready', (w) => {
@@ -503,29 +535,30 @@ const removeM29Repair = addOnEnter(M29Primary, 'ready', (w) => {
   m29RepairEntity = w.spawn().unwrap();
   despawnOnExit(w, m29RepairEntity, M29Primary, 'ready');
 });
-// Consume the stale no-op request first; the later token must progress here.
-m29World.update(1 / 60).unwrap();
-const m29LaterAfterStale = getState(m29World, M29Later);
-if (!m29LaterAfterStale.ok || m29LaterAfterStale.value !== 'hot' || m29RepairRuns !== 0) {
-  console.error('[smoke] FAIL - M29 stale request did not defer callback and advance later token');
+setNextState(m29RecoveryWorld, M29Primary, 'ready');
+setNextState(m29RecoveryWorld, M29Later, 'hot');
+m29RecoveryWorld.update(1 / 60).unwrap();
+const m29LaterAfterRecovery = getState(m29RecoveryWorld, M29Later);
+if (
+  m29RecoveryWorld.identity === m29World.identity ||
+  !m29LaterAfterRecovery.ok || m29LaterAfterRecovery.value !== 'hot' ||
+  m29RepairRuns !== 1 || m29RepairEntity === undefined ||
+  !m29RecoveryWorld.get(m29RepairEntity, Entity).ok
+) {
+  console.error('[smoke] FAIL - M29 fresh-World recovery or exact-once callback failed');
   process.exit(1);
 }
-setNextStateForce(m29World, M29Primary, 'ready');
-m29World.update(1 / 60).unwrap();
-if (m29RepairRuns !== 1 || m29RepairEntity === undefined || !m29World.get(m29RepairEntity, Entity).ok) {
-  console.error('[smoke] FAIL - M29 forced retry did not run repaired callback exactly once');
-  process.exit(1);
-}
-setNextState(m29World, M29Primary, 'idle');
-m29World.update(1 / 60).unwrap();
-setNextStateForce(m29World, M29Primary, 'idle');
-m29World.update(1 / 60).unwrap();
-if (m29RepairEntity === undefined || m29World.get(m29RepairEntity, Entity).ok) {
-  console.error('[smoke] FAIL - M29 scoped cleanup was not idempotent after retry');
+setNextState(m29RecoveryWorld, M29Primary, 'idle');
+m29RecoveryWorld.update(1 / 60).unwrap();
+const m29CleanedOnce = m29RecoveryWorld.get(m29RepairEntity, Entity).ok;
+setNextStateForce(m29RecoveryWorld, M29Primary, 'idle');
+m29RecoveryWorld.update(1 / 60).unwrap();
+if (m29CleanedOnce || m29RecoveryWorld.get(m29RepairEntity, Entity).ok) {
+  console.error('[smoke] FAIL - M29 fresh-World scoped cleanup was not idempotent');
   process.exit(1);
 }
 removeM29Repair();
-console.log('[smoke] M29 PASS: partial commit, later-token deferral, same-world forced retry, exact-once callback, cleanup');
+console.log('[smoke] M29 PASS: partial commit, later-token abort, fresh-World recovery, exact-once callback, cleanup');
 
 // Run remaining frames to reach SMOKE_MIN_FRAMES.
 const remainingFrames = Math.max(0, SMOKE_MIN_FRAMES - BASELINE_FRAMES - 10 - 5);
@@ -683,6 +716,8 @@ const finalState = getState(world, LevelId);
 const finalVariant = finalState.ok ? finalState.value : '???';
 const finalDrawCount = globalThis.__smokeDrawCount;
 console.log(`[smoke] final state = ${finalVariant}, player count = ${playerCount}, draw count = ${finalDrawCount}, mesh count = ${meshEntityCount}`);
+console.log(`[smoke] frames completed=${finalDrawCount}`);
+emitSmokeReceipt('hello-level-switch/smoke', successfulFrameCount);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

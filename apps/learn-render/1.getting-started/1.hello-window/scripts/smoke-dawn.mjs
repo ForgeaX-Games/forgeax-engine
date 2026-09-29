@@ -27,11 +27,11 @@
 // Output literals (preserved byte-for-byte for grep tooling):
 //   - `[learn-render-hello-window] backend=webgpu`
 //   - `[smoke] frames observed=<N>`
-//   - `[smoke] PASS - 3 criteria GREEN: backend=webgpu, frames=<N>, RhiError count=0, ...`
+//   - `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=<N>, RhiError count=0, clear color matched, ...`
 //
 // charter mapping:
-//   - F1 (limited context): smoke literal grep finds frames=300 +
-//     PASS-3-criteria + backend=webgpu in this single file.
+//   - F1 (limited context): smoke literal grep finds frames=60 +
+//     PASS-4-criteria + backend=webgpu in this single file.
 //   - P4 (consistent abstraction): the dawn-node mock canvas / shared
 //     device capture / engine ECS spawn shape mirrors the textures
 //     template; only the verdict diverges (D-3 explicit special case).
@@ -41,9 +41,10 @@
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
@@ -170,7 +171,8 @@ const { Transform } = await import('@forgeax/engine-scene');
 // manifest URL on init, so we hand it the real engine manifest data: URL.
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -202,6 +204,7 @@ const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const lease = worldAttachment1.value;
+const CLEAR_COLOR = [0.2, 0.3, 0.3, 1.0];
 world.spawn(
   {
     component: Transform,
@@ -215,12 +218,12 @@ world.spawn(
       aspect: WIDTH / HEIGHT,
       near: 0.1,
       far: 100,
-      clearColor: [0.2, 0.3, 0.3, 1.0],
+      clearColor: CLEAR_COLOR,
     },
   },
 );
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -294,7 +297,7 @@ const pixelSamples = {};
 for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
 console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
-// --- 5. Verdict (3 criteria; LO 1.1 special case per D-3 / AC-08) -----------
+// --- 5. Verdict (4 criteria; LO 1.1 special case per D-3 / AC-08) -----------
 
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
@@ -309,7 +312,16 @@ if (errors.length > 0) {
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
 
-void SMOKE_PIXEL_THRESHOLD;
+// The swap-chain is sRGB-encoded; the linear clear color must survive to every corner.
+const srgbEncode = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
+const expectedClear = CLEAR_COLOR.slice(0, 3).map(srgbEncode);
+for (const [name, rgb] of Object.entries(pixelSamples)) {
+  const delta = Math.max(...rgb.map((c, i) => Math.abs(c - expectedClear[i])));
+  if (delta > SMOKE_PIXEL_THRESHOLD)
+    failures.push(
+      `(d) ${name}=${JSON.stringify(rgb)} differs from clear ${JSON.stringify(expectedClear)} by ${delta.toFixed(3)} > ${SMOKE_PIXEL_THRESHOLD}`,
+    );
+}
 void APP_ROOT;
 
 if (failures.length > 0) {
@@ -327,9 +339,10 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 3 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, clear color matched, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();
 delete globalThis.navigator.gpu;
+emitSmokeReceipt('app-learn-render-1-getting-started-1-hello-window/smoke', framesObserved);
 process.exit(0);

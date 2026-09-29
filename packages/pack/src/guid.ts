@@ -1,6 +1,6 @@
-import { sha1 } from '@noble/hashes/legacy.js';
 import { uuidv7obj } from 'uuidv7';
 import { PackError } from './errors.js';
+import { uuidV5 } from './uuid-v5.js';
 
 /**
  * 16-byte UUID branded ABI. Prevents assignment from plain Uint8Array or string.
@@ -87,16 +87,7 @@ function derivedGuid(namespace: PackageId, sourceKey: string): AssetGuid {
     Object.defineProperty(error, 'code', { value: 'pack-source-key-invalid' });
     throw error;
   }
-  const name = new TextEncoder().encode(sourceKey);
-  const input = new Uint8Array(namespace.byteLength + name.byteLength);
-  input.set(namespace, 0);
-  input.set(name, namespace.byteLength);
-  const digest = sha1(input);
-  const result = digest.slice(0, 16);
-  // RFC 4122 §4.1.1 / §4.1.3: UUID version 5, RFC variant.
-  result[6] = ((result[6] ?? 0) & 0x0f) | 0x50;
-  result[8] = ((result[8] ?? 0) & 0x3f) | 0x80;
-  return brand(result);
+  return brand(uuidV5(namespace, sourceKey));
 }
 
 /**

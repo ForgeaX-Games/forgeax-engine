@@ -102,6 +102,28 @@ describe('meshIrToMeshAsset pure-unskinned path (AC-04 / AC-08 / OOS-9)', () => 
 });
 
 describe('glTF bridge uses geometry-owned packing', () => {
+  it('persists a generated tangent frame when source TANGENT is absent', () => {
+    const asset = meshIrToMeshAsset([
+      {
+        meshIndex: 0,
+        materialIndex: null,
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+        texcoord0: new Float32Array([0, 0, 1, 0, 0, 1]),
+        indices: new Uint16Array([0, 1, 2]),
+      },
+    ]);
+
+    const tangent = asset.attributes.tangent;
+    expect(tangent).toBeInstanceOf(Float32Array);
+    if (!(tangent instanceof Float32Array)) throw new Error('generated tangent stream missing');
+    expect(tangent?.length).toBe(12);
+    expect(tangent?.[0]).toBeCloseTo(1, 5);
+    expect(tangent?.[1]).toBeCloseTo(0, 5);
+    expect(tangent?.[2]).toBeCloseTo(0, 5);
+    expect(Math.abs(tangent?.[3] ?? 0)).toBeCloseTo(1, 5);
+  });
+
   it('does not own a parallel 12F/18F stride or uv count calculation', () => {
     const asset = meshIrToMeshAsset([makeUnskinnedPrim(0, 4)]);
     expect(asset.vertices.length / 12).toBe(4);

@@ -5,7 +5,7 @@
 //
 // Decision anchors (plan-strategy §2):
 //   - D-6  appendInjection(bgl, kind) — engine injection ('shadow' | 'ibl' |
-//          'lightmap') starts at derive(...).userRegionBindingEnd, no
+//          'transmission') starts at derive(...).userRegionBindingEnd, no
 //          hardcoded emissive/AO start-binding (=14) leak.
 //   - R-1  the 14-slot user-region assumption breaks once D-3 merges UBO;
 //          appendInjection threads userRegionBindingEnd from derive output.
@@ -65,13 +65,13 @@ describe('appendInjection (M3 w15) — engine injection BGL appending', () => {
     expect(injected[0]?.binding).toBe(start);
   });
 
-  it('(a/lightmap) lightmap injection starts at userRegionBindingEnd', () => {
+  it('(a/transmission) transmission injection starts at userRegionBindingEnd', () => {
     const out = derive(standardPbrSchema);
     // See `(a)` for the cast rationale (forgeax shim → @webgpu/types via
     // explicit two-step `as unknown as`, exempt from RHI gate j).
     const userBgl = [...out.bglEntries] as unknown as readonly GPUBindGroupLayoutEntry[];
     const start = out.userRegionBindingEnd;
-    const injected = appendInjection(userBgl, 'lightmap');
+    const injected = appendInjection(userBgl, 'transmission');
     expect(injected[0]?.binding).toBe(start);
   });
 

@@ -1,10 +1,10 @@
-import type { VfxGpuEmitterProgram, VfxGpuTickIntent } from '@forgeax/engine-vfx';
+import type { VfxGpuEmitterProgramAny, VfxGpuTickIntent } from '@forgeax/engine-vfx';
 
 export const VFX_EVENT_INPUT_BYTES = 32;
 export const VFX_EVENT_BYTES = 32;
 export const VFX_EVENT_COUNTER_BYTES = 16;
 
-function channelFanOut(emitter: VfxGpuEmitterProgram, channel: string): number {
+function channelFanOut(emitter: VfxGpuEmitterProgramAny, channel: string): number {
   return Math.max(
     1,
     ...(emitter.events ?? [])
@@ -13,14 +13,14 @@ function channelFanOut(emitter: VfxGpuEmitterProgram, channel: string): number {
   );
 }
 
-export function eventInputCapacity(emitter: VfxGpuEmitterProgram): number {
+export function eventInputCapacity(emitter: VfxGpuEmitterProgramAny): number {
   return Math.max(
     1,
     (emitter.channels ?? []).reduce((total, channel) => total + channel.capacity, 0),
   );
 }
 
-export function eventCapacity(emitter: VfxGpuEmitterProgram): number {
+export function eventCapacity(emitter: VfxGpuEmitterProgramAny): number {
   const capacity = (emitter.channels ?? []).reduce(
     (total, channel) => total + channel.capacity * channelFanOut(emitter, channel.id),
     0,
@@ -55,6 +55,20 @@ export function encodeEventInputs(intent: VfxGpuTickIntent): Uint8Array {
     view.setUint32(offset + 28, channelFanOut(intent.emitter, input.channel), true);
   }
   return bytes;
+}
+
+/**
+ * Pack the fixed-tick inputs and GPU-produced events into one typed storage
+ * resource. The managed event kernel uses the reflected input capacity as the
+ * split point; this keeps channel/sub-emitter semantics while leaving one
+ * storage binding available for Custom-enabled emitters.
+ */
+export function encodeEventBuffer(intent: VfxGpuTickIntent): Uint8Array {
+  const inputBytes = encodeEventInputs(intent);
+  const outputBytes = eventCapacity(intent.emitter) * VFX_EVENT_BYTES;
+  const data = new Uint8Array(inputBytes.byteLength + outputBytes);
+  data.set(inputBytes);
+  return data;
 }
 
 export function eventCounterData(): Uint8Array {

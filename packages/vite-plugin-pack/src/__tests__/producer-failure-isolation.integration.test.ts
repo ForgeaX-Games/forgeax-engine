@@ -14,6 +14,7 @@ describe('source-package failure isolation', () => {
         packageUrl: `/__forgeax-ddc/${INVALID_GUID}.pack.json`,
         kind: 'fixture-mesh',
         sourcePath: 'broken.fixture',
+        revision: { digest: 'sha256:broken', observedAt: 7, rootId: 'fixture-root' },
         ...currentProjectionFor('imported-output', 'cooked'),
         projection: {
           ...currentProjectionFor('imported-output', 'cooked').projection,
@@ -64,6 +65,11 @@ describe('source-package failure isolation', () => {
     expect(invalid?.projection?.lastKnownGood).toEqual({
       packageUrl: `/__forgeax-ddc/${INVALID_GUID}.pack.json`,
     });
+    expect(invalid?.revision).toEqual({
+      digest: `failure:${error.code}:${error.detail.stage}:sha256:broken`,
+      observedAt: expect.any(Number),
+      rootId: 'fixture-root',
+    });
     expect(valid).toEqual(rows[1]);
   });
 
@@ -90,5 +96,38 @@ describe('source-package failure isolation', () => {
     );
 
     expect(projectSourcePackageFailure(rows, error)[0]?.projection?.lastKnownGood).toBeUndefined();
+  });
+
+  it('promotes an accepted current package to LKG on its first source failure', () => {
+    const packageUrl = `/__forgeax-ddc/${INVALID_GUID}.pack.json`;
+    const rows = [
+      {
+        guid: INVALID_GUID,
+        packageUrl,
+        kind: 'fixture-mesh',
+        sourcePath: 'broken.fixture',
+        revision: { digest: 'sha256:accepted', observedAt: 7, rootId: 'fixture-root' },
+        ...currentProjectionFor('imported-output', 'cooked'),
+      },
+    ];
+    const error = sourcePackageError(
+      'source-package-conversion-failed',
+      {
+        sourceMeta: 'broken.fixture.meta.json',
+        anchorGuid: INVALID_GUID,
+        affectedGuids: [INVALID_GUID],
+        producer: 'source-package/fixture',
+        importer: 'fixture',
+      },
+      { stage: 'conversion', reason: 'fixture conversion failed' },
+    );
+
+    const failed = projectSourcePackageFailure(rows, error)[0];
+    expect(failed?.projection?.lastKnownGood).toEqual({ packageUrl });
+    expect(failed?.lifecycle).toBe('failed');
+    expect(failed?.revision).toMatchObject({
+      digest: `failure:${error.code}:${error.detail.stage}:sha256:accepted`,
+      rootId: 'fixture-root',
+    });
   });
 });

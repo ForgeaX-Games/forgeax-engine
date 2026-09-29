@@ -10,7 +10,21 @@
 // This file is scoped to the 'browser' vitest project (file-naming convention
 // *.browser.test.ts); the 'dawn' and 'unit' projects exclude it.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { World } from '@forgeax/engine-ecs';
+import {
+  Camera,
+  DirectionalLight,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  PointLightShadow,
+} from '@forgeax/engine-render';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 // WebGPU bitmask constants per spec (avoids needing @webgpu/types globals
 // in the runtime tsconfig). Values are stable across implementations.
@@ -192,87 +206,205 @@ describe('M0 cube_array comparison sampler (browser)', () => {
   });
 });
 
-// feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-6 (AC-14 URP path).
-//
-// URP-end-to-end pixel-readback assertion: spawn PointLight + PointLightShadow
-// + occluder + ground plane, run one frame, read back swap-chain pixels, and
-// assert the occluded fragment is darker than a non-occluded reference
-// fragment.
-//
-// Round-2 status (feat-20260612 Round-2 commit-B + commit-C): the BGL
-// hookup landed -- POINT_SHADOW_AVAILABLE is registered at all 3
-// vite-plugin-shader define sites, the runtime PBR view BGL emits
-// always-on bindings 5 (cube_array depth atlas) + 6 (shadowParams UBO 64 B),
-// and recordPointShadowPass walks validated entries with real drawIndexed
-// calls + per-face VP write to viewUniformBuffer.lightSpaceMatrix. The
-// shadowParams UBO is written per frame in record-stage with
-// (near, far, 1/(far-near), 0) per shadow-casting snapshot.
-//
-// What remains for this `it.skip` to flip to `it`: the full
-// createRenderer + canvas + readPixels + scene scaffolding (mirror of
-// `light-casters-9-light.browser.test.ts` shape: spawnCamera + spawn
-// occluder cube + spawn ground plane + spawnPointAt + spawnPointShadow
-// + driving FRAMES_PER_SCENE rAF ticks + sampleBlockAverage at occluded
-// vs free sample sites). The wiring is unblocked at the engine layer; the
-// scope of writing the test fixture itself + tuning the lighting setup so
-// occluded < non-occluded reliably under chromium headless presentation
-// timing exceeds Round-2 fix-up budget. Tracked as a sub-followup
-// (feat-followup-point-shadow-browser-readback) per implement-decisions.md.
-describe('URP point shadow pixel readback (browser, T-M3-6 / AC-14)', () => {
-  it.skip('occluded fragment darker than non-occluded -- BGL hookup landed in Round-2; full createRenderer + readPixels scaffolding deferred', () => {
-    // Pseudocode for the assertion the runnable test will make once the
-    // hookup lands:
-    //
-    //   const renderer = createRenderer(canvas, { ... });
-    //   const world = new World();
-    //   world.spawn({ component: Transform, data: {...} },
-    //               { component: PointLight, data: {...} },
-    //               { component: PointLightShadow, data: {} });
-    //   // ... ground plane + occluder ...
-    //   renderer.draw(world);
-    //   const px = await readback(canvas, occludedX, occludedY);
-    //   const py = await readback(canvas, freeX, freeY);
-    //   expect(px.r + px.g + px.b).toBeLessThan(py.r + py.g + py.b);
-    //   expect(py.r + py.g + py.b).toBeGreaterThan(0); // non-black frame
-  });
-});
+// feat-20260612-point-light-shadows-urp-hdrp M5 / AC-24 focused consumer.
+// This is a real Standard createRenderer path rather than a cube-array-only
+// primitive: the same caster/receiver scene is rendered with and without the
+// PointLightShadow component, then the canvas pixels and renderer pass facts
+// are checked together.
+const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
+const REAL_CANVAS_SIZE = 96;
 
-// feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-6 (AC-14 HDRP path).
-//
-// HDRP-end-to-end pixel-readback assertion: createRenderer with HDRP pipeline
-// installed -> spawn PointLight + PointLightShadow + occluder + ground ->
-// renderFrame -> readback pixels. Assert occluded < non-occluded brightness
-// AND non-black frame.
-//
-// Round-2 status (feat-20260612 Round-2 commit-B + commit-C): the BGL
-// hookup landed for both URP and HDRP -- the shared `pbr-view-bgl` declares
-// always-on bindings 5 + 6 (HDRP rides binding 5 only; HDRP gets the
-// (near, far) pair via LightSlot.kind_and_pad.zw per plan-strategy D-8),
-// and hdrp-cluster-forward.wgsl now imports shadowAtlas + shadowSampler
-// from common.wgsl under the POINT_SHADOW_AVAILABLE ifdef so naga_oil
-// resolves the free identifiers. recordPointShadowPass writes real depth
-// values to the cube atlas faces.
-//
-// What remains for this `it.skip` to flip to `it`: same as the URP test --
-// the full createRenderer + canvas + readPixels + scene scaffolding,
-// additionally with `installPipeline(hdrpAsset)` to drive the HDRP path.
-// Tracked under the same sub-followup (feat-followup-point-shadow-browser-readback).
-describe('HDRP point shadow pixel readback (browser, T-M4-6 / AC-14)', () => {
-  it.skip('occluded fragment darker than non-occluded -- BGL hookup landed in Round-2; full createRenderer + readPixels + HDRP install scaffolding deferred', () => {
-    // Pseudocode for the assertion the runnable test will make once the
-    // hookup lands:
-    //
-    //   const renderer = createRenderer(canvas, { ... });
-    //   renderer.installPipeline(hdrpAsset);  // forgeax::hdrp
-    //   const world = new World();
-    //   world.spawn({ component: Transform, data: {...} },
-    //               { component: PointLight, data: {...} },
-    //               { component: PointLightShadow, data: {} });
-    //   // ... ground plane + occluder ...
-    //   renderer.draw(world);
-    //   const px = await readback(canvas, occludedX, occludedY);
-    //   const py = await readback(canvas, freeX, freeY);
-    //   expect(px.r + px.g + px.b).toBeLessThan(py.r + py.g + py.b);
-    //   expect(py.r + py.g + py.b).toBeGreaterThan(0); // non-black frame
-  });
-});
+function spawnPointShadowScene(world: World, withShadow: boolean): void {
+  const material = world.allocSharedRef(
+    'MaterialAsset',
+    Materials.standard({
+      baseColor: [0.78, 0.26, 0.08, 1],
+      metallic: 0,
+      roughness: 0.45,
+    }),
+  );
+  world
+    .spawn(
+      { component: Transform, data: { pos: [0, 0, 0], scale: [1.3, 1.3, 1.3] } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [material] } },
+    )
+    .unwrap();
+  world
+    .spawn(
+      // A receiver wall sits behind the cube so the point light's occlusion
+      // lands on a camera-visible surface. The old floor-only witness could
+      // miss the shadow entirely at the fixed camera pose and make a valid
+      // shadow pass look identical to the no-shadow baseline.
+      { component: Transform, data: { pos: [0, 0, -0.65], scale: [5, 5, 0.1] } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [material] } },
+    )
+    .unwrap();
+  world
+    .spawn(
+      { component: Transform, data: { pos: [0, 0, 6] } },
+      { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 50 } },
+    )
+    .unwrap();
+  world
+    .spawn({
+      component: DirectionalLight,
+      // Keep the point light as the only direct source; a directional fill
+      // would mask a broken point-shadow factor in this pixel witness.
+      data: { direction: [-0.4, -0.8, -1], intensity: 0, castShadow: false },
+    })
+    .unwrap();
+  const point = [1.8, 2.6, 2.2] as const;
+  world
+    .spawn(
+      { component: Transform, data: { pos: point } },
+      { component: PointLight, data: { color: [1, 0.72, 0.4], intensity: 22, range: 12 } },
+      ...(withShadow
+        ? [{ component: PointLightShadow, data: { mapSize: 256, nearPlane: 0.1, farPlane: 25 } }]
+        : []),
+    )
+    .unwrap();
+
+  // The standalone renderer host does not install scenePlugin for this
+  // fixture. Publish world-space matrices before extract so the pixel proof
+  // exercises the actual caster/receiver scene instead of the clear colour.
+  propagateTransforms(world).unwrap();
+}
+
+async function waitForPresentedPixels(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  let latest = new Uint8Array(REAL_CANVAS_SIZE * REAL_CANVAS_SIZE * 4);
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    // CDP-backed element screenshots read the compositor surface directly;
+    // createImageBitmap(canvas) can race swap-chain presentation in headless
+    // Chromium and return an all-zero opaque surface.
+    const shot = await page.elementLocator(canvas).screenshot({ base64: true, save: false });
+    const b64 = typeof shot === 'string' ? shot : shot.base64;
+    const binary = atob(b64);
+    const encoded = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      encoded[index] = binary.charCodeAt(index);
+    }
+    const bitmap = await createImageBitmap(new Blob([encoded], { type: 'image/png' }));
+    const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = surface.getContext('2d', { willReadFrequently: true });
+    if (context === null) {
+      bitmap.close();
+      throw new Error('point-shadow browser test: canvas readback context unavailable');
+    }
+    context.drawImage(bitmap, 0, 0);
+    const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
+    latest = new Uint8Array(image.data);
+    let nonBlack = false;
+    for (let index = 0; index < latest.length; index += 4) {
+      if ((latest[index] ?? 0) + (latest[index + 1] ?? 0) + (latest[index + 2] ?? 0) > 0) {
+        nonBlack = true;
+        break;
+      }
+    }
+    if (nonBlack) return latest;
+  }
+  return latest;
+}
+
+function pixelLuma(pixels: Uint8Array): number {
+  let sum = 0;
+  for (let index = 0; index < pixels.length; index += 4) {
+    sum += (pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0);
+  }
+  return sum / (pixels.length / 4);
+}
+
+function pixelDifference(a: Uint8Array, b: Uint8Array): number {
+  let difference = 0;
+  for (let index = 0; index < Math.min(a.length, b.length); index += 4) {
+    difference += Math.abs((a[index] ?? 0) - (b[index] ?? 0));
+    difference += Math.abs((a[index + 1] ?? 0) - (b[index + 1] ?? 0));
+    difference += Math.abs((a[index + 2] ?? 0) - (b[index + 2] ?? 0));
+  }
+  return difference;
+}
+
+it.skipIf(!browserReady)(
+  'Standard point-shadow scene differs from its no-shadow baseline',
+  async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = REAL_CANVAS_SIZE;
+    canvas.height = REAL_CANVAS_SIZE;
+    canvas.style.width = `${REAL_CANVAS_SIZE}px`;
+    canvas.style.height = `${REAL_CANVAS_SIZE}px`;
+    document.body.appendChild(canvas);
+    let renderer: import('@forgeax/engine-render').Renderer | undefined;
+    try {
+      const host = await constructRuntimeRendererHost(
+        canvas,
+        {},
+        { shaderManifestUrl: '/shaders/manifest.json' },
+      );
+      if (!host.ok) throw host.error;
+      renderer = host.value.renderer;
+      const errors: string[] = [];
+      const unsubscribe = renderer.subscribe((event) => {
+        if (event.kind === 'error') errors.push(event.error.code);
+      });
+
+      const shadowWorld = new World();
+      spawnPointShadowScene(shadowWorld, true);
+      const shadowAttachment = renderer.attach(shadowWorld);
+      expect(shadowAttachment.ok).toBe(true);
+      if (!shadowAttachment.ok) throw shadowAttachment.error;
+      for (let frame = 0; frame < 6; frame += 1) {
+        shadowWorld.update(1 / 60).unwrap();
+        const drawn = renderer.draw({
+          leases: [shadowAttachment.value],
+          camera: { lease: shadowAttachment.value },
+          environment: { lease: shadowAttachment.value },
+        });
+        expect(drawn.ok).toBe(true);
+        if (!drawn.ok) throw drawn.error;
+      }
+      const shadowPixels = await waitForPresentedPixels(canvas);
+      const shadowInspection = renderer.inspect();
+      expect(shadowInspection.pointShadow?.status).toBe('ready');
+      expect(shadowInspection.pointShadow?.requested).toBe(1);
+      expect(shadowInspection.pointShadow?.admitted).toBe(1);
+      expect(
+        shadowInspection.perFramePassNames.filter((name) => /^point-shadow-\d+-\d+$/.test(name)),
+      ).toHaveLength(6);
+
+      const noShadowWorld = new World();
+      spawnPointShadowScene(noShadowWorld, false);
+      const noShadowAttachment = renderer.attach(noShadowWorld);
+      expect(noShadowAttachment.ok).toBe(true);
+      if (!noShadowAttachment.ok) throw noShadowAttachment.error;
+      for (let frame = 0; frame < 6; frame += 1) {
+        noShadowWorld.update(1 / 60).unwrap();
+        const drawn = renderer.draw({
+          leases: [noShadowAttachment.value],
+          camera: { lease: noShadowAttachment.value },
+          environment: { lease: noShadowAttachment.value },
+        });
+        expect(drawn.ok).toBe(true);
+        if (!drawn.ok) throw drawn.error;
+      }
+      const noShadowPixels = await waitForPresentedPixels(canvas);
+      const noShadowInspection = renderer.inspect();
+      expect(noShadowInspection.pointShadow?.status).toBe('inactive');
+      expect(
+        noShadowInspection.perFramePassNames.filter((name) => name.startsWith('point-shadow-')),
+      ).toHaveLength(0);
+      expect(pixelLuma(shadowPixels)).toBeGreaterThan(0);
+      expect(pixelLuma(noShadowPixels)).toBeGreaterThan(0);
+      expect(pixelDifference(shadowPixels, noShadowPixels)).toBeGreaterThan(0);
+      expect(errors).toEqual([]);
+      unsubscribe();
+    } finally {
+      if (renderer !== undefined) await renderer.dispose();
+      canvas.remove();
+    }
+  },
+  60_000,
+);

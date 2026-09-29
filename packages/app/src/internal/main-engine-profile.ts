@@ -14,6 +14,7 @@ import type { Plugin } from '@forgeax/engine-plugin';
 import { renderComponentsPlugin } from '@forgeax/engine-render';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
+import type { AssetRuntimeAssembly } from '../assets-runtime-assembly';
 import { inputMapPlugin } from '../input-map-plugin';
 import { inputPlugin } from '../input-plugin';
 import {
@@ -21,11 +22,16 @@ import {
   type RenderFeatureHost,
   renderFeatureHostPlugin,
 } from '../renderer-plugin';
-import { assetsWorldPlugin, rendererAssetsPlugin } from './assets-world-plugin';
+import {
+  assetRegistryPlugin,
+  assetsWorldPlugin,
+  rendererAssetsPlugin,
+} from './assets-world-plugin';
 import { createDebugDrawOnReady, type RendererDebugDrawHost, releaseDebugDraw } from './debug-draw';
 import type { EngineProfileBase } from './engine-profile-common';
 
 export interface MainEngineProfileOptions extends EngineProfileBase {
+  readonly assetAssembly?: AssetRuntimeAssembly;
   readonly rendererDebugDrawHost?: RendererDebugDrawHost;
   readonly rendererFeatureHost?: RenderFeatureHost;
   readonly animationPayloads: AnimationPayloadLookup;
@@ -61,7 +67,9 @@ export function mainEngineProfile(options: MainEngineProfileOptions): Plugin[] {
     ...(options.rendererFeatureHost === undefined
       ? []
       : [renderFeatureHostPlugin(options.rendererFeatureHost)]),
-    rendererAssetsPlugin(options.assets),
+    ...(options.assetAssembly === undefined
+      ? [rendererAssetsPlugin(options.assets)]
+      : [assetRegistryPlugin(options.assetAssembly, options.pluginPrograms, options.runtimePacks)]),
     assetsWorldPlugin(),
     ...(options.input === undefined
       ? []

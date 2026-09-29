@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { forgeaxShader } from '../index.js';
 
@@ -43,12 +44,12 @@ function createContext(): PluginContext {
   };
 }
 
-function latestManifest(context: PluginContext): Manifest {
+async function latestManifest(context: PluginContext): Promise<Manifest> {
   const manifest = [...context.emitted]
     .reverse()
     .find((asset) => asset.fileName === 'shaders/manifest.json');
   if (manifest === undefined) throw new Error('shader manifest was not emitted');
-  return JSON.parse(manifest.source) as Manifest;
+  return (await readShaderManifestPublication(JSON.parse(manifest.source))) as Manifest;
 }
 
 function materialEntry(manifest: Manifest): Manifest['materialShaders'][number] {
@@ -87,7 +88,7 @@ async function runLkgScenario(): Promise<LkgScenario> {
 
   await plugin.transform.call(context as never, source, sourcePath);
   plugin.generateBundle.call(context as never);
-  const baselineManifest = latestManifest(context);
+  const baselineManifest = await latestManifest(context);
   const baseline = materialEntry(baselineManifest);
   const baselineHash = materialHash(baselineManifest);
 
@@ -102,7 +103,7 @@ async function runLkgScenario(): Promise<LkgScenario> {
     failure = error;
   }
   plugin.generateBundle.call(context as never);
-  const retained = latestManifest(context);
+  const retained = await latestManifest(context);
 
   const repaired = source.replace(
     'let pulse_factor = sin(material.time * material.speed) * 0.25 + 0.75;',
@@ -110,14 +111,14 @@ async function runLkgScenario(): Promise<LkgScenario> {
   );
   await plugin.transform.call(context as never, repaired, sourcePath);
   plugin.generateBundle.call(context as never);
-  const firstRepair = latestManifest(context);
+  const firstRepair = await latestManifest(context);
   const firstRepairEntry = materialEntry(firstRepair);
   const firstRepairHash = materialHash(firstRepair);
 
   const secondRepair = repaired.replace('0.35 + 0.65', '0.45 + 0.55');
   await plugin.transform.call(context as never, secondRepair, sourcePath);
   plugin.generateBundle.call(context as never);
-  const finalManifest = latestManifest(context);
+  const finalManifest = await latestManifest(context);
   const finalEntry = materialEntry(finalManifest);
 
   const sourceNode = { file: sourcePath };

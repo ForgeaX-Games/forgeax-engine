@@ -19,6 +19,7 @@ import {
   type RenderFeaturePreparedStateMismatchDetail,
   RenderFeaturePreparedStateMismatchError,
 } from '../errors/render';
+import type { SceneDataTarget } from '../temporal/scene-data';
 import type { RenderFeatureGpuBufferRef } from './prepared-gpu-work';
 import type { RenderFeatureTargetHandle } from './targets';
 import type { PreparedKind } from './vocabulary';
@@ -30,8 +31,11 @@ export type { PreparedKind } from './vocabulary';
 export const RENDER_FEATURE_VERTEX_LAYOUTS = Object.freeze({
   positionSizeColorInstance: 'position-size-color-instance',
   billboardMaterialInstance: 'billboard-material-instance',
+  billboardMaterialInputInstance: 'billboard-material-input-instance',
   topologySegmentInstance: 'topology-segment-instance',
+  topologySegmentMaterialInputInstance: 'topology-segment-material-input-instance',
   meshGeometryMaterialInstance: 'mesh-geometry-material-instance',
+  meshGeometryMaterialInputInstance: 'mesh-geometry-material-input-instance',
 } as const);
 
 /**
@@ -50,6 +54,8 @@ export interface RenderFeaturePreparedRef<Kind extends PreparedKind = PreparedKi
 export interface RenderFeaturePipelineDescriptor {
   readonly shader: string;
   readonly vertexLayout: string;
+  /** Number of vec4 lanes in the material-input instance layout (1 through 4). */
+  readonly particleInputLanes?: number;
   readonly colorFormats: readonly TextureFormat[];
   readonly depthFormat?: TextureFormat;
   /** Sample count of the target this pipeline will draw into. */
@@ -234,7 +240,7 @@ export type RenderFeatureDrawRecord =
 export interface RenderFeatureGraphicsPassDescriptor {
   readonly attachments: RenderFeatureGraphicsPassAttachments;
   /** Targets sampled by shaders but not attached for writing in this pass. */
-  readonly sampledTargets?: readonly RenderFeatureTargetHandle[];
+  readonly sampledTargets?: readonly (RenderFeatureTargetHandle | SceneDataTarget)[];
   readonly draws: readonly RenderFeatureDrawRecord[];
 }
 

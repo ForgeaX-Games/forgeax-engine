@@ -46,6 +46,15 @@ if (!result.ok) {
 const materialHandle = world.allocSharedRef('MaterialAsset', result.value);
 ```
 
+## Blended custom materials and fog
+
+A custom WGSL material drawn with a blend state imports
+`forgeax_view::fog::{translucent_fog}` and returns
+`translucent_fog(view, worldPos, color, alpha)` as its final color, applying it once
+per writer. The renderer picks straight, premultiplied or additive composition from
+the blend state and binds the unfogged View for opaque draws, so the same program
+serves both. Clip-space producers reconstruct `worldPos` with `ndc_world`.
+
 ## Coordinate inputs
 
 The built-in and custom paths use named texture values. `coordinates.set`
@@ -73,6 +82,21 @@ path and compare the resulting final capture against the Three r184 analytic
 oracle. A source-name match without formula and output-domain parity is not a
 passing result.
 
+## GPU-driven scene-index materials
+
+GPU-driven raster and shadow passes bind one visible item `vec4<u32>` per
+drawn instance: `x` scene instance row, `y` scene material row, `z` skin
+palette base, `w` bitcast signed LOD coverage. LOD level and coverage are
+chosen by the GPU cull per view; the material never selects a level.
+
+> [!IMPORTANT]
+> Migration: a cooked scene-index material must not read `Mesh` rows or treat
+> `visible.x` as a per-batch index. Resolve transforms, temporal flags and
+> probe identity with `sceneIndexDraw(visible.x)` from
+> `forgeax_view::common`, and pass `bitcast<f32>(visible.w)` to
+> `applyLodCoverage`. See the
+> [LOD coverage ABI](../../packages/shader/README.md#lod-coverage-abi).
+
 ## Contract and reflection
 
 The compiler derives uniform layout, sampler/texture bindings, and injection
@@ -97,6 +121,16 @@ For every failure, switch on `error.code` and read `error.detail` and
 fixed by changing the demo's material data. This is the recovery route.
 
 ## Routing
+
+In an Engine contributor checkout, standalone Dawn fixtures with authored
+material packages use `buildEngineShaderManifest` with the CI-admitted shared
+inputs: built-in rows are reused while custom materials still compile from
+source. Point-shadow requests require their source profile. See the
+[shader plugin contract](../../packages/vite-plugin-shader/README.md) and
+[CI operating guide](../../scripts/ci/README.md) before changing preparation.
+Standalone Dawn tests reuse the existing `shaderManifestUrl` fixture, which
+serializes `publishShaderManifest(entries, materialShaders)`. Do not percent-encode
+the expanded builder result.
 
 - Material shape: [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)
 - Asset catalog and pack roots: [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md)

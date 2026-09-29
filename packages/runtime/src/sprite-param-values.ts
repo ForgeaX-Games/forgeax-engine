@@ -31,7 +31,7 @@
  *   replaces this asset-side region.
  * - `pivotAndSize`: vec4 `[pivotX, pivotY, sizeX, sizeY]` — `.xy` is the
  *   pivot (0..1 normalised); `.zw` is the DEAD SLOT post-w11 (D-6 unit-
- *   quad: world scale flows entirely through Transform.world, no longer
+ *   quad: world scale flows entirely through GlobalTransform.world, no longer
  *   double-applied via the UBO). Default `[0.5, 0.5, 1, 1]`.
  * - `slicesAndMode`: vec4 `[left, top, right, bottom-signed]` — 9-slice
  *   border widths in UV (0..1) on the source texture region. Sum of

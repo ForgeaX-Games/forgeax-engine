@@ -102,7 +102,7 @@ const RUN_CLIP_GUID = '019ecd87-179b-71f7-b9f8-4c8518326b65';
 // sky.hdr IBL source (F-05): demo-assets/template-game-default/sky.hdr (Apache-2.0,
 // commercial-compatible). pluginPack scans that directory (added to vite roots)
 // and surfaces it via the binding's scoped catalog -> loadByGuid<EquirectAsset>, the same
-// declarative equirect IBL path the learn-render PBR demos + templates/game-default
+// declarative equirect IBL path the learn-render PBR demos + templates/game-3d
 // use (Skylight/SkyboxBackground hold the equirect handle; projection is internal).
 const SKY_HDR_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
 
@@ -142,7 +142,10 @@ function resizeCanvasToDisplaySize(c: HTMLCanvasElement): void {
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
-    { plugins: [physicsPlugin('rapier-3d'), webAudioPlugin(), audioPlugin(), skinningPlugin()] },
+    {
+      plugins: [physicsPlugin('rapier-3d'), webAudioPlugin(), audioPlugin(), skinningPlugin()],
+      ...(runtimeBinding === undefined ? {} : { assetRuntimeBinding: runtimeBinding }),
+    },
     {
       ...forgeaxBundlerAdapter(),
       importTransport: createRuntimeAssetImportTransport(runtimeBinding),
@@ -486,7 +489,7 @@ function spawnCamera(world: World): EntityHandle {
   // AudioListener (F-07): the camera carries the listener so 3D AudioSource
   // emitters attenuate by distance. createApp auto-registers the listener-sync
   // system that drives the Web Audio listener pose from this entity's
-  // Transform.world.
+  // GlobalTransform.world.
   const look = cameraLookAtQuat(
     0,
     CAMERA_OFFSET_Y,

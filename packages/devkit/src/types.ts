@@ -1,34 +1,5 @@
-import type { GameProjectPluginEntry } from '@forgeax/engine-project';
-
-export type ForgeaXCommand =
-  | 'new'
-  | 'init'
-  | 'doctor'
-  | 'test'
-  | 'dev'
-  | 'build'
-  | 'package'
-  | 'capture'
-  | 'engine.status'
-  | 'engine.use-local'
-  | 'engine.unlink'
-  | 'engine.doctor'
-  | 'serve'
-  | 'preview'
-  | 'plugin.install'
-  | 'plugin.uninstall'
-  | 'skill.install'
-  | 'skill.verify'
-  | 'sdk.install'
-  | 'asset.add'
-  | 'asset.verify'
-  | 'asset.inspect'
-  | 'asset.list'
-  | 'shader.check'
-  | 'list'
-  | 'describe'
-  | 'run'
-  | 'exec';
+import type { GameProjectRoots } from '@forgeax/engine-project';
+import type { BrowserCarrierAdapter, BrowserCarrierRunIdentity } from './tools/display-carrier.js';
 
 export interface CommandError {
   readonly code: string;
@@ -41,26 +12,12 @@ export type CommandResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: CommandError };
 
-export interface CommandEnvelope<T = unknown> {
-  readonly schemaVersion: '1.0.0';
-  readonly command: ForgeaXCommand;
-  readonly ok: boolean;
-  readonly value?: T;
-  readonly error?: CommandError;
-}
-
 export interface ProjectFacts {
   readonly root: string;
   readonly id: string;
   readonly name: string;
-  readonly entry: string;
-  readonly bootstrapEntry?: string;
-  readonly plugins: readonly GameProjectPluginEntry[];
-  readonly physics?: '2d' | '3d';
-  readonly defaultScene?: string;
+  readonly roots: GameProjectRoots;
   readonly assetRoots: readonly string[];
-  readonly assetImporters?: readonly string[];
-  readonly assetPublicDir?: string;
   readonly packageJson: Readonly<Record<string, unknown>>;
 }
 
@@ -107,6 +64,12 @@ export interface InitOptions extends ProjectCommandOptions {
 export interface NewOptions extends ProjectCommandOptions {
   readonly dryRun?: boolean;
   readonly template?: string;
+  /** Override the generated project id; defaults to the target directory basename. */
+  readonly id?: string;
+  /** Override the generated display name; defaults to the generated id. */
+  readonly name?: string;
+  /** Override the generated npm package name; defaults to the template namespace plus id. */
+  readonly packageName?: string;
 }
 
 export interface BuildOptions extends ProjectCommandOptions {
@@ -116,7 +79,10 @@ export interface BuildOptions extends ProjectCommandOptions {
 
 export interface PackageOptions extends ProjectCommandOptions {
   readonly output?: string;
+  readonly format?: PackageFormat;
 }
+
+export type PackageFormat = 'web-zip' | 'single-html';
 
 export type CaptureBackend = 'auto' | 'software' | 'hardware';
 
@@ -133,6 +99,13 @@ export interface BrowserCaptureOptions extends ProjectCommandOptions {
   readonly requireUi?: boolean;
   readonly deterministic?: boolean;
   readonly headless?: boolean;
+  /**
+   * Existing browser-page owner for an eligible headed run. The owner keeps
+   * the Page alive; DevKit only borrows and releases its exact lease.
+   */
+  readonly carrier?: BrowserCarrierAdapter;
+  readonly carrierRun?: BrowserCarrierRunIdentity;
+  readonly carrierGeneration?: number;
 }
 
 /** @deprecated Use BrowserCaptureOptions with `backend: 'software'`. */
@@ -146,31 +119,47 @@ export interface AssetAddOptions extends ProjectCommandOptions {
   readonly dryRun?: boolean;
 }
 
+export interface AssetListOptions extends ProjectCommandOptions {
+  /** Filter by the producer-declared asset kind (for example `mesh`). */
+  readonly type?: string;
+  /** Maximum number of rows in one response. */
+  readonly limit?: number;
+  /** Opaque numeric continuation cursor returned by the previous page. */
+  readonly cursor?: string;
+}
+
 export interface AssetInspectOptions extends ProjectCommandOptions {
   readonly subject: string;
+  /** Select one output when subject is a Pack source path. */
+  readonly sourceKey?: string;
+}
+
+export interface AssetResolveOptions extends ProjectCommandOptions {
+  readonly subject?: string;
+  readonly packageId?: string;
+  readonly sourceKey?: string;
+  readonly require?: 'identity' | 'present' | 'ready';
+  readonly requestId?: string;
 }
 
 export interface ShaderCheckOptions extends ProjectCommandOptions {
   readonly path?: string;
 }
 
-export interface OperationCommandOptions extends ProjectCommandOptions {
-  readonly id?: string;
-  readonly args?: string;
-  readonly input?: string;
-  readonly program?: string;
-}
-
-export interface PluginInstallOptions extends ProjectCommandOptions {
-  readonly id: string;
-  readonly module: string;
-  readonly realm?: 'host' | 'engine' | 'build';
-  readonly dependency?: string;
+export interface PluginCreateOptions extends ProjectCommandOptions {
+  readonly path: string;
+  readonly module?: string;
+  readonly export?: string;
+  readonly packageId?: string;
+  readonly sourceKey?: string;
+  readonly config?: unknown;
   readonly dryRun?: boolean;
 }
-
-export interface PluginUninstallOptions extends ProjectCommandOptions {
-  readonly id: string;
-  readonly dependency?: string;
+export interface PluginInspectOptions extends ProjectCommandOptions {
+  readonly guid?: string;
+}
+export interface PluginRootOptions extends ProjectCommandOptions {
+  readonly realm: keyof GameProjectRoots;
+  readonly guid: string | null;
   readonly dryRun?: boolean;
 }

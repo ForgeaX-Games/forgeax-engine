@@ -67,6 +67,11 @@ Three live engine roots are always present in eval scope. Diagnostics are struct
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
 | `execution` | `{ report(): unknown; rebuild(): Promise<unknown> } \| undefined` | App-owned execution report and explicit poisoned-World rebuild. Remote imports no App or ECS execution type. |
 
+The Host can supply `StartServerOptions.importModule` to use its own module
+resolution and runtime identities. It is forwarded to the existing execution
+seam; Remote imports no domain packages. Optional `simulation` is the Host's
+live operations projection, including its native `pluginContext` when supplied.
+
 The `_import(specifier)` injection enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
 
 The App host's ECS import resolver is explicit: when the host exposes
@@ -130,7 +135,7 @@ world.despawn(h);
 if (rhiCapture === undefined) return { ok: false, error: { code: 'capture-unavailable' } };
 const capture = await rhiCapture.captureFrame();
 if (!capture.ok) return capture;
-// Pass this single artifact to `forgeax run rhi.summary` or `rhi.inspect`.
+// Pass this single artifact to `forgeax debug rhi summary` or `rhi.inspect`.
 return { kind: capture.value.kind, digest: capture.value.digest };
 ```
 
@@ -213,9 +218,9 @@ flowchart TD
 |:--|:--|:--|
 | In-process | `const result = await client.eval('world.inspect().entityCount')` | Host self-inspection; zero network cost |
 | WebSocket | `ws://localhost:5732` send `{"method":"eval","params":{"script":"..."}}` | External AI agents / CLI tools attaching to a running **Node / dawn-node** app |
-| Browser loopback relay (**remote-live**) | `POST http://127.0.0.1:5733/eval {"code":"..."}` → page dials the relay | Driving a **live browser** engine (`pnpm --filter <app> dev`, :5173) where no WS server can bind |
+| Persistent DevKit owner (**`forgeax dev`**) | `forgeax dev eval --root <project> --revision <revision> --code "..."` | Driving a **live browser** engine while preserving one Page and one actual World |
 
-> **Browsers cannot host a WS server.** `startServer` uses `ws.WebSocketServer` (a Node listening socket), so it never starts in a browser — `createApp` catches the failure and `app.remote` stays `undefined`. To reach a running browser engine, `createApp` mounts a DEV-only bridge that dials OUT to a loopback relay and runs the ws-free eval core (`@forgeax/engine-remote/execute`) in the page realm. Start it with `node scripts/dev-live.mjs <app>` and drive it with `node skills/forgeax-engine-cli/scripts/remote-live.mjs "<code>"`. On by default in dev; opt out with `VITE_FORGEAX_ENGINE_BRIDGE=0`. Full recipe + security notes: the `forgeax-engine-cli` skill (§remote-live). This path is additive — it does not change the WS-server path or `app.remote` semantics.
+> **Browsers cannot host a WS server.** `startServer` remains a Node/dawn-node transport. Browser development uses the DevKit owner: `forgeax dev start` keeps the project process and controlled Page, and its App bridge evaluates code in the actual main or Worker realm. `forgeax dev status` is the readiness and identity authority; stale `revision` requests fail instead of silently switching pages.
 
 The wire protocol exposes **two** JSON-RPC methods: `eval` (the single capability above) and `introspect`. Send `{"method":"introspect"}` to get an OpenRPC L2 subset document listing the available methods (`eval` / `introspect`) and the eval-scope live roots — an AI agent can self-describe the surface without reading source. Recoverable failures map to JSON-RPC error codes `-32001..-32005` (the 5-member `RemoteErrorCode` union; see above).
 

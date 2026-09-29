@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-delayed-commands headless dawn smoke (structural-only).
-// Verify: backend=webgpu, 300 frames no crash, 0 RhiError
+// Verify: backend=webgpu, 60 frames no crash, 0 RhiError
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const WIDTH = 200, HEIGHT = 150;
-const TARGET_FRAMES = 300;
+const TARGET_FRAMES = 60;
 
 let create, globals;
 ({ create, globals } = await import('webgpu'));

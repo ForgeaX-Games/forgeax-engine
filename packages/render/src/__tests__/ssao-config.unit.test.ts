@@ -13,6 +13,8 @@ describe('SSAO parameter authority', () => {
       radius: SSAO_DEFAULT_RADIUS,
       bias: SSAO_DEFAULT_BIAS,
       intensity: SSAO_DEFAULT_INTENSITY,
+      quality: 'high',
+      algorithm: 'ssao',
     });
   });
 
@@ -21,7 +23,14 @@ describe('SSAO parameter authority', () => {
       radius: 0.65,
       bias: 0.025,
       intensity: 1.4,
+      quality: 'high',
+      algorithm: 'ssao',
     });
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects non-finite parameters (%s)', (value) => {
+    for (const field of ['radius', 'bias', 'intensity'])
+      expect(resolveSsaoParameters({ [field]: value }).ok).toBe(false);
   });
 
   it('returns structured failures for invalid radius and bias', () => {
@@ -32,5 +41,17 @@ describe('SSAO parameter authority', () => {
     if (invalidRadius.ok || invalidBias.ok) throw new Error('expected structured SSAO failures');
     expect(invalidRadius.error.code).toBe('ssao-radius-non-positive');
     expect(invalidBias.error.code).toBe('ssao-bias-negative');
+  });
+});
+
+it('selects GTAO and rejects unknown AO algorithms', () => {
+  expect(resolveSsaoParameters({ algorithm: 'gtao' })).toMatchObject({
+    ok: true,
+    value: { algorithm: 'gtao' },
+  });
+  const invalid = resolveSsaoParameters({ algorithm: 'unknown' as 'gtao' });
+  expect(invalid).toMatchObject({
+    ok: false,
+    error: { code: 'ssao-parameter-invalid', detail: { paramName: 'algorithm' } },
   });
 });

@@ -25,6 +25,21 @@ import { pickVertex, pickVertexOnEntity } from '../pick-vertex';
 import { viewportToWorld } from '../viewport-to-world';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
+const EMPTY_ATTRIBUTE = new Float32Array(0);
+function interleavedAttributes(position: Float32Array): {
+  position: Float32Array;
+  normal: Float32Array;
+  uv: Float32Array;
+  tangent: Float32Array;
+} {
+  return {
+    position,
+    normal: EMPTY_ATTRIBUTE,
+    uv: EMPTY_ATTRIBUTE,
+    tangent: EMPTY_ATTRIBUTE,
+  };
+}
+
 // --- from pick.test.ts ---
 // pick.test.ts — feat-20260529-picking-raycasting-screen-to-entity M3 / w12 (TDD red).
 //
@@ -61,7 +76,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 // TDD red: pick.ts does not exist yet when this file is first committed, so the
 // `../pick` import will not resolve. Green after w13.
 
-// feat-20260601 w12/w13: pick reads the resolved `Transform.world` mat4 written
+// feat-20260601 w12/w13: pick reads the resolved `GlobalTransform.world` mat4 written
 // by propagateTransforms (no GlobalTransform/Transform fallback). Every scene
 // runs propagate before pick so the world column is fresh; `runPick` folds the
 // propagate + pick pair so the test bodies stay focused on the pick contract.
@@ -119,7 +134,7 @@ function registerBox(world: World, assets: AssetRegistry): Handle<'MeshAsset', '
     kind: 'mesh',
     vertices,
     indices: new Uint16Array([0, 1, 2]),
-    attributes: { position: positions },
+    attributes: interleavedAttributes(positions),
     submeshes: [
       {
         indexOffset: 0,
@@ -490,7 +505,7 @@ describe('w12 — type narrowing (AC-05 / AC-08, tsc)', () => {
   );
 });
 
-describe('w12 — pick reads Transform.world for hierarchical entities (AC-05)', () => {
+describe('w12 — pick reads GlobalTransform.world for hierarchical entities (AC-05)', () => {
   it('picks a child box at its resolved world position (parent x child), not its local position', () => {
     const scene = makeScene();
     const camera = spawnPerspectiveCamera(scene.world, 5);
@@ -498,7 +513,7 @@ describe('w12 — pick reads Transform.world for hierarchical entities (AC-05)',
     // Parent translates +X by 2; child local sits at the origin. The child's
     // world position is therefore (2,0,0) -- off the centre -Z ray. A pick
     // reading the LOCAL transform (origin) would (wrongly) hit; a pick reading
-    // Transform.world (x=2) correctly misses the centre ray.
+    // GlobalTransform.world (x=2) correctly misses the centre ray.
     const parent = scene.world
       .spawn({ component: Transform, data: translateTransform(2, 0, 0) })
       .unwrap();

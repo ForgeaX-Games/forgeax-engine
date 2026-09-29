@@ -41,6 +41,8 @@ const NUMERIC_TYPES: ReadonlySet<MaterialParamType> = new Set<MaterialParamType>
 
 const TEXTURE_VIEW_TYPES: ReadonlySet<MaterialParamType> = new Set<MaterialParamType>([
   'texture2d',
+  'texture2d_array',
+  'texture3d',
   'texture_cube',
   'texture_depth_2d',
   'texture_cube_array',
@@ -92,6 +94,10 @@ function textureBglDescriptor(t: TextureBindingParamType): TextureBglDescriptor 
   switch (t) {
     case 'texture2d':
       return { sampleType: 'float', viewDimension: '2d' };
+    case 'texture2d_array':
+      return { sampleType: 'float', viewDimension: '2d-array' };
+    case 'texture3d':
+      return { sampleType: 'float', viewDimension: '3d' };
     case 'texture_cube':
       return { sampleType: 'float', viewDimension: 'cube' };
     case 'texture_depth_2d':
@@ -228,6 +234,7 @@ export interface ParamSchemaProjectionOwnerStats {
 
 export type ParamSchemaDeriveObservationKind =
   | 'admitted-identity-hit'
+  | 'fallback-cache-hit'
   | 'unregistered-fallback-derive'
   | 'fallback-layout-sha';
 
@@ -251,6 +258,27 @@ interface OwnedParamSchemaProjection extends ImmutableParamSchemaProjection {
 const ADMITTED_PARAM_SCHEMA_PROJECTIONS = new WeakMap<
   readonly ParamSchemaEntry[],
   DerivedMaterialInterface
+>();
+
+interface ParamSchemaShape {
+  readonly names: readonly string[];
+  readonly types: readonly MaterialParamType[];
+  readonly sampleTypes: readonly (string | undefined)[];
+}
+
+interface UnadmittedParamSchemaProjection {
+  readonly shape: ParamSchemaShape;
+  readonly derivedInterface: DerivedMaterialInterface;
+}
+
+// Runtime compatibility callers do not always carry an owner/revision. Keep
+// that path fast without weakening its mutable-schema contract: the cache is
+// keyed by array identity, while every hit rechecks the only fields consumed by
+// `derivePure` (ordered `name` + `type`). Results are frozen before publication
+// so a caller cannot poison a later hit.
+const UNADMITTED_PARAM_SCHEMA_PROJECTIONS = new WeakMap<
+  readonly ParamSchemaEntry[],
+  UnadmittedParamSchemaProjection
 >();
 
 /**
@@ -320,13 +348,15 @@ export class ParamSchemaProjectionOwner {
 }
 
 /**
- * Pure derivation: paramSchema -> BGL entries + UBO byte layout + field maps.
+ * Deterministic derivation: paramSchema -> BGL entries + UBO byte layout +
+ * field maps. Unadmitted schemas are memoized by identity after an exact
+ * ordered name/type check; owner-admitted schemas still take precedence.
  *
  * The function has no side effects and is the SSOT for BGL / UBO / loader
  * lookup tables (D-2). Runtime / vite-plugin-shader / loader all call into
  * this single entry point; in particular, `userRegionBindingEnd` is the
  * post-user-region binding index that engine-injected groups (shadow / IBL
- * / lightmap, see D-6) must start from.
+ * / transmission, see D-6) must start from.
  *
  * Throws on schema authoring errors:
  *   - duplicate entry name (numeric or non-numeric)
@@ -337,36 +367,91 @@ export class ParamSchemaProjectionOwner {
 export function derive(schema: readonly ParamSchemaEntry[]): DeriveOutput {
   const admitted = ADMITTED_PARAM_SCHEMA_PROJECTIONS.get(schema);
   if (admitted !== undefined) return admitted;
-  return derivePure(schema);
+  return deriveUnadmitted(schema).derivedInterface;
 }
 
 /**
  * Debug-only observation seam for runtime compatibility consumers.
  *
- * This wrapper deliberately does not cache or change derivation semantics. It
- * only records whether the supplied schema identity was admitted by the
- * ParamSchemaProjectionOwner before delegating to the existing pure `derive`
- * function. Keeping the observer out of the normal `derive` signature leaves
- * production callers on the existing zero-argument path.
+ * This wrapper records whether the supplied schema identity was admitted by the
+ * ParamSchemaProjectionOwner, or reused through the unadmitted identity cache.
+ * Keeping the observer out of the normal `derive` signature leaves production
+ * callers on the existing zero-argument path.
  */
 export function deriveObserved(
   schema: readonly ParamSchemaEntry[],
   observer: ParamSchemaDeriveObserver,
   site: string,
 ): DeriveOutput {
-  const admitted = ADMITTED_PARAM_SCHEMA_PROJECTIONS.has(schema);
-  const output = derive(schema);
+  const admitted = ADMITTED_PARAM_SCHEMA_PROJECTIONS.get(schema);
+  if (admitted !== undefined) {
+    if (observer.enabled) observer.observe({ kind: 'admitted-identity-hit', site });
+    return admitted;
+  }
+  const result = deriveUnadmitted(schema);
   if (observer.enabled) {
     observer.observe({
-      kind: admitted ? 'admitted-identity-hit' : 'unregistered-fallback-derive',
+      kind: result.cacheHit ? 'fallback-cache-hit' : 'unregistered-fallback-derive',
       site,
     });
-    if (!admitted) observer.observe({ kind: 'fallback-layout-sha', site });
+    if (!result.cacheHit) observer.observe({ kind: 'fallback-layout-sha', site });
   }
-  return output;
+  return result.derivedInterface;
 }
 
-function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
+function deriveUnadmitted(schema: readonly ParamSchemaEntry[]): {
+  readonly cacheHit: boolean;
+  readonly derivedInterface: DerivedMaterialInterface;
+} {
+  const shape = captureParamSchemaShape(schema);
+  const cached = UNADMITTED_PARAM_SCHEMA_PROJECTIONS.get(schema);
+  if (cached !== undefined && matchesParamSchemaShape(shape, cached.shape)) {
+    return { cacheHit: true, derivedInterface: cached.derivedInterface };
+  }
+
+  // Only publish successful derivations. A legal -> illegal mutation must
+  // still execute the original validation and throw rather than falling back
+  // to a stale result.
+  const derivedInterface = freezeDerivedMaterialInterface(derivePure(schema, shape));
+  UNADMITTED_PARAM_SCHEMA_PROJECTIONS.set(schema, { shape, derivedInterface });
+  return { cacheHit: false, derivedInterface };
+}
+
+function captureParamSchemaShape(schema: readonly ParamSchemaEntry[]): ParamSchemaShape {
+  const names: string[] = new Array(schema.length);
+  const types: MaterialParamType[] = new Array(schema.length);
+  const sampleTypes: (string | undefined)[] = new Array(schema.length);
+  for (let index = 0; index < schema.length; index += 1) {
+    const entry = schema[index] as ParamSchemaEntry;
+    names[index] = entry.name;
+    types[index] = entry.type;
+    sampleTypes[index] = 'sampleType' in entry ? entry.sampleType : undefined;
+  }
+  return Object.freeze({
+    names: Object.freeze(names),
+    types: Object.freeze(types),
+    sampleTypes: Object.freeze(sampleTypes),
+  });
+}
+
+function matchesParamSchemaShape(current: ParamSchemaShape, cached: ParamSchemaShape): boolean {
+  if (current.names.length !== cached.names.length) return false;
+  for (let index = 0; index < current.names.length; index += 1) {
+    if (
+      current.names[index] !== cached.names[index] ||
+      current.types[index] !== cached.types[index] ||
+      current.sampleTypes[index] !== cached.sampleTypes[index]
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function derivePure(
+  schema: readonly ParamSchemaEntry[],
+  shape: ParamSchemaShape = captureParamSchemaShape(schema),
+): DeriveOutput {
   const bglEntries: BindGroupLayoutEntry[] = [];
   const uboFields: UboFieldLayout[] = [];
   const numericMembers: DerivedNumericMember[] = [];
@@ -395,62 +480,69 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
     return uboBinding;
   };
 
-  for (const rawEntry of schema) {
-    const entry = rawEntry as ParamSchemaEntry;
-    if (entry.name.length === 0) {
+  for (let index = 0; index < shape.names.length; index += 1) {
+    const name = shape.names[index] as string;
+    const type = shape.types[index] as MaterialParamType;
+    if (name.length === 0) {
       throw new Error('derive: schema entry name must be non-empty');
     }
-    if (!ALL_TYPES.has(entry.type)) {
-      throw new Error(`derive: unrecognised paramSchema type literal '${entry.type}'`);
+    if (!ALL_TYPES.has(type)) {
+      throw new Error(`derive: unrecognised paramSchema type literal '${type}'`);
     }
-    if (seenNames.has(entry.name)) {
-      throw new Error(`derive: duplicate paramSchema entry name '${entry.name}'`);
+    if (seenNames.has(name)) {
+      throw new Error(`derive: duplicate paramSchema entry name '${name}'`);
     }
-    if (reservedSamplerNames.has(entry.name)) {
-      throw new Error(
-        `derive: paramSchema entry '${entry.name}' collides with auto-paired sampler name`,
-      );
+    if (reservedSamplerNames.has(name)) {
+      throw new Error(`derive: paramSchema entry '${name}' collides with auto-paired sampler name`);
     }
-    seenNames.add(entry.name);
+    seenNames.add(name);
 
-    if (NUMERIC_TYPES.has(entry.type)) {
-      const numericType = entry.type as NumericParamType;
+    if (NUMERIC_TYPES.has(type)) {
+      const numericType = type as NumericParamType;
       const { size, align } = numericFootprint(numericType);
       ensureUboBinding();
       const offset = alignUp(uboCursor, align);
-      uboFields.push({ name: entry.name, offset, size, type: numericType });
-      numericMembers.push({ name: entry.name, offset, size, alignment: align, type: numericType });
+      uboFields.push({ name, offset, size, type: numericType });
+      numericMembers.push({ name, offset, size, alignment: align, type: numericType });
       uboCursor = offset + size;
       continue;
     }
 
-    if (TEXTURE_VIEW_TYPES.has(entry.type)) {
-      const texType = entry.type as TextureBindingParamType;
+    if (TEXTURE_VIEW_TYPES.has(type)) {
+      const texType = type as TextureBindingParamType;
       ensureUboBinding();
       const coordinateOffset = alignUp(uboCursor, 16);
       const coordinates: MaterialCoordinateRecordLayout = {
-        parameter: entry.name,
+        parameter: name,
         offset: coordinateOffset,
         size: 32,
         alignment: 16,
-        transformMember: `${entry.name}CoordinatesTransform`,
-        metadataMember: `${entry.name}CoordinatesMetadata`,
+        transformMember: `${name}CoordinatesTransform`,
+        metadataMember: `${name}CoordinatesMetadata`,
       };
       coordinateRecords.push(coordinates);
       uboCursor = coordinateOffset + coordinates.size;
-      const { sampleType, viewDimension } = textureBglDescriptor(texType);
+      const textureDescriptor = textureBglDescriptor(texType);
+      const sampleType = shape.sampleTypes[index] ?? textureDescriptor.sampleType;
+      if (
+        sampleType !== textureDescriptor.sampleType &&
+        !(sampleType === 'unfilterable-float' && textureDescriptor.sampleType === 'float')
+      ) {
+        throw new Error(`derive: invalid texture sample type '${sampleType}' for '${name}'`);
+      }
+      const viewDimension = textureDescriptor.viewDimension;
       // Sampler-first per plan §D-4: emit auto-paired filtering sampler at
       // binding N, then the texture view at binding N+1. Matches the actual
       // WGSL @binding declaration order in the 5 built-in shaders (sampler
       // declared on the odd binding, texture on the even+1 binding).
-      const samplerName = `${entry.name}_sampler`;
+      const samplerName = `${name}_sampler`;
       if (seenNames.has(samplerName)) {
         throw new Error(
           `derive: auto-paired sampler name '${samplerName}' collides with existing entry`,
         );
       }
       reservedSamplerNames.add(samplerName);
-      samplerForTexture.set(entry.name, samplerName);
+      samplerForTexture.set(name, samplerName);
       const samplerBinding = nextBinding;
       nextBinding += 1;
       bglEntries.push({
@@ -461,7 +553,7 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
       bindingSpans.push({ group: 1, binding: samplerBinding, start: 0, end: 0 });
       resourceBindings.push({
         name: samplerName,
-        parameter: entry.name,
+        parameter: name,
         kind: 'sampler',
         binding: samplerBinding,
       });
@@ -471,21 +563,25 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
       bglEntries.push({
         binding: texBinding,
         visibility: FRAGMENT,
-        texture: { sampleType, viewDimension, multisampled: false },
+        texture: {
+          sampleType: sampleType as GPUTextureSampleType,
+          viewDimension,
+          multisampled: false,
+        },
       });
       bindingSpans.push({ group: 1, binding: texBinding, start: 0, end: 0 });
       resourceBindings.push({
-        name: entry.name,
-        parameter: entry.name,
+        name,
+        parameter: name,
         kind: 'texture',
         binding: texBinding,
       });
-      textureFieldNames.add(entry.name);
+      textureFieldNames.add(name);
       continue;
     }
 
-    if (SAMPLER_TYPES.has(entry.type)) {
-      const samplerType = entry.type as 'sampler' | 'sampler_comparison';
+    if (SAMPLER_TYPES.has(type)) {
+      const samplerType = type as 'sampler' | 'sampler_comparison';
       const samplerBinding = nextBinding;
       nextBinding += 1;
       bglEntries.push({
@@ -495,8 +591,8 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
       });
       bindingSpans.push({ group: 1, binding: samplerBinding, start: 0, end: 0 });
       resourceBindings.push({
-        name: entry.name,
-        parameter: entry.name,
+        name,
+        parameter: name,
         kind: 'sampler',
         binding: samplerBinding,
       });
@@ -513,8 +609,8 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
     });
     bindingSpans.push({ group: 1, binding: storageBinding, start: 0, end: 0 });
     resourceBindings.push({
-      name: entry.name,
-      parameter: entry.name,
+      name,
+      parameter: name,
       kind: 'storage-buffer',
       binding: storageBinding,
     });
@@ -528,6 +624,7 @@ function derivePure(schema: readonly ParamSchemaEntry[]): DeriveOutput {
   }
   const userRegion: MaterialUserRegion = { group: 1, bindingStart: 0, bindingEnd: nextBinding };
   const layoutIdentity = sha256LayoutIdentity({
+    bglEntries,
     numericMembers,
     coordinateRecords,
     resourceBindings,
@@ -692,6 +789,7 @@ export function inferMaterialParameterKind(
 }
 
 function sha256LayoutIdentity(value: {
+  readonly bglEntries: readonly BindGroupLayoutEntry[];
   readonly numericMembers: readonly DerivedNumericMember[];
   readonly coordinateRecords: readonly MaterialCoordinateRecordLayout[];
   readonly resourceBindings: readonly MaterialResourceBindingLayout[];
@@ -700,7 +798,8 @@ function sha256LayoutIdentity(value: {
   readonly userRegion: MaterialUserRegion;
 }): string {
   const canonical = JSON.stringify({
-    version: 1,
+    version: 2,
+    bglEntries: value.bglEntries,
     numericMembers: value.numericMembers,
     coordinateRecords: value.coordinateRecords,
     resourceBindings: value.resourceBindings,
@@ -790,10 +889,9 @@ function smallSigma1(value: number): number {
  * paramSchema-driven extract filter (`validateTextureHandle`). They map to the
  * fixed `@group(1) @binding(2/4/6)` slots in the standard material BGL.
  *
- * `emissiveTexture` / `occlusionTexture` are deliberately EXCLUDED: they live
- * in the engine-managed lightmap injection region (`appendInjection`,
- * bindings 14..17), are sampled by `default-standard-pbr` without a schema
- * entry, and are never filtered by `validateTextureHandle`. Including them
+ * `emissiveTexture` / `occlusionTexture` are deliberately EXCLUDED: they are
+ * engine-owned Standard textures, are sampled by `default-standard-pbr` without
+ * a schema entry, and are never filtered by `validateTextureHandle`. Including them
  * would false-positive the engine's own PBR shader.
  */
 const USER_REGION_TEXTURE_FIELDS: readonly string[] = [
@@ -812,7 +910,7 @@ function stripWgslComments(source: string): string {
  * its paramSchema fails to declare as a texture entry.
  *
  * This is the runtime (register-time) counterpart of the build-time superset
- * gate (`compareParamSchemaSuperset`): user shaders registered directly via
+ * gate (`compareMaterialBindings`): user shaders registered directly via
  * `ShaderRegistry.installMaterialArtifact` bypass the vite-plugin-shader
  * reflection path, so an under-declared schema would otherwise let the extract
  * stage's `validateTextureHandle` silently drop the sampled texture's handle

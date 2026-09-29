@@ -23,9 +23,8 @@
 //   @binding(3) rotation      : SkyboxRotation (UBO)
 
 #import forgeax_view::common::FullscreenOutput
-#import forgeax_view::common::{View, FogViewParams, FogRay}
+#import forgeax_view::common::View
 #import forgeax_view::common::fullscreen_triangle
-#import forgeax_view::fog::{apply_fog}
 #import forgeax_pbr::ibl_shared::{inverseRotateEnvironment}
 
 @group(0) @binding(0) var cubemap       : texture_cube<f32>;
@@ -55,10 +54,15 @@ fn vs_main(@builtin(vertex_index) vertex_index : u32) -> FullscreenOutput {
 // MIRRORED screen position, and the final `-dir.y` (kept for the IBL bake
 // convention) ended up rendering the skybox upside-down. Reverse the V-flip
 // here with `1.0 - uv.y * 2.0`; see skybox-direction.test.ts.
+//
+// The unprojected NDC sample is a world POINT, so the ray is that point minus
+// the camera position. Under Reverse-Z, depth 0.5 lies just past the near
+// plane; normalizing the point alone collapsed every fragment of a camera away
+// from the origin onto one direction (a flat skybox).
 fn skyboxDirection(uv : vec2<f32>) -> vec3<f32> {
-  let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
-  let worldDir = view.inverseViewProj * ndc;
-  let dir = normalize(worldDir.xyz / worldDir.w);
+  let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
+  let worldPoint = view.inverseViewProj * ndc;
+  let dir = normalize(worldPoint.xyz / worldPoint.w - view.cameraPos);
   let rotated = inverseRotateEnvironment(dir, environment.rotation);
   return vec3<f32>(rotated.x, -rotated.y, rotated.z);
 }
@@ -67,9 +71,5 @@ fn skyboxDirection(uv : vec2<f32>) -> vec3<f32> {
 fn skybox_fs(in : FullscreenOutput) -> @location(0) vec4<f32> {
   let dir = skyboxDirection(in.uv);
   let color = textureSample(cubemap, cubemapSampler, dir).rgb;
-  return apply_fog(
-    view.fog,
-    FogRay(view.cameraPos, dir, max(view.temporalProjection.y, 0.0)),
-    vec4<f32>(color, 1.0),
-  );
+  return vec4<f32>(color, 1.0);
 }

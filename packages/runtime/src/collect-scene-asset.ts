@@ -60,22 +60,16 @@ import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { SceneInstance } from '@forgeax/engine-render';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
+import type { MountOverride, SceneInstanceMount } from '@forgeax/engine-scene';
 import {
   collectSubtree,
   externalizeSceneAsset,
   SCENE_COLLECT_PROFILE,
+  sceneEntityAddressKey,
   worldGetSceneAssetForInstance,
   worldGetSceneInstanceState,
 } from '@forgeax/engine-scene';
-import type {
-  Asset,
-  Handle,
-  LocalEntityId,
-  MountOverride,
-  SceneAsset,
-  SceneEntity,
-  SceneInstanceMount,
-} from '@forgeax/engine-types';
+import type { Asset, Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { foldMountOverrides } from './scene-utils/mount-override-fold';
 
 /** The collector needs identity lookup, not an authoring registry implementation. */
@@ -213,6 +207,562 @@ function _serializeOverrideValueHandles(
   return ok(out);
 }
 
+type LegacyCollectedEntity = {
+  readonly localId: number;
+  readonly components: Record<string, Record<string, unknown>>;
+};
+
+type SceneEntityAddress = string | readonly [string, ...string[]];
+type SceneInstanceOverride = {
+  readonly target: readonly [string, ...string[]];
+  readonly components: Record<string, Record<string, unknown>>;
+};
+type CollectorSceneState = {
+  readonly keyByLocalId: Map<number, string>;
+  readonly instanceKey?: string;
+  readonly bindings: Map<string, EntityHandle>;
+  readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
+  readonly overrides: Map<
+    LocalEntityId,
+    Map<string, { readonly comp: string; readonly field?: string; readonly value: unknown }>
+  >;
+  readonly mountTimeOverrides: readonly MountOverride[];
+};
+
+type CollectedKeyedEntity = {
+  readonly components: Record<string, Record<string, unknown>>;
+  readonly instance?: {
+    readonly source: string;
+    readonly overrides?: readonly SceneInstanceOverride[];
+  };
+};
+
+type SceneStateInfo = {
+  readonly root: number;
+  readonly state: CollectorSceneState;
+  readonly mapping: Uint32Array;
+};
+
+type SceneStateRelation = {
+  readonly parent: SceneStateInfo;
+  readonly child: SceneStateInfo;
+  readonly key: string;
+  readonly memberFirst: number;
+};
+
+type KeyedCollectError =
+  | SceneCollectEntityRefOutOfClosureError
+  | SceneCollectAssetGuidUnresolvedError;
+
+function isSceneEntityAddress(value: string | readonly string[]): value is SceneEntityAddress {
+  return typeof value === 'string' || value.length > 0;
+}
+
+/**
+ * Convert the old private numeric collector result to the keyed author model.
+ * Numeric slots remain an implementation detail of the live SceneInstance;
+ * this function uses the retained instance key maps and child mapping windows
+ * to reconstruct addresses before the public SceneAsset leaves Engine.
+ */
+function collectKeyedSceneAsset(
+  world: World,
+  registry: SceneAssetGuidLookup,
+  _roots: readonly EntityHandle[],
+  visited: ReadonlySet<number>,
+  ownedEntities: readonly number[],
+  legacyEntities: readonly LegacyCollectedEntity[],
+  mounts: readonly SceneInstanceMount[],
+  anchors: ReadonlyArray<{ entityRaw: number; sourceGuid: string; totalSlots: number }>,
+  memberOrigin: ReadonlyMap<number, { anchorRaw: number; memberLocalId: number }>,
+): Result<SceneAsset, KeyedCollectError> {
+  const sceneInstanceToken = world.components.resolve('SceneInstance');
+  const childOfToken = world.components.resolve('ChildOf');
+  const stateInfos: SceneStateInfo[] = [];
+  if (sceneInstanceToken !== undefined) {
+    const queryResult = world.query({ read: [SceneInstance] });
+    if (queryResult.ok) {
+      for (const row of queryResult.value) {
+        const stateResult = worldGetSceneInstanceState(world, row.entity);
+        if (!stateResult.ok) continue;
+        const rowValue = row.get(SceneInstance) as unknown as { mapping: ArrayLike<number> };
+        stateInfos.push({
+          root: row.entity as number,
+          state: stateResult.value as unknown as CollectorSceneState,
+          mapping: Uint32Array.from(rowValue.mapping as ArrayLike<number>),
+        });
+      }
+    }
+  }
+  const stateByRoot = new Map<number, SceneStateInfo>();
+  for (const info of stateInfos) stateByRoot.set(info.root, info);
+
+  const parentByChildRoot = new Map<number, SceneStateInfo>();
+  const relationCandidates: Array<{ child: SceneStateInfo; parent: SceneStateInfo; key: string }> =
+    [];
+  for (const child of stateInfos) {
+    if (child.state.instanceKey === undefined || childOfToken === undefined) continue;
+    const parentResult = world.get(
+      child.root as EntityHandle,
+      childOfToken as EcsComponent<string>,
+    );
+    if (!parentResult.ok) continue;
+    const carrier = (parentResult.value as Record<string, unknown>).parent as number | undefined;
+    if (carrier === undefined) continue;
+    for (const parent of stateInfos) {
+      const bound = parent.state.bindings.get(sceneEntityAddressKey(child.state.instanceKey));
+      if ((bound as number | undefined) === carrier) {
+        parentByChildRoot.set(child.root, parent);
+        relationCandidates.push({ child, parent, key: child.state.instanceKey });
+        break;
+      }
+    }
+  }
+
+  const findSequence = (
+    haystack: Uint32Array,
+    needle: Uint32Array,
+    start: number,
+  ): number | undefined => {
+    if (needle.length === 0) return start;
+    for (let index = Math.max(0, start); index + needle.length <= haystack.length; index += 1) {
+      let match = true;
+      for (let offset = 0; offset < needle.length; offset += 1) {
+        if (haystack[index + offset] !== needle[offset]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return index;
+    }
+    return undefined;
+  };
+
+  const relations: SceneStateRelation[] = [];
+  for (const candidate of relationCandidates) {
+    const slot = [...candidate.parent.state.keyByLocalId.entries()].find(
+      ([, value]) => value === candidate.key,
+    )?.[0];
+    if (slot === undefined) continue;
+    const memberFirst = findSequence(candidate.parent.mapping, candidate.child.mapping, slot + 1);
+    if (memberFirst === undefined) continue;
+    relations.push({ ...candidate, memberFirst });
+  }
+  const relationsByParent = new Map<number, SceneStateRelation[]>();
+  for (const relation of relations) {
+    const list = relationsByParent.get(relation.parent.root);
+    if (list === undefined) relationsByParent.set(relation.parent.root, [relation]);
+    else list.push(relation);
+  }
+
+  const statePrefixMemo = new Map<number, readonly string[]>();
+  const statePrefix = (info: SceneStateInfo, stack = new Set<number>()): readonly string[] => {
+    const prior = statePrefixMemo.get(info.root);
+    if (prior !== undefined) return prior;
+    if (stack.has(info.root)) return [];
+    if (info.state.instanceKey === undefined) {
+      statePrefixMemo.set(info.root, []);
+      return [];
+    }
+    const next = new Set(stack);
+    next.add(info.root);
+    const parent = parentByChildRoot.get(info.root);
+    const prefix =
+      parent === undefined
+        ? [info.state.instanceKey]
+        : [...statePrefix(parent, next), info.state.instanceKey];
+    statePrefixMemo.set(info.root, prefix);
+    return prefix;
+  };
+
+  const stateSlotAddress = (
+    info: SceneStateInfo,
+    slot: number,
+    prefix: readonly string[],
+    stack = new Set<number>(),
+  ): readonly string[] | undefined => {
+    if (slot < 0 || stack.has(info.root)) return undefined;
+    const key = info.state.keyByLocalId.get(slot);
+    if (key !== undefined) return [...prefix, key];
+    const next = new Set(stack);
+    next.add(info.root);
+    for (const relation of relationsByParent.get(info.root) ?? []) {
+      const end = relation.memberFirst + relation.child.mapping.length;
+      if (slot >= relation.memberFirst && slot < end) {
+        return stateSlotAddress(
+          relation.child,
+          slot - relation.memberFirst,
+          [...prefix, relation.key],
+          next,
+        );
+      }
+    }
+    return undefined;
+  };
+
+  const rawToAddress = new Map<number, readonly string[]>();
+  const orderedStates = [...stateInfos].sort(
+    (a, b) => statePrefix(a).length - statePrefix(b).length,
+  );
+  for (const info of orderedStates) {
+    const prefix = statePrefix(info);
+    for (let slot = 0; slot < info.mapping.length; slot += 1) {
+      const raw = info.mapping[slot];
+      if (raw === undefined || raw === 0xffffffff || !visited.has(raw)) continue;
+      const address = stateSlotAddress(info, slot, prefix);
+      if (address !== undefined && !rawToAddress.has(raw)) rawToAddress.set(raw, address);
+    }
+  }
+  for (const [raw, origin] of memberOrigin) {
+    if (!visited.has(raw) || rawToAddress.has(raw)) continue;
+    const child = stateByRoot.get(origin.anchorRaw);
+    if (child === undefined) continue;
+    const address = stateSlotAddress(child, origin.memberLocalId, statePrefix(child));
+    if (address !== undefined) rawToAddress.set(raw, address);
+  }
+
+  const generatedKeys = new Set<string>();
+  const keyForOwnedRaw = new Map<number, string>();
+  for (let index = 0; index < ownedEntities.length; index += 1) {
+    const raw = ownedEntities[index] as number;
+    const known = rawToAddress.get(raw);
+    let key = known?.length === 1 ? known[0] : undefined;
+    if (key === undefined || key.length === 0 || generatedKeys.has(key)) {
+      const base = `entity-${index}`;
+      key = base;
+      let suffix = 1;
+      while (generatedKeys.has(key)) key = `${base}-${suffix++}`;
+    }
+    generatedKeys.add(key);
+    keyForOwnedRaw.set(raw, key);
+    rawToAddress.set(raw, [key]);
+  }
+
+  const slotAddress = (slot: number): SceneEntityAddress | undefined => {
+    if (slot >= 0 && slot < ownedEntities.length) {
+      const raw = ownedEntities[slot];
+      const key = raw === undefined ? undefined : keyForOwnedRaw.get(raw);
+      return key;
+    }
+    const mountIndex = mounts.findIndex((mount) => (mount.localId as unknown as number) === slot);
+    if (mountIndex >= 0) {
+      const anchor = anchors[mountIndex];
+      const child = anchor === undefined ? undefined : stateByRoot.get(anchor.entityRaw);
+      const key = child?.state.instanceKey;
+      if (key !== undefined) return key;
+    }
+    for (let index = 0; index < mounts.length; index += 1) {
+      const mount = mounts[index];
+      if (mount === undefined) continue;
+      const first = mount.memberFirst as unknown as number;
+      if (slot < first || slot >= first + mount.memberCount) continue;
+      const anchor = anchors[index];
+      const child = anchor === undefined ? undefined : stateByRoot.get(anchor.entityRaw);
+      const mountKey = child?.state.instanceKey;
+      if (child === undefined || mountKey === undefined) return undefined;
+      const address = stateSlotAddress(child, slot - first, []);
+      if (address === undefined) return undefined;
+      return [mountKey, ...address] as readonly [string, ...string[]];
+    }
+    const top = orderedStates.find((info) => statePrefix(info).length === 0);
+    if (top !== undefined) {
+      const address = stateSlotAddress(top, slot, []);
+      if (address !== undefined) {
+        return address.length === 1 ? address[0] : (address as readonly [string, ...string[]]);
+      }
+    }
+    return undefined;
+  };
+
+  const convertComponents = (
+    entityRaw: number,
+    source: Record<string, Record<string, unknown>>,
+  ): Result<Record<string, Record<string, unknown>>, KeyedCollectError> => {
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [componentName, rawFields] of Object.entries(source)) {
+      const token = world.components.resolve(componentName);
+      if (token === undefined) {
+        out[componentName] = { ...rawFields };
+        continue;
+      }
+      const converted: Record<string, unknown> = {};
+      for (const [fieldName, value] of Object.entries(rawFields)) {
+        const kind = classifyEntityField(token as EcsComponent, fieldName);
+        if (kind === null) {
+          converted[fieldName] = value;
+          continue;
+        }
+        const convertSlot = (localSlot: unknown): SceneEntityAddress | undefined => {
+          if (typeof localSlot !== 'number') return undefined;
+          return slotAddress(localSlot);
+        };
+        if (kind.isArray) {
+          if (!Array.isArray(value)) {
+            return err(
+              new SceneCollectEntityRefOutOfClosureError(
+                entityRaw,
+                `${componentName}.${fieldName}`,
+                -1,
+              ),
+            );
+          }
+          const addresses: SceneEntityAddress[] = [];
+          for (const item of value) {
+            const address = convertSlot(item);
+            if (address === undefined || !isSceneEntityAddress(address)) {
+              return err(
+                new SceneCollectEntityRefOutOfClosureError(
+                  entityRaw,
+                  `${componentName}.${fieldName}`,
+                  Number(item),
+                ),
+              );
+            }
+            addresses.push(address);
+          }
+          converted[fieldName] = addresses;
+        } else if (value === null) {
+          converted[fieldName] = null;
+        } else {
+          const address = convertSlot(value);
+          if (address === undefined || !isSceneEntityAddress(address)) {
+            return err(
+              new SceneCollectEntityRefOutOfClosureError(
+                entityRaw,
+                `${componentName}.${fieldName}`,
+                Number(value),
+              ),
+            );
+          }
+          converted[fieldName] = address;
+        }
+      }
+      out[componentName] = converted;
+    }
+    return ok(out);
+  };
+
+  const entities: Record<string, CollectedKeyedEntity> = {};
+  for (const legacy of legacyEntities) {
+    const raw = ownedEntities[legacy.localId];
+    if (raw === undefined) continue;
+    const key = keyForOwnedRaw.get(raw) as string;
+    const converted = convertComponents(raw, legacy.components);
+    if (!converted.ok) return converted;
+    entities[key] = { components: converted.value };
+  }
+
+  const resolveOverrideTarget = (
+    child: SceneStateInfo | undefined,
+    memberFirst: number,
+    localId: number,
+  ): readonly [string, ...string[]] | undefined => {
+    if (child === undefined) return undefined;
+    const target = stateSlotAddress(child, localId - memberFirst, []);
+    if (target === undefined || target.length === 0) return undefined;
+    return target as readonly [string, ...string[]];
+  };
+
+  const convertOverrideValue = (
+    entityRaw: number,
+    componentName: string,
+    fieldName: string | undefined,
+    value: unknown,
+  ): Result<unknown, KeyedCollectError> => {
+    const token = world.components.resolve(componentName);
+    if (token === undefined) return ok(value);
+    const schema = componentSchema(token) as Record<string, string>;
+    const convertFields = (
+      field: string,
+      fieldValue: unknown,
+    ): Result<unknown, KeyedCollectError> => {
+      const kind = classifyEntityField(token as EcsComponent, field);
+      if (kind === null) {
+        const sharedType = schema[field];
+        const shared: SchemaFieldClass | undefined = sharedType?.startsWith('shared<')
+          ? { kind: 'shared', scalar: true }
+          : sharedType?.startsWith('array<shared<')
+            ? { kind: 'shared', scalar: false }
+            : undefined;
+        if (shared === undefined) return ok(fieldValue);
+        return _serializeSharedFieldValue(world, registry, shared, fieldValue, field);
+      }
+      const resolveLiveOrSlot = (item: unknown): SceneEntityAddress | undefined => {
+        if (typeof item !== 'number') return undefined;
+        const live = rawToAddress.get(item);
+        if (live !== undefined) {
+          return live.length === 1 ? live[0] : (live as readonly [string, ...string[]]);
+        }
+        return slotAddress(item);
+      };
+      if (kind.isArray) {
+        if (!Array.isArray(fieldValue)) return ok(fieldValue);
+        const mapped: SceneEntityAddress[] = [];
+        for (const item of fieldValue) {
+          const address = resolveLiveOrSlot(item);
+          if (address === undefined || !isSceneEntityAddress(address)) {
+            return err(
+              new SceneCollectEntityRefOutOfClosureError(
+                entityRaw,
+                `${componentName}.${field}`,
+                Number(item),
+              ),
+            );
+          }
+          mapped.push(address);
+        }
+        return ok(mapped);
+      }
+      if (fieldValue === null) return ok(null);
+      const address = resolveLiveOrSlot(fieldValue);
+      if (address === undefined || !isSceneEntityAddress(address)) {
+        return err(
+          new SceneCollectEntityRefOutOfClosureError(
+            entityRaw,
+            `${componentName}.${field}`,
+            Number(fieldValue),
+          ),
+        );
+      }
+      return ok(address);
+    };
+    if (fieldName !== undefined) return convertFields(fieldName, value);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return ok(value);
+    const result: Record<string, unknown> = {};
+    for (const [field, fieldValue] of Object.entries(value as Record<string, unknown>)) {
+      const converted = convertFields(field, fieldValue);
+      if (!converted.ok) return converted;
+      result[field] = converted.value;
+    }
+    return ok(result);
+  };
+
+  const declarationOverrides = (
+    parent: SceneStateInfo | undefined,
+    child: SceneStateInfo | undefined,
+    mount: SceneInstanceMount,
+    anchor: { entityRaw: number },
+  ): Result<readonly SceneInstanceOverride[] | undefined, KeyedCollectError> => {
+    const memberFirst = mount.memberFirst as unknown as number;
+    const candidates: MountOverride[] = [];
+    if (parent !== undefined) {
+      for (const override of parent.state.mountTimeOverrides) {
+        const localId = override.localId as unknown as number;
+        if (localId >= memberFirst && localId < memberFirst + mount.memberCount)
+          candidates.push(override);
+      }
+      for (const [localId, records] of parent.state.overrides) {
+        const numeric = localId as unknown as number;
+        if (numeric < memberFirst || numeric >= memberFirst + mount.memberCount) continue;
+        for (const record of records.values()) {
+          candidates.push({
+            localId,
+            comp: record.comp,
+            ...(record.field === undefined ? {} : { field: record.field }),
+            value: record.value,
+          });
+        }
+      }
+    }
+    if (candidates.length === 0) candidates.push(...(mount.overrides ?? []));
+    if (candidates.length === 0 || child === undefined) return ok(undefined);
+    const byTarget = new Map<string, SceneInstanceOverride>();
+    for (const override of candidates) {
+      const localId = override.localId as unknown as number;
+      const target = resolveOverrideTarget(child, memberFirst, localId);
+      if (target === undefined) {
+        return err(
+          new SceneCollectEntityRefOutOfClosureError(
+            anchor.entityRaw,
+            'instance.override.target',
+            localId,
+          ),
+        );
+      }
+      const converted = convertOverrideValue(
+        anchor.entityRaw,
+        override.comp,
+        override.field,
+        override.value,
+      );
+      if (!converted.ok) return converted;
+      const targetKey = JSON.stringify(target);
+      const prior = byTarget.get(targetKey);
+      const components: Record<string, Record<string, unknown>> = {};
+      if (prior !== undefined) {
+        for (const [name, fields] of Object.entries(
+          prior.components as Record<string, Record<string, unknown>>,
+        )) {
+          components[name] = { ...fields };
+        }
+      }
+      const priorFields = components[override.comp] as Record<string, unknown> | undefined;
+      const existing: Record<string, unknown> = { ...(priorFields ?? {}) };
+      if (
+        override.field === undefined &&
+        typeof converted.value === 'object' &&
+        converted.value !== null
+      ) {
+        Object.assign(existing, converted.value as Record<string, unknown>);
+      } else if (override.field !== undefined) {
+        existing[override.field] = converted.value;
+      }
+      components[override.comp] = existing;
+      byTarget.set(targetKey, { target, components });
+    }
+    return ok([...byTarget.values()]);
+  };
+
+  for (let index = 0; index < mounts.length; index += 1) {
+    const mount = mounts[index];
+    const anchor = anchors[index];
+    if (mount === undefined || anchor === undefined) continue;
+    const child = stateByRoot.get(anchor.entityRaw);
+    const parent = child === undefined ? undefined : parentByChildRoot.get(child.root);
+    const instanceKey = child?.state.instanceKey ?? `instance-${index}`;
+    const carrierRaw =
+      childOfToken === undefined
+        ? undefined
+        : (() => {
+            const parentResult = world.get(
+              anchor.entityRaw as EntityHandle,
+              childOfToken as EcsComponent<string>,
+            );
+            return parentResult.ok
+              ? ((parentResult.value as Record<string, unknown>).parent as number | undefined)
+              : undefined;
+          })();
+    const converted = convertComponents(
+      carrierRaw ?? anchor.entityRaw,
+      (mount.components ?? {}) as Record<string, Record<string, unknown>>,
+    );
+    if (!converted.ok) return converted;
+    if (mount.parent !== undefined) {
+      const parentAddress = slotAddress(mount.parent as unknown as number);
+      if (parentAddress === undefined) {
+        return err(
+          new SceneCollectEntityRefOutOfClosureError(
+            carrierRaw ?? anchor.entityRaw,
+            'ChildOf.parent',
+            mount.parent as unknown as number,
+          ),
+        );
+      }
+      converted.value.ChildOf = { parent: parentAddress };
+    }
+    const overrides = declarationOverrides(parent, child, mount, anchor);
+    if (!overrides.ok) return overrides;
+    entities[instanceKey] = {
+      components: converted.value,
+      instance: {
+        source: String(mount.source),
+        ...(overrides.value === undefined ? {} : { overrides: overrides.value }),
+      },
+    };
+  }
+
+  return ok({ kind: 'scene', entities });
+}
+
 // serializeSceneAssetToPack — emits the current Pack v2/local-artifact envelope.
 export function serializeSceneAssetToPack(
   sceneAsset: SceneAsset,
@@ -271,7 +821,7 @@ export function rootsToSceneAsset(
   // ── Step 1: BFS closure ──
   const visited = new Set<number>();
   for (const root of roots) collectSubtree(world, root, visited);
-  if (visited.size === 0) return ok({ kind: 'scene', entities: [] });
+  if (visited.size === 0) return ok({ kind: 'scene', entities: {} });
 
   const rootRawSet = new Set<number>();
   for (const r of roots) rootRawSet.add(r as number);
@@ -298,11 +848,53 @@ export function rootsToSceneAsset(
     if (rootRawSet.has(er)) continue; // root anchor: don't classify members
     const sr = worldGetSceneInstanceState(world, er as EntityHandle);
     if (!sr.ok) continue;
-    for (const [me, lid] of sr.value.entityToLocalId) {
+    const retainedState = sr.value as unknown as CollectorSceneState;
+    for (const [me, lid] of retainedState.entityToLocalId) {
       const mr = me as number;
       if (visited.has(mr) && !anchorEntities.has(mr) && !memberEntities.has(mr)) {
         memberEntities.add(mr);
         memberOrigin.set(mr, { anchorRaw: er, memberLocalId: lid as unknown as number });
+      }
+    }
+    // Mount carriers are structural and therefore absent from
+    // `entityToLocalId`, but the parent instance still exposes them through
+    // `bindings` and its keyed slot map. Include those slots so a nested
+    // instance is folded into its owning child scene rather than emitted as a
+    // second top-level instance.
+    for (const [key, member] of retainedState.bindings) {
+      const mr = member as number;
+      const localId = [...retainedState.keyByLocalId.entries()].find(
+        ([, value]) => sceneEntityAddressKey(value) === key,
+      )?.[0];
+      if (
+        localId !== undefined &&
+        visited.has(mr) &&
+        !anchorEntities.has(mr) &&
+        !memberEntities.has(mr)
+      ) {
+        memberEntities.add(mr);
+        memberOrigin.set(mr, { anchorRaw: er, memberLocalId: localId });
+      }
+    }
+  }
+
+  // A nested synthetic SceneInstance root is structural too. Its carrier is
+  // already claimed by the parent instance above; fold the anchor into that
+  // same member origin before allocating parent mounts.
+  const childOfForAnchor = world.components.resolve('ChildOf');
+  if (childOfForAnchor !== undefined) {
+    for (const anchorRaw of [...anchorEntities]) {
+      if (rootRawSet.has(anchorRaw) || memberEntities.has(anchorRaw)) continue;
+      const parentRes = world.get(
+        anchorRaw as EntityHandle,
+        childOfForAnchor as EcsComponent<string>,
+      );
+      if (!parentRes.ok) continue;
+      const carrierRaw = (parentRes.value as Record<string, unknown>).parent as number | undefined;
+      const origin = carrierRaw === undefined ? undefined : memberOrigin.get(carrierRaw);
+      if (origin !== undefined) {
+        memberEntities.add(anchorRaw);
+        memberOrigin.set(anchorRaw, origin);
       }
     }
   }
@@ -310,6 +902,23 @@ export function rootsToSceneAsset(
   // Remove inner anchors (members of outer anchors).
   for (const er of anchorEntities) {
     if (memberEntities.has(er) && !rootRawSet.has(er)) anchorEntities.delete(er);
+  }
+
+  // Inner instance members must use the surviving outer mount's slot window.
+  // Their original anchor has just been folded away.
+  for (const [raw, origin] of memberOrigin) {
+    if (anchorEntities.has(origin.anchorRaw)) continue;
+    const original = world.get(origin.anchorRaw as EntityHandle, SceneInstance);
+    const mappedRaw = original.ok ? original.value.mapping[origin.memberLocalId] : raw;
+    for (const anchor of anchorEntities) {
+      if (rootRawSet.has(anchor)) continue;
+      const instance = world.get(anchor as EntityHandle, SceneInstance);
+      if (!instance.ok || mappedRaw === undefined) continue;
+      const slot = Array.from(instance.value.mapping).indexOf(mappedRaw);
+      if (slot < 0) continue;
+      memberOrigin.set(raw, { anchorRaw: anchor, memberLocalId: slot });
+      break;
+    }
   }
 
   // ── Step 1.75: Mount-carrier absorption ──
@@ -336,7 +945,7 @@ export function rootsToSceneAsset(
   // mount.parent = P's ChildOf parent, and any ref to P resolves to the mount.
   const childOfTk0 = world.components.resolve('ChildOf');
   const childrenTk0 = world.components.resolve('Children');
-  const carrierAllowed = new Set(['Transform', 'Children', 'ChildOf', 'Entity']);
+  const carrierAllowed = new Set(['Transform', 'GlobalTransform', 'Children', 'ChildOf', 'Entity']);
   const carrierForAnchor = new Map<number, number>(); // anchorRaw -> carrierRaw
   const carrierToAnchor = new Map<number, number>(); // carrierRaw -> anchorRaw
   const isMountCarrier = (p: number, anchorRaw: number): boolean => {
@@ -388,7 +997,12 @@ export function rootsToSceneAsset(
   const ownedEntities: number[] = [];
   for (const er of orderedEntities) {
     if (carrierToAnchor.has(er)) continue; // absorbed into its mount
-    if ((!anchorEntities.has(er) || rootRawSet.has(er)) && !memberEntities.has(er)) {
+    // A root SceneInstance is the transient synthetic anchor returned by
+    // instantiate(). Its mapped members are authored entities; the anchor
+    // itself has no durable declaration and must not be minted as `entity-0`
+    // during collect, otherwise each collect/reload cycle adds another root.
+    if (rootRawSet.has(er) && anchorEntities.has(er)) continue;
+    if (!anchorEntities.has(er) && !memberEntities.has(er)) {
       ownedEntities.push(er);
     }
   }
@@ -480,7 +1094,12 @@ export function rootsToSceneAsset(
       const tr = world.get(carrierRaw as EntityHandle, transformTk as EcsComponent<string>);
       if (tr.ok) {
         mountComponents = {
-          Transform: { ...(tr.value as Record<string, unknown>) },
+          Transform: Object.fromEntries(
+            Object.entries(tr.value as Record<string, unknown>).map(([key, value]) => [
+              key,
+              _isArrayLike(value) ? _normalizeArray(value) : value,
+            ]),
+          ),
         } as SceneInstanceMount['components'];
       }
     }
@@ -555,7 +1174,10 @@ export function rootsToSceneAsset(
 
   // ── Step 4: Build SceneEntity rows ──
   const registeredComps = world.components.entries();
-  const entities: SceneEntity[] = [];
+  const legacyEntities: Array<{
+    localId: number;
+    components: Record<string, Record<string, unknown>>;
+  }> = [];
 
   for (let lid = 0; lid < ownedEntities.length; lid++) {
     const entityRaw = ownedEntities[lid];
@@ -626,6 +1248,19 @@ export function rootsToSceneAsset(
         }
 
         if (entityKind !== null) {
+          // The synthetic root anchor is transient and is intentionally omitted
+          // from the authored entity map. A member's implicit ChildOf edge to
+          // that anchor has no authored counterpart, so omit that one edge
+          // before the keyed remap instead of reporting a false out-of-closure
+          // reference.
+          if (
+            !entityKind.isArray &&
+            typeof rawValue === 'number' &&
+            rootRawSet.has(rawValue) &&
+            anchorEntities.has(rawValue)
+          ) {
+            continue;
+          }
           // Entity / array<entity> field — use shared kernel for remap
           if (entityKind.isArray) {
             const arr = _isArrayLike(rawValue)
@@ -690,12 +1325,18 @@ export function rootsToSceneAsset(
       if (Object.keys(fieldValues).length > 0) components[compName] = fieldValues;
     }
 
-    entities.push({ localId: lid as LocalEntityId, components } as SceneEntity);
+    legacyEntities.push({ localId: lid, components });
   }
 
-  return ok({
-    kind: 'scene',
-    entities,
-    ...(outMounts.length > 0 ? { mounts: outMounts } : {}),
-  });
+  return collectKeyedSceneAsset(
+    world,
+    registry,
+    roots,
+    visited,
+    ownedEntities,
+    legacyEntities,
+    outMounts,
+    nonRootAnchors,
+    memberOrigin,
+  );
 }

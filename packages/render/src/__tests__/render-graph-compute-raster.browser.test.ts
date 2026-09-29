@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runTextureReuseGraph } from './graph-texture-reuse-gpu';
 import { runComputeRasterGraph } from './render-graph-compute-raster-gpu';
 
 describe('RenderGraph compute to indirect raster in Chromium WebGPU', () => {
@@ -13,4 +14,16 @@ describe('RenderGraph compute to indirect raster in Chromium WebGPU', () => {
     ]);
     expect(evidence.pixel).toEqual([64, 128, 191, 255]);
   });
+});
+
+it('reuses replacement targets with fresh pixels and preserves rollback and resize', async () => {
+  const result = await runTextureReuseGraph();
+  expect(result.shared).toBe(true);
+  expect(result.distinct).toBe(true);
+  expect(result.pixels).toEqual([
+    [255, 0, 0, 255],
+    [0, 255, 0, 255],
+    [255, 0, 0, 255],
+    [0, 0, 255, 255],
+  ]);
 });

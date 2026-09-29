@@ -319,14 +319,17 @@ export function screenToRay(
   mat4.multiply(_tmpInvVP as unknown as import('./types').Mat4, proj, view);
   mat4.invert(_tmpInvVP as unknown as import('./types').Mat4, _tmpInvVP);
 
-  // --- unproject near (z=0) and far (z=1) ---
+  // Projection coefficients determine the Z direction for both perspective
+  // and orthographic matrices. Use an interior point for the direction so an
+  // infinite far plane never divides by zero.
+  const reversed = (proj[10] as number) >= 0;
   _nearNdC[0] = ndcX;
   _nearNdC[1] = ndcY;
-  _nearNdC[2] = 0;
+  _nearNdC[2] = reversed ? 1 : 0;
 
   _farNdC[0] = ndcX;
   _farNdC[1] = ndcY;
-  _farNdC[2] = 1;
+  _farNdC[2] = 0.5;
 
   mat4.unproject(_nearWorld as unknown as Vec3, _nearNdC, _tmpInvVP as unknown as Mat4Like);
   mat4.unproject(_farWorld as unknown as Vec3, _farNdC, _tmpInvVP as unknown as Mat4Like);

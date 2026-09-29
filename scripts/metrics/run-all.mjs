@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // run-all.mjs (M5 w19) - generic CI metrics runner.
 //
-// Reads forgeax-metrics.schema.json + every workspace member's
+// Reads schemas/forgeax-metrics.schema.json + every workspace member's
 // package.json#forgeax.metrics declaration, dispatches one reporter per
 // (workspace, kind) where enabled=true, writes
 // report/<package>/<kind>.json (2D grouping per plan-strategy K-5), and
@@ -25,7 +25,7 @@
 // Usage:
 //   node scripts/metrics/run-all.mjs [--root <dir>] [--schema <path>] [--report-dir <dir>]
 //   --root        default = process.cwd()
-//   --schema      default = <root>/forgeax-metrics.schema.json
+//   --schema      default = <root>/schemas/forgeax-metrics.schema.json
 //   --report-dir  default = <root>/report
 //
 // Exit codes:
@@ -37,9 +37,9 @@
 //   - requirements §AC-05 / §AC-06 / §AC-15
 //   - plan-strategy §K-5 / §K-8 / §K-11 / §7.1 / §7.3 / §3 R-4
 
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
@@ -208,6 +208,223 @@ export function dispatchPixelDiffBench(_pkgName, pkgRoot, decl, opts = {}) {
   };
 }
 
+function packageFilterForBench(pkgName, pkgRoot) {
+  try {
+    const packageName = readJson(resolve(pkgRoot, 'package.json'))?.name;
+    if (typeof packageName === 'string' && packageName.length > 0) return packageName;
+  } catch {
+    // Keep the legacy package-name fallback for the generic dispatcher tests
+    // and for package roots that are being materialised by a producer.
+  }
+  return pkgName.startsWith('@')
+    ? pkgName
+    : pkgName.startsWith('engine-')
+      ? `@forgeax/${pkgName}`
+      : `@forgeax/engine-${pkgName}`;
+}
+
+function currentGitHead(root, opts) {
+  if (typeof opts.currentHead === 'string' && opts.currentHead.length > 0) {
+    return opts.currentHead;
+  }
+  try {
+    const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return head.length > 0 ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateGpuFrameSamplesReport(payload, pkgName, pkgRoot, opts) {
+  const injectedValidator = opts.validateFn;
+  if (typeof injectedValidator === 'function') {
+    try {
+      const result = injectedValidator(payload, { pkgRoot });
+      const verdict = typeof result === 'object' && result !== null ? result.verdict : undefined;
+      const ok =
+        result === true ||
+        (typeof result === 'object' &&
+          result !== null &&
+          (verdict === undefined ? result.ok === true : verdict === 'production-ready')) ||
+        verdict === 'production-ready';
+      return {
+        ok,
+        details: {
+          source: 'injected',
+          verdict: verdict ?? (result === true ? 'production-ready' : null),
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        details: {
+          source: 'injected',
+          validationError: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  const packageFilter = packageFilterForBench(pkgName, pkgRoot);
+  const validatorEnv = { ...process.env };
+  delete validatorEnv.FORGEAX_LOD_GPU_PRODUCER;
+  const result = spawnSync('pnpm', ['-F', packageFilter, 'smoke:performance'], {
+    cwd: pkgRoot,
+    encoding: 'utf8',
+    env: validatorEnv,
+    shell: false,
+  });
+  return {
+    ok: result?.status === 0,
+    details: {
+      source: 'package-script:smoke:performance',
+      package: packageFilter,
+      exit: result?.status ?? -1,
+      stdout: typeof result?.stdout === 'string' ? result.stdout.slice(0, 4000) : '',
+      stderr: typeof result?.stderr === 'string' ? result.stderr.slice(0, 4000) : '',
+    },
+  };
+}
+
+export function dispatchGpuFrameSamplesBench(pkgName, pkgRoot, decl, opts = {}) {
+  const reportPath = decl.reportPath ?? 'evidence/gpu-frame-samples.json';
+  const artefact = resolve(pkgRoot, reportPath);
+  const threshold = decl.baseline?.threshold ?? null;
+  const spawnFn = opts.spawnFn ?? spawnSync;
+  const root = opts.root ?? process.cwd();
+  const packageRelativePath = relative(resolve(pkgRoot), artefact);
+  const currentHead = currentGitHead(root, opts);
+  const details = {
+    reportPath,
+    reportSchema: decl.reportSchema,
+    packageRoot: pkgRoot,
+    currentHead,
+    producerInvoked: false,
+  };
+  if (
+    packageRelativePath.length === 0 ||
+    packageRelativePath === '..' ||
+    packageRelativePath.startsWith(`..${sep}`)
+  ) {
+    return {
+      kind: 'bench',
+      status: 'unavailable',
+      value: null,
+      threshold,
+      details: { ...details, pathError: 'GPU frame evidence must stay under the package root' },
+    };
+  }
+  if (currentHead === null) {
+    return {
+      kind: 'bench',
+      status: 'unavailable',
+      value: null,
+      threshold,
+      details: { ...details, freshnessError: 'unable to resolve current git HEAD' },
+    };
+  }
+
+  let payload;
+  let needsProducer = !existsSync(artefact);
+  if (!needsProducer) {
+    try {
+      payload = readJson(artefact);
+      needsProducer = payload?.identity?.build !== currentHead;
+    } catch {
+      needsProducer = true;
+    }
+  }
+
+  if (needsProducer) {
+    details.producerInvoked = true;
+    let result;
+    try {
+      result = spawnFn('pnpm', ['-F', packageFilterForBench(pkgName, pkgRoot), 'bench:json'], {
+        cwd: pkgRoot,
+        encoding: 'utf8',
+        env: process.env,
+        shell: false,
+        stdio: 'inherit',
+      });
+    } catch (error) {
+      return {
+        kind: 'bench',
+        status: 'unavailable',
+        value: null,
+        threshold,
+        details: {
+          ...details,
+          spawnError: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+    details.spawnExit = result?.status ?? -1;
+    details.spawnStderr = typeof result?.stderr === 'string' ? result.stderr.slice(0, 4000) : '';
+    if (details.spawnExit !== 0 || !existsSync(artefact)) {
+      return {
+        kind: 'bench',
+        status: 'unavailable',
+        value: null,
+        threshold,
+        details: {
+          ...details,
+          message: 'GPU frame producer failed or did not write its package-root evidence',
+        },
+      };
+    }
+    try {
+      payload = readJson(artefact);
+    } catch (error) {
+      return {
+        kind: 'bench',
+        status: 'unavailable',
+        value: null,
+        threshold,
+        details: { ...details, parseError: error instanceof Error ? error.message : String(error) },
+      };
+    }
+  }
+
+  if (payload?.identity?.build !== currentHead) {
+    return {
+      kind: 'bench',
+      status: 'unavailable',
+      value: null,
+      threshold,
+      details: {
+        ...details,
+        identityBuild: payload?.identity?.build ?? null,
+        freshnessError: 'GPU frame evidence was not produced by the current checkout HEAD',
+      },
+    };
+  }
+
+  const validation = validateGpuFrameSamplesReport(payload, pkgName, pkgRoot, opts);
+  const value = payload?.metrics?.gpuMedianImprovement;
+  const valid =
+    validation.ok &&
+    payload?.verdict === 'production-ready' &&
+    payload?.metrics?.timestampAvailable === true &&
+    Number.isFinite(value);
+  return {
+    kind: 'bench',
+    status: valid && (threshold === null || value >= threshold) ? 'ok' : 'unavailable',
+    value: Number.isFinite(value) ? value : null,
+    threshold,
+    details: {
+      ...details,
+      identityBuild: payload?.identity?.build ?? null,
+      verdict: payload?.verdict ?? null,
+      timestampAvailable: payload?.metrics?.timestampAvailable ?? null,
+      retainedSamples: payload?.retainedSamples ?? null,
+      validator: validation.details,
+    },
+  };
+}
+
 export function dispatchBench(pkgName, pkgRoot, decl, opts = {}) {
   if (decl?.reportSchema === 'vfx-batch-b') {
     const root = opts.root ?? process.cwd();
@@ -244,6 +461,9 @@ export function dispatchBench(pkgName, pkgRoot, decl, opts = {}) {
   // the runner aggregator (main()) needs no further branching.
   if (decl && typeof decl === 'object' && 'pixelDiff' in decl && decl.pixelDiff) {
     return dispatchPixelDiffBench(pkgName, pkgRoot, decl, opts);
+  }
+  if (decl?.reportSchema === 'gpu-frame-samples') {
+    return dispatchGpuFrameSamplesBench(pkgName, pkgRoot, decl, opts);
   }
   const reportPath = decl.reportPath ?? 'bench-result.json';
   const suite = decl.suite ?? null;
@@ -490,7 +710,7 @@ async function main() {
   }
 
   const root = resolve(args.root ?? process.cwd());
-  const schemaPath = resolve(args.schema ?? `${root}/forgeax-metrics.schema.json`);
+  const schemaPath = resolve(args.schema ?? `${root}/schemas/forgeax-metrics.schema.json`);
   const reportDir = resolve(args.reportDir ?? `${root}/report`);
 
   let schemaJson;
@@ -499,8 +719,8 @@ async function main() {
   } catch (e) {
     failStructured(
       'metric-schema-malformed',
-      'forgeax-metrics.schema.json is well-formed JSON Schema 2020-12',
-      `validate with: python -m json.tool forgeax-metrics.schema.json; parseError: ${e.message}`,
+      'schemas/forgeax-metrics.schema.json is well-formed JSON Schema 2020-12',
+      `validate with: python -m json.tool schemas/forgeax-metrics.schema.json; parseError: ${e.message}`,
     );
   }
   if (!schemaJson) {

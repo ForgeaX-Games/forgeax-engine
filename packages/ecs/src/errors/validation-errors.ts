@@ -225,6 +225,49 @@ export class ManagedArrayInvalidValueError extends Error {
 }
 
 /**
+ * Returned by `World.setArrayRange` when the written window does not fit the
+ * field's current length, or the field is not a numeric array. The write
+ * never resizes: a range write that would grow the array must use `set`.
+ */
+export class ArrayRangeOutOfBoundsError extends RangeError {
+  override readonly name = 'ArrayRangeOutOfBoundsError';
+  readonly code = 'array-range-out-of-bounds' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly component: string;
+    readonly field: string;
+    readonly offset: number;
+    readonly length: number;
+    readonly size: number;
+  };
+
+  constructor(
+    componentName: string,
+    fieldName: string,
+    offset: number,
+    length: number,
+    size: number,
+  ) {
+    const expected = `an integer offset with offset + length <= ${size}`;
+    const hint =
+      size < 0
+        ? `${componentName}.${fieldName} is not a numeric array field; use world.set for it.`
+        : `Write within [0, ${size}) of ${componentName}.${fieldName}, or use world.set to resize the array.`;
+    super(
+      `${componentName}.${fieldName}: range [${offset}, ${offset + length}) is outside the array.\n` +
+        `  code: array-range-out-of-bounds\n` +
+        `  size: ${size}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { component: componentName, field: fieldName, offset, length, size };
+  }
+}
+
+/**
  * Validate the closed enum fields present in a write payload. Enums without
  * labels remain open numeric fields for compatibility with existing schemas.
  */
@@ -291,6 +334,36 @@ export function validateEnumFieldValues<S extends ComponentSchema>(
  * `.hint` — names the offending field plus the valid replacement form.
  */
 const SPAWN_LIGHT_INVALID_BOUNDS_POLICY = {
+  intensity: {
+    expected: 'intensity is finite and >= 0',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.intensity must be a finite non-negative number (got ${got})`,
+  },
+  color: {
+    expected: 'color is a finite non-negative [r, g, b] vector',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.color must contain three finite non-negative channels (got ${JSON.stringify(got)})`,
+  },
+  width: {
+    expected: 'width is finite and > 0',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.width must be a finite positive meter value (got ${got})`,
+  },
+  height: {
+    expected: 'height is finite and > 0',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.height must be a finite positive meter value (got ${got})`,
+  },
+  irradiance: {
+    expected: 'irradiance is a finite 27-value SH vector',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.irradiance must contain 27 finite SH values (got ${JSON.stringify(got)})`,
+  },
+  radius: {
+    expected: 'radius is finite and >= R_MIN',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.radius must be a finite value >= R_MIN (got ${got})`,
+  },
   range: {
     expected: 'range >= 0 or Number.POSITIVE_INFINITY',
     hint: (componentName: string, got: number | readonly number[]) =>

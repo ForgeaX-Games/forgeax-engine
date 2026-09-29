@@ -1,11 +1,20 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   branchFor,
   directoryFor,
   parseWorktreeOptions,
+  submoduleReference,
   submoduleStatusProblems,
   submoduleUpdateArgs,
 } from '../worktree.ts';
+
+function git(args: readonly string[], cwd: string): string {
+  return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim();
+}
 
 describe('worktree option parsing', () => {
   it('uses a safe codex branch and worktree directory', () => {
@@ -53,6 +62,41 @@ describe('worktree bootstrap plans', () => {
       '4',
     ]);
     expect(submoduleUpdateArgs(4, '/tmp/assets-reference')).toContain('--reference');
+  });
+
+  it('omits a shallow assets checkout as the submodule reference', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'forgeax-worktree-reference-')));
+    const source = join(root, 'source');
+    const commonRoot = join(root, 'common');
+    const assetsRoot = join(commonRoot, 'forgeax-engine-assets');
+    mkdirSync(source, { recursive: true });
+    mkdirSync(commonRoot, { recursive: true });
+    try {
+      git(['init', '--quiet'], source);
+      writeFileSync(join(source, 'README.md'), 'reference fixture\n');
+      git(['add', 'README.md'], source);
+      git(
+        [
+          '-c',
+          'user.name=ForgeaX Test',
+          '-c',
+          'user.email=forgeax-test@example.invalid',
+          'commit',
+          '--quiet',
+          '-m',
+          'fixture',
+        ],
+        source,
+      );
+      git(['clone', '--quiet', '--depth', '1', `file://${source}`, assetsRoot], commonRoot);
+
+      expect(submoduleReference(commonRoot)).toBeUndefined();
+
+      git(['fetch', '--quiet', '--unshallow'], assetsRoot);
+      expect(submoduleReference(commonRoot)).toBe(assetsRoot);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('reports unresolved or detached submodules', () => {

@@ -15,13 +15,13 @@ import { World } from '@forgeax/engine-ecs';
 import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import { vec3 } from '@forgeax/engine-math';
 import { PointLightShadow } from '@forgeax/engine-render';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validatePointLightShadowData } from '../../../render/src/components/light-helpers';
 import { ShadowInvalidConfigError } from '../../../render/src/errors/render';
 import {
-  BYTES_PER_LIGHT_SLOT,
-  LIGHTSLOT_LAYOUT,
-  packLightSlot,
+  BYTES_PER_DIRECT_LIGHT_SLOT,
+  DIRECT_LIGHT_SLOT_LAYOUT,
+  packDirectLightSlot,
 } from '../../../render/src/light-buffer-layout';
 import { buildPointShadowMatrices } from '../../../render/src/render-system-extract';
 import {
@@ -56,8 +56,8 @@ function spawnValidatedPointShadow(
 
         // AC-01 field defaults (requirements §5.1)
         expect(defaults.mapSize).toBe(512);
-        expect(defaults.depthBias).toBeCloseTo(0.005, 5);
-        expect(defaults.normalBias).toBeCloseTo(0.05, 5);
+        expect(defaults.depthBias).toBeCloseTo(0.08, 5);
+        expect(defaults.normalBias).toBeCloseTo(0.6, 5);
         expect(defaults.nearPlane).toBeCloseTo(0.1, 5);
         expect(defaults.farPlane).toBeCloseTo(25, 5);
         expect(defaults.pcfKernelSize).toBe(3); // u32-like, exact for small integers
@@ -81,8 +81,8 @@ function spawnValidatedPointShadow(
 
         const shadow = world.get(e, PointLightShadow).unwrap();
         expect(shadow.mapSize).toBe(512);
-        expect(shadow.depthBias).toBeCloseTo(0.005, 5);
-        expect(shadow.normalBias).toBeCloseTo(0.05, 5);
+        expect(shadow.depthBias).toBeCloseTo(0.08, 5);
+        expect(shadow.normalBias).toBeCloseTo(0.6, 5);
         expect(shadow.nearPlane).toBeCloseTo(0.1, 5);
         expect(shadow.farPlane).toBeCloseTo(25, 5);
         expect(shadow.pcfKernelSize).toBe(3);
@@ -102,8 +102,8 @@ function spawnValidatedPointShadow(
         // Explicit field keeps the passed value
         expect(shadow.mapSize).toBe(1024);
         // Omitted fields fall back to defaults
-        expect(shadow.depthBias).toBeCloseTo(0.005, 5);
-        expect(shadow.normalBias).toBeCloseTo(0.05, 5);
+        expect(shadow.depthBias).toBeCloseTo(0.08, 5);
+        expect(shadow.normalBias).toBeCloseTo(0.6, 5);
         expect(shadow.nearPlane).toBeCloseTo(0.1, 5);
         expect(shadow.farPlane).toBeCloseTo(25, 5);
         expect(shadow.pcfKernelSize).toBe(3);
@@ -164,8 +164,8 @@ function spawnValidatedPointShadow(
           expect(r.error).toBeInstanceOf(ShadowInvalidConfigError);
           const detail = (r.error as unknown as ShadowInvalidConfigError).detail;
           expect(detail.field).toBe('mapSize');
-          expect(detail.value).toBe(0);
-          expect(detail.min).toBe(1);
+          expect(detail.actual).toBe(0);
+          expect(detail.bound).toEqual({ kind: 'lower-bound', operator: '>=', value: 1 });
           // .expected and .hint carry actionable strings
           expect((r.error as unknown as ShadowInvalidConfigError).expected).toContain('mapSize');
           expect((r.error as unknown as ShadowInvalidConfigError).hint).toContain('mapSize');
@@ -190,8 +190,8 @@ function spawnValidatedPointShadow(
           expect(r.error).toBeInstanceOf(ShadowInvalidConfigError);
           const detail = (r.error as unknown as ShadowInvalidConfigError).detail;
           expect(detail.field).toBe('farPlane');
-          expect(detail.value).toBe(0.5);
-          expect(detail.min).toBe(1.0);
+          expect(detail.actual).toBe(0.5);
+          expect(detail.bound).toEqual({ kind: 'lower-bound', operator: '>=', value: 1.0 });
         }
       });
 
@@ -270,29 +270,59 @@ function spawnValidatedPointShadow(
         }
       });
 
-      it('AC-03: lightPos=(0,0,0) near=0.1 far=10 — face +X projects (1,0,0) into NDC z=1 (far) at depth-far plane', () => {
-        // Reference: WebGPU [0, 1] NDC. far point on the face axis maps to ndc_z=1.
-        const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
-        const faceM = ms[0] ?? new Float32Array(16);
-        // A point at (10, 0, 0) — exactly far distance along +X — should project
-        // to NDC z = 1 (WebGPU convention, far plane).
-        const p = projectPoint(faceM, 10, 0, 0);
-        const ndcZ = p.z / p.w;
-        expect(ndcZ).toBeCloseTo(1.0, 5);
+      it('projects off-axis casters to the texel addressed by a raw cube direction on all six faces', () => {
+        const position = vec3.create(2, 3, 4);
+        const shadowMatrices = buildPointShadowMatrices(position, 0.1, 25);
+        // WebGPU cube face table: each direction addresses UV=(0.25,0.75).
+        // Independent of either camera/matrix helper, and not on a face axis.
+        const directions = [
+          [2, -1, 1],
+          [-2, -1, -1],
+          [-1, 2, 1],
+          [-1, -2, -1],
+          [-1, -1, 2],
+          [1, -1, -2],
+        ] as const;
+        for (const [index, matrix] of shadowMatrices.entries()) {
+          const direction = directions[index];
+          if (direction === undefined) throw new Error('missing cube direction');
+          const point = [
+            (position[0] ?? 0) + direction[0],
+            (position[1] ?? 0) + direction[1],
+            (position[2] ?? 0) + direction[2],
+            1,
+          ];
+          const clip = [0, 1, 2, 3].map((row) =>
+            point.reduce((sum, value, column) => sum + value * (matrix[column * 4 + row] ?? 0), 0),
+          );
+          const w = clip[3] ?? 1;
+          expect(((clip[0] ?? 0) / w) * 0.5 + 0.5).toBeCloseTo(0.25, 6);
+          expect(0.5 - ((clip[1] ?? 0) / w) * 0.5).toBeCloseTo(0.75, 6);
+        }
       });
 
-      it('AC-03: face +X projects (0.1, 0, 0) — near point — to NDC z=0', () => {
+      it('cube +X projects world -X far plane to NDC z=0', () => {
+        // Reference: WebGPU [0, 1] NDC. far point on the face axis maps to ndc_z=0.
+        const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
+        const faceM = ms[0] ?? new Float32Array(16);
+        // A point at (+10, 0, 0) — far distance along cube +X — should project
+        // to NDC z = 0 (WebGPU convention, far plane).
+        const p = projectPoint(faceM, 10, 0, 0);
+        const ndcZ = p.z / p.w;
+        expect(ndcZ).toBeCloseTo(0.0, 5);
+      });
+
+      it('cube +X projects world -X near plane to NDC z=1', () => {
         const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
         const faceM = ms[0] ?? new Float32Array(16);
         const p = projectPoint(faceM, 0.1, 0, 0);
         const ndcZ = p.z / p.w;
-        expect(ndcZ).toBeCloseTo(0.0, 4);
+        expect(ndcZ).toBeCloseTo(1.0, 4);
       });
 
-      it('AC-03: each face projects its forward axis point at far depth to NDC z=1', () => {
+      it('AC-03: each face projects its forward axis point at far depth to NDC z=0', () => {
         const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
-        // For each face, the "far" point along the look direction (in world
-        // space) should map to NDC z = 1.
+        // Directions are in the negated-world cube basis used for sampling.
         const lookDirs: ReadonlyArray<readonly [number, number, number]> = [
           [10, 0, 0], // +X
           [-10, 0, 0], // -X
@@ -306,11 +336,11 @@ function spawnValidatedPointShadow(
           const ld = lookDirs[i] ?? ([0, 0, 0] as const);
           const p = projectPoint(m, ld[0], ld[1], ld[2]);
           const ndcZ = p.z / p.w;
-          expect(ndcZ).toBeCloseTo(1.0, 5);
+          expect(ndcZ).toBeCloseTo(0.0, 5);
         }
       });
 
-      it('AC-03: each face projects its forward-axis near point to NDC z=0', () => {
+      it('AC-03: each face projects its forward-axis near point to NDC z=1', () => {
         const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
         const nearPts: ReadonlyArray<readonly [number, number, number]> = [
           [0.1, 0, 0],
@@ -325,12 +355,12 @@ function spawnValidatedPointShadow(
           const np = nearPts[i] ?? ([0, 0, 0] as const);
           const p = projectPoint(m, np[0], np[1], np[2]);
           const ndcZ = p.z / p.w;
-          expect(ndcZ).toBeCloseTo(0.0, 4);
+          expect(ndcZ).toBeCloseTo(1.0, 4);
         }
       });
 
       it('AC-03: WebGPU [0,1] NDC depth — out-of-frustum mid-distance maps to ndc_z in (0, 1)', () => {
-        // Pick a mid-point along +X face axis (5 units, between near=0.1 and far=10).
+        // Pick a mid-point along cube +X (world +X).
         const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), 0.1, 10);
         const faceM = ms[0] ?? new Float32Array(16);
         const p = projectPoint(faceM, 5, 0, 0);
@@ -340,19 +370,18 @@ function spawnValidatedPointShadow(
         expect(ndcZ).toBeLessThan(1);
       });
 
-      it('AC-03: lightPos translation — origin reference point at (lightPos + far*lookDir) maps to ndc_z=1', () => {
+      it('AC-03: lightPos translation — origin reference point at (lightPos + far*lookDir) maps to ndc_z=0', () => {
         const lightPos = vec3.create(2, 3, 4);
         const ms = buildPointShadowMatrices(lightPos, 0.1, 10);
-        // Face +X: world point at lightPos + (10, 0, 0) = (12, 3, 4) is at far
-        // plane along the +X face look direction.
+        // Cube +X: world point lightPos + (10, 0, 0) is on the far plane.
         // biome-ignore lint/style/noNonNullAssertion: ms.length === 6
         const faceM = ms[0]!;
         const p = projectPoint(faceM, 12, 3, 4);
         const ndcZ = p.z / p.w;
-        expect(ndcZ).toBeCloseTo(1.0, 5);
+        expect(ndcZ).toBeCloseTo(0.0, 5);
       });
 
-      it('AC-03: matrix m[10] = far/(near-far) (WebGPU [0,1] perspective entry lock)', () => {
+      it('AC-03: matrix m[10] = near/(far-near) (WebGPU [0,1] perspective entry lock)', () => {
         // Numerical lock on the projection's z-depth coefficient. proj * view
         // composition mostly preserves the proj column-2 row-2 entry because
         // view's column 2 is the camera forward (unit length, no scale).
@@ -365,7 +394,7 @@ function spawnValidatedPointShadow(
         const ms = buildPointShadowMatrices(vec3.create(0, 0, 0), near, far);
         // The vp.z component for a face-z aligned point should track
         // proj's depth coefficient via the view-rotation matrix. Project the
-        // unit far-vector along the face look axis; expect ndc_z=1 (matches
+        // unit far-vector along the face look axis; expect ndc_z=0 (matches
         // earlier tests, proves the entry chain holds).
         const lookDirs: ReadonlyArray<readonly [number, number, number]> = [
           [far, 0, 0],
@@ -380,7 +409,7 @@ function spawnValidatedPointShadow(
           const ld = lookDirs[i] ?? ([0, 0, 0] as const);
           const p = projectPoint(m, ld[0], ld[1], ld[2]);
           const ndcZ = p.z / p.w;
-          expect(ndcZ).toBeCloseTo(1.0, 4);
+          expect(ndcZ).toBeCloseTo(0.0, 4);
         }
       });
     });
@@ -448,10 +477,12 @@ function spawnValidatedPointShadow(
 
       it('ensure() lazily allocates exactly one texture + cube-array view + sampler', async () => {
         const { device, calls } = makeMockDevice();
+        const sampler = vi.spyOn(device, 'createSampler');
         const atlas = new ShadowAtlas(device);
         expect(atlas.isAllocated()).toBe(false);
         atlas.ensure();
         expect(atlas.isAllocated()).toBe(true);
+        expect(sampler).toHaveBeenCalledWith(expect.objectContaining({ compare: 'greater' }));
         expect(calls.createTexture).toBe(1);
         // cube-array sampling view (1) only; per-face views are lazy on faceView()
         expect(calls.createTextureView).toBe(1);
@@ -550,7 +581,7 @@ function spawnValidatedPointShadow(
     });
 
     describe('standard point shadow light-slot packing (AC-05)', () => {
-      it('AC-13: packLightSlot writes shadow info onto LightSlot pad lanes (byte 52..64)', () => {
+      it('AC-13: packDirectLightSlot writes point shadow identity metadata', () => {
         const snap = {
           kind: 'point' as const,
           position: vec3.create(1, 2, 3),
@@ -558,26 +589,18 @@ function spawnValidatedPointShadow(
           intensity: 1,
           invRangeSquared: 0.04,
         };
-        // Without shadow info: layer = -1 sentinel; near/far = 0.
-        const noShadow = packLightSlot(snap);
+        // Without shadow info: layer = -1 sentinel in metadata word 17.
+        const noShadow = packDirectLightSlot(snap);
         const i32NoShadow = new Int32Array(noShadow.buffer);
-        expect(i32NoShadow[13]).toBe(-1); // sentinel
-        expect(noShadow[14]).toBe(0); // near
-        expect(noShadow[15]).toBe(0); // far
+        expect(i32NoShadow[17]).toBe(-1); // sentinel
 
-        // With shadow info: layer 2, near 0.1, far 25 — matches PointLightShadow defaults.
-        const withShadow = packLightSlot(snap, {
-          shadowAtlasLayer: 2,
-          near: 0.1,
-          far: 25,
-        });
+        // Extract joins the PointLightShadow layer before packing.
+        const withShadow = packDirectLightSlot({ ...snap, shadowAtlasLayer: 2 });
         const i32Shadow = new Int32Array(withShadow.buffer);
-        expect(i32Shadow[13]).toBe(2);
-        expect(withShadow[14]).toBeCloseTo(0.1, 5);
-        expect(withShadow[15]).toBe(25);
+        expect(i32Shadow[17]).toBe(2);
       });
 
-      it('AC-13: spot light packLightSlot leaves pad lanes at sentinel (-1, 0, 0)', () => {
+      it('AC-13: unified Spot packing writes shadow metadata', () => {
         const spotSnap = {
           kind: 'spot' as const,
           entity: 0,
@@ -595,29 +618,15 @@ function spawnValidatedPointShadow(
           farPlane: 50,
           shadowAtlasTile: -1,
         };
-        // Even when shadow info is passed, spot lights ignore the lanes
-        // (only point lights with shadow ride the pad lanes).
-        const packed = packLightSlot(spotSnap, {
-          shadowAtlasLayer: 0,
-          near: 0.1,
-          far: 25,
-        });
+        const packed = packDirectLightSlot(spotSnap);
         const i32 = new Int32Array(packed.buffer);
-        expect(i32[13]).toBe(-1); // sentinel; spot lights stay shadowless
-        expect(packed[14]).toBe(0);
-        expect(packed[15]).toBe(0);
+        expect(i32[17]).toBe(-1);
       });
 
-      it('AC-05: LIGHTSLOT_LAYOUT byteSize unchanged at 64 (no-regression for standard)', () => {
-        // The pad-lane re-purposing must not change the total LightSlot size:
-        // the std430 vec4 stride is preserved; only the field semantics within
-        // bytes 52..64 changed (u32 pad -> i32 layer + f32 near + f32 far).
-        expect(BYTES_PER_LIGHT_SLOT).toBe(64);
-        expect(LIGHTSLOT_LAYOUT.byteSize).toBe(64);
-        expect(LIGHTSLOT_LAYOUT.shadowAtlasLayerOffset).toBe(52);
-        expect(LIGHTSLOT_LAYOUT.shadowPayloadOffset).toBe(52);
-        expect(LIGHTSLOT_LAYOUT.shadowNearOffset).toBe(56);
-        expect(LIGHTSLOT_LAYOUT.shadowFarOffset).toBe(60);
+      it('AC-05: DIRECT_LIGHT_SLOT_LAYOUT keeps the five-row ABI', () => {
+        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(80);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(80);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.shadowByteOffset).toBe(68);
       });
     });
 

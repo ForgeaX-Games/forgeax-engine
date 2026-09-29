@@ -291,13 +291,32 @@ describe('tool-runtime uncovered contracts', () => {
     const terminalFailure = tool('terminal.failure', async () => ({ outcome: 'failed' as const, failure: domainFailureError('producer'), artifacts: [] }));
     const okTerminal = tool('terminal.ok', async () => ({ outcome: 'succeeded' as const, result: 'done', artifacts: [], snapshotAfter: { revision: 1, digest: 'sha256:after' } }));
     const falseResult = tool('false.result', async () => ({ ok: false as const, error: { code: 'bad', detail: { message: 'bad' } } }));
+    const structuredHint = tool('structured.hint', async () => ({
+      ok: false as const,
+      error: {
+        code: 'producer-failed',
+        expected: 'the producer to succeed',
+        hint: { reason: 'gpu-lost', code: 42 } as unknown as string,
+      },
+    }));
+    const falseArtifact = createArtifactRef({ kind: 'png', digest: 'sha256:failure', uri: 'file:///failure.png' });
+    const falseResultWithArtifact = tool('false.result.artifact', async () => ({ ok: false as const, error: { code: 'bad', detail: { message: 'bad' } }, artifacts: [falseArtifact] }));
     const invalidResult = tool('invalid.result', async () => ({ object: new Date() }));
     const schemaFailure = tool('schema.failure', async () => undefined, { parse: () => ({ ok: false, error: 'schema' }) });
     const invalidArtifact = tool('invalid.artifact', async () => ({ ok: true as const, value: 'ok', artifacts: [{ kind: 'png', digest: 1 }] as never }));
-    const all = createToolRuntime([terminalFailure, okTerminal, falseResult, invalidResult, schemaFailure, invalidArtifact]);
+    const all = createToolRuntime([terminalFailure, okTerminal, falseResult, falseResultWithArtifact, invalidResult, schemaFailure, invalidArtifact]);
     expect(await all.run(terminalFailure, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' } });
+    const structuredHintRuntime = createToolRuntime([structuredHint]);
+    const structuredHintTerminal = await structuredHintRuntime.run(structuredHint, 'x').terminal;
+    expect(structuredHintTerminal.outcome).toBe('failed');
+    if (structuredHintTerminal.outcome === 'failed') {
+      // A structured producer hint stays readable instead of String() loss.
+      expect(typeof structuredHintTerminal.failure.hint).toBe('string');
+      expect(structuredHintTerminal.failure.hint).toContain('gpu-lost');
+    }
     expect(await all.run(okTerminal, 'x').terminal).toMatchObject({ outcome: 'succeeded', snapshotAfter: { revision: 1 } });
     expect(await all.run(falseResult, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' } });
+    expect(await all.run(falseResultWithArtifact, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' }, artifacts: [falseArtifact] });
     expect(await all.run(invalidResult, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' } });
     expect(await all.run(schemaFailure, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' } });
     expect(await all.run(invalidArtifact, 'x').terminal).toMatchObject({ outcome: 'failed', failure: { code: 'tool-domain-failed' } });

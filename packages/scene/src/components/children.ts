@@ -1,28 +1,23 @@
 // @forgeax/engine-runtime - Children (forward-list of child entities).
 //
 // Schema: 1 array<entity> field `entities` (variable-length, ECS-managed via
-// the BufferPool slot column + sidecar count column allocated by the ECS M2
-// `world.push` / `world.pop` / `world.capacity` command surface).
+// the BufferPool slot column + sidecar count column allocated by the ECS
+// relationship owner).
 //
 // feat-20260515-buffer-array-vocab-collapse M3 / w17:
 // the legacy `VarArrayView<Entity>` value-shape wrapper was retired in
-// favour of a direct `TypedArray` snapshot returned by `world.get` plus the
-// three `world` commands. AI users mutate the list through:
-//
-//   world.push(parent, Children, 'entities', child).unwrap();
-//   world.pop(parent, Children, 'entities').unwrap();
-//   world.capacity(parent, Children, 'entities').unwrap();
-//
-// And read through the read-only `Uint32Array` snapshot:
+// favour of a direct `TypedArray` snapshot returned by `world.get`. AI users
+// read the engine-maintained list through the read-only `Uint32Array` snapshot:
 //
 //   const snap = world.get(parent, Children).unwrap().entities;
 //   const liveCount = snap.length;
 //   for (let i = 0; i < liveCount; i++) { const child = snap[i]; ... }
 //
 // Snapshot length equals the live element count (sidecar count column owned
-// by the ECS layer); the snapshot is rematerialised on every `world.get`
-// (D-4 no-cache); writes routed through the snapshot are undefined behaviour
-// (the contract is read-only, plan-strategy §2.2 D-R3).
+// by the ECS layer); the public snapshot is detached and rematerialised on
+// every `world.get` (D-4 no-cache), so `fill` or index writes cannot mutate the
+// target. Internal relationship maintenance and Scene traversal borrow the
+// live array through the package-internal zero-copy seams instead.
 //
 // feat-20260531-ecs-relationship-abstraction-bidirectional-sync M4 / t20:
 // Children is the MIRROR side of the ChildOf relationship. Its schema is
@@ -33,9 +28,8 @@
 // "AI users keep the two sides consistent themselves" contract is retired:
 // `world.addComponent(child, ChildOf{parent})` appends `child` to
 // `parent.Children.entities`, `world.removeComponent` / reparent prunes it.
-// AI users still MAY push/pop the list manually (the three `world` commands
-// below remain valid for non-ChildOf forward-lists), but for the ChildOf
-// hierarchy the engine owns consistency.
+// For the ChildOf hierarchy the engine owns consistency; no public target
+// write can diverge from the source relationship.
 //
 // feat-20260514-ecs-children-instances-managed-buffer-array M3 / w13 (kept
 // for context): migrated from the legacy `{ count: 'u32' }` advisory marker
@@ -43,14 +37,12 @@
 //   - OOS-09 (prior loop): no `addChild` / `removeChild` / `removeChildren`
 //     Commands API. Retired this feat: `world.addChild` / `world.removeChild`
 //     / `world.reparent` ship in M3, plus the relationship hook above.
-//   - OOS-01 (prior loop): no dangling-entity sweep on `array<entity>`. If a
-//     child entity has been despawned, the stored u32 still occupies the
-//     slot; AI users explicitly call the engine's entity-liveness check
-//     before consuming a child id (see `world.get(child, ChildOf)` returns
-//     `Result.err(...)` for a despawned entity --- the stored u32 surfaces
-//     as a dead handle, not a silent zero). Charter proposition 4
-//     (explicit failure): the engine does not silently drop dangling
-//     entries.
+//   - Normal ChildOf child despawn invokes the source onRemove hook and
+//     removes the child before the row is retired; parent despawn follows the
+//     linkedSpawn cascade. A dangling u32 is therefore an explicitly malformed
+//     internal fixture or a non-linked generic relationship, not a normal
+//     ChildOf lifecycle result. Consumers still probe liveness before using a
+//     handle and receive the structured ECS error for malformed state.
 //
 // charter mapping: proposition 2 (Bevy ChildOf+Children pair, holder
 // perspective) + proposition 3 (machine-readable schema:
@@ -60,30 +52,32 @@
 // generic relationship-mirror shape, not a ChildOf special case).
 
 import { defineRelationship } from '@forgeax/engine-ecs';
+import { Transform } from './transform';
 
 /**
  * Hierarchy forward-list of child entities.
  *
  * `entities` is a variable-length `array<entity>` field; each element is
- * an `Entity` u32 the AI user pushed via
- * `world.push(parent, Children, 'entities', child)`. The value returned by
- * `world.get(parent, Children).unwrap().entities` is a read-only
+ * an `Entity` u32 the ECS relationship owner materialized. The value returned
+ * by `world.get(parent, Children).unwrap().entities` is a detached read-only
  * `Uint32Array` snapshot rematerialised fresh on every read (D-4 no-cache);
- * the snapshot's `length` equals the live element count.
+ * mutating the returned array cannot change ECS-owned storage, and the
+ * snapshot's `length` equals the live element count. Internal Scene/ECS paths
+ * use the package-internal zero-copy array seams instead of this snapshot.
  *
  * Invariants:
- *   - Children is NOT consumed by `propagateTransforms` (which walks ChildOf
- *     upward, D-P2). The forward list is for AI-user traversal / debug /
- *     inspection.
+ *   - `propagateTransforms` consumes Children from the ECS-owned materialized
+ *     buffer and expands each root parent-first. The forward list is also
+ *     available for AI-user traversal / debug / inspection.
  *   - Children <-> ChildOf consistency is maintained by the engine via the
  *     ChildOf `relationship` mirror hook (see ./child-of.ts): adding /
  *     removing / reparenting ChildOf on a child auto-updates the parent's
  *     `entities` list. AI users do not hand-sync the two sides for the
  *     hierarchy.
- *   - Stored entity u32s are NOT auto-cleared when the referenced entity is
- *     despawned (OOS-01 above); a `world.get(despawnedChild, ...)` call
- *     returns `Result.err(...)` so AI users discover the dangling state
- *     through the engine's structured-error channel.
+ *   - ChildOf's linked lifecycle keeps ordinary Children entries aligned: a
+ *     child despawn prunes its source slot and a parent despawn cascades. A
+ *     deliberately malformed/non-linked edge remains observable as a dead
+ *     handle and must be diagnosed through the structured error channel.
  *
  * @example Spawn a parent and two children via ChildOf (engine maintains Children):
  *   const parent = world.spawn({ component: Transform, data: identityXf() }).unwrap();
@@ -99,8 +93,8 @@ import { defineRelationship } from '@forgeax/engine-ecs';
  *   const snap = world.get(parent, Children).unwrap().entities;
  *   for (let i = 0; i < snap.length; i++) {
  *     const child = snap[i];
- *     // ... consume; world.get(child, ...) surfaces a structured error
- *     // if the child has been despawned (OOS-01 dangling-entity surface).
+ *     // ... consume; probe the handle before using it when reading a
+ *     // deliberately malformed/non-linked relationship.
  *   }
  */
 export const { source: ChildOf, target: Children } = defineRelationship({
@@ -108,6 +102,11 @@ export const { source: ChildOf, target: Children } = defineRelationship({
   sourceField: 'parent',
   targetName: 'Children',
   targetField: 'entities',
+  // Every scene hierarchy node is spatial.  Adding ChildOf therefore
+  // materializes the local/derived transform pair at the same structural
+  // boundary, so render- and scene-authored children cannot enter a frame
+  // with an incomplete hierarchy node.
+  sourceRequires: [Transform],
   exclusive: true,
   linkedSpawn: true,
 });

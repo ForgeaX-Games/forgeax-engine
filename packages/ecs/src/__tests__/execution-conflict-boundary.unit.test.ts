@@ -5,6 +5,7 @@ import {
   SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
   type SharedKernelExecutor,
 } from '../execution/shared-kernel';
+import { createStateProjection } from '../projection/state-projection';
 import type { QuerySpan } from '../query/query';
 import { Update } from '../schedule-token';
 import { World } from '../world';
@@ -58,6 +59,8 @@ function runCase(
     world.insertResource(SHARED_KERNEL_EXECUTOR_RESOURCE_KEY, executor);
   }
   world.spawn({ component: Position, data: { x: 1 } }).unwrap();
+  const projection = createStateProjection(world, [Position]);
+  projection.read().accept();
 
   const first = defineSharedKernel(import.meta.url, {
     name: `${kind}-first`,
@@ -97,6 +100,7 @@ function runCase(
   world.addSystem(Update, second).unwrap();
 
   world.update(0).unwrap();
+  expect(projection.read().indices).toEqual(kind === 'read-read' ? [] : [0]);
   const [row] = world.query({ read: [Position] }).unwrap();
   return { x: row?.get(Position).x ?? Number.NaN, trace };
 }

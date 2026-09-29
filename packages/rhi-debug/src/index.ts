@@ -5,6 +5,13 @@
 // browser, Node, and backend ownership at their host boundaries.
 
 export {
+  type BufferRecordLayout,
+  type BufferRecords,
+  type BufferScalar,
+  decodeBufferRecords,
+  inspectBufferRecords,
+} from './buffer-records';
+export {
   createRhiDebugError,
   type RhiDebugError,
   type RhiDebugErrorCode,
@@ -30,7 +37,9 @@ export {
   type ResourceLifecycleEntry,
   type ResourceLifecycleSummary,
 } from './frame-model';
-export { decodeTape, encodeTape } from './protocol/codec';
+export { type FrameSummary, summarizeFrame } from './frame-summary';
+export type { UnseededResource } from './initial-contents';
+export { decodeTape, digestBytes as tapeDigest, encodeTape } from './protocol/codec';
 export type { EventCategory, EventSemantics } from './protocol/event-semantics';
 export {
   EVENT_SEMANTICS,
@@ -66,6 +75,7 @@ export {
   attachRecorder,
   type CaptureFrameOptions,
   type CreateShaderModuleFn,
+  type CreateShaderModuleImmediateFn,
   type EncodedTape,
   type RecordableBackend,
   type RecorderAttachment,

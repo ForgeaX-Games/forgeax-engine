@@ -1,11 +1,12 @@
 import { defineConfig } from 'tsup';
-import { baseTsupConfig } from '../../tsup.base';
+import { baseTsupConfig } from '../../config/tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
   entry: {
     index: 'src/index.ts',
     'engine-worker-runtime': 'src/execution/engine-worker-runtime.ts',
+    'render-worker-runtime': 'src/execution/render-worker-runtime.ts',
     'kernel-worker-runtime': 'src/execution/kernel-worker-runtime.ts',
   },
   external: [

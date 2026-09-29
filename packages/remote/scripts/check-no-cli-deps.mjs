@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // AC-09 grep gate: assert `@forgeax/engine-remote` package.json#dependencies
 // does NOT include any third-party CLI argparse library (sade / commander /
-// cac). The CLI is implemented with stdlib `node:util.parseArgs` + the
-// package-internal `defineSubcommand` DSL (plan-strategy D-4 + D-7 / D-P3 RD-3).
+// cac). The public command tree belongs to DevKit; this package is
+// transport/eval core only.
 //
 // Hits in dependencies indicate someone re-introduced an external argparse
-// dep. Pattern aligns with `check-no-help-string-array.mjs`: zero npm deps,
-// plain `node:fs` + `node:path`, exit 1 on any hit.
+// dep. Keep this as a small package-boundary guard: zero npm CLI deps, plain
+// `node:fs` + `node:path`, exit 1 on any hit.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -34,7 +34,7 @@ function main() {
     }
     process.stderr.write(
       `\n  expected: 0 entries from { ${FORBIDDEN_DEPS.join(', ')} }\n` +
-        `  hint:     stdlib node:util.parseArgs + defineSubcommand DSL is the locked surface (plan-strategy D-P3 RD-3 + D-4)\n`,
+        `  hint:     use the unified DevKit command tree; transport stays CLI-free\n`,
     );
     process.exit(1);
   }

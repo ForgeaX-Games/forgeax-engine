@@ -198,8 +198,11 @@ export function createKernelPool(options: KernelPoolOptions = {}): KernelPool {
         };
         workers[index % workers.length]?.postMessage(message);
       }
-      while (Atomics.load(control, 0) < bindings.length) {
+      while (true) {
         const observed = Atomics.load(control, 0);
+        if (observed >= bindings.length) break;
+        // The completion check and wait must share one observation: a second
+        // load could observe the final value, which no future lane will notify.
         const wait = Atomics.wait(control, 0, observed, timeoutMs);
         if (wait === 'timed-out') {
           for (const worker of workers) worker.terminate();

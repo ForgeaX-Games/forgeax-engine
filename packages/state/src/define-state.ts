@@ -64,14 +64,14 @@ export type StateTokenName<T extends StateToken> =
  * Global registry of all state tokens, keyed by token name.
  *
  * `defineState` writes here; active state plugins project it into Worlds;
- * cli-state reflection also reads it.
+ * live `forgeax dev eval` inspection also reads it.
  */
 const STATE_REGISTRY = new Map<string, StateToken>();
 const STATE_DEFINED_LISTENERS = new Set<(token: StateToken) => void>();
 
 /**
  * Internal: get the read-only snapshot of all registered tokens.
- * Exported for M2 registerStatesPlugin and M6 cli-state.
+ * Exported for the state plugin and live inspection.
  */
 export function getRegisteredTokens(): ReadonlyMap<string, StateToken> {
   return STATE_REGISTRY;

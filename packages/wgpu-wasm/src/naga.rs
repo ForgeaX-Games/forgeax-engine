@@ -94,6 +94,85 @@ pub fn validate(parsed: ParsedModule) -> Result<ValidatedModule, JsError> {
 
 // === Phase 3: emit_reflection ======================================================
 
+/// Validate the selected graphics stages, rather than merely the whole module.
+#[wasm_bindgen]
+pub fn validate_render_entries(
+    validated: &ValidatedModule,
+    vertex: &str,
+    fragment: Option<String>,
+    color_formats: Option<String>,
+) -> Result<(), JsError> {
+    let module = &validated.module;
+    let vertex_entry = module.entry_points.iter()
+        .find(|entry| entry.name == vertex && entry.stage == ShaderStage::Vertex)
+        .ok_or_else(|| JsError::new(&format!("vertex entry '{vertex}' does not exist")))?;
+    let Some(fragment) = fragment else { return Ok(()) };
+    let fragment_entry = module.entry_points.iter()
+        .find(|entry| entry.name == fragment && entry.stage == ShaderStage::Fragment)
+        .ok_or_else(|| JsError::new(&format!("fragment entry '{fragment}' does not exist")))?;
+    if let Some(formats_json) = color_formats {
+        let formats: Vec<String> = serde_json::from_str(&formats_json)
+            .map_err(|e| JsError::new(&format!("invalid color formats: {e}")))?;
+        let mut colors = Vec::new();
+        if let Some(result) = &fragment_entry.function.result {
+            collect_stage_locations(module, result.ty, result.binding.as_ref(), &mut colors);
+        }
+        if colors.len() != formats.len() {
+            return Err(JsError::new("material output count differs from selected fragment outputs"));
+        }
+        for (index, format) in formats.iter().enumerate() {
+            let (_, ty, _) = colors.iter().find(|(location, _, _)| *location == index as u32)
+                .ok_or_else(|| JsError::new(&format!("missing fragment output @location({index})")))?;
+            let scalar = match module.types[*ty].inner {
+                TypeInner::Scalar(scalar) | TypeInner::Vector { scalar, .. } => scalar,
+                _ => return Err(JsError::new("fragment output must be scalar or vector")),
+            };
+            let expected = if format.ends_with("uint") { naga::ScalarKind::Uint }
+                else if format.ends_with("sint") { naga::ScalarKind::Sint }
+                else { naga::ScalarKind::Float };
+            if scalar.kind != expected {
+                return Err(JsError::new(&format!("fragment output @location({index}) is incompatible with {format}")));
+            }
+        }
+    }
+    let mut outputs = Vec::new();
+    if let Some(result) = &vertex_entry.function.result {
+        collect_stage_locations(module, result.ty, result.binding.as_ref(), &mut outputs);
+    }
+    let mut inputs = Vec::new();
+    for argument in &fragment_entry.function.arguments {
+        collect_stage_locations(module, argument.ty, argument.binding.as_ref(), &mut inputs);
+    }
+    for (location, ty, binding) in inputs {
+        let compatible = outputs.iter().any(|(output_location, output_ty, output_binding)| {
+            *output_location == location
+                && module.types[*output_ty].inner == module.types[ty].inner
+                && *output_binding == binding
+        });
+        if !compatible {
+            return Err(JsError::new(&format!(
+                "fragment entry '{fragment}' input @location({location}) has no compatible output from vertex entry '{vertex}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn collect_stage_locations<'a>(
+    module: &'a Module,
+    ty: Handle<naga::Type>,
+    binding: Option<&'a Binding>,
+    locations: &mut Vec<(u32, Handle<naga::Type>, &'a Binding)>,
+) {
+    if let Some(binding @ Binding::Location { location, .. }) = binding {
+        locations.push((*location, ty, binding));
+    } else if let TypeInner::Struct { members, .. } = &module.types[ty].inner {
+        for member in members {
+            collect_stage_locations(module, member.ty, member.binding.as_ref(), locations);
+        }
+    }
+}
+
 /// `ValidatedModule` + options JSON -> `BindGroupLayoutDescriptor[]` JSON string.
 ///
 /// `options_json` shape: `{ "dynamicOffsets": [{ "group": u32, "binding": u32 }, ...] }`.
@@ -199,6 +278,9 @@ struct BoundGlobal {
     members: Option<Vec<ReflectionMember>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     span: Option<u32>,
+    /// Byte step used when indexing a runtime-sized storage array.
+    #[serde(rename = "elementStride", skip_serializing_if = "Option::is_none")]
+    element_stride: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -230,33 +312,52 @@ fn derive_bound_globals(module: &Module, info: &ModuleInfo) -> Vec<BoundGlobal> 
     for (handle, variable) in module.global_variables.iter() {
         let Some(binding) = variable.binding else { continue };
         let visibility = compute_visibility(module, info, handle);
-        let (members, span) = match variable.space {
-            AddressSpace::Uniform | AddressSpace::Storage { .. } => {
+        let (members, span, element_stride) = match variable.space {
+            AddressSpace::Uniform => {
                 let ty = &module.types[variable.ty];
                 match &ty.inner {
                     TypeInner::Struct { members, span } => (
-                        Some(
-                            members
-                                .iter()
-                                .filter_map(|member| {
-                                    let name = member.name.as_ref()?;
-                                    let member_ty = &module.types[member.ty];
-                                    Some(ReflectionMember {
-                                        name: name.clone(),
-                                        ty: reflection_type_name(member_ty),
-                                        offset: member.offset,
-                                        size: member_ty.inner.try_size(module.to_ctx()).unwrap_or(0),
-                                        alignment: reflection_alignment(member_ty),
-                                    })
-                                })
-                                .collect(),
-                        ),
+                        Some(reflection_members(module, members)),
                         Some(*span),
+                        None,
                     ),
-                    _ => (Some(Vec::new()), Some(0)),
+                    TypeInner::Array { base, stride: _, .. } => {
+                        let (members, span) = match &module.types[*base].inner {
+                            TypeInner::Struct { members, span } => {
+                                (Some(reflection_members(module, members)), Some(*span))
+                            }
+                            _ => (Some(Vec::new()), Some(0)),
+                        };
+                        (members, span, None)
+                    }
+                    _ => (Some(Vec::new()), Some(0), None),
                 }
             }
-            _ => (None, None),
+            AddressSpace::Storage { .. } => {
+                let ty = &module.types[variable.ty];
+                match &ty.inner {
+                    TypeInner::Array { base, stride, .. } => {
+                        let (members, span) = match &module.types[*base].inner {
+                            TypeInner::Struct { members, span } => {
+                                (Some(reflection_members(module, members)), Some(*span))
+                            }
+                            _ => (Some(Vec::new()), Some(0)),
+                        };
+                        (members, span, Some(*stride))
+                    }
+                    TypeInner::Struct { members, span } => (
+                        Some(reflection_members(module, members)),
+                        Some(*span),
+                        Some(*span),
+                    ),
+                    _ => (
+                        Some(Vec::new()),
+                        Some(0),
+                        ty.inner.try_size(module.to_ctx()),
+                    ),
+                }
+            }
+            _ => (None, None, None),
         };
         globals.push(BoundGlobal {
             group: binding.group,
@@ -267,10 +368,28 @@ fn derive_bound_globals(module: &Module, info: &ModuleInfo) -> Vec<BoundGlobal> 
             name: variable.name.clone(),
             members,
             span,
+            element_stride,
         });
     }
     globals.sort_by_key(|global| (global.group, global.binding));
     globals
+}
+
+fn reflection_members(module: &Module, members: &[naga::StructMember]) -> Vec<ReflectionMember> {
+    members
+        .iter()
+        .filter_map(|member| {
+            let name = member.name.as_ref()?;
+            let member_ty = &module.types[member.ty];
+            Some(ReflectionMember {
+                name: name.clone(),
+                ty: reflection_type_name(member_ty),
+                offset: member.offset,
+                size: member_ty.inner.try_size(module.to_ctx()).unwrap_or(0),
+                alignment: reflection_alignment(member_ty),
+            })
+        })
+        .collect()
 }
 
 fn reflection_address_space(space: &AddressSpace) -> &'static str {

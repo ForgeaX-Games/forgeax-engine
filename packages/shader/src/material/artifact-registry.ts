@@ -20,6 +20,7 @@ export interface MaterialArtifactConflictError {
   readonly hint: string;
   readonly detail: {
     readonly key: string;
+    readonly dimension: 'bytes' | 'param-schema' | 'receipt';
     readonly existingDigest?: string;
     readonly incomingDigest?: string;
   };
@@ -27,6 +28,17 @@ export interface MaterialArtifactConflictError {
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function equalParamSchema(left: MaterialRuntimeArtifact, right: MaterialRuntimeArtifact): boolean {
+  return JSON.stringify(left.metadata?.paramSchema) === JSON.stringify(right.metadata?.paramSchema);
+}
+
+function equalReceipt(left: MaterialRuntimeArtifact, right: MaterialRuntimeArtifact): boolean {
+  return (
+    JSON.stringify([left.metadata?.abi, left.metadata?.receipt]) ===
+    JSON.stringify([right.metadata?.abi, right.metadata?.receipt])
+  );
 }
 
 export class MaterialArtifactRegistry {
@@ -37,13 +49,40 @@ export class MaterialArtifactRegistry {
   ): Result<MaterialRuntimeArtifact, MaterialArtifactConflictError> {
     const previous = this.#artifacts.get(artifact.key);
     if (previous !== undefined) {
-      if (equalBytes(previous.bytes, artifact.bytes)) return ok(previous);
+      if (equalBytes(previous.bytes, artifact.bytes)) {
+        if (!equalParamSchema(previous, artifact)) {
+          return err({
+            code: 'material-artifact-conflict',
+            expected: 'one immutable parameter schema per specialization key',
+            hint: 're-cook the conflicting specialization with one canonical parameter schema',
+            detail: {
+              key: artifact.key,
+              dimension: 'param-schema',
+              ...(previous.digest ? { existingDigest: previous.digest } : {}),
+              ...(artifact.digest ? { incomingDigest: artifact.digest } : {}),
+            },
+          });
+        }
+        if (equalReceipt(previous, artifact)) return ok(previous);
+        return err({
+          code: 'material-artifact-conflict',
+          expected: 'one immutable ABI receipt per specialization key',
+          hint: 're-cook the conflicting specialization with one canonical ABI receipt',
+          detail: {
+            key: artifact.key,
+            dimension: 'receipt',
+            ...(previous.digest ? { existingDigest: previous.digest } : {}),
+            ...(artifact.digest ? { incomingDigest: artifact.digest } : {}),
+          },
+        });
+      }
       return err({
         code: 'material-artifact-conflict',
         expected: 'one immutable artifact byte sequence per specialization key',
         hint: 're-cook the conflicting specialization and publish one artifact digest',
         detail: {
           key: artifact.key,
+          dimension: 'bytes',
           ...(previous.digest ? { existingDigest: previous.digest } : {}),
           ...(artifact.digest ? { incomingDigest: artifact.digest } : {}),
         },

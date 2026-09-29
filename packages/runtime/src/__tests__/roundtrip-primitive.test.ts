@@ -75,9 +75,9 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_F32;
@@ -98,9 +98,9 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_F64;
@@ -122,9 +122,9 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_I32;
@@ -145,9 +145,9 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_U32;
@@ -170,16 +170,18 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(2);
 
-    const comps0 = (scene.entities[0]?.components as Record<string, Record<string, unknown>>)
-      .Test_RT_BOOL;
+    const comps0 = (
+      scene.entities['entity-0']?.components as Record<string, Record<string, unknown>>
+    ).Test_RT_BOOL;
     expect(comps0).toBeDefined();
     if (!comps0) throw new Error('Test_RT_BOOL missing on e0');
     expect(comps0.flag).toBe(true);
 
-    const comps1 = (scene.entities[1]?.components as Record<string, Record<string, unknown>>)
-      .Test_RT_BOOL;
+    const comps1 = (
+      scene.entities['entity-1']?.components as Record<string, Record<string, unknown>>
+    ).Test_RT_BOOL;
     expect(comps1).toBeDefined();
     if (!comps1) throw new Error('Test_RT_BOOL missing on e1');
     expect(comps1.flag).toBe(false);
@@ -197,9 +199,9 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_STR;
@@ -270,10 +272,10 @@ describe('m3-t3(b): mixed entity+shared+primitive round-trip', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(2);
 
     // Entity 0 (r0): primitives
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('e0 missing');
     const mp = (ent0.components as Record<string, Record<string, unknown>>).Test_RT_MixedPrim;
     expect(mp).toBeDefined();
@@ -286,14 +288,13 @@ describe('m3-t3(b): mixed entity+shared+primitive round-trip', () => {
     expect(mp.name).toBe('mixed-entity');
 
     // Entity 1 (r1): entity ref + shared ref
-    const ent1 = scene.entities[1];
+    const ent1 = scene.entities['entity-1'];
     if (!ent1) throw new Error('e1 missing');
     const er = (ent1.components as Record<string, Record<string, unknown>>).Test_EntityRef;
     expect(er).toBeDefined();
     if (!er) throw new Error('Test_EntityRef missing');
-    // After localId renumbering, the target should be a valid localId number.
-    expect(typeof er.target).toBe('number');
-    expect(er.target as number).toBeGreaterThanOrEqual(0);
+    // Entity references retain the keyed authoring identity.
+    expect(er.target).toBe('entity-0');
 
     // shared<> field must resolve to GUID string.
     const hs = (ent1.components as Record<string, Record<string, unknown>>).Test_HasShared;
@@ -326,9 +327,9 @@ describe('m3-t3(c): TypedArray->Array round-trip normalization', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
     const scene = collected.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     const cf = comps.Test_RT_ArrF32;

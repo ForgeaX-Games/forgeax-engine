@@ -1,18 +1,65 @@
 # @forgeax/engine-gltf
 
 > [!IMPORTANT]
-> glTF material output is a MaterialAsset payload. The bridge writes `passes`, `values`, and one structured texture value per slot, including `coordinates.set` and `coordinates.transform`; an optional `parent` is preserved, and the package cook then preserves those facts in the runtime-ready record. Consumers load the material by GUID with the scene graph.
+> glTF material output is a MaterialAsset payload. The bridge writes `passes`, `values`, and one structured texture value per slot, including `coordinates.set` and `coordinates.transform`; an optional `parent` is preserved, and the package cook then preserves those facts in the runtime-ready record. Consumers load the material by GUID with the scene graph. For recovery, follow the [MaterialAsset bridge guidance](#materialasset-bridge-recovery).
 
 The importer receives the built-in standard root through the source declaration's
 `importSettings.standardMaterialGuid`. It writes that GUID as `MaterialAsset.parent`
 and adds the same GUID to the material `refs[]` edge; no runtime handle or shader
 identifier is invented by the glTF bridge.
 
+Standalone Standard roots declare Forward, Deferred and ShadowCaster passes.
+Opaque and MASK materials share the Standard G-buffer; BLEND and physical
+extension materials use Forward. Shadow coverage evaluates the same Surface,
+including texture coordinates and alpha cutoff. A configured parent continues
+to own inherited passes. After an importer change, cold-cook the source package
+before checking an existing scene; a retained DDC payload is not new output.
+
 ## MaterialAsset bridge recovery
+
+### Transmission/refraction extensions
+
+`KHR_materials_transmission`, `KHR_materials_ior`, and `KHR_materials_volume` project into the same
+Standard `MaterialAsset.values` contract: `transmission`, `ior`, `thickness`, `attenuationColor`, and
+`attenuationDistance`, with texture slots retaining their coordinates and transforms. A GLTF material
+with effective transmission and `alphaMode: BLEND` is rejected as the structured
+`gltf-material-transmission-invalid` error; repair the source and reimport instead of silently changing
+the render phase. The carrier validates the source, Pack, GUID load, and renderer inspection together.
 
 If a source requests a UV set that the primitive does not provide, handle `gltf-material-uv-set-missing` using its material, primitive, slot, requested set, and available sets. Add the source UV set and re-import; do not substitute a custom mesh or discard the slot transform.
 
-> Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-remote-gltf` (resolved via PATH-prefix scan for `forgeax-engine-remote-`) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
+### KHR physical material extensions
+
+The importer accepts the six second-stage material extensions below in both
+`extensionsUsed` and `extensionsRequired`. A required extension outside the
+supported set fails closed with `gltf-extension-unsupported`; a supported
+extension is projected into the same Standard `MaterialAsset` root rather than
+an extension-specific runtime type.
+
+| Extension | Standard values / slots | Channel and color-space rule | Admission / recovery |
+|:--|:--|:--|:--|
+| `KHR_materials_clearcoat` | `clearcoat`, `clearcoatRoughness`, `clearcoatTexture`, `clearcoatRoughnessTexture`, `clearcoatNormalTexture`, `clearcoatNormalScale` | weight R, roughness G, coat normal RG; data textures are linear | coat normal uses the mesh tangent producer |
+| `KHR_materials_anisotropy` | `anisotropyStrength`, `anisotropyRotation`, `anisotropyTexture` | direction RG, strength B; linear data | scalar and mapped forms both require a tangent frame |
+| `KHR_materials_sheen` | `sheenColor`, `sheenRoughness`, `sheenColorTexture`, `sheenRoughnessTexture` | color RGB is sRGB; roughness A is linear | preserve each slot's UV transform; repair `gltf-material-uv-set-missing` on conflict |
+| `KHR_materials_iridescence` | `iridescence`, `iridescenceIor`, `iridescenceThicknessMinimum/Maximum`, `iridescenceTexture`, `iridescenceThicknessTexture` | strength R and thickness G; both maps are linear | minimum greater than maximum is accepted per glTF semantics |
+| `KHR_materials_specular` | `specular`, `specularTexture`, `specularColor`, `specularColorTexture` | weight A is linear; color RGB is sRGB | texture declarations select the physical Forward contract |
+| `KHR_materials_diffuse_transmission` | `diffuseTransmission`, `diffuseTransmissionColor`, `diffuseTransmissionTexture`, `diffuseTransmissionColorTexture` | factor A is linear; color RGB is sRGB | factor and color outside [0, 1] fail as `gltf-material-physical-invalid`; use a double-sided source for foliage |
+
+All six paths preserve `textureInfo.texCoord` and
+`KHR_texture_transform` into `MaterialTextureValue.coordinates`. A material
+with any of these declarations owns an extended Standard root, so its scalar
+defaults and only its authored physical texture bindings participate in cook,
+reflection, Pack refs, Catalog/load, and runtime sampling.
+
+> [!IMPORTANT]
+> `KHR_materials_anisotropy` always needs a finite tangent frame, even when
+> only `anisotropyStrength` or `anisotropyRotation` is authored. If `TANGENT`
+> is absent, the producer may generate it from `NORMAL + TEXCOORD_n + triangle
+> topology`; if those inputs are missing or degenerate, import returns the
+> structured `material-tangent-required` error. The importer persists generated
+> tangents in `MeshAsset.attributes.tangent` and never writes an identity guess.
+
+> Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` is selected by the unified `forgeax asset import` producer, which writes `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
 
 > [!IMPORTANT]
 > `toAssetPack` and `reimportReuseMeta` return `Result` values. The producer derives semantic `sourceKey` values before GUID reuse; duplicate or ambiguous identities return `duplicate-source-key` / `ambiguous-source-key` and the CLI leaves the previous sidecar untouched. `sourceIndex` is a locator only, never a generated identity.
@@ -30,7 +77,7 @@ This package consumes:
 - `scenes` + `nodes` (TRS or matrix decomposed via `mat4.decompose` wrapper)
 - `meshes` with **multiple primitives** -- each primitive produces an independent `MeshIr` with UUIDv7 GUID; `SceneAsset` nodes reference individual primitive-level mesh sub-assets
 - Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional), and `COLOR_0` (see the support matrix below) -- decoded via the accessor SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
-- `materials` with metallic-roughness PBR mapping to pass-based `MaterialAsset` (see MaterialIr table below)
+- `materials` with metallic-roughness and five KHR physical extensions mapped to pass-based `MaterialAsset` (see MaterialIr table below)
 - `textures` / `images` / `samplers` top-level arrays parsed into `GltfDoc` IR; texture index -> image index -> URI two-hop resolution via `externalLoader`
 - `cameras` of `type: 'perspective'`
 
@@ -93,6 +140,21 @@ The complete closed error/detail union remains owned by
 | `metallicRoughnessTexture` | `number` (texture index) | no | Same two-hop resolution |
 | `normalTexture` | `number` (texture index) | no | Same two-hop resolution; TANGENT optional decode |
 
+The physical extension fields are projected into the same IR object:
+
+| Extension | Scalar fields | Texture fields |
+|:--|:--|:--|
+| `KHR_materials_clearcoat` | `clearcoatFactor`, `clearcoatRoughnessFactor` | `clearcoatTexture`, `clearcoatRoughnessTexture`, `clearcoatNormalTexture` |
+| `KHR_materials_anisotropy` | `anisotropyStrength`, `anisotropyRotation` | `anisotropyTexture` |
+| `KHR_materials_sheen` | `sheenColorFactor`, `sheenRoughnessFactor` | `sheenColorTexture`, `sheenRoughnessTexture` |
+| `KHR_materials_iridescence` | `iridescenceFactor`, `iridescenceIor`, `iridescenceThicknessMinimum/Maximum` | `iridescenceTexture`, `iridescenceThicknessTexture` |
+| `KHR_materials_specular` | `specularFactor`, `specularColorFactor` | `specularTexture`, `specularColorTexture` |
+
+Each texture field is a `GltfTextureInfoIr | number` with an explicit texture
+index and optional UV/transform facts. The bridge creates a complete extended
+root for the declarations it sees; base-only materials may still inherit the
+configured `standardMaterialGuid`.
+
 ### GltfDoc IR (textures / images / samplers)
 
 | Array | Element | Notes |
@@ -110,7 +172,7 @@ only its slot index. Canonical `SceneAsset` nodes carry `MeshFilter` plus an
 empty `MeshRenderer.materials` override vector, so imported defaults remain
 mesh-owned and reimport-safe.
 
-Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md` OOS-1 .. OOS-15): KHR extensions other than the supported `EXT_mesh_gpu_instancing` and `KHR_texture_transform` paths / morph targets other than the explicit `COLOR_0` deferred signal / orthographic camera / sparse accessors / inspector future fields / pixel-parity vs three.js. Dense interleaved `COLOR_0` is supported; other interleaved accessor consumers retain their existing scope. v1.1 OOS additions (locked by feat-20260518-gltf-instancing-and-name-component): multi-primitive instancing / mesh-level + material-level + scene-level Name (only node.name lands as ECS `Name`) / instancing hard cap / SoA TRS direct-to-GPU pipe / IR-to-GPU direct path / ROTATION BYTE/SHORT normalized encoding / Babylon thin-instances style SoA channel / Bevy multi-tier Name propagation.
+Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md` OOS-1 .. OOS-15): KHR material extensions other than the supported transmission/IOR/volume, clearcoat, anisotropy, sheen, iridescence, specular, and diffuse-transmission paths / morph targets other than the explicit `COLOR_0` deferred signal / orthographic camera / sparse accessors / inspector future fields / pixel-parity vs three.js. Dense interleaved `COLOR_0` is supported; other interleaved accessor consumers retain their existing scope. v1.1 OOS additions (locked by feat-20260518-gltf-instancing-and-name-component): multi-primitive instancing / mesh-level + material-level + scene-level Name (only node.name lands as ECS `Name`) / instancing hard cap / SoA TRS direct-to-GPU pipe / IR-to-GPU direct path / ROTATION BYTE/SHORT normalized encoding / Babylon thin-instances style SoA channel / Bevy multi-tier Name propagation.
 
 ## Importer sub-asset PODs (7 kinds)
 
@@ -141,7 +203,7 @@ Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each ru
 | `gltf-malformed-header` | GLB magic / version / length header rejection or missing JSON chunk |
 | `gltf-version-unsupported` | `asset.version` is not `'2.0'` |
 | `gltf-buffer-out-of-bounds` | accessor reads past `bufferView.byteLength` |
-| `gltf-extension-unsupported` | `extensionsRequired[]` lists an extension outside the supported allowlist (`EXT_mesh_gpu_instancing`, `KHR_texture_transform`) |
+| `gltf-extension-unsupported` | `extensionsRequired[]` lists an extension outside the supported allowlist exported as `EXTENSION_ALLOWLIST` (`EXT_mesh_gpu_instancing`, `EXT_meshopt_compression`, `KHR_lights_punctual`, `KHR_texture_transform`, transmission/IOR/volume, clearcoat, anisotropy, sheen, iridescence, specular, diffuse transmission) |
 | `gltf-accessor-type-mismatch` | sparse / morph / interleaved / unknown componentType accessor (4 reasons) |
 | `gltf-texture-load-failed` | `externalLoader` rejected for a texture `uri`; `detail.uri` carries the failing URI; hint: `'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup'` |
 | `gltf-meta-missing` | sidecar `<source>.meta.json` is absent next to the `.gltf` / `.glb` source file |
@@ -153,6 +215,14 @@ Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each ru
 | `gltf-morph-unsupported` | animation channel targets morph weights (`path==='weights'`, OOS-skin-morph-anim) |
 | `gltf-color-accessor-unsupported` | `COLOR_0` type/component/normalized combination, sparse input, or morph-target input is deferred |
 | `gltf-color-accessor-malformed` | `COLOR_0` count, finite/range, buffer bounds, or reference validation failed |
+| `gltf-material-physical-invalid` | a clearcoat/anisotropy/sheen/iridescence/specular scalar or color violates its finite glTF range |
+
+Mesh tangent admission is a material error because the geometry producer owns
+the repairable frame. Branch on `material-tangent-required` and read its
+`detail.material`, `detail.mesh`, `detail.layer`, `detail.uv`,
+`detail.attributes`, and `detail.reason`; fix the source attributes and rerun
+the same importer. Do not parse the human-facing message or silently continue
+with an identity tangent.
 
 Source-key conflicts are producer failures, not automatic renames. A
 `duplicate-source-key` or `ambiguous-source-key` detail includes the semantic
@@ -166,7 +236,8 @@ When `ImporterRegistry` + `runImport` consumes a glTF source, malformed base64 i
 > Two submodules: `parse-skin.ts` (skin index dedupe via UUIDv5 + IBM decoding + jointPath derivation) + `parse-animation.ts` (LINEAR/STEP samplers, CUBICSPLINE/morph fail-fast). Called inside `parseGltfWithBin` -> `toAssetPack` which extends sub-asset output from 3 kinds (mesh/material/scene) to 6 (+ skeleton + skin + animation-clip).
 
 - **Limitations**: CUBICSPLINE interpolation not supported; morph weight animation not supported; jointPath resolution uses leaf-name first-match (same-name sibling is warn-only).
-- **BindPose AABB** derived at importer time (per skinned mesh-primitive, static BindPose) and written to mesh asset metadata for frustum cull; dynamic AABB deferred to OOS-skin-dyn-bounds.
+- **Animated skin bounds** are producer-authored facts. The primary source is `skins[].extras.forgeax.conservativeAnimatedBounds`; `importSettings.conservativeAnimatedBounds[sourceIndex]` is accepted only when source extras do not provide bounds. The importer publishes the six-float bounds on `SkeletonAsset`. When both sources are absent, the import producer derives a conservative enclosure from mesh influences, inverse bind matrices, node TRS, morph deltas, and every imported animation clip. The shared [animation enclosure contract](../animation/README.md#imported-animation-bounds) covers intervals between keys and convex clip blends. Incomplete or singular inputs keep bounds absent and retain the `cpu-deformation` lane. The raw parser remains a source IR; the importer publishes the derived metadata.
+- **Shadow capsules** are always fitted at import: `fitShadowCapsules` (`@forgeax/engine-skinning`) assigns each vertex to its highest-weight joint, fits one capsule along each joint's principal axis sized to stay inside the surface, and publishes `SkeletonAsset.shadowCapsules` for the `CapsuleShadow` directional shadow ([render README](../render/README.md#capsule-character-shadows)). Joints with too few vertices or a sub-centimetre radius get no capsule; a skeleton with none omits the field.
 
 ## 4-step runtime recipe (apps/hello/gltf, M5)
 
@@ -186,19 +257,132 @@ const root = engine.assets.instantiate(sceneResult.value, world);
 // equivalent to world.instantiateScene(handle).
 ```
 
-## CLI plugin — `forgeax-engine-remote-gltf`
+## Unified asset producer
 
-The build-time CLI subcommand `import` ships as a standalone plugin bin `forgeax-engine-remote-gltf` (entry `dist/cli-gltf.mjs`) declared in this package's `package.json#bin`, discovered via PATH-prefix scan for `forgeax-engine-remote-`.
+The glTF producer is selected by the unified `asset import` command. DevKit
+loads this package's producer only when a `.gltf` or `.glb` source is passed;
+the package no longer publishes an independent executable.
 
 | Subcommand | Description | Exit code |
 |:--|:--|:--|
-| `forgeax-engine-remote-gltf import <path>` | Parse `.gltf` / `.glb`; write sidecar `<source>.meta.json` (top-level `importer: 'gltf'`) next to source; UUIDv7 GUIDs assigned per sub-asset in document order | 0 success / 1 `GltfError` |
-| `forgeax-engine-remote-gltf import <path> --check` | Dry-run mode — no sidecar write; surfaces `gltf-meta-missing` route b (cf. importer route a) | 0 if sidecar already present / 1 if missing |
+| `forgeax asset import <path> --root <project>` | Parse `.gltf` / `.glb`; write sidecar `<source>.meta.json` (top-level `importer: 'gltf'`) next to source; UUIDv7 GUIDs assigned per sub-asset in document order | 0 success / 1 `GltfError` |
+| `forgeax asset import <path> --dry-run --root <project>` | Validate the producer path without writing a sidecar | 0 if valid / 1 if missing or invalid |
 
 ```bash
-# Direct invocation (after pnpm -F @forgeax/engine-gltf build)
-forgeax-engine-remote-gltf import apps/hello/gltf/assets/box.glb
-forgeax-engine-remote-gltf import apps/hello/gltf/assets/ --check
+# Unified invocation
+forgeax asset import apps/hello/gltf/assets/box.glb --root ./game --json
+forgeax asset import apps/hello/gltf/assets/ --dry-run --root ./game --json
 ```
 
+### End-to-end source-to-Pack route
+
+The CLI creates the authoring sidecar; the shared import runner is the single
+Pack/DDC publication path. Keep these steps together when adding a glTF LOD:
+
+```mermaid
+flowchart LR
+    source["source .gltf/.glb"] --> cli["forgeax asset import"]
+    cli --> meta["source.meta.json"]
+    meta --> registry["ImporterRegistry + gltfImporter"]
+    registry --> runner["runImport"]
+    runner --> pack["Pack/DDC + Catalog"]
+```
+
+1. Run `forgeax asset import <source> --root <project>` to create or refresh the
+   adjacent `<source>.meta.json` and its stable sub-asset GUIDs.
+2. Register `gltfImporter` with the build-time `ImporterRegistry` and pass the
+   sidecar to `runImport`; this validates the declared LOD GUID closure and
+   writes the Pack/DDC output.
+3. Verify the resulting Catalog/receipt and load the root GUID at runtime. The
+   complete `ImporterRegistry`/`runImport` example, including the filesystem
+   adapter, lives in [`@forgeax/engine-import`](../import/README.md#the-importload-split).
+
 See `.forgeax-harness/forgeax-loop/feat-20260515-gltf-loader-via-asset-system/plan-strategy.md` for the full roadmap.
+
+## LOD extensions
+
+The glTF adapter admits `MSFT_lod` at node level. The extension's `ids` array
+is preserved in producer order; each referenced root or lower node must resolve
+to a non-empty mesh sub-asset. Material, name, and guessed suffix conventions
+do not create LOD relations.
+
+The portable Khronos form stores coverage on the root LOD node:
+
+```json
+{
+  "extensions": { "MSFT_lod": { "ids": [1, 2] } },
+  "extras": { "MSFT_screencoverage": [0.5, 0.2, 0.01] }
+}
+```
+
+The array describes the root and lower ranges and includes a terminal discard
+threshold. The adapter keeps `[0.5, 0.2]` as the two lower-level absolute
+`MeshAsset.lods[].screenCoverage` values and drops only that terminal discard
+entry, which has no `MeshAsset` representation. The historical document-level
+`extensions.MSFT_screencoverage.scales` form remains an internal fixture
+adapter; node `extras` takes precedence when both forms are present.
+
+| Source fact | Projection | Recovery |
+|:--|:--|:--|
+| `MSFT_lod.ids` | root MeshAsset `lods[]` and `refs[]` | repair node references and reimport |
+| root `extras.MSFT_screencoverage` | absolute coverage values (terminal discard omitted) | repair values and reimport |
+| legacy document `MSFT_screencoverage.scales` | explicit fixture coverage values | migrate to node `extras`, then recook |
+| no coverage extension | shared importer defaults | keep existing sidecar values, then recook |
+
+On malformed extension data, a required-but-missing `MSFT_lod` group, an empty
+referenced mesh, or an unresolved mesh sub-asset, the importer returns
+`gltf-lod-invalid` before publication. The old sidecar and Catalog LKG are the
+recovery boundary; no relation is silently dropped by `flatMap` or a partial
+Pack is published.
+
+The material bridge projects glTF `normalTexture.scale` to `values.normalScale: [scale, scale]`
+and `clearcoatNormalTexture.scale` to `values.clearcoatNormalScale`, preserving
+zero and signed scale values. The coat remains scalar; the base normal uses the same two-axis contract as
+authored Standard materials. The emitted texture binding contains no duplicate
+scale. glTF 2.0 has no standard bump slot; height textures are authored on the
+ordinary Standard `bumpTexture` slot instead of inventing a glTF extension.
+
+Imported Standard roots declare texture slots only when authored in the glTF
+material. Omitted slots do not enable unrelated bump/displacement paths or
+require fallback resources. Numeric defaults remain in the shared Standard
+schema, and an explicit imported parent still owns its inherited contract.
+
+### Undefined authored tangent frames
+
+`meshIrToMeshAsset` preserves valid authored tangents. Supplied tangents parallel
+to their vertex normal have no usable normal-map basis: the producer regenerates
+only those vertices using existing geometry/UV tangent generation. If collapsed
+UVs still leave the direction undefined, it supplies a deterministic normal-plane
+basis with finite handedness. This defines missing orientation; it does not
+recover artist intent. Invalid normal bases return `gltf-mesh-bridge-invalid` with
+`reason: tangent-frame`. Raster and ray consumers receive the same repaired mesh.
+
+## Offline mesh cards
+
+Opt in through the source Meta's `importSettings.meshCards`:
+
+```json
+{ "meshCards": { "resolution": 16, "maxCards": 24 } }
+```
+
+Omitted or `false` leaves the representation absent. The ordinary glTF importer
+builds one `MeshAsset.cardLayout` across the static triangle-list sections, preserving
+each triangle's source material `doubleSided` value. Layouts travel in the existing mesh-bin
+body, under the original mesh GUID; each imported LOD mesh owns its own data.
+The material slot table and ordinary texture/material references remain authoritative.
+Skinning, morph targets, translucent sections, invalid settings and non-triangle topology fail the
+opted-in import before publication. Cards describe geometry coverage, not material
+or SDF support; MASK is evaluated later by the shared material capture.
+
+The geometry owner defines resolution/card limits and layout validation.
+`maxCards` applies per mesh, across its six candidate directions; it is not
+an aggregate scene residency budget. The loader preserves and validates the
+layout, while capture checks the geometry digest and sidedness again before
+GPU allocation. A changed material side policy needs a reimport; other material
+or texture changes invalidate capture, not the geometric layout.
+
+`mesh-cards.integration.test.ts` covers multi-material/LOD import, binary and
+JSON decoding, GUID lookup, omission and invalid data. The diagnostic
+`scripts/raytracing/gltf/audit-card-import.mjs <source.gltf> <output>` additionally
+runs the full source import and package finalizer, then loads mesh bodies through
+a real HTTP Catalog and reports construction cost plus the exact card byte increment.

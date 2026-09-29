@@ -37,7 +37,9 @@ import type {
   TextureAsset,
 } from '@forgeax/engine-types';
 import './multi-uv-demo.wgsl';
+import './multi-uv-demo-false.wgsl';
 import inheritancePackUrl from './multi-uv-inheritance.pack.json?url';
+import depthFalsifierShader from './post-depth-falsifier.wgsl';
 import depthOverlayShader from './post-depth-overlay.wgsl';
 import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
 import inversionShader from './post-inversion.wgsl';
@@ -80,6 +82,7 @@ declare global {
 }
 
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
+const DEMO_FALSE_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo-false';
 
 function materialFromCookedRecord(
   record: CookedMaterialRecord,
@@ -128,19 +131,29 @@ const initialPost: PostChoice =
     : params.get('post') === 'inversion'
       ? 'inversion'
       : 'passthrough';
-const fullscreenShader =
-  initialPost === 'depth'
-    ? useMsaa
-      ? depthOverlayMsaaShader.wgsl
-      : depthOverlayShader.wgsl
-    : initialPost === 'inversion'
-      ? inversionShader.wgsl
-      : passthroughShader.wgsl;
-const fullscreenFeature = createFullscreenRenderFeature({
-  identity: `hello-multi-uv::${initialPost}`,
-  source: fullscreenShader,
-  ...(initialPost === 'depth' ? { reads: [{ key: 'depth', sampleType: 'depth' as const }] } : {}),
-});
+function createPostFeature(effect: PostChoice) {
+  const falsifyMsaaResolve = useMsaa && params.has('falsify-msaa-resolve');
+  const source = falsifyMsaaResolve
+    ? effect === 'inversion'
+      ? passthroughShader.wgsl
+      : inversionShader.wgsl
+    : effect === 'depth'
+      ? params.has('falsify-depth')
+        ? depthFalsifierShader.wgsl
+        : useMsaa
+          ? depthOverlayMsaaShader.wgsl
+          : depthOverlayShader.wgsl
+      : effect === 'inversion'
+        ? inversionShader.wgsl
+        : passthroughShader.wgsl;
+  return createFullscreenRenderFeature({
+    identity: `hello-multi-uv::${effect}`,
+    source,
+    ...(effect === 'depth' && !params.has('falsify-depth')
+      ? { reads: [{ key: 'depth', sampleType: 'depth' as const }] }
+      : {}),
+  });
+}
 
 function resizeCanvas(): void {
   targetCanvas.width = window.innerWidth;
@@ -236,10 +249,8 @@ for (let i = 0; i < vertexCount; i++) {
 const app = await createApp(
   canvas,
   {
-    features: [fullscreenFeature],
     standardProfile: {
       ...DEFAULT_STANDARD_PROFILE,
-      antialias: useMsaa ? 'msaa' : 'fxaa',
     },
   },
   forgeaxBundlerAdapter(),
@@ -251,6 +262,10 @@ if (!app.ok) {
   const assets = app.value.assets;
   if (assets === undefined) {
     throw new Error('hello-multi-uv: asset owner unavailable');
+  }
+  const featureHost = app.value.pluginContext.renderFeatureHost;
+  if (featureHost === undefined) {
+    throw new Error('hello-multi-uv: render feature host unavailable');
   }
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
   const switchedVariant: 'true' | 'false' = startupVariant === 'true' ? 'false' : 'true';
@@ -291,10 +306,15 @@ if (!app.ok) {
         return {
           guid,
           record,
-          artifact: {
-            bytes: Uint8Array.from(record.artifact.bytes),
-            digest: record.artifact.digest,
-          },
+          artifacts: Object.fromEntries(
+            record.programs.map(({ artifact }) => [
+              artifact.path,
+              {
+                bytes: Uint8Array.from(artifact.bytes),
+                digest: artifact.digest,
+              },
+            ]),
+          ),
         };
       },
       loadReference: async (guid: string) =>
@@ -314,7 +334,7 @@ if (!app.ok) {
       throw new Error('[hello-multi-uv] inheritance cooked records are not runtime-ready');
     }
     if (
-      root.artifact.digest !== derived.artifact.digest ||
+      root.artifactDigest !== derived.artifactDigest ||
       root.record.receipt.identity.programIdentity !==
         derived.record.receipt.identity.programIdentity ||
       root.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH ||
@@ -344,18 +364,98 @@ if (!app.ok) {
   const postStatus = document.createElement('span');
   postStatus.id = 'post-status';
   postStatus.textContent = `M3_POST_EFFECT=${initialPost}`;
-  variantControl.append(' ', postStatus);
+  const postControl = document.createElement('label');
+  postControl.id = 'post-control';
+  postControl.style.cssText =
+    'position:fixed;z-index:1;top:104px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
+  postControl.append('M3_POST_EFFECT ');
+  const postSelect = document.createElement('select');
+  postSelect.id = 'post-select';
+  postSelect.setAttribute('aria-label', 'M3 post-process effect');
+  postSelect.add(new Option('passthrough', 'passthrough'));
+  postSelect.add(new Option('inversion', 'inversion'));
+  postSelect.add(new Option('depth', 'depth'));
+  postControl.append(postSelect, ' ', postStatus);
+  document.body.append(postControl);
+
+  const pipelineControl = document.createElement('label');
+  pipelineControl.id = 'pipeline-control';
+  pipelineControl.style.cssText =
+    'position:fixed;z-index:1;top:58px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
+  pipelineControl.append('M3_PIPELINE ');
+  const pipelineSelect = document.createElement('select');
+  pipelineSelect.id = 'pipeline-select';
+  pipelineSelect.setAttribute('aria-label', 'M3 render pipeline');
+  pipelineSelect.add(new Option('standard', 'standard'));
+  pipelineSelect.add(new Option('feature-host', 'custom'));
+  pipelineControl.append(pipelineSelect, ' ');
+  const pipelineStatus = document.createElement('span');
+  pipelineStatus.id = 'pipeline-status';
+  const initialPipeline = params.get('pipeline') === 'standard' ? 'standard' : 'custom';
+  let selectedPipeline: 'standard' | 'custom' = initialPipeline;
+  pipelineSelect.value = initialPipeline;
+  pipelineStatus.textContent = `M3_PIPELINE=${initialPipeline}`;
+  pipelineControl.append(pipelineStatus);
+  document.body.append(pipelineControl);
+
+  type PostFeatureLease = Extract<
+    Awaited<ReturnType<typeof featureHost.installFeature>>,
+    { ok: true }
+  >['value'];
+  let postFeatureLease: PostFeatureLease | undefined;
+  let postFeatureOperation = Promise.resolve();
+  const installPostFeature = async (effect: PostChoice): Promise<void> => {
+    const previous = postFeatureLease;
+    postFeatureLease = undefined;
+    if (previous !== undefined) {
+      const released = await previous.release();
+      if (!released.ok) throw released.error;
+    }
+    const suppressFeature =
+      (selectedPipeline === 'custom' && params.has('falsify-pipeline')) ||
+      (selectedPipeline === 'standard' && params.has('falsify-reverse-pipeline'));
+    if (!suppressFeature) {
+      const installed = await featureHost.installFeature(createPostFeature(effect));
+      if (!installed.ok) throw installed.error;
+      postFeatureLease = installed.value;
+    }
+    postSelect.value = effect;
+    postStatus.textContent = `M3_POST_EFFECT=${effect}`;
+  };
+  const queuePostFeature = (): Promise<void> => {
+    const operation = postFeatureOperation.then(() => installPostFeature(selectedPost));
+    postFeatureOperation = operation.catch(() => undefined);
+    return operation;
+  };
+  let selectedPost: PostChoice = initialPost;
+  await installPostFeature(initialPost);
+  postSelect.addEventListener('change', () => {
+    selectedPost =
+      postSelect.value === 'inversion'
+        ? 'inversion'
+        : postSelect.value === 'depth'
+          ? 'depth'
+          : 'passthrough';
+    void queuePostFeature();
+  });
+  pipelineSelect.addEventListener('change', () => {
+    selectedPipeline = pipelineSelect.value === 'custom' ? 'custom' : 'standard';
+    pipelineStatus.textContent = `M3_PIPELINE=${selectedPipeline}`;
+    void queuePostFeature();
+  });
 
   const baseColorTexture: TextureAsset = {
     kind: 'texture',
-    width: 2,
-    height: 2,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: 2, height: 2 },
+    },
     format: 'rgba8unorm',
     data: new Uint8Array([
       255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255,
     ]),
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
   const baseColorTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
     'TextureAsset',
@@ -363,14 +463,16 @@ if (!app.ok) {
   );
   const detailTexture: TextureAsset = {
     kind: 'texture',
-    width: 2,
-    height: 2,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: 2, height: 2 },
+    },
     format: 'rgba8unorm',
     data: new Uint8Array([
       64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255, 255,
     ]),
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
   const detailTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
     'TextureAsset',
@@ -442,8 +544,27 @@ if (!app.ok) {
   // built-in PBR is deliberately NOT used here so the engine core stays
   // single-UV-zero-regression clean.
   const falsifyDetailTexture = new URLSearchParams(location.search).has('falsify-texture');
-  const beforeBaseColor = [0.7, 0.7, 0.7, 1] as const;
-  const beforeBaseColorUvTransform = [0, 0, 1, 1] as const;
+  const asMaterialVec4 = (
+    value: MaterialValue | null | undefined,
+    fallback: readonly [number, number, number, number],
+  ): readonly [number, number, number, number] => {
+    if (
+      Array.isArray(value) &&
+      value.length === 4 &&
+      value.every((component) => typeof component === 'number')
+    ) {
+      return [value[0] as number, value[1] as number, value[2] as number, value[3] as number];
+    }
+    return fallback;
+  };
+  const beforeBaseColor = asMaterialVec4(
+    inheritedMaterialPair?.derived.record.resolved.values.baseColor,
+    [0.7, 0.7, 0.7, 1],
+  );
+  const beforeBaseColorUvTransform = asMaterialVec4(
+    inheritedMaterialPair?.derived.record.resolved.values.baseColorUvTransform,
+    [0, 0, 1, 1],
+  );
   const liveBaseColor = [0.12, 0.86, 0.34, 1] as const;
   const liveBaseColorUvTransform = [0.35, 0.05, 0.65, 0.9] as const;
   const afterBaseColor =
@@ -470,10 +591,13 @@ if (!app.ok) {
       {
         name: 'Forward',
         program: {
-          module: DEMO_MATERIAL_SHADER_PATH,
-          moduleSlots: {
-            M3_MULTI_UV_VARIANT: falsifyVariantSelection ? 'true' : variant,
-          },
+          // Material module identity is closed before render extraction. Keep
+          // the falsifier on the same module as the positive path so a
+          // constant-selection run proves the visual delta is causal.
+          module:
+            falsifyVariantSelection || variant === 'true'
+              ? DEMO_MATERIAL_SHADER_PATH
+              : DEMO_FALSE_MATERIAL_SHADER_PATH,
         },
         renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
@@ -650,8 +774,8 @@ if (!app.ok) {
       afterComponentMaterialHandle: null,
       sourceRootGuid: inheritedMaterialPair?.root.record.guid ?? null,
       sourceDerivedGuid: inheritedMaterialPair?.derived.record.guid ?? null,
-      sourceRootArtifactDigest: inheritedMaterialPair?.root.artifact.digest ?? null,
-      sourceArtifactDigest: inheritedMaterialPair?.derived.artifact.digest ?? null,
+      sourceRootArtifactDigest: inheritedMaterialPair?.root.artifactDigest ?? null,
+      sourceArtifactDigest: inheritedMaterialPair?.derived.artifactDigest ?? null,
       sourceRootCookInputDigest:
         inheritedMaterialPair?.root.record.receipt.identity.cookIdentity ?? null,
       sourceCookInputDigest:

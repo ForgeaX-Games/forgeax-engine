@@ -15,28 +15,38 @@ import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../../shared/png-codec.mjs';
 import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
 import { bootstrapDawn } from '../../../../shared/scripts/rhi-debug-verify.mjs';
+import { createOwnedProcessGroupStopper } from '../../../../shared/scripts/rhi-debug-process.mjs';
+import { extractViteLocalUrl } from './vite-local-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..', '..');
-const { PNG } = createRequire(resolve(REPO_ROOT, 'packages/rhi-debug/package.json'))('pngjs');
+const { PNG } = createRequire(resolve(APP_ROOT, 'package.json'))('pngjs');
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-browser-live'),
 );
 const RAW_TAPE_ROUTE = '/__forgeax-debug/tape';
 const RHITAPE_MIME = 'application/x-forgeax-rhitape';
+const VITE_READY_TIMEOUT_MS = Math.min(
+  Math.max(Number.parseInt(process.env.FORGEAX_RHI_DEBUG_VITE_READINESS_TIMEOUT_MS ?? '120000', 10) || 120_000, 1),
+  180_000,
+);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers', 'dev'], {
   cwd: REPO_ROOT,
   env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },
+  detached: process.platform !== 'win32',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
+const stopVite = createOwnedProcessGroupStopper(viteProc);
 let portUrl;
+let viteOutput = '';
 viteProc.stdout.on('data', (chunk) => {
   const text = chunk.toString();
+  viteOutput = `${viteOutput}${text}`.slice(-8192);
   process.stdout.write(`[vite] ${text}`);
-  portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
+  portUrl ??= extractViteLocalUrl(viteOutput)?.replace(/\/$/, '');
 });
 viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
@@ -197,18 +207,26 @@ async function publicSwitchCapture(page, method, label, { driveFrame = false } =
 }
 
 try {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + VITE_READY_TIMEOUT_MS;
   while (!portUrl && Date.now() < deadline) await sleep(200);
-  if (!portUrl) throw new Error('vite did not become ready in 30s');
+  if (!portUrl) throw new Error(`vite did not become ready in ${VITE_READY_TIMEOUT_MS}ms`);
 
+  const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL;
+  const browserHeadless = !['0', 'false'].includes(
+    (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+  );
   const browser = await chromium.launch({
-    headless: true,
-    channel: 'chrome',
+    headless: browserHeadless,
+    ...(chromeChannel === undefined ? {} : { channel: chromeChannel }),
     args: [
       '--disable-features=MacAppCodeSignClone',
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+      '--use-vulkan=swiftshader',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
+      '--disable-gpu-driver-bug-workarounds',
+      '--disable-dawn-features=disallow_unsafe_apis',
     ],
   });
   try {
@@ -220,12 +238,12 @@ try {
       if (message.type() === 'error' && !message.text().includes('404')) consoleErrors.push(message.text());
     });
 
-    await page.goto(`${portUrl}/`, { waitUntil: 'networkidle', timeout: 30_000 });
+    await page.goto(`${portUrl}/`, { waitUntil: 'networkidle', timeout: 60_000 });
     await page.waitForFunction(
       () => document.querySelector('#hud')?.textContent === 'passthrough'
         && (document.querySelector('#app')?.getAttribute('width') ?? '') !== '0',
       undefined,
-      { timeout: 15_000 },
+      { timeout: 60_000 },
     );
     // The HUD and canvas dimensions come from index.html before the async
     // createApp/bootstrap path finishes. Wait for the demo's public capture
@@ -233,7 +251,7 @@ try {
     await page.waitForFunction(
       () => typeof globalThis.__captureFramebuffers === 'function',
       undefined,
-      { timeout: 30_000 },
+      { timeout: 90_000 },
     );
     await page.waitForTimeout(500);
 
@@ -302,7 +320,7 @@ try {
     const model = buildFrameModel(tape);
     if (model.works.length === 0) throw new Error('decoded tape has no work entries');
     const inspectedWork = model.works.length - 1;
-    const { freshDevice, rhiWebgpu } = await bootstrapDawn('m3-programmable');
+    const { freshDevice, rhiWebgpu } = await bootstrapDawn('m3-programmable', tape);
     const replayResult = await openReplay(tape, {
       device: freshDevice,
       createShaderModule: rhiWebgpu.createShaderModule,
@@ -349,8 +367,8 @@ try {
       cycle: {
         install: cycle.install,
         code: cycle.state.cycleDiagnostic?.code,
-        futureRead: cycle.state.cycleDiagnostic?.detail,
-        drawSubmitted: cycle.state.cycleDrawSubmitted,
+        detail: cycle.state.cycleDiagnostic?.detail,
+        frameStatus: cycle.state.lastFrameStatus,
         activePipelineId: cycle.state.activePipelineId,
         healthyCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, cycleCanvas.png),
       },
@@ -363,9 +381,7 @@ try {
       repaired: {
         install: repaired.install,
         activePipelineId: repaired.state.activePipelineId,
-        drawSubmitted: repaired.state.repairedDrawSubmitted,
-        passNames: repaired.state.lastPassNames,
-        executeOrder: repaired.state.repairedPassOrder,
+        frameStatus: repaired.state.lastFrameStatus,
         recoveredBytes: changedPixels(baseline, repaired),
         recoveredCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, repairedCanvas.png),
       },
@@ -387,29 +403,28 @@ try {
     if (baseline.hud !== 'passthrough' || inversion.hud !== 'inversion' || edge.hud !== 'edge-detection') {
       throw new Error(`HUD did not track public pipeline switches: ${baseline.hud}, ${inversion.hud}, ${edge.hud}`);
     }
-    const futureRead = cycle.state.cycleDiagnostic?.detail;
-    if (cycle.state.cycleDiagnostic?.code !== 'uninitialized-read' || futureRead?.passName !== 'cycle-pass-a' || futureRead?.resourceLabel !== 'cycle-resource-b') {
-      throw new Error(`temporal diagnostic incomplete: ${JSON.stringify(cycle.state.cycleDiagnostic)}`);
+    const cycleDetail = cycle.state.cycleDiagnostic?.detail;
+    const expectedFeatureFailure = (diagnostic, mode) =>
+      diagnostic?.code === 'render-feature-stage-failed'
+      && diagnostic.mode === mode
+      && diagnostic.detail?.featureIdentity === 'learn-render-4-5::feature-recovery'
+      && diagnostic.detail?.stage === 'plan'
+      && diagnostic.detail?.recovery === 'next-frame';
+    if (!expectedFeatureFailure(cycle.state.cycleDiagnostic, 'cycle')) {
+      throw new Error(`feature-plan diagnostic incomplete: ${JSON.stringify(cycle.state.cycleDiagnostic)}`);
     }
-    const invalidDetail = invalidFormat.state.invalidFormatDiagnostic?.detail;
-    const hasSupportedSurfaceFormat = invalidDetail?.expected.some(
-      (format) => format === 'rgba8unorm' || format === 'rgba8unorm-srgb' || format === 'bgra8unorm' || format === 'bgra8unorm-srgb',
-    ) === true;
     if (
       invalidFormat.install.ok !== true ||
-      invalidFormat.state.invalidFormatDiagnostic?.code !== 'invalid-format' ||
-      invalidDetail?.resourceKey !== 'offscreenColor' ||
-      invalidDetail.format !== 'not-a-gpu-texture-format' ||
-      !invalidDetail.expected.includes('bgra8unorm') ||
-      invalidFormat.state.activePipelineId !== 'learn-render-5-pipeline::passthrough' ||
+      !expectedFeatureFailure(invalidFormat.state.invalidFormatDiagnostic, 'invalid-format') ||
+      invalidFormat.state.activePipelineId !== 'learn-render-5::passthrough' ||
       changedPngPixels(healthyCanvas.png, invalidFormatCanvas.png) !== 0
     ) {
       throw new Error(`invalid-format recovery evidence incomplete: ${JSON.stringify(invalidFormat)}`);
     }
-    if (cycle.state.cycleDrawSubmitted !== false || changedPngPixels(healthyCanvas.png, cycleCanvas.png) !== 0) {
-      throw new Error(`cycle contaminated/submitted: submitted=${cycle.state.cycleDrawSubmitted} canvasChanged=${changedPngPixels(healthyCanvas.png, cycleCanvas.png)}`);
+    if (cycle.state.lastFrameStatus !== 'feature-failed' || changedPngPixels(healthyCanvas.png, cycleCanvas.png) !== 0) {
+      throw new Error(`cycle contaminated/submitted: frameStatus=${cycle.state.lastFrameStatus} canvasChanged=${changedPngPixels(healthyCanvas.png, cycleCanvas.png)}`);
     }
-    if (repaired.state.repairedDrawSubmitted !== true || repaired.state.repairedPassOrder.join('>') !== 'repaired-stage-a>repaired-stage-b' || repaired.state.lastPassNames.join('>') !== 'repaired-stage-a>repaired-stage-b>main>post') {
+    if (repaired.state.lastFrameStatus !== 'healthy') {
       throw new Error(`repaired pipeline evidence incomplete: ${JSON.stringify(repaired.state)}`);
     }
     if (changedPixels(baseline, repaired) !== 0) throw new Error(`repaired pixels did not recover: ${changedPixels(baseline, repaired)}`);
@@ -425,7 +440,7 @@ try {
     }
     console.log(`[m3-programmable] browser live artifacts: baseline=${baseline.pngPath} inversion=${inversion.pngPath} resized=${resized.pngPath} edge=${edge.pngPath}`);
     console.log(`[m3-programmable] browser live RHI: tape=${retainedTape} draws=${drawCount} inspectedWork=${inspectedWork} bindings=${summary.bindingCount}`);
-    console.log(`[m24] browser live temporal/recovery: PASS temporal=uninitialized-read futureRead=${futureRead.passName}:${futureRead.resourceLabel} submitted=false repairedPasses=${repaired.state.lastPassNames.join('>')} recoveredBytes=0 healthyChangedPixels=${changedPixels(repaired, inversion)} cleanup=idempotent`);
+    console.log(`[m24] browser live feature-plan/recovery: PASS feature=render-feature-stage-failed detail=${cycleDetail.featureIdentity}:${cycleDetail.stage} frameStatus=${cycle.state.lastFrameStatus}->${repaired.state.lastFrameStatus} recoveredBytes=0 healthyChangedPixels=${changedPixels(repaired, inversion)} cleanup=idempotent`);
     console.log(`[m3-programmable] browser live pipeline: PASS switchChangedPixels=${switchDelta} edgeChangedPixels=${edgeDelta} resized=${resized.width}x${resized.height}`);
   } finally {
     await browser.close();
@@ -434,6 +449,6 @@ try {
   console.error(`[m3-programmable] browser live pipeline: FAIL - ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  viteProc.kill('SIGTERM');
+  await stopVite();
   await sleep(300);
 }

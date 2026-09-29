@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 // shadertoy/happy-blob headless smoke.
 //
 // Acceptance gate: the ported raymarcher must (a) run on the WebGPU backend,
@@ -12,7 +13,7 @@
 //   3. createRenderer with the built shader manifest; read the composed wgsl
 //      for shadertoy::happy_blob out of the manifest.
 //   4. installMaterialArtifact + spawn fullscreen quad + camera.
-//   5. For t in {0.0, 0.6, 1.3} seconds: mutate values.iTime, draw N
+//   5. For t in {0.0, 0.6, 1.3} seconds: update RuntimeMaterialValue for iTime, draw N
 //      frames, copyTextureToBuffer + map, average the whole frame. Assert the
 //      mean brightness is non-trivial and that frames differ across t.
 //
@@ -26,8 +27,20 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
 
-const SMOKE_FRAMES_PER_T = Number.parseInt(process.env.SMOKE_FRAMES_PER_T ?? '8', 10);
+const requestedSmokeFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
+const SMOKE_MIN_FRAMES =
+  Number.isInteger(requestedSmokeFrames) && requestedSmokeFrames > 0 ? requestedSmokeFrames : 60;
+const defaultFramesPerT = Math.ceil(SMOKE_MIN_FRAMES / 3);
+const requestedFramesPerT = Number.parseInt(
+  process.env.SMOKE_FRAMES_PER_T ?? `${defaultFramesPerT}`,
+  10,
+);
+const SMOKE_FRAMES_PER_T =
+  Number.isInteger(requestedFramesPerT) && requestedFramesPerT > 0
+    ? requestedFramesPerT
+    : defaultFramesPerT;
 const MEAN_BRIGHTNESS_MIN = Number.parseFloat(process.env.MEAN_BRIGHTNESS_MIN ?? '0.002');
 const FRAME_DELTA_MIN = Number.parseFloat(process.env.FRAME_DELTA_MIN ?? '0.002');
 const captureEvidence = { mode: 'pixel' };
@@ -144,7 +157,7 @@ if (!existsSync(MANIFEST_PATH)) {
   process.exit(1);
 }
 const manifestRaw = readFileSync(MANIFEST_PATH, 'utf8');
-const manifestParsed = JSON.parse(manifestRaw);
+const manifestParsed = await readShaderManifestPublication(JSON.parse(manifestRaw));
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
@@ -223,11 +236,19 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     {
       name: 'Forward',
       program: { module: 'shadertoy::happy_blob' },
-      renderState: { cullMode: 'none', tags: { LightMode: 'Forward' }, queue: 2000 },
+      renderState: {
+        cullMode: 'none',
+        depthCompare: 'always',
+        depthWriteEnabled: false,
+        tags: { LightMode: 'Forward' },
+        queue: 2000,
+      },
     },
   ],
   values,
 });
+
+const timeValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iTime', value: [0] } }).unwrap();
 
 const planeRes = createPlaneGeometry(1, 1);
 if (!planeRes.ok) {
@@ -274,14 +295,30 @@ if (FALSIFY_NO_DRAW) {
 const bytesPerPixel = 4;
 const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+let framesObserved = 0;
 
 async function captureFrameAtT(t) {
-  values.iTime = t;
+  world.set(timeValue, RuntimeMaterialValue, { value: [t] }).unwrap();
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
     if (!FALSIFY_NO_DRAW) {
       world.update().unwrap();
       const r = renderer.draw(frameRequest);
-      if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
+      if (!r.ok) {
+        console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
+        continue;
+      }
+      const completed = await r.value.completed;
+      if (!completed.ok) {
+        console.error(
+          `[smoke] draw t=${t} frame ${i} completion error: ${completed.error.code}`,
+        );
+        continue;
+      }
+      // Count only completed FrameReceipts, so this is an observed draw count.
+      framesObserved += 1;
+      if (framesObserved === 1 || framesObserved % 25 === 0) {
+        console.log(`[happy-blob] completedFrames=${framesObserved} time=${t}`);
+      }
     }
   }
   await device.queue.onSubmittedWorkDone();
@@ -330,13 +367,9 @@ function frameDelta(a, b) {
   return sum / (WIDTH * HEIGHT * 3 * 255);
 }
 
-let framesObserved = 0;
 const frame0 = await captureFrameAtT(0.0);
-framesObserved += SMOKE_FRAMES_PER_T;
 const frame1 = await captureFrameAtT(0.6);
-framesObserved += SMOKE_FRAMES_PER_T;
 const frame2 = await captureFrameAtT(1.3);
-framesObserved += SMOKE_FRAMES_PER_T;
 
 console.log(`[smoke] frames observed=${framesObserved}`);
 
@@ -356,6 +389,11 @@ console.log(
 // --- 5. Verdict -------------------------------------------------------------
 
 const failures = [];
+if (framesObserved < SMOKE_MIN_FRAMES) {
+  failures.push(
+    `(a) successful FrameReceipt completions=${framesObserved} < required ${SMOKE_MIN_FRAMES}`,
+  );
+}
 const maxBrightness = Math.max(b0, b1, b2);
 if (maxBrightness < MEAN_BRIGHTNESS_MIN) {
   failures.push(

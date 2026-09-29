@@ -2,6 +2,7 @@
 
 /// <reference types="@webgpu/types" />
 
+import { type UnseededResource, unseededResources } from './initial-contents';
 import {
   EVENT_SEMANTICS,
   type EventCategory,
@@ -39,6 +40,11 @@ export interface FramePass {
   readonly workIndices: readonly number[];
   readonly commandIndices: readonly number[];
   colorAttachmentViewHandleIds: readonly string[];
+  /**
+   * MSAA resolve target per color attachment, index-aligned with
+   * `colorAttachmentViewHandleIds`; `null` for a single-sample attachment.
+   */
+  colorAttachmentResolveViewHandleIds: readonly (string | null)[];
   depthStencilViewHandleId: string | null;
 }
 
@@ -70,6 +76,8 @@ export interface WorkBinding {
   readonly resourceKind: string | null;
   readonly bufferOffset: number | null;
   readonly bufferSize: number | null;
+  /** Offset applied by `setBindGroup` dynamic offsets; null for a static binding. */
+  readonly dynamicOffset: number | null;
 }
 
 export interface WorkPipeline {
@@ -105,11 +113,14 @@ export interface WorkEntry extends TapeWorkEntry {
   } | null;
   readonly attachments: {
     readonly colorViewHandleIds: readonly string[];
+    /** Index-aligned with `colorViewHandleIds`; `null` without a resolve target. */
+    readonly colorResolveViewHandleIds: readonly (string | null)[];
     readonly depthStencilViewHandleId: string | null;
   } | null;
 }
 
 export interface FrameModel {
+  readonly unseededResources: readonly UnseededResource[];
   readonly commands: readonly CommandEntry[];
   readonly passes: readonly FramePass[];
   readonly resources: readonly ResourceEntry[];
@@ -141,6 +152,25 @@ function jsonValue(value: unknown): JsonValue {
 
 function eventDescriptor(event: RhiCallEvent): JsonValue {
   return jsonValue(event);
+}
+
+// WebGPU consumes dynamic offsets in ascending binding order across the layout
+// entries that declare `hasDynamicOffset`.
+function dynamicOffsetsByBinding(
+  layout: Extract<RhiCallEvent, { kind: 'createBindGroupLayout' }> | undefined,
+  dynamicOffsets: readonly number[],
+): ReadonlyMap<number, number> {
+  const result = new Map<number, number>();
+  if (layout === undefined || dynamicOffsets.length === 0) return result;
+  const dynamicBindings = [...layout.desc.entries]
+    .filter((entry) => entry.buffer?.hasDynamicOffset === true)
+    .map((entry) => entry.binding)
+    .sort((a, b) => a - b);
+  for (const [index, binding] of dynamicBindings.entries()) {
+    const offset = dynamicOffsets[index];
+    if (offset !== undefined) result.set(binding, offset);
+  }
+  return result;
 }
 
 function workPipeline(
@@ -200,15 +230,22 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       workIndices: pass.workIndices,
       commandIndices: [],
       colorAttachmentViewHandleIds: [],
+      colorAttachmentResolveViewHandleIds: [],
       depthStencilViewHandleId: null,
     });
     const begin = events[pass.beginEventIndex];
     if (begin?.kind === 'beginRenderPass') {
       const attachment = passAttachmentByIndex.get(pass.passIndex);
       if (attachment !== undefined) {
-        attachment.colorAttachmentViewHandleIds = begin.colorAttachmentViewHandleIds.filter(
-          (id): id is string => typeof id === 'string',
-        );
+        const color: string[] = [];
+        const resolve: (string | null)[] = [];
+        for (const [slot, id] of begin.colorAttachmentViewHandleIds.entries()) {
+          if (typeof id !== 'string') continue;
+          color.push(id);
+          resolve.push(begin.colorAttachmentResolveTargetHandleIds?.[slot] ?? null);
+        }
+        attachment.colorAttachmentViewHandleIds = color;
+        attachment.colorAttachmentResolveViewHandleIds = resolve;
         attachment.depthStencilViewHandleId = begin.depthStencilViewHandleId ?? null;
       }
     }
@@ -242,6 +279,10 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
   const pipelineEvents = new Map<string, RhiCallEvent>();
   const shaderEvents = new Map<string, RhiCallEvent>();
   const bindGroups = new Map<string, Extract<RhiCallEvent, { kind: 'createBindGroup' }>>();
+  const bindGroupLayouts = new Map<
+    string,
+    Extract<RhiCallEvent, { kind: 'createBindGroupLayout' }>
+  >();
   const resourceRecords = new Map<string, ResourceEntry>();
   const workByEvent = new Map<number, number>();
   for (const work of index.works) workByEvent.set(work.eventIndex, work.workIndex);
@@ -254,6 +295,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       pipelineEvents.set(create.handleId, create);
     if (create.kind === 'createShaderModule') shaderEvents.set(create.handleId, create);
     if (create.kind === 'createBindGroup') bindGroups.set(create.handleId, create);
+    if (create.kind === 'createBindGroupLayout') bindGroupLayouts.set(create.handleId, create);
     resourceRecords.set(bootstrap.handleId, {
       resourceId: bootstrap.handleId,
       kind: bootstrap.kind,
@@ -270,6 +312,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       pipelineEvents.set(event.handleId, event);
     if (event.kind === 'createShaderModule') shaderEvents.set(event.handleId, event);
     if (event.kind === 'createBindGroup') bindGroups.set(event.handleId, event);
+    if (event.kind === 'createBindGroupLayout') bindGroupLayouts.set(event.handleId, event);
     const kind = resourceKindForEvent(event.kind);
     const handleId =
       kind === undefined
@@ -295,7 +338,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     }
   }
 
-  const lifecycle = buildResourceLifecycle(events);
+  const lifecycle = buildResourceLifecycle(tape);
   for (const record of lifecycle.resources) {
     const resource = resourceRecords.get(record.handleId);
     if (resource === undefined) continue;
@@ -326,11 +369,20 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     Map<number, { bufferHandleId: string; offset: number; size: number | null }>
   >();
   const currentIndexBuffers = new Map<string, WorkEntry['indexBuffer']>();
-  const currentBindGroups = new Map<string, Map<number, string>>();
+  const currentBindGroups = new Map<
+    string,
+    Map<number, { bindGroupId: string; dynamicOffsets: readonly number[] }>
+  >();
   const workByEventEntry = new Map(index.works.map((work) => [work.eventIndex, work]));
   for (const [eventIndex, event] of events.entries()) {
     if (event === undefined) continue;
     const passHandleId = 'passHandleId' in event ? event.passHandleId : '';
+    if (event.kind === 'resetRenderState') {
+      currentPipeline.delete(passHandleId);
+      currentVertexBuffers.delete(passHandleId);
+      currentIndexBuffers.delete(passHandleId);
+      currentBindGroups.delete(passHandleId);
+    }
     if (event.kind === 'setPipeline' || event.kind === 'setComputePipeline')
       currentPipeline.set(passHandleId, event.pipelineHandleId);
     if (event.kind === 'setVertexBuffer') {
@@ -351,7 +403,10 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       });
     if (event.kind === 'setBindGroup') {
       const groups = currentBindGroups.get(passHandleId) ?? new Map();
-      groups.set(event.index, event.bindGroupHandleId);
+      groups.set(event.index, {
+        bindGroupId: event.bindGroupHandleId,
+        dynamicOffsets: event.dynamicOffsets ?? [],
+      });
       currentBindGroups.set(passHandleId, groups);
     }
     if (!isWorkEvent(event.kind)) continue;
@@ -360,8 +415,11 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     const pipelineId = currentPipeline.get(passHandleId);
     const groups = currentBindGroups.get(passHandleId) ?? new Map();
     const bindings: WorkBinding[] = [];
-    for (const [groupIndex, bindGroupId] of groups) {
+    for (const [groupIndex, { bindGroupId, dynamicOffsets }] of groups) {
       const bindGroup = bindGroups.get(bindGroupId);
+      const layout =
+        bindGroup === undefined ? undefined : bindGroupLayouts.get(bindGroup.layoutHandleId);
+      const dynamicOffsetByBinding = dynamicOffsetsByBinding(layout, dynamicOffsets);
       for (const [entryIndex, resourceId] of bindGroup?.resourceHandleIds.entries() ?? []) {
         const entry = bindGroup?.entries[entryIndex];
         bindings.push({
@@ -372,6 +430,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
           resourceKind: entry?.resourceKind ?? null,
           bufferOffset: entry?.bufferOffset ?? null,
           bufferSize: entry?.bufferSize ?? null,
+          dynamicOffset: dynamicOffsetByBinding.get(entry?.binding ?? entryIndex) ?? null,
         });
       }
     }
@@ -391,6 +450,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
           ? null
           : {
               colorViewHandleIds: attachment.colorAttachmentViewHandleIds,
+              colorResolveViewHandleIds: attachment.colorAttachmentResolveViewHandleIds,
               depthStencilViewHandleId: attachment.depthStencilViewHandleId,
             },
     });
@@ -402,10 +462,13 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     commandIndices: passCommandIndices[pass.passIndex] ?? [],
     colorAttachmentViewHandleIds:
       passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentViewHandleIds ?? [],
+    colorAttachmentResolveViewHandleIds:
+      passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentResolveViewHandleIds ?? [],
     depthStencilViewHandleId:
       passAttachmentByIndex.get(pass.passIndex)?.depthStencilViewHandleId ?? null,
   }));
   return {
+    unseededResources: unseededResources(tape),
     commands,
     passes,
     resources: [...resourceRecords.values()],
@@ -449,7 +512,7 @@ export interface ResourceLifecycleEntry {
   readonly kind: ResourceKind;
   readonly origin: ResourceOrigin;
   readonly state: 'live' | 'destroyed';
-  readonly createdEventIndex: number;
+  readonly createdEventIndex: number | null;
   readonly destroyedEventIndex?: number;
   readonly byteEstimate: ResourceByteEstimate;
 }
@@ -600,14 +663,17 @@ function addBytes(
   else bytes.unavailable++;
 }
 
-/** Build a pure lifecycle ledger from the ordered tape events. */
-export function buildResourceLifecycle(events: readonly RhiCallEvent[]): ResourceLifecycleSummary {
+/** Join initial v7 ownership to frame events; bootstrap creation has no frame event index. */
+export function buildResourceLifecycle(
+  tape: Pick<V7Tape, 'bootstrap' | 'events'>,
+): ResourceLifecycleSummary {
+  const { events } = tape;
   const records = new Map<
     HandleId,
     {
       readonly kind: ResourceKind;
       readonly origin: ResourceOrigin;
-      readonly createdEventIndex: number;
+      readonly createdEventIndex: number | null;
       readonly byteEstimate: ResourceByteEstimate;
       destroyedEventIndex?: number;
     }
@@ -616,26 +682,31 @@ export function buildResourceLifecycle(events: readonly RhiCallEvent[]): Resourc
   let destroyEvents = 0;
   let unknownDestroyEvents = 0;
 
+  const recordCreate = (event: RhiCallEvent, eventIndex: number | null): boolean => {
+    const identity = resourceIdentity(event);
+    if (identity === undefined) return false;
+    const origin: ResourceOrigin =
+      event.kind === 'createTexture' && event.origin === 'swapchain'
+        ? 'swapchain'
+        : event.kind === 'createTextureView'
+          ? (origins.get(event.sourceHandleId) ?? 'engine')
+          : 'engine';
+    origins.set(identity.handleId, origin);
+    records.set(identity.handleId, {
+      kind: identity.kind,
+      origin,
+      createdEventIndex: eventIndex,
+      byteEstimate: estimateBytes(event),
+    });
+    return true;
+  };
+  for (const resource of tape.bootstrap) {
+    // The strict v7 decoder validates bootstrap creates against the RHI event union.
+    recordCreate(resource.create as unknown as RhiCallEvent, null);
+  }
   for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
     const event = events[eventIndex];
-    if (event === undefined) continue;
-    const identity = resourceIdentity(event);
-    if (identity !== undefined) {
-      const origin: ResourceOrigin =
-        event.kind === 'createTexture' && event.origin === 'swapchain'
-          ? 'swapchain'
-          : event.kind === 'createTextureView'
-            ? (origins.get(event.sourceHandleId) ?? 'engine')
-            : 'engine';
-      origins.set(identity.handleId, origin);
-      records.set(identity.handleId, {
-        kind: identity.kind,
-        origin,
-        createdEventIndex: eventIndex,
-        byteEstimate: estimateBytes(event),
-      });
-      continue;
-    }
+    if (event === undefined || recordCreate(event, eventIndex)) continue;
     if (event.kind !== 'destroyBuffer' && event.kind !== 'destroyTexture') continue;
     destroyEvents++;
     const record = records.get(event.handleId);

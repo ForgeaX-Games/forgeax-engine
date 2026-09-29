@@ -19,7 +19,7 @@ describe('runtime profiler assembly', () => {
       'utf8',
     );
 
-    expect(source).toContain('profiler');
+    expect(source).toContain('constructRuntimeRendererHost(canvas, options, bundler)');
     expect(source).not.toContain('@forgeax/engine-remote');
     expect(source).not.toContain('phaseCatalog');
     expect(source).not.toContain('createProfiler');

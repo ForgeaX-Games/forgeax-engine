@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DdcEntryStore, ddcOutputDigest } from '../entry-store.js';
 import { DdcStoreError } from '../errors.js';
 import { DdcLifecycle } from '../lifecycle.js';
@@ -104,6 +104,20 @@ describe('DDC lifecycle head', () => {
     });
   });
 
+  it('reads the accepted entry together with its projected current head', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    const lifecycle = new DdcLifecycle(root);
+    const lease = await lifecycle.begin(GUID, KEY_A);
+    await writeEntry(root, KEY_A);
+    await lifecycle.commit(lease, KEY_A);
+
+    await expect(lifecycle.readCurrentEntry(GUID)).resolves.toMatchObject({
+      head: { state: 'current', desiredKey: KEY_A, currentKey: KEY_A },
+      entry: { key: KEY_A, guid: GUID, payload: { key: KEY_A } },
+    });
+  });
+
   it('retains last-known-good when recook fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
     roots.push(root);
@@ -144,6 +158,32 @@ describe('DDC lifecycle head', () => {
       lastKnownGoodKey: KEY_A,
       currentKey: KEY_A,
     });
+  });
+
+  it('uses a persisted heartbeat expiry with an older lease token', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    const lifecycle = new DdcLifecycle(root, { leaseTtlMs: 100 });
+    let now = 1_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const lease = await lifecycle.begin(GUID, KEY_A);
+      await writeEntry(root, KEY_A);
+
+      now = 1_050;
+      await expect(lifecycle.heartbeat(lease)).resolves.toMatchObject({ expiresAt: 1_150 });
+
+      // The original token has expired, but the persisted active lease for the
+      // same attempt is still alive after the heartbeat refresh.
+      now = 1_101;
+      await expect(lifecycle.commit(lease, KEY_A)).resolves.toMatchObject({ result: 'current' });
+
+      const newer = await lifecycle.begin(GUID, KEY_B);
+      await expect(lifecycle.commit(lease, KEY_A)).resolves.toMatchObject({ result: 'lease-lost' });
+      await lifecycle.close(newer);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('keeps a first cook failure failed without inventing a current or LKG', async () => {

@@ -5,6 +5,7 @@ import type {
   GameProjectionValue,
   GameReadDef,
 } from '@forgeax/engine-app';
+import type { RenderErrorCode } from '@forgeax/engine-render';
 
 type PreviewInspectionErrorCode =
   | 'projection-action-not-found'
@@ -20,13 +21,14 @@ type PreviewInspectionErrorCode =
   | 'recover-adapter-unavailable'
   | 'recover-device-unavailable'
   | 'recover-lifecycle-failed'
-  | 'recover-disposed-during-rebuild';
+  | 'recover-disposed-during-rebuild'
+  | RenderErrorCode;
 
 export type PreviewInspectionError = {
   readonly code: PreviewInspectionErrorCode;
   readonly expected: string;
   readonly hint: string;
-  readonly detail?: { readonly id?: string; readonly cause?: string };
+  readonly detail?: GameProjectionValue;
 };
 
 export type PreviewInspectionResult<T> =
@@ -82,6 +84,59 @@ function serialise(
     return { ok: true, value: JSON.parse(json) as GameProjectionValue };
   } catch (cause) {
     return { ok: false, cause: String(cause) };
+  }
+}
+
+const PREVIEW_DETAIL_MAX_DEPTH = 8;
+const PREVIEW_DETAIL_MAX_ENTRIES = 64;
+
+/** Project renderer details into bounded JSON-shaped data without dropping nested fields. */
+function projectJsonSafe(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet<object>(),
+  depth = 0,
+): GameProjectionValue {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'undefined') return null;
+  if (typeof value === 'function' || typeof value === 'symbol') return String(value);
+  if (depth >= PREVIEW_DETAIL_MAX_DEPTH) return '[truncated]';
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value
+        .slice(0, PREVIEW_DETAIL_MAX_ENTRIES)
+        .map((entry) => projectJsonSafe(entry, seen, depth + 1));
+    }
+
+    const source = value as Record<string, unknown>;
+    const projected: Record<string, GameProjectionValue> = {};
+    const entries = Object.entries(
+      value instanceof Error
+        ? {
+            name: value.name,
+            message: value.message,
+            ...Object.fromEntries(
+              ['code', 'expected', 'hint', 'detail']
+                .filter((key) => key in value)
+                .map((key) => [key, source[key]]),
+            ),
+          }
+        : source,
+    );
+    for (const [key, entry] of entries.slice(0, PREVIEW_DETAIL_MAX_ENTRIES)) {
+      try {
+        projected[key] = projectJsonSafe(entry, seen, depth + 1);
+      } catch (cause) {
+        projected[key] = String(cause);
+      }
+    }
+    return projected;
+  } finally {
+    seen.delete(value);
   }
 }
 
@@ -238,14 +293,17 @@ export function createPreviewInspection(
       recover: async () => {
         const result = await app.renderer.recover();
         const healthValue = rendererHealth(app);
+        const resultError = result.ok ? undefined : result.error;
+        const resultDetail = (resultError as { readonly detail?: unknown } | undefined)?.detail;
         return result.ok
           ? { ok: true, value: { recovered: true, health: healthValue } }
           : {
               ok: false,
               error: {
-                code: 'recover-lifecycle-failed',
+                code: result.error.code,
                 expected: result.error.expected,
-                hint: `${result.error.hint} (${result.error.code})`,
+                hint: result.error.hint,
+                ...(resultDetail === undefined ? {} : { detail: projectJsonSafe(resultDetail) }),
               },
             };
       },

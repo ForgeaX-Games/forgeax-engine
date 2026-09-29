@@ -89,7 +89,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           if (r.error.detail.code !== 'image-meta-missing') return;
           expect(r.error.detail.sourcePath).toBe(sourcePath);
           expect(r.error.detail.expectedSidecarPath).toBe(join(dir, 'wood.png.meta.json'));
-          expect(r.error.hint).toContain('forgeax-engine-remote-asset');
+          expect(r.error.hint).toContain('forgeax asset');
         } finally {
           rmSync(dir, { recursive: true, force: true });
         }
@@ -601,8 +601,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
         const payload = asset?.payload as unknown as Record<string, unknown>;
         expect(payload.kind).toBe('texture');
-        expect(payload.width).toBe(8);
-        expect(payload.height).toBe(4);
+        expect(payload.shape).toEqual({ viewDimension: '2d', extent: { width: 8, height: 4 } });
         expect(payload.format).toBe('rgba8unorm-srgb');
         expect(payload.colorSpace).toBe('srgb');
         expect(payload.data).toBeInstanceOf(Uint8Array);
@@ -859,8 +858,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
         const payload = asset?.payload as TextureAsset;
         expect(payload.kind).toBe('texture');
-        expect(payload.width).toBe(8);
-        expect(payload.height).toBe(4);
+        expect(payload.shape).toEqual({ viewDimension: '2d', extent: { width: 8, height: 4 } });
         expect(payload.format).toBe('rgba8unorm-srgb');
         expect(payload.colorSpace).toBe('srgb');
         expect(payload.data.length).toBe(8 * 4 * 4);

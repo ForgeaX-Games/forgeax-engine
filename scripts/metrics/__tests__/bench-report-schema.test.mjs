@@ -2,7 +2,7 @@
 // Schema-as-Contract enforcement (D-P12 + AI-user review F-3 P2).
 //
 // Drives the implementation of `$defs.benchReportPixelParity` inside
-// `forgeax-metrics.schema.json` AND the runner-side fail-fast validator
+// `schemas/forgeax-metrics.schema.json` AND the runner-side fail-fast validator
 // hook in `scripts/bench/pixel-parity.mjs` (M3 T-020 same-task scope).
 //
 // Six scenarios exercise the JSON Schema 2020-12 contract for the runner
@@ -43,7 +43,7 @@ import { METRIC_KINDS } from '../run-all.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
-const schemaPath = resolve(repoRoot, 'forgeax-metrics.schema.json');
+const schemaPath = resolve(repoRoot, 'schemas/forgeax-metrics.schema.json');
 
 function loadSchema() {
   return JSON.parse(readFileSync(schemaPath, 'utf8'));
@@ -59,7 +59,7 @@ function compileReportValidator() {
   const reportSchema = schema?.$defs?.benchReportPixelParity;
   if (!reportSchema) {
     throw new Error(
-      'forgeax-metrics.schema.json $defs.benchReportPixelParity not defined (T-020 schema add missing)',
+      'schemas/forgeax-metrics.schema.json $defs.benchReportPixelParity not defined (T-020 schema add missing)',
     );
   }
   return ajv.compile(reportSchema);

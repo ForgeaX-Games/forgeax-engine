@@ -1,17 +1,29 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
+  PACK_AUTHORING_OPERATION_DESCRIPTORS,
+  type PackAuthoringOperation,
+  type PackAuthoringOperationResult,
+} from '@forgeax/engine-pack/source';
+import { Context, createToolApiPlugin, registerTools } from '@forgeax/engine-plugin';
+import { PluginRealmSchema } from '@forgeax/engine-project';
+import {
   capabilityUnavailableError,
-  createToolRuntime,
+  type ToolApi,
+  type ToolApiRunOptions,
   type ToolContribution,
   type ToolDescriptor,
-  type ToolRunOptions,
-  type ToolRuntime,
+  type ToolJsonSchema,
   type ToolSchema,
   type ToolTerminal,
 } from '@forgeax/engine-tool-runtime';
-import type { BuildOptions, PluginInstallOptions } from '../types.js';
+import type {
+  BuildOptions,
+  PluginCreateOptions,
+  PluginInspectOptions,
+  PluginRootOptions,
+} from '../types.js';
 import type { OfflineAnalysisRequest, OfflineAnalysisResult } from './offline-analysis.js';
 import { nativePreviewDescriptors } from './preview-catalog.js';
 import type { PreviewHostRequest, PreviewHostResult } from './preview-host.js';
@@ -30,6 +42,7 @@ export interface ToolCatalogAuthoritySnapshot {
 
 export interface ToolCatalogEntry {
   readonly id: string;
+  readonly path: readonly string[];
   readonly title: string;
   readonly summary: string;
   readonly realm: ToolDescriptor['realm'];
@@ -66,18 +79,199 @@ const buildArgsSchema: ToolSchema<BuildOptions> = {
       return { ok: false, error: 'expected an options object' };
     return { ok: true, value: value as BuildOptions };
   },
-  describe: '{"type":"object","properties":{"root":{"type":"string"},"base":{"type":"string"}}}',
+  describe:
+    '{"type":"object","properties":{"root":{"type":"string"},"base":{"type":"string"},"outDir":{"type":"string"},"json":{"type":"boolean"}}}',
 };
 
-const pluginInstallArgsSchema: ToolSchema<PluginInstallOptions> = {
+const pluginCreateArgsSchema: ToolSchema<PluginCreateOptions> = {
   parse(value) {
     if (value === null || typeof value !== 'object')
-      return { ok: false, error: 'expected a plugin install options object' };
-    return { ok: true, value: value as PluginInstallOptions };
+      return { ok: false, error: 'expected plugin asset options' };
+    return { ok: true, value: value as PluginCreateOptions };
   },
   describe:
-    '{"type":"object","required":["id","module"],"properties":{"id":{"type":"string"},"module":{"type":"string"},"realm":{"enum":["host","engine","build"]},"dependency":{"type":"string"},"root":{"type":"string"}}}',
+    '{"type":"object","required":["path"],"additionalProperties":false,"properties":{"path":{"type":"string","description":"New .pack.ts (same-file behavior by default) or .pack.json (requires module)."},"module":{"type":"string","description":"Optional existing implementation module, relative to the Pack or an npm specifier."},"export":{"type":"string","description":"Named runtime export; defaults to plugin for same-file authoring, default for an existing module."},"packageId":{"type":"string"},"sourceKey":{"type":"string"},"config":{},"dryRun":{"type":"boolean"},"root":{"type":"string"}}}',
 };
+
+const pluginInspectArgsSchema: ToolSchema<PluginInspectOptions> = {
+  parse(value) {
+    if (value === null || typeof value !== 'object')
+      return { ok: false, error: 'expected plugin inspect options object' };
+    const id = (value as { readonly guid?: unknown }).guid;
+    if (id !== undefined && typeof id !== 'string')
+      return { ok: false, error: 'expected id to be a string when provided' };
+    return { ok: true, value: value as PluginInspectOptions };
+  },
+  describe: '{"type":"object","properties":{"guid":{"type":"string"},"root":{"type":"string"}}}',
+};
+
+const pluginRootArgsSchema: ToolSchema<PluginRootOptions> = {
+  parse(value) {
+    if (!value || typeof value !== 'object') return { ok: false, error: 'expected root options' };
+    return { ok: true, value: value as PluginRootOptions };
+  },
+  describe: JSON.stringify({
+    type: 'object',
+    required: ['realm', 'guid'],
+    properties: {
+      realm: { enum: PluginRealmSchema.options },
+      guid: { type: ['string', 'null'] },
+      root: { type: 'string' },
+    },
+  }),
+};
+
+const packAuthoringArgsSchema: ToolSchema<PackAuthoringOperation> = {
+  parse(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return { ok: false, error: 'expected a Pack authoring operation object' };
+    }
+    const operation = value as { readonly requestId?: unknown };
+    if (typeof operation.requestId !== 'string' || operation.requestId.trim().length === 0) {
+      return { ok: false, error: 'requestId must be a non-empty caller-minted string' };
+    }
+    return { ok: true, value: value as PackAuthoringOperation };
+  },
+  describe:
+    '{"type":"object","required":["requestId"],"properties":{"requestId":{"type":"string","minLength":1},"expectedRevision":{"type":"string"},"subject":{"type":"string"},"sourcePath":{"type":"string"},"sourceRoot":{"type":"string"},"targetPath":{"type":"string"},"packageId":{"type":"string","format":"uuid"},"parentPackageId":{"type":"string","format":"uuid"},"parent":{"type":"string","format":"uuid"},"sourceKey":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"},"format":{"enum":["pack.ts","pack.json"]},"require":{"enum":["identity","present","ready"]},"values":{"type":"object"},"initialAssets":{"type":"object"},"parameters":{"type":"array","minItems":1}}}',
+};
+
+const packAuthoringResultSchema: ToolSchema<PackAuthoringOperationResult> = {
+  parse(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return { ok: false, error: 'expected a Pack authoring result object' };
+    }
+    return { ok: true, value: value as PackAuthoringOperationResult };
+  },
+  describe: '{"type":"object"}',
+};
+
+const packRootSchema: ToolJsonSchema = { type: 'string' };
+const packStringSchema: ToolJsonSchema = { type: 'string' };
+const packBooleanSchema: ToolJsonSchema = { type: 'boolean' };
+
+/**
+ * The public asset read paths use the same schema in the command tree and
+ * in their Pack domain descriptors. Keeping these JSON shapes here prevents
+ * help from advertising the lower-level request envelope to CLI callers.
+ */
+export const assetListInputSchema: ToolJsonSchema = {
+  type: 'object',
+  properties: {
+    root: packRootSchema,
+    type: packStringSchema,
+    limit: { type: 'integer', minimum: 1, maximum: 256 },
+    cursor: packStringSchema,
+    json: packBooleanSchema,
+  },
+  additionalProperties: false,
+};
+
+export const assetInspectInputSchema: ToolJsonSchema = {
+  type: 'object',
+  properties: { root: packRootSchema, subject: packStringSchema, json: packBooleanSchema },
+  required: ['subject'],
+  additionalProperties: false,
+};
+
+export const assetResolveInputSchema: ToolJsonSchema = {
+  type: 'object',
+  properties: {
+    root: packRootSchema,
+    subject: packStringSchema,
+    packageId: packStringSchema,
+    sourceKey: packStringSchema,
+    require: { enum: ['identity', 'present', 'ready'] },
+    json: packBooleanSchema,
+  },
+  additionalProperties: false,
+};
+
+export const assetVerifyInputSchema: ToolJsonSchema = {
+  type: 'object',
+  properties: { root: packRootSchema, json: packBooleanSchema },
+  additionalProperties: false,
+};
+
+function packReadArgsSchemaFor(inputSchema: ToolJsonSchema): ToolSchema<PackAuthoringOperation> {
+  // Read-only requests need correlation, but have no mutation replay/CAS
+  // identity. Derive that correlation at the adapter instead of making CLI
+  // callers mint it.
+  return {
+    parse(value) {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return packAuthoringArgsSchema.parse(value);
+      }
+      return packAuthoringArgsSchema.parse({ requestId: randomUUID(), ...value });
+    },
+    describe: JSON.stringify(inputSchema),
+  };
+}
+
+const operationTitles: Readonly<Record<string, string>> = {
+  'asset.list': 'List Pack assets',
+  'asset.inspect': 'Inspect Pack subject',
+  'asset.resolve': 'Resolve Pack asset identity',
+  'asset.verify': 'Verify Pack authoring',
+  'asset-source.create': 'Create Pack source',
+  'asset-source.clone': 'Clone Pack source closure',
+  'asset-source.import': 'Import Pack source closure',
+  'asset-source.create-instance': 'Create Pack instance',
+  'asset-source.apply-values': 'Apply Pack instance values',
+  'asset-source.rebuild': 'Rebuild Pack source',
+  'asset-source.cold-cook': 'Cold-cook Pack source',
+};
+
+/** The public command identity is derived from the domain operation id once. */
+export function commandPathForToolId(id: string): readonly string[] {
+  if (id === 'asset-source.import') return ['asset', 'source', 'import'];
+  if (id === 'asset.add') return ['asset', 'import'];
+  if (id === 'project.build') return ['project', 'build'];
+  if (id === 'preview.offline-analysis') return ['debug', 'preview', 'analyze'];
+  if (id === 'preview.run') return ['asset', 'preview'];
+  if (id.startsWith('asset-source.')) {
+    const operation = id.slice('asset-source.'.length);
+    const names: Readonly<Record<string, string>> = {
+      'create-instance': 'instance',
+      'apply-values': 'set',
+      'cold-cook': 'cold-cook',
+    };
+    return ['asset', names[operation] ?? operation];
+  }
+  if (id.startsWith('asset.plugin.')) return id.split('.');
+  if (id.startsWith('asset.')) return ['asset', id.slice('asset.'.length)];
+  if (id.endsWith('.preview')) {
+    const kind = id.slice(0, -'.preview'.length);
+    return ['asset', kind, 'preview'];
+  }
+  if (id.startsWith('rhi.')) return ['debug', 'rhi', id.slice('rhi.'.length)];
+  if (id.startsWith('profile.')) return ['debug', 'profile', id.slice('profile.'.length)];
+  return id.split('.');
+}
+
+/** The Pack domain owns these descriptors; DevKit only projects them. */
+export const packAuthoringToolDescriptors: readonly ToolDescriptor[] =
+  PACK_AUTHORING_OPERATION_DESCRIPTORS.map((operation) => ({
+    id: operation.id,
+    path: commandPathForToolId(operation.id),
+    title: operationTitles[operation.id] ?? operation.id,
+    summary: operation.readOnly
+      ? 'Reads Pack identity, topology, inheritance, or current readiness without building or writing.'
+      : 'Runs the Pack authoring gateway with requestId and revision CAS semantics.',
+    realm: 'build' as const,
+    argsSchema:
+      operation.id === 'asset.list'
+        ? packReadArgsSchemaFor(assetListInputSchema)
+        : operation.id === 'asset.inspect'
+          ? packReadArgsSchemaFor(assetInspectInputSchema)
+          : operation.id === 'asset.resolve'
+            ? packReadArgsSchemaFor(assetResolveInputSchema)
+            : operation.id === 'asset.verify'
+              ? packReadArgsSchemaFor(assetVerifyInputSchema)
+              : packAuthoringArgsSchema,
+    resultSchema: packAuthoringResultSchema,
+    evidence: [],
+  }));
 
 const previewArgsSchema: ToolSchema<PreviewHostRequest> = {
   parse(value) {
@@ -110,8 +304,35 @@ const offlineAnalysisArgsSchema: ToolSchema<OfflineAnalysisRequest> = {
     '{"type":"object","required":["manifest"],"properties":{"manifest":{"type":"object","required":["schemaVersion","identity","artifacts"]},"required":{"type":"array","items":{"enum":["rhi-tape","png","profile-capture"]}}}}',
 };
 
+export const pluginMigrationDescriptor: ToolDescriptor<
+  import('../plugin/migration.js').PluginMigrationOptions,
+  unknown
+> = {
+  id: 'project.migrate',
+  path: ['project', 'migrate'],
+  title: 'Migrate plugin assets',
+  summary: 'Converts a static schema 2 project into a validated schema 3 candidate directory.',
+  realm: 'build',
+  evidence: [],
+  resultSchema,
+  argsSchema: {
+    parse(value) {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        typeof (value as { output?: unknown }).output !== 'string'
+      )
+        return { ok: false, error: 'output is required' };
+      return { ok: true, value: value as import('../plugin/migration.js').PluginMigrationOptions };
+    },
+    describe:
+      '{"type":"object","required":["output"],"properties":{"output":{"type":"string"},"root":{"type":"string"}}}',
+  },
+};
+
 export const projectBuildDescriptor: ToolDescriptor<BuildOptions, unknown> = {
   id: 'project.build',
+  path: commandPathForToolId('project.build'),
   title: 'Build project',
   summary: 'Builds the project through the existing Vite and Pack authorities.',
   realm: 'build',
@@ -119,17 +340,39 @@ export const projectBuildDescriptor: ToolDescriptor<BuildOptions, unknown> = {
   resultSchema,
   evidence: [],
 };
-export const authorPluginInstallDescriptor: ToolDescriptor<PluginInstallOptions, unknown> = {
-  id: 'author.plugin-install',
-  title: 'Install project plugin',
-  summary: 'Writes one plugin Entry through the project authoring authority.',
+export const authorPluginCreateDescriptor: ToolDescriptor<PluginCreateOptions, unknown> = {
+  id: 'asset.plugin.create',
+  path: commandPathForToolId('asset.plugin.create'),
+  title: 'Create plugin asset',
+  summary: 'Creates a same-file .pack.ts behavior, or a Pack referencing an existing module.',
   realm: 'build',
-  argsSchema: pluginInstallArgsSchema,
+  argsSchema: pluginCreateArgsSchema,
+  resultSchema,
+  evidence: [],
+};
+export const authorPluginInspectDescriptor: ToolDescriptor<PluginInspectOptions, unknown> = {
+  id: 'asset.plugin.inspect',
+  path: commandPathForToolId('asset.plugin.inspect'),
+  title: 'Inspect project plugins',
+  summary: 'Inspects source plugin definitions and project root references.',
+  realm: 'build',
+  argsSchema: pluginInspectArgsSchema,
+  resultSchema,
+  evidence: [],
+};
+export const authorPluginRootDescriptor: ToolDescriptor<PluginRootOptions, unknown> = {
+  id: 'project.root.set',
+  path: ['project', 'root', 'set'],
+  title: 'Set project root',
+  summary: 'References a plugin asset in one realm; null removes the root reference.',
+  realm: 'build',
+  argsSchema: pluginRootArgsSchema,
   resultSchema,
   evidence: [],
 };
 export const previewRunDescriptor: ToolDescriptor<PreviewHostRequest, PreviewHostResult> = {
   id: 'preview.run',
+  path: commandPathForToolId('preview.run'),
   title: 'Run hidden WebGPU preview',
   summary: 'Runs one fixed real-WebGPU preview recipe and returns structured evidence refs.',
   realm: 'host',
@@ -145,6 +388,7 @@ export const previewOfflineAnalysisDescriptor: ToolDescriptor<
   OfflineAnalysisResult
 > = {
   id: 'preview.offline-analysis',
+  path: commandPathForToolId('preview.offline-analysis'),
   title: 'Analyze preview artifacts',
   summary: 'Validates owner-separated evidence identity before offline consumption.',
   realm: 'build',
@@ -155,13 +399,18 @@ export const previewOfflineAnalysisDescriptor: ToolDescriptor<
 
 export const defaultToolDescriptors: readonly ToolDescriptor[] = [
   projectBuildDescriptor,
-  authorPluginInstallDescriptor,
+  authorPluginCreateDescriptor,
+  authorPluginRootDescriptor,
+  pluginMigrationDescriptor,
+  authorPluginInspectDescriptor,
+  ...packAuthoringToolDescriptors,
   ...nativePreviewDescriptors,
 ];
 
 function projectDescriptor(descriptor: ToolDescriptor): ToolCatalogEntry {
   return {
     id: descriptor.id,
+    path: descriptor.path ?? commandPathForToolId(descriptor.id),
     title: descriptor.title,
     summary: descriptor.summary,
     realm: descriptor.realm,
@@ -178,6 +427,10 @@ function projectDescriptor(descriptor: ToolDescriptor): ToolCatalogEntry {
 export interface ToolRealmOwner {
   readonly realm: ToolDescriptor['realm'];
   readonly contributions: readonly ToolContribution[];
+  /** Optional explicit provider identity for multiple owners in one realm. */
+  readonly sourceId?: string;
+  readonly providerId?: string;
+  readonly module?: string;
 }
 
 export interface ToolRealmDispatch {
@@ -186,8 +439,10 @@ export interface ToolRealmDispatch {
   readonly run: <TResult = unknown>(
     id: string,
     args: unknown,
-    options?: ToolRunOptions,
+    options?: ToolApiRunOptions,
   ) => Promise<ToolTerminal<TResult>>;
+  /** Disposes only the owner Fibers created for this dispatch. */
+  readonly dispose: () => Promise<void>;
 }
 
 function missingRealmOwner<TResult>(
@@ -202,17 +457,24 @@ function missingRealmOwner<TResult>(
   } as ToolTerminal<TResult>;
 }
 
-/** Dispatches a descriptor to the one physical owner for its declared realm. */
+/**
+ * Dispatches descriptors through real Cordis native plugin tool owners.
+ *
+ * A realm is only an execution classification. Multiple owners may publish the
+ * same operation from different sources; callers must route those operations
+ * explicitly through the source/provider pair returned by the owner contract.
+ */
 export function createRealmDispatch(
   contributions: readonly ToolContribution[],
   owners: readonly ToolRealmOwner[],
 ): ToolRealmDispatch {
-  const contributionById = new Map(
-    contributions.map((contribution) => [contribution.descriptor.id, contribution]),
-  );
-  const ownerByRealm = new Map<ToolDescriptor['realm'], ToolRuntime>();
+  const contributionById = new Map<string, ToolContribution[]>();
+  for (const contribution of contributions) {
+    const matches = contributionById.get(contribution.descriptor.id) ?? [];
+    matches.push(contribution);
+    contributionById.set(contribution.descriptor.id, matches);
+  }
   for (const owner of owners) {
-    if (ownerByRealm.has(owner.realm)) throw new TypeError(`Duplicate realm owner: ${owner.realm}`);
     const invalid = owner.contributions.find(
       (contribution) => contribution.descriptor.realm !== owner.realm,
     );
@@ -221,20 +483,93 @@ export function createRealmDispatch(
         `Tool ${invalid.descriptor.id} declares ${invalid.descriptor.realm} but owner is ${owner.realm}`,
       );
     }
-    ownerByRealm.set(owner.realm, createToolRuntime(owner.contributions));
   }
+  const ownerContext = new Context();
+  const ownerFibers: Array<{ dispose: () => Promise<unknown> }> = [];
+  const routesById = new Map<string, Array<{ providerId: string; sourceId: string }>>();
+  const providerInputs = owners.map((owner, index) => ({
+    owner,
+    index,
+    providerId:
+      owner.providerId ?? `devkit-realm-owner:${owner.realm}:${index}:${crypto.randomUUID()}`,
+    sourceId: owner.sourceId ?? `devkit-realm-source:${owner.realm}:${index}`,
+  }));
+  const ready = (async (): Promise<ToolApi> => {
+    await ownerContext.plugin(createToolApiPlugin());
+    const api = ownerContext.get('toolApi', false) as ToolApi | undefined;
+    if (api === undefined) throw new Error('realm dispatch owner did not install ToolApi');
+    for (const { owner, index, providerId, sourceId } of providerInputs) {
+      if (owner.contributions.length === 0) continue;
+      const bound = {
+        name: `forgeax:realm-dispatch/${owner.realm}/${index}`,
+        inject: ['toolApi'],
+        apply(ctx: Context) {
+          ctx.effect(() =>
+            registerTools(ctx, owner.contributions, {
+              sourceId,
+              providerId,
+              module: owner.module ?? '@forgeax/engine-devkit',
+              realm: owner.realm,
+            }),
+          );
+        },
+      };
+      const fiber = await ownerContext.plugin(bound);
+      ownerFibers.push(fiber);
+      for (const contribution of owner.contributions) {
+        const routes = routesById.get(contribution.descriptor.id) ?? [];
+        routes.push({ providerId, sourceId });
+        routesById.set(contribution.descriptor.id, routes);
+      }
+    }
+    return api;
+  })();
   return {
     list: () => contributions.map((contribution) => contribution.descriptor),
-    describe: (id) => contributionById.get(id)?.descriptor,
-    async run<TResult = unknown>(id: string, args: unknown, options: ToolRunOptions = {}) {
-      const contribution = contributionById.get(id);
-      if (contribution === undefined)
+    describe: (id) => {
+      const matches = contributionById.get(id) ?? [];
+      return matches.length === 1 ? matches[0]?.descriptor : undefined;
+    },
+    async run<TResult = unknown>(id: string, args: unknown, options: ToolApiRunOptions = {}) {
+      const matches = contributionById.get(id);
+      if (matches === undefined || matches.length === 0)
         return missingRealmOwner(undefined, id) as ToolTerminal<TResult>;
-      const owner = ownerByRealm.get(contribution.descriptor.realm);
-      if (owner === undefined) return missingRealmOwner(contribution.descriptor, id);
-      const bound = owner.get(id);
-      if (bound === undefined) return missingRealmOwner(contribution.descriptor, id);
-      return (await owner.run(bound, args, options).terminal) as ToolTerminal<TResult>;
+      const api = await ready;
+      const routes = routesById.get(id) ?? [];
+      if (routes.length === 0) {
+        return missingRealmOwner(matches[0]?.descriptor, id) as ToolTerminal<TResult>;
+      }
+      const explicitRoute =
+        options.providerId === undefined || options.sourceId === undefined
+          ? undefined
+          : routes.find(
+              (route) =>
+                route.providerId === options.providerId && route.sourceId === options.sourceId,
+            );
+      const route =
+        options.providerId !== undefined || options.sourceId !== undefined
+          ? explicitRoute
+          : routes.length === 1
+            ? routes[0]
+            : undefined;
+      const runOptions: ToolApiRunOptions =
+        route === undefined
+          ? options
+          : {
+              ...options,
+              providerId: route.providerId,
+              sourceId: route.sourceId,
+            };
+      return (await api.run<TResult>(id, args, runOptions).terminal) as ToolTerminal<TResult>;
+    },
+    async dispose() {
+      try {
+        await ready;
+      } finally {
+        for (const fiber of [...ownerFibers].reverse()) await fiber.dispose();
+        ownerFibers.length = 0;
+        await ownerContext.fiber.dispose();
+      }
     },
   };
 }

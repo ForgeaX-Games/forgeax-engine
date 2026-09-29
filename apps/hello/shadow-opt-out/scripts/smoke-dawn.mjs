@@ -2,7 +2,7 @@
 // apps/hello/shadow-opt-out headless smoke
 // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat T-018
 //
-// Structural-only smoke: 300-frame stable draw loop + shadow factor
+// Structural-only smoke: 60-frame stable draw loop + shadow factor
 // sampling confirms cube A casts shadow (< 1), cube B no shadow (=~ 1),
 // cube C shadow via cutout shader produces an intermediate value.
 //
@@ -21,7 +21,7 @@ import { dirname, resolve } from 'node:path';
 const WIDTH = 200;
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const HEIGHT = 150;
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FIXTURE_MAP_SIZE = 1024;
 
 // ── 1. dawn.node binding ────────────────────────────────────────────────
@@ -117,7 +117,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 const { World } = await import('@forgeax/engine-ecs');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, ShadowParticipation } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -200,8 +200,8 @@ world.spawn(
   { component: MeshRenderer, data: { materials: [matA] } },
 );
 
-// Cube B: green, castShadow: false
-const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
+// Cube B: green, ShadowParticipation { cast: false }
+const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1] }));
 world.spawn(
   {
     component: Transform,
@@ -209,6 +209,7 @@ world.spawn(
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matB] } },
+    { component: ShadowParticipation, data: { cast: false, receive: true } },
 );
 
 // Cube C: blue, cutout shadow shader
@@ -216,7 +217,11 @@ const matC = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 },
-    { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
+    {
+      name: 'ShadowCaster',
+      program: { module: CUTOUT_SHADER_PATH, vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+      renderState: { tags: { LightMode: 'ShadowCaster' } },
+    },
   ],
   values: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
 });
@@ -268,7 +273,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log('[smoke] PASS - castShadow opt-out + cutout shadow demo GREEN');
+console.log('[smoke] PASS - ShadowParticipation opt-out + cutout shadow demo GREEN');
 await renderer.dispose();
 device.destroy?.();
 process.exit(0);

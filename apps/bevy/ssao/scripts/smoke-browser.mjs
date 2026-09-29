@@ -43,7 +43,7 @@ try {
     await page.close();
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
-    if (state.enabled !== true || state.meshCount < 7 || state.pipeline !== 'forgeax::hdrp') throw new Error(`state incomplete: ${JSON.stringify(state)}`);
+    if (state.enabled !== true || state.meshCount < 7 || state.pipeline !== 'forgeax::standard') throw new Error(`state incomplete: ${JSON.stringify(state)}`);
     console.log(`[smoke-browser] state=${JSON.stringify(state)}`);
     console.log('[smoke-browser] PASS - Chrome rendered the Bevy SSAO scene through HDRP');
   } finally {

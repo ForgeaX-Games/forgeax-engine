@@ -1,10 +1,35 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import {
+  APP_SHADER_MANIFEST_DELTA,
+  mergeAppShaderManifest,
+  readSharedShaderManifest,
+} from './app-shader-manifest.mjs';
 
 function argument(name, fallback = null) {
   const index = process.argv.indexOf(name);
   return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
+}
+
+function repeatedArgument(name) {
+  const values = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (process.argv[index] !== name) continue;
+    const value = process.argv[index + 1];
+    if (value !== undefined && value !== '') values.push(value);
+  }
+  return values;
 }
 
 function fail(code, detail) {
@@ -17,67 +42,23 @@ const requestedSharedInputManifest = argument(
   '--shared-input-manifest',
   'shared-app-inputs/manifest.json',
 );
-const requestedSharedInputManifestPath = resolve(root, requestedSharedInputManifest);
-// A single artifact downloaded to `--path .` is intentionally extracted at the
-// archive's common root (`manifest.json`, `shaders/...`). App-shard downloads
-// use `--path shared-app-inputs` and retain the producer directory. Accept both
-// layouts so consumers do not need a second artifact transfer just to restore
-// a projection file.
-const sharedInputManifestCandidates = [
-  requestedSharedInputManifestPath,
-  resolve(root, 'manifest.json'),
-].filter((path, index, paths) => paths.indexOf(path) === index);
-const sharedInputManifestPath = sharedInputManifestCandidates.find((path) => existsSync(path));
-if (!sharedInputManifestPath) {
-  fail('ci-app-shader-manifest-shared-input-missing', {
-    manifest: requestedSharedInputManifest,
-    candidates: sharedInputManifestCandidates.map((path) => relative(root, path)),
-  });
-}
-
-let manifest;
+let shared;
 try {
-  manifest = JSON.parse(readFileSync(sharedInputManifestPath, 'utf8'));
-} catch {
-  fail('ci-app-shader-manifest-shared-input-invalid', {
-    manifest: relative(root, sharedInputManifestPath),
-    expected: 'valid JSON in the shared-app-inputs manifest',
-  });
-}
-
-const sourceRelative = manifest?.payload?.engineShaderManifest;
-if (
-  manifest?.schemaVersion !== 1 ||
-  manifest?.producer !== 'shared-app-inputs' ||
-  typeof sourceRelative !== 'string'
-) {
-  fail('ci-app-shader-manifest-shared-input-invalid', {
-    manifest: relative(root, sharedInputManifestPath),
+  shared = readSharedShaderManifest(root, requestedSharedInputManifest);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = /not valid JSON|incompatible producer metadata/.test(message)
+    ? 'ci-app-shader-manifest-shared-input-invalid'
+    : 'ci-app-shader-manifest-shared-input-missing';
+  fail(code, {
+    manifest: requestedSharedInputManifest,
     expected: 'catalog-only shared-app-inputs manifest with engineShaderManifest',
+    detail: message,
   });
 }
-const sourceCandidates = [
-  resolve(root, sourceRelative),
-  // When the archive is extracted at `.`, the producer's common directory is
-  // stripped from every path. The manifest keeps its producer-relative path,
-  // so resolve the same payload relative to the extracted manifest directory.
-  resolve(dirname(sharedInputManifestPath), sourceRelative.replace(/^shared-app-inputs\//, '')),
-].filter((path, index, paths) => paths.indexOf(path) === index);
-const source = sourceCandidates.find((path) => existsSync(path));
-const sourceRoot = source ? relative(root, source).split('\\').join('/') : '';
-if (
-  !source ||
-  sourceRoot.length === 0 ||
-  sourceRoot === '..' ||
-  sourceRoot.startsWith('../') ||
-  sourceRoot.includes('/../') ||
-  !existsSync(source)
-) {
-  fail('ci-app-shader-manifest-shared-input-missing', {
-    manifest: relative(root, sharedInputManifestPath),
-    expected: 'engine shader manifest contained by the repository root',
-  });
-}
+const sharedInputManifestPath = shared.manifestPath;
+const source = shared.sourcePath;
+const sourceRoot = relative(root, source).split('\\').join('/');
 
 if (relative(root, sharedInputManifestPath).split('\\').join('/') === 'manifest.json') {
   // Read-only consumers download the combined artifact at `.`, so upload-artifact
@@ -98,6 +79,28 @@ if (relative(root, sharedInputManifestPath).split('\\').join('/') === 'manifest.
 
 function appDistDirectories(directory, relativeDirectory = '') {
   const result = [];
+  const rootManifestPath = join(directory, 'package.json');
+  if (existsSync(rootManifestPath)) {
+    try {
+      const packageManifest = JSON.parse(readFileSync(rootManifestPath, 'utf8'));
+      if (typeof packageManifest.scripts?.build === 'string') {
+        // An explicitly selected smoke root can itself be the app package
+        // (for example apps/collectathon), not only a parent directory such
+        // as apps/hello. Treat that root as one app so its shader projection
+        // is materialized instead of silently leaving the delta transport in
+        // place.
+        const app =
+          relativeDirectory ||
+          relative(root, directory)
+            .split('\\')
+            .join('/')
+            .replace(/^apps\//, '');
+        return [{ dist: join(directory, 'dist'), app }];
+      }
+    } catch {
+      return result;
+    }
+  }
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
     left.name.localeCompare(right.name),
   )) {
@@ -130,16 +133,91 @@ function appDistDirectories(directory, relativeDirectory = '') {
 const appsRoot = join(root, 'apps');
 if (!existsSync(appsRoot)) fail('ci-app-shader-manifest-apps-missing', { appsRoot });
 
+// Read-only smoke consumers only need the app roots that they will execute.
+// The build artifact also contains hundreds of Bevy/editor/demo manifests;
+// walking and rewriting those unrelated trees made every fleet leg spend
+// ~50s on immutable input preparation. Keep the broad `apps/` default for
+// other callers and let the fleet pass its explicit smoke roots.
+const requestedAppRoots = repeatedArgument('--app-root');
+const appRoots =
+  requestedAppRoots.length > 0
+    ? requestedAppRoots.map((relativeRoot) => resolve(root, relativeRoot))
+    : [appsRoot];
+for (const appRoot of appRoots) {
+  if (!existsSync(appRoot)) fail('ci-app-shader-manifest-app-root-missing', { appRoot });
+}
+
 const materialized = [];
-for (const { dist, app } of appDistDirectories(appsRoot)) {
-  const target = join(dist, 'shaders', 'manifest.json');
-  if (existsSync(target)) continue;
-  mkdirSync(dirname(target), { recursive: true });
-  cpSync(source, target);
-  materialized.push({ app, path: relative(root, target).split('\\').join('/') });
+const merged = [];
+const materializeSharedManifest = (sourcePath, targetPath) => {
+  try {
+    // The shared manifest is immutable CI input. A hardlink avoids copying the
+    // same large catalog into every app while preserving ordinary-file reads.
+    linkSync(sourcePath, targetPath);
+  } catch (error) {
+    // Artifact extraction can place source and app trees on different mounts;
+    // retain the portable copy fallback for those filesystems.
+    if (!['EXDEV', 'EPERM', 'EOPNOTSUPP'].includes(error?.code)) throw error;
+    cpSync(sourcePath, targetPath);
+  }
+};
+// Every empty delta expands to the same normalized, immutable catalog.
+// Serialize it once, then share that ordinary file across these consumers.
+let emptyDeltaSource = null;
+const fileIdentity = (path) => {
+  const { dev, ino } = statSync(path);
+  return `${dev}:${ino}`;
+};
+// Recovery and the consumer can both materialize the same input. Hardlinked
+// catalogs are one immutable file, so parse their bytes only once.
+const processedManifests = new Set([fileIdentity(source)]);
+for (const appRoot of appRoots) {
+  for (const { dist, app } of appDistDirectories(appRoot)) {
+    const target = join(dist, 'shaders', 'manifest.json');
+    if (existsSync(target)) {
+      try {
+        const identity = fileIdentity(target);
+        if (processedManifests.has(identity)) continue;
+        const appManifest = JSON.parse(readFileSync(target, 'utf8'));
+        if (appManifest?.forgeaxTransport === APP_SHADER_MANIFEST_DELTA) {
+          if (
+            Array.isArray(appManifest.entries) &&
+            appManifest.entries.length === 0 &&
+            Array.isArray(appManifest.materialShaders) &&
+            appManifest.materialShaders.length === 0
+          ) {
+            if (emptyDeltaSource === null) {
+              const runtimeManifest = mergeAppShaderManifest(shared.manifest, appManifest, target);
+              writeFileSync(target, `${JSON.stringify(runtimeManifest, null, 2)}\n`);
+              emptyDeltaSource = target;
+            } else {
+              unlinkSync(target);
+              materializeSharedManifest(emptyDeltaSource, target);
+            }
+          } else {
+            const runtimeManifest = mergeAppShaderManifest(shared.manifest, appManifest, target);
+            writeFileSync(target, `${JSON.stringify(runtimeManifest, null, 2)}\n`);
+          }
+          merged.push({ app, path: relative(root, target).split('\\').join('/') });
+        }
+        processedManifests.add(fileIdentity(target));
+      } catch (error) {
+        fail('ci-app-shader-manifest-delta-invalid', {
+          app,
+          manifest: relative(root, target),
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+      continue;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    materializeSharedManifest(source, target);
+    materialized.push({ app, path: relative(root, target).split('\\').join('/') });
+  }
 }
 
 materialized.sort((left, right) => left.path.localeCompare(right.path));
+merged.sort((left, right) => left.path.localeCompare(right.path));
 process.stdout.write(
-  `${JSON.stringify({ status: 'success', source: sourceRoot, materialized })}\n`,
+  `${JSON.stringify({ status: 'success', source: sourceRoot, materialized, merged })}\n`,
 );

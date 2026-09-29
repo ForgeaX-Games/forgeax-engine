@@ -85,8 +85,9 @@ const BYTES_PER_KERNEL_ELEMENT = 16;
 //   bytes [0..63]    view              mat4x4<f32>
 //   bytes [64..127]  projection        mat4x4<f32>
 //   bytes [128..191] inverseProjection mat4x4<f32>
-//   bytes [192..207] intensityPad      vec4<f32>  // x = intensity, y = radius, z = bias, w = pad
-//   bytes [208..255] padding           // align to 256B WebGPU UBO offset
+//   bytes [192..207] intensityPad      vec4<f32>  // x = intensity, y = radius, z = bias, w = sample budget
+//   bytes [208..223] algorithmPad      vec4<f32>  // x = 0 SSAO, 1 GTAO
+//   bytes [224..255] padding           // align to 256B WebGPU UBO offset
 //
 // The total is rounded to 256B so the same UBO can host an additional
 // shader-side scalar binding at the tail without re-allocation.
@@ -106,12 +107,55 @@ export const SSAO_UNIFORM_BYTES = UNIFORM_BYTES;
 // recompile across enable/disable.
 
 interface SsaoFallbackResources {
+  readonly device: RenderSystemRuntime['device'];
   readonly texture: Texture;
   readonly view: TextureView;
   readonly sampler: Sampler;
 }
 
 const fallbackCache = new WeakMap<RenderSystemRuntime, SsaoFallbackResources>();
+
+function destroyBuffer(
+  runtime: RenderSystemRuntime,
+  device: RenderSystemRuntime['device'],
+  buffer: Buffer,
+): void {
+  const destroyed = device.destroyBuffer(buffer);
+  if (!destroyed.ok) runtime.errorRegistry.fire(destroyed.error);
+}
+
+function destroyTexture(
+  runtime: RenderSystemRuntime,
+  device: RenderSystemRuntime['device'],
+  texture: Texture,
+): void {
+  const destroyed = device.destroyTexture(texture);
+  if (!destroyed.ok) runtime.errorRegistry.fire(destroyed.error);
+}
+
+function retireSsaoResources(device: RenderSystemRuntime['device'], release: () => void): void {
+  const queue = device.queue as {
+    readonly onSubmittedWorkDone?: () => Promise<undefined>;
+  };
+  if (typeof queue.onSubmittedWorkDone === 'function') {
+    try {
+      void queue.onSubmittedWorkDone().then(release, release);
+      return;
+    } catch {
+      // A lost or minimal test device may reject the fence synchronously.
+    }
+  }
+  // There is no submitted work to fence on minimal RHI fixtures.  Releasing
+  // synchronously keeps cache reset deterministic for those callers.
+  release();
+}
+
+function destroySsaoFallbackResources(
+  runtime: RenderSystemRuntime,
+  resources: SsaoFallbackResources,
+): void {
+  destroyTexture(runtime, resources.device, resources.texture);
+}
 
 /**
  * Lazily allocate the 1x1 r8unorm white fallback texture + a sampler for
@@ -126,7 +170,11 @@ export function getOrCreateSsaoFallbackTexture(
   runtime: RenderSystemRuntime,
 ): SsaoFallbackResources | null {
   const cached = fallbackCache.get(runtime);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined && cached.device === runtime.device) return cached;
+  if (cached !== undefined) {
+    fallbackCache.delete(runtime);
+    retireSsaoResources(cached.device, () => destroySsaoFallbackResources(runtime, cached));
+  }
 
   const device = runtime.device;
   const texRes = device.createTexture({
@@ -158,6 +206,7 @@ export function getOrCreateSsaoFallbackTexture(
   );
   if (!writeRes.ok) {
     runtime.errorRegistry.fire(writeRes.error);
+    destroyTexture(runtime, device, texRes.value);
     return null;
   }
 
@@ -173,6 +222,7 @@ export function getOrCreateSsaoFallbackTexture(
   });
   if (!viewRes.ok) {
     runtime.errorRegistry.fire(viewRes.error);
+    destroyTexture(runtime, device, texRes.value);
     return null;
   }
 
@@ -187,10 +237,12 @@ export function getOrCreateSsaoFallbackTexture(
   });
   if (!samplerRes.ok) {
     runtime.errorRegistry.fire(samplerRes.error);
+    destroyTexture(runtime, device, texRes.value);
     return null;
   }
 
   const resources: SsaoFallbackResources = {
+    device,
     texture: texRes.value,
     view: viewRes.value,
     sampler: samplerRes.value,
@@ -205,6 +257,8 @@ export function getOrCreateSsaoFallbackTexture(
  * Fields are readonly per charter P5: one resource, one owner.
  */
 export interface SsaoBuffers {
+  /** Device identity that owns every handle in this bundle. */
+  readonly device: RenderSystemRuntime['device'];
   /** 64 padded vec4 uniform buffer for hemisphere samples. */
   readonly kernelBuffer: Buffer;
   readonly kernelBytes: number;
@@ -216,6 +270,44 @@ export interface SsaoBuffers {
 }
 
 const cache = new WeakMap<RenderSystemRuntime, SsaoBuffers>();
+
+function destroySsaoBufferResources(runtime: RenderSystemRuntime, buffers: SsaoBuffers): void {
+  for (const buffer of [buffers.kernelBuffer, buffers.uniformBuffer]) {
+    destroyBuffer(runtime, buffers.device, buffer);
+  }
+  destroyTexture(runtime, buffers.device, buffers.noiseTexture);
+}
+
+function destroyCreatedSsaoResources(
+  runtime: RenderSystemRuntime,
+  device: RenderSystemRuntime['device'],
+  buffers: readonly Buffer[],
+  textures: readonly Texture[],
+): void {
+  for (const buffer of buffers) destroyBuffer(runtime, device, buffer);
+  for (const texture of textures) destroyTexture(runtime, device, texture);
+}
+
+/**
+ * Release every persistent SSAO resource owned by one renderer runtime.
+ *
+ * The fallback texture and the enabled-path buffers are module caches keyed by
+ * the runtime object, so Renderer.dispose()/recover() must explicitly retire
+ * them.  Cache eviction alone loses the only owner and leaves the backing RHI
+ * handles live until the device itself is collected.
+ */
+export function resetSsaoResources(runtime: RenderSystemRuntime): void {
+  const buffers = cache.get(runtime);
+  if (buffers !== undefined) {
+    cache.delete(runtime);
+    retireSsaoResources(buffers.device, () => destroySsaoBufferResources(runtime, buffers));
+  }
+  const fallback = fallbackCache.get(runtime);
+  if (fallback !== undefined) {
+    fallbackCache.delete(runtime);
+    retireSsaoResources(fallback.device, () => destroySsaoFallbackResources(runtime, fallback));
+  }
+}
 
 /**
  * Lazily allocate the 3 SSAO GPU resources for `runtime`. Returns the
@@ -229,7 +321,11 @@ const cache = new WeakMap<RenderSystemRuntime, SsaoBuffers>();
  */
 export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffers | null {
   const cached = cache.get(runtime);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined && cached.device === runtime.device) return cached;
+  if (cached !== undefined) {
+    cache.delete(runtime);
+    retireSsaoResources(cached.device, () => destroySsaoBufferResources(runtime, cached));
+  }
 
   const device = runtime.device;
 
@@ -260,6 +356,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   const kernelWriteRes = device.queue.writeBuffer(kernelBufferRes.value, 0, kernelData);
   if (!kernelWriteRes.ok) {
     runtime.errorRegistry.fire(kernelWriteRes.error);
+    destroyBuffer(runtime, device, kernelBufferRes.value);
     return null;
   }
 
@@ -286,6 +383,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   });
   if (!noiseTexRes.ok) {
     runtime.errorRegistry.fire(noiseTexRes.error);
+    destroyBuffer(runtime, device, kernelBufferRes.value);
     return null;
   }
 
@@ -306,6 +404,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   );
   if (!noiseCopyRes.ok) {
     runtime.errorRegistry.fire(noiseCopyRes.error);
+    destroyCreatedSsaoResources(runtime, device, [kernelBufferRes.value], [noiseTexRes.value]);
     return null;
   }
 
@@ -318,10 +417,12 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   });
   if (!uniformBufRes.ok) {
     runtime.errorRegistry.fire(uniformBufRes.error);
+    destroyCreatedSsaoResources(runtime, device, [kernelBufferRes.value], [noiseTexRes.value]);
     return null;
   }
 
   const buffers: SsaoBuffers = {
+    device,
     kernelBuffer: kernelBufferRes.value,
     kernelBytes: SSAO_KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
     noiseTexture: noiseTexRes.value,

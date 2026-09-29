@@ -124,9 +124,20 @@ Blocking diagnostics use the shared import shape: `code`, `severity`, `sourcePat
 
 Normalizable surfaces (inline style, global selectors, root or parent URLs, generated classes) are reported without changing source. Runtime-bound surfaces (scripts, inline handlers, remote URLs, CSS imports, and CSS-in-JS markers) must be moved to a consumer-side framework island.
 
-Authoring sources (`.ui.html` plus same-name `.ui.css`) remain the source-to-payload input for consumers that own an importer. The importer pairs the files and records relative image/font reads as private companions. The manifest owns exactly one public GUID; companions do not receive consumer GUIDs. Keep author sources in the assets submodule, not in a template's `assets/ui` directory.
+Authoring sources (`.ui.html` plus same-name `.ui.css`) remain the source-to-payload input for consumers that own an importer. The importer pairs the files and records relative image/font reads as private companions. The manifest owns exactly one public GUID; companions do not receive consumer GUIDs. Shared/demo author sources remain in the assets submodule; a consumer template may carry a small, template-owned pair under its own `assets/` root when the UI is part of that template's source closure. Use the pair for readable multiline authoring and keep the prepared `.pack.json` output generated.
 
-The `*.pack.json` file is the canonical contract for prepared UI assets such as the template HUD and settings. It owns exactly one public GUID and stores the final HTML/CSS payload directly, so loading it does not invoke an importer, generate DDC, or require an `ImportTransport`. A consumer-owned prepared pack belongs in that consumer's `assets/ui` directory; only generic authoring sources and binary demo inputs belong in the assets submodule.
+The standalone DevKit host includes `createUiImporter()` in its default
+build-time importer composition. A custom Vite host should register the same
+self-declared `{ key: 'ui', import, finalize }` owner directly in its
+`pluginPack({ importers: [...] })` list; do not maintain a second project
+registry or wrap it with another key.
+
+The sidecar's `source` names the `.ui.html` file, and the importer derives the
+same-directory `.ui.css` companion. The generated Pack keeps the runtime
+`UiAsset` shape (`html` and `css` strings); source readability and runtime
+payload format are separate concerns.
+
+The `*.pack.json` file remains the canonical contract for a deliberately prepared UI asset, such as a small hand-authored HUD or settings panel. It owns exactly one public GUID and stores the final HTML/CSS payload directly, so loading it does not invoke an importer, generate DDC, or require an `ImportTransport`. A consumer-owned prepared pack belongs in that consumer's `assets/ui` directory; a template that needs readable multiline UI should keep the `.ui.html` / `.ui.css` source pair and generate this Pack instead.
 
 | Concern | Owner |
 | --- | --- |

@@ -126,7 +126,11 @@ function wireFetch(
               {
                 guid: GUID_TEX,
                 kind: 'texture',
-                payload: { width: 4, height: 4, colorSpace },
+                payload: {
+                  shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+                  colorSpace,
+                  mips: { kind: 'none' },
+                },
                 refs: [],
                 artifacts: {
                   body: {

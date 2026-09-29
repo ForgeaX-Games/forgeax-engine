@@ -18,7 +18,7 @@ const alphaFeature = {
     const count: number = data.visibleCount;
     void count;
     void context;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [{ scope: 'frame', resources: [], passes: [] }] });
   },
 } satisfies RenderFeature<AlphaFrame>;
 
@@ -31,7 +31,7 @@ const betaFeature = {
     const bounds: BetaFrame['bounds'] = data.bounds;
     void bounds;
     void context;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [{ scope: 'frame', resources: [], passes: [] }] });
   },
 } satisfies RenderFeature<BetaFrame>;
 

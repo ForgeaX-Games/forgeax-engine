@@ -8,8 +8,8 @@
 //   - caps insufficient (rgba16floatRenderable=false) -> project through the
 //     renderable rgba8 precompute output (the WebKit path)
 //   - first sight (status undefined) + caps OK -> fire-and-forget launch; the
-//     store records status:'pending' synchronously, then 'ready' once the
-//     async projection completes
+//     store records status:'pending' synchronously, then 'ready' after the
+//     IBL queue completion fence
 //   - pending -> a re-entry while in flight does NOT relaunch (store dedup,
 //     idempotent per source; D-4)
 //   - failed -> EquirectProjectionFailedError fired EXACTLY ONCE per handle;
@@ -56,8 +56,9 @@ const capsNotRenderable: RhiCaps = {
 } as unknown as RhiCaps;
 
 // ── mock GPU device: createTexture / view / queue succeed so the upload runs to
-// a 'ready' entry; a counter tracks texture creation so the "no relaunch while
-// pending" assertion can prove a second drive does not mint a second texture. ──
+// a 'ready' entry after the submission fence; a counter tracks texture creation
+// so the "no relaunch while pending" assertion can prove a second drive does
+// not mint a second texture. ──
 
 interface DeviceProbe {
   textures: number;
@@ -99,6 +100,7 @@ function makeReadyDevice(probe: DeviceProbe): any {
       writeTexture: () => okShim(undefined),
       writeBuffer: () => okShim(undefined),
       submit: () => okShim(undefined),
+      onSubmittedWorkDone: async () => undefined,
     },
   };
 }
@@ -130,15 +132,12 @@ function equirectPod(width = 4, height = 2): EquirectAsset {
 }
 
 // Build a store wired to a device (no shader factory -> the optional async IBL
-// precompute render-pass block is skipped). NOTE on the status timeline: the
-// cube-projection entry status (pending -> ready) and the idempotent source->cube
-// mapping are written SYNCHRONOUSLY inside _uploadCubemapFromEquirect, BEFORE the
-// first await (the async part is only the IBL prefilter precompute that populates
-// the per-device IblPipelineCache, NOT the entry status). So after one drive the
-// store entry is already 'ready'; the white-vs-real-IBL binding decision is made
-// by recordMainPass off the global cache views (out of scope for this unit test,
-// covered by the dawn IBL readback test). This unit test asserts the lazy
-// trigger's launch / dedup / caps-gate / fail-once-and-no-retry bookkeeping.
+// precompute render-pass block is skipped). The cube-projection entry remains
+// pending until the IBL queue completion fence resolves; the white-vs-real-IBL
+// binding decision is made by recordMainPass off the global cache views (out of
+// scope for this unit test, covered by the dawn IBL readback test). This unit
+// test asserts the lazy trigger's launch / dedup / caps-gate /
+// fail-once-and-no-retry bookkeeping.
 function configuredStore(device: unknown, caps: RhiCaps): GpuResidencyCache {
   const store = new GpuResidencyCache();
   let next = 9000;
@@ -176,6 +175,13 @@ function makeFrameState() {
   return { firedEquirectProjectionFailedHandles: new Set<number>() };
 }
 
+async function flushProjection(): Promise<void> {
+  // The precompute now fences each irradiance face separately before the
+  // single prefilter/BRDF submissions are promoted. Let every fence turn
+  // settle instead of assuming the old one-submit path.
+  for (let i = 0; i < 128; i += 1) await Promise.resolve();
+}
+
 // Catalogue an equirect POD into the world's user-tier shared-ref store so
 // resolveAssetHandle<EquirectAsset>(world, handle) returns it (record path).
 function catalogEquirect(world: WorldType, pod: EquirectAsset): Handle<'EquirectAsset', 'shared'> {
@@ -187,7 +193,7 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
     vi.restoreAllMocks();
   });
 
-  it('caps insufficient (rgba16floatRenderable=false) -> projects through rgba8 output', () => {
+  it('caps insufficient (rgba16floatRenderable=false) -> projects through rgba8 output', async () => {
     const probe: DeviceProbe = { textures: 0 };
     const store = configuredStore(makeReadyDevice(probe), capsNotRenderable);
     const world = new World();
@@ -204,12 +210,14 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
       handle as unknown as number,
     );
 
+    expect(store.getCubemapStatus(handle)).toBe('pending');
+    await flushProjection();
     expect(probe.textures).toBeGreaterThan(0);
     expect(store.getCubemapStatus(handle)).toBe('ready');
     expect(seen).toEqual([]);
   });
 
-  it('first sight + caps OK -> fire-and-forget launch projects the equirect (status ready) (AC-05)', () => {
+  it('first sight + caps OK -> fire-and-forget launch projects the equirect (pending then ready) (AC-05)', async () => {
     const probe: DeviceProbe = { textures: 0 };
     const store = configuredStore(makeReadyDevice(probe), capsRenderable);
     const world = new World();
@@ -227,14 +235,15 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
       handle as unknown as number,
     );
 
-    // The cube projection entry status + idempotent mapping are written
-    // synchronously (before the async IBL precompute), so the entry exists +
-    // a texture was minted right after the fire-and-forget launch.
+    // The cube projection entry is pending until the IBL command submission
+    // completion fence resolves; only then is it published as ready.
+    expect(store.getCubemapStatus(handle)).toBe('pending');
+    await flushProjection();
     expect(store.getCubemapStatus(handle)).toBe('ready');
     expect(probe.textures).toBeGreaterThan(0);
   });
 
-  it('re-entry does NOT relaunch the projection (idempotent per source, D-4)', () => {
+  it('re-entry does NOT relaunch the projection (idempotent per source, D-4)', async () => {
     const probe: DeviceProbe = { textures: 0 };
     const store = configuredStore(makeReadyDevice(probe), capsRenderable);
     const world = new World();
@@ -244,9 +253,15 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
     const internals = makeInternals(store, reg, capsRenderable);
 
     driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
+    const texturesWhilePending = probe.textures;
+    expect(store.getCubemapStatus(handle)).toBe('pending');
+    driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
+    expect(store.getCubemapStatus(handle)).toBe('pending');
+    expect(probe.textures).toBe(texturesWhilePending);
+    await flushProjection();
+    expect(store.getCubemapStatus(handle)).toBe('ready');
     const texturesAfterFirst = probe.textures;
     expect(texturesAfterFirst).toBeGreaterThan(0);
-    expect(store.getCubemapStatus(handle)).toBe('ready');
 
     // Subsequent frames: the existing entry (status !== undefined) short-circuits
     // the lazy trigger, so no second projection / texture is minted.
@@ -260,10 +275,10 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
     const world = new World();
     const handle = catalogEquirect(world, equirectPod());
     const reg = new RhiErrorListenerRegistry();
-    const fired: Array<{ code: string; handle: number | undefined }> = [];
+    const fired: Array<{ code: string; handle: number | undefined; hint?: string }> = [];
     reg.add((e) => {
       if (e.code === 'equirect-projection-failed') {
-        fired.push({ code: e.code, handle: e.detail.handle });
+        fired.push({ code: e.code, handle: e.detail.handle, hint: e.hint });
       } else {
         fired.push({ code: e.code, handle: undefined });
       }
@@ -281,9 +296,12 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
 
     // Frame 2: status:'failed' observed -> fire the structured error ONCE.
     driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
-    expect(fired).toEqual([
-      { code: 'equirect-projection-failed', handle: handle as unknown as number },
-    ]);
+    expect(fired).toHaveLength(1);
+    expect(fired[0]).toMatchObject({
+      code: 'equirect-projection-failed',
+      handle: handle as unknown as number,
+    });
+    expect(fired[0]?.hint).toContain('declare Skylight');
 
     // Frame 3+: the latch keeps the channel quiet -- no re-fire, no retry
     // (the store's status:'failed' short-circuit + the frameState latch).

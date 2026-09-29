@@ -30,6 +30,8 @@ export interface ChaosWebSocketProxySnapshot {
 
 export interface ChaosWebSocketProxy {
   readonly url: string;
+  /** The same proxy instance's control channel for the paired host. */
+  readonly hostUrl?: string;
   disconnectSession(sessionId: number): boolean;
   markLateJoin(): void;
   snapshot(): ChaosWebSocketProxySnapshot;
@@ -38,6 +40,7 @@ export interface ChaosWebSocketProxy {
 
 export function startChaosWebSocketProxy(options: {
   readonly targetUrl: string;
+  readonly targetHostUrl?: string;
   readonly mode?: string;
   readonly sabotage?: string;
   readonly delayMs?: number;

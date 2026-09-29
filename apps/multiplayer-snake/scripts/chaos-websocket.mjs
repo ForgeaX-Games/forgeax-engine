@@ -74,6 +74,7 @@ function normalizeDelay(value) {
  */
 export function startChaosWebSocketProxy({
   targetUrl,
+  targetHostUrl,
   mode = 'all',
   sabotage = '',
   delayMs = DEFAULT_DELAY_MS,
@@ -94,12 +95,14 @@ export function startChaosWebSocketProxy({
   const sessionConnectionCounts = new Map();
   const disconnectedSessionIds = new Set();
   const staleFrames = new Map();
+  const hostConnections = [];
   const timers = new Set();
   let nextConnectionId = 1;
   let replacementPending = false;
   let lateJoinPending = false;
   let closed = false;
   let server;
+  let hostServer;
   let closePromise;
 
   const record = (event) => {
@@ -436,6 +439,74 @@ export function startChaosWebSocketProxy({
     });
   };
 
+  const startHostServer = () => {
+    if (targetHostUrl === undefined) return Promise.resolve();
+    hostServer = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false });
+    hostServer.on('connection', (downstream) => {
+      const connection = {
+        downstream,
+        upstream: undefined,
+        closed: false,
+        queue: [],
+      };
+      hostConnections.push(connection);
+      const closeHostConnection = (reason) => {
+        if (connection.closed) return;
+        connection.closed = true;
+        connection.queue.length = 0;
+        if (connection.downstream.readyState === OPEN) connection.downstream.close();
+        else connection.downstream.terminate();
+        if (connection.upstream?.readyState === OPEN) connection.upstream.close();
+        else connection.upstream?.terminate();
+        record({ kind: 'host-connection-closed', reason });
+      };
+      const flushHostQueue = () => {
+        if (connection.closed || connection.upstream?.readyState !== OPEN) return;
+        for (const frame of connection.queue.splice(0))
+          connection.upstream.send(frame.data, { binary: frame.isBinary });
+      };
+      const upstream = new WebSocket(targetHostUrl);
+      connection.upstream = upstream;
+      upstream.on('open', flushHostQueue);
+      upstream.on('message', (data, isBinary) => {
+        if (connection.closed || connection.downstream.readyState !== OPEN) return;
+        try {
+          connection.downstream.send(data, { binary: isBinary });
+        } catch {
+          closeHostConnection('host-downstream-send-error');
+        }
+      });
+      upstream.on('error', () => closeHostConnection('host-upstream-error'));
+      upstream.on('close', () => closeHostConnection('host-upstream-close'));
+      downstream.on('message', (data, isBinary) => {
+        if (connection.closed) return;
+        if (connection.upstream?.readyState === OPEN) {
+          try {
+            connection.upstream.send(data, { binary: isBinary });
+          } catch {
+            closeHostConnection('host-upstream-send-error');
+          }
+          return;
+        }
+        if (connection.queue.length >= MAX_QUEUED_FRAMES) {
+          closeHostConnection('host-queue-overflow');
+          return;
+        }
+        connection.queue.push({ data, isBinary });
+      });
+      downstream.on('error', () => closeHostConnection('host-downstream-error'));
+      downstream.on('close', () => closeHostConnection('host-downstream-close'));
+    });
+    return new Promise((resolve, reject) => {
+      const onError = (cause) => reject(cause);
+      hostServer.once('error', onError);
+      hostServer.once('listening', () => {
+        hostServer.off('error', onError);
+        resolve();
+      });
+    });
+  };
+
   const promise = new Promise((resolve, reject) => {
     try {
       startServer();
@@ -443,17 +514,32 @@ export function startChaosWebSocketProxy({
       reject(cause);
       return;
     }
+    const hostReady = startHostServer();
     const onError = (cause) => reject(cause);
     server.once('error', onError);
-    server.once('listening', () => {
+    server.once('listening', async () => {
       server.off('error', onError);
+      try {
+        await hostReady;
+      } catch (cause) {
+        reject(cause);
+        return;
+      }
       const address = server.address();
       if (address === null || typeof address === 'string') {
         reject(new Error('M17 chaos proxy did not expose a TCP address'));
         return;
       }
+      const hostAddress = hostServer?.address();
+      if (hostServer !== undefined && (hostAddress === null || typeof hostAddress === 'string')) {
+        reject(new Error('M17 chaos host proxy did not expose a TCP address'));
+        return;
+      }
       resolve({
         url: `ws://127.0.0.1:${address.port}`,
+        ...(hostAddress === null || hostAddress === undefined || typeof hostAddress === 'string'
+          ? {}
+          : { hostUrl: `ws://127.0.0.1:${hostAddress.port}` }),
         disconnectSession(sessionId) {
           controls.disconnect.attempted += 1;
           if (sabotage === 'm17-disconnect-recovery') {
@@ -498,10 +584,15 @@ export function startChaosWebSocketProxy({
             resources: {
               connections: active.length,
               upstreamSockets: active.filter((connection) => connection.upstream?.readyState === OPEN).length,
+              hostConnections: hostConnections.filter((connection) => !connection.closed).length,
+              hostUpstreamSockets: hostConnections.filter(
+                (connection) => connection.upstream?.readyState === OPEN,
+              ).length,
               timers: timers.size,
               queuedFrames: active.reduce((total, connection) => total + connection.outbound.length, 0),
               lateJoinPending,
               serverListening: !closed,
+              hostServerListening: hostServer !== undefined && !closed,
             },
           };
         },
@@ -512,13 +603,33 @@ export function startChaosWebSocketProxy({
             for (const timer of timers) clearTimeout(timer);
             timers.clear();
             for (const connection of connections) closeConnection(connection, 'proxy-close');
-            await new Promise((done) => {
-              try {
-                server.close(() => done());
-              } catch {
-                done();
+            for (const connection of hostConnections)
+              if (!connection.closed) {
+                connection.closed = true;
+                connection.queue.length = 0;
+                connection.downstream.terminate();
+                connection.upstream?.terminate();
               }
-            });
+            await Promise.all([
+              new Promise((done) => {
+                try {
+                  server.close(() => done());
+                } catch {
+                  done();
+                }
+              }),
+              new Promise((done) => {
+                if (hostServer === undefined) {
+                  done();
+                  return;
+                }
+                try {
+                  hostServer.close(() => done());
+                } catch {
+                  done();
+                }
+              }),
+            ]);
             record({ kind: 'proxy-closed' });
           })();
           return closePromise;

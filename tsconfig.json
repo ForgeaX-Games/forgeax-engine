@@ -3,6 +3,9 @@
   "files": [],
   "references": [
     {
+      "path": "./packages/types"
+    },
+    {
       "path": "./packages/math"
     },
     {
@@ -91,6 +94,9 @@
     },
     {
       "path": "./packages/plugin"
+    },
+    {
+      "path": "./packages/host"
     },
     {
       "path": "./packages/devkit"

@@ -220,12 +220,11 @@ if (!woodGuidRes.ok) {
 
 const woodTexAsset = {
   kind: 'texture',
-  width: woodDecoded.width,
-  height: woodDecoded.height,
+  shape: { viewDimension: '2d', extent: { width: woodDecoded.width, height: woodDecoded.height } },
   format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: woodDecoded.bytes,
   colorSpace: woodDecoded.colorSpace,
-  mipmap: woodDecoded.mipmap,
+  mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 
 const world = new World();

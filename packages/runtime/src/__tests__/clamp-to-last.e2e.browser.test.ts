@@ -61,8 +61,8 @@ const SUT_ATTRIBUTABLE_RENDER_CODES: ReadonlySet<string> = new Set([
   'vertex-storage-buffer-unavailable',
   'mesh-ssbo-capacity-exceeded',
   'mesh-ssbo-ceiling-reached',
-  'hdrp-light-budget-exceeded',
-  'hdrp-index-list-overflow',
+  'standard-light-budget-exceeded',
+  'standard-cluster-index-overflow',
 ]);
 
 // Suppress WebGPU teardown race: chromium fires unhandled OperationError

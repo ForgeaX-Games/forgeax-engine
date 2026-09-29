@@ -1,11 +1,16 @@
 import {
+  type BufferRecordLayout,
+  type BufferRecords,
   buildFrameModel,
   decodeTape,
-  type FrameModel,
+  type FrameSummary,
   type InspectField,
+  inspectBufferRecords,
   openReplay,
   type ReplayBackend,
   type RhiDebugError,
+  summarizeFrame,
+  tapeDigest,
   type V7Tape,
   type WorkInspection,
 } from '@forgeax/engine-rhi-debug';
@@ -45,6 +50,12 @@ export interface RhiInspectInput {
   readonly artifact: ArtifactRef;
   readonly workIndex: number;
   readonly fields?: readonly InspectField[];
+  readonly buffer?: {
+    readonly resourceId: string;
+    readonly layout: BufferRecordLayout;
+    readonly first: number;
+    readonly count: number;
+  };
 }
 
 export type RhiDebugOperationName = 'rhi.capture' | 'rhi.summary' | 'rhi.inspect';
@@ -53,12 +64,13 @@ export type RhiDebugOperationInput = RhiCaptureInput | RhiSummaryInput | RhiInsp
 
 export interface RhiSummaryOutput {
   readonly artifact: ArtifactRef;
-  readonly model: FrameModel;
+  readonly summary: FrameSummary;
 }
 
 export interface RhiInspectOutput {
   readonly artifact: ArtifactRef;
   readonly inspection: WorkInspection;
+  readonly bufferRecords?: BufferRecords;
 }
 
 export type RhiDebugOperationOutput = ArtifactRef | RhiSummaryOutput | RhiInspectOutput;
@@ -108,6 +120,7 @@ export interface JsonSchema {
   readonly items?: JsonSchema;
   readonly enum?: readonly string[];
   readonly minimum?: number;
+  readonly maximum?: number;
   readonly additionalProperties?: boolean;
 }
 
@@ -141,9 +154,9 @@ const summaryOutputSchema: JsonSchema = {
   type: 'object',
   properties: {
     artifact: artifactRefSchema,
-    model: { type: 'object', additionalProperties: true },
+    summary: { type: 'object', additionalProperties: true },
   },
-  required: ['artifact', 'model'],
+  required: ['artifact', 'summary'],
   additionalProperties: false,
 };
 
@@ -152,10 +165,57 @@ const inspectOutputSchema: JsonSchema = {
   properties: {
     artifact: artifactRefSchema,
     inspection: { type: 'object', additionalProperties: true },
+    bufferRecords: { type: 'object', additionalProperties: true },
   },
   required: ['artifact', 'inspection'],
   additionalProperties: false,
 };
+
+export const RHI_INSPECT_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    artifact: artifactRefSchema,
+    workIndex: { type: 'integer', minimum: 0 },
+    buffer: {
+      type: 'object',
+      properties: {
+        resourceId: { type: 'string' },
+        first: { type: 'integer', minimum: 0 },
+        count: { type: 'integer', minimum: 1, maximum: 4096 },
+        layout: {
+          type: 'object',
+          properties: {
+            stride: { type: 'integer', minimum: 4, maximum: 65536 },
+            fields: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  offset: { type: 'integer', minimum: 0 },
+                  type: { type: 'string', enum: ['f32', 'u32', 'i32'] },
+                  components: { type: 'integer', minimum: 1, maximum: 4 },
+                },
+                required: ['name', 'offset', 'type', 'components'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['stride', 'fields'],
+          additionalProperties: false,
+        },
+      },
+      required: ['resourceId', 'layout', 'first', 'count'],
+      additionalProperties: false,
+    },
+    fields: {
+      type: 'array',
+      items: { type: 'string', enum: ['bindings', 'pipeline', 'pixels'] },
+    },
+  },
+  required: ['artifact', 'workIndex'],
+  additionalProperties: false,
+} as const;
 
 export const RHI_DEBUG_OPERATION_MANIFEST: RhiDebugOperationManifest = {
   schemaVersion: '1.0.0',
@@ -179,7 +239,8 @@ export const RHI_DEBUG_OPERATION_MANIFEST: RhiDebugOperationManifest = {
     },
     {
       name: 'rhi.summary',
-      summary: 'Strictly decode one ArtifactRef and return its CPU FrameModel.',
+      summary:
+        'List work indices, pipeline entry points, and missing initial contents from one tape.',
       inputSchema: {
         type: 'object',
         properties: { artifact: artifactRefSchema },
@@ -191,20 +252,9 @@ export const RHI_DEBUG_OPERATION_MANIFEST: RhiDebugOperationManifest = {
     },
     {
       name: 'rhi.inspect',
-      summary: 'Replay one ArtifactRef on a fresh backend and inspect a workIndex.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          artifact: artifactRefSchema,
-          workIndex: { type: 'integer', minimum: 0 },
-          fields: {
-            type: 'array',
-            items: { type: 'string', enum: ['bindings', 'pipeline', 'pixels'] },
-          },
-        },
-        required: ['artifact', 'workIndex'],
-        additionalProperties: false,
-      },
+      summary:
+        'Replay one ArtifactRef and inspect a workIndex, optionally decoding bounded buffer records.',
+      inputSchema: RHI_INSPECT_INPUT_SCHEMA,
       outputSchema: inspectOutputSchema,
       recoveryCodes: [
         'tape-invalid',
@@ -225,11 +275,13 @@ export function discoverRhiDebugOperations(): readonly RhiDebugOperationDescript
 
 export function renderRhiDebugHelp(): string {
   return [
-    'forgeax run <operation>',
+    'forgeax debug rhi <capture|summary|inspect>',
     ...discoverRhiDebugOperations().map((operation) => `  ${operation.name}: ${operation.summary}`),
     'Usage:',
-    '  forgeax run rhi.summary --artifact PATH --digest SHA256 --json',
-    '  forgeax run rhi.inspect --artifact PATH --digest SHA256 --work-index N --fields pipeline,bindings,pixels --json',
+    '  forgeax debug rhi summary --artifact PATH --json',
+    `  forgeax debug rhi inspect --artifact PATH --work-index N --fields '["pipeline","bindings"]' --json`,
+    'Optional --digest verifies the file against an expected sha256 digest.',
+    'Inspect fields: pipeline, bindings, pixels. Use summary.works[].workIndex.',
     'ArtifactRef schema:',
     JSON.stringify(RHI_DEBUG_OPERATION_MANIFEST.artifactRefSchema),
   ].join('\n');
@@ -329,7 +381,18 @@ async function readTape(
 ): Promise<CommandResult<Uint8Array>> {
   const validated = validateArtifactRef(artifact);
   if (!validated.ok) return validated;
-  return context.readArtifact(validated.value);
+  const bytes = await context.readArtifact(validated.value);
+  if (!bytes.ok) return bytes;
+  const actual = tapeDigest(bytes.value);
+  if (actual !== validated.value.digest) {
+    return operationError(
+      'artifact-digest-mismatch',
+      'the file bytes to match ArtifactRef.digest',
+      'Use the original captured file or open this file by path to obtain its current digest.',
+      { expected: validated.value.digest, actual, path: validated.value.path ?? null },
+    );
+  }
+  return bytes;
 }
 
 export function runRhiDebugOperation(
@@ -375,7 +438,10 @@ export async function runRhiDebugOperation(
       if (!artifact.ok) return artifact;
       return {
         ok: true,
-        value: { artifact: artifact.value, model: buildFrameModel(decoded.value) },
+        value: {
+          artifact: artifact.value,
+          summary: summarizeFrame(buildFrameModel(decoded.value)),
+        },
       };
     }
     case 'rhi.inspect': {
@@ -384,7 +450,7 @@ export async function runRhiDebugOperation(
         return operationError(
           'work-index-invalid',
           'workIndex to be a non-negative integer',
-          'Choose workIndex from the FrameModel returned by rhi.summary.',
+          'Choose workIndex from the work inventory returned by rhi.summary.',
           { workIndex: inspectInput.workIndex },
         );
       }
@@ -406,12 +472,32 @@ export async function runRhiDebugOperation(
       try {
         const inspection = await opened.value.inspectWork(
           inspectInput.workIndex,
-          inspectInput.fields,
+          inspectInput.fields ?? ['pipeline', 'bindings'],
         );
         if (!inspection.ok) return { ok: false, error: coreError(inspection.error) };
         const artifact = validateArtifactRef(inspectInput.artifact);
         if (!artifact.ok) return artifact;
-        return { ok: true, value: { artifact: artifact.value, inspection: inspection.value } };
+        const buffer = inspectInput.buffer;
+        const records =
+          buffer === undefined
+            ? undefined
+            : await inspectBufferRecords(
+                opened.value,
+                buffer.resourceId,
+                inspectInput.workIndex,
+                buffer.layout,
+                { first: buffer.first, count: buffer.count },
+              );
+        if (records !== undefined && !records.ok)
+          return { ok: false, error: coreError(records.error) };
+        return {
+          ok: true,
+          value: {
+            artifact: artifact.value,
+            inspection: inspection.value,
+            ...(records?.ok === true ? { bufferRecords: records.value } : {}),
+          },
+        };
       } finally {
         await opened.value.dispose();
       }

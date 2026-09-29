@@ -36,7 +36,7 @@ function makeRegistry(): AssetRegistry {
 function meshPayload(): MeshAsset {
   return {
     kind: 'mesh',
-    vertices: new Float32Array(36), // 3 verts * 12
+    vertices: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0), // Position-only layout.
     indices: Uint16Array.of(0, 1, 2),
     attributes: { position: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0) },
     submeshes: [
@@ -59,6 +59,42 @@ describe('parseGuid', () => {
 });
 
 describe('catalog + lookup', () => {
+  it('indexes repeated payload-to-GUID queries once per catalog publication', () => {
+    const reg = makeRegistry();
+    const first = reg.catalog(GUID_A, meshPayload()).unwrap();
+    const second = reg.catalog(GUID_B, meshPayload()).unwrap();
+    const scan = vi.spyOn(reg.assetCatalog, Symbol.iterator);
+    for (let frame = 0; frame < 60; frame++) {
+      expect(reg.guidOf(first)).toBe(GUID_A);
+      expect(reg.guidOf(second)).toBe(GUID_B);
+      expect(reg.guidOf(meshPayload())).toBeUndefined();
+    }
+    expect(scan).toHaveBeenCalledTimes(1);
+    const replacement = reg.catalog(GUID_A, meshPayload()).unwrap();
+    expect(reg.guidOf(replacement)).toBe(GUID_A);
+    expect(reg.guidOf(first)).toBe(GUID_A);
+    expect(scan).toHaveBeenCalledTimes(2);
+    reg.invalidate(GUID_A);
+    expect(reg.guidOf(replacement)).toBe(GUID_A);
+    expect(reg.guidOf(second)).toBe(GUID_B);
+    expect(scan).toHaveBeenCalledTimes(3);
+  });
+
+  it('prefers the first current catalog identity over superseded provenance', () => {
+    const reg = makeRegistry();
+    const original = reg.catalog(GUID_A, meshPayload()).unwrap();
+    reg.catalog(GUID_B, original).unwrap();
+    expect(reg.guidOf(original)).toBe(GUID_A);
+    reg.catalog(GUID_A, meshPayload()).unwrap();
+    expect(reg.guidOf(original)).toBe(GUID_B);
+    reg.invalidate(GUID_B);
+    expect(reg.guidOf(original)).toBe(GUID_B);
+    const current = reg.catalog(GUID_B, meshPayload()).unwrap();
+    expect(reg.guidOf(current)).toBe(GUID_B);
+    reg.invalidateAll();
+    expect(reg.guidOf(current)).toBeUndefined();
+  });
+
   it('catalogs a mesh payload (computes aabb) and looks it up by GUID', () => {
     const reg = makeRegistry();
     const res = reg.catalog(GUID_A, meshPayload());

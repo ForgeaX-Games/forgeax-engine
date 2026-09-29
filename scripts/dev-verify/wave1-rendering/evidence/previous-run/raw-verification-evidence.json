@@ -1,0 +1,662 @@
+{
+  "archive": "raw-verification-evidence.tar.gz",
+  "sha256": "2ff35606394214758908ca35e66923f0a9ed291ace00b32aa7d9b03ddfc18c87",
+  "extractAt": "artifacts/wave1-rendering",
+  "files": [
+    {
+      "path": "additional-smokes/logs/excluded_hello-format-tier1_dawn-300.log",
+      "bytes": 156,
+      "sha256": "9497e3ef5ad64a70751a6cad0f210d2177b73a23bc7255dea0f39079e6ecb31f"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_hello-m3-programmable-rendering_m10-dawn.log",
+      "bytes": 229,
+      "sha256": "b0bb750153ac3389427ec260634da911e1d69b9d72020d6ff3910122f70d8aeb"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_hello-m8-integrated-capstone_smoke.log",
+      "bytes": 94,
+      "sha256": "f52501c57c6720ba35cead2b03eee88064e71dcf942a61c3b551dd64a0997392"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_hello-physical-material_smoke.log",
+      "bytes": 65941,
+      "sha256": "9632467cbf4538599d17e51012e3b9eb4cec1f3f81f72c91130b4c67237f0443"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-1-1_hello-window.log",
+      "bytes": 428,
+      "sha256": "69072065892c382a36b7a1eba174265aec600686e0b2a6955f8189381542442c"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-1-3_shaders.log",
+      "bytes": 700,
+      "sha256": "b11199f81c32fd5fbd42fdaea25aa827a081f633b96b52f2fea24bc9542dd5bb"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-1-5_transformations.log",
+      "bytes": 757,
+      "sha256": "33044009e1d85de913c94938338ebb36b620d46da9c1c173d23e77a1148ddbcf"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-1-6_coordinate-systems.log",
+      "bytes": 24540,
+      "sha256": "059d779556333049c24c7bb7ba285602a82b0e3710c228a562dd53206d22418e"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-6-2_ibl-irradiance.log",
+      "bytes": 740,
+      "sha256": "11051e0fb4448f75e0b1470af347f08305c3b356f1ea65d32b8245127d557409"
+    },
+    {
+      "path": "additional-smokes/logs/excluded_learn-render-6-3_ibl-specular.log",
+      "bytes": 814,
+      "sha256": "7855bd3e57eda2017c8f0480d525cd2a3300d455eefc3d58ab08019ad5296359"
+    },
+    {
+      "path": "additional-smokes/logs/independent_hello-animation-graph_numerical.log",
+      "bytes": 397,
+      "sha256": "1c7543b2cfa1baba2c629e723236bea1415a592bb50bf7e6c359a8cfe0202d46"
+    },
+    {
+      "path": "additional-smokes/logs/independent_hello-custom-shader_composite.log",
+      "bytes": 5192,
+      "sha256": "a499cc0815249e2d17913c5545fac6babfedd14fa3c303b2658f7c45f89162aa"
+    },
+    {
+      "path": "additional-smokes/logs/independent_hello-skin_writeback.log",
+      "bytes": 310,
+      "sha256": "2d365f5c972f4bfa6d20f592362d0cfc480ff3d02b3ab630a3ebb2a65796988c"
+    },
+    {
+      "path": "additional-smokes/logs/independent_learn-render-framebuffers_gauntlet.log",
+      "bytes": 6046,
+      "sha256": "286d6b5d98d297d0eef61f2e52c8c31ed224fe0b821f5638893752d5fbb9405a"
+    },
+    {
+      "path": "additional-smokes/plan.json",
+      "bytes": 21816,
+      "sha256": "d4400edd367ba41623850a0cd4785375efa9bc2cbde694ef8664d1987f004c04"
+    },
+    {
+      "path": "additional-smokes/rechecks-format-tier1-fixed.log",
+      "bytes": 246,
+      "sha256": "dea7f65d31067ebc37ca3de73fdff5f330e051530833fc89b4b5b2feefe1d22d"
+    },
+    {
+      "path": "additional-smokes/rechecks-format-tier1-original-timeout.log",
+      "bytes": 156,
+      "sha256": "9497e3ef5ad64a70751a6cad0f210d2177b73a23bc7255dea0f39079e6ecb31f"
+    },
+    {
+      "path": "additional-smokes/rechecks-format-tier1.json",
+      "bytes": 990,
+      "sha256": "33d9dd73499ff174342e19a28bc391259669fe7f789a64f0269505883fce43d2"
+    },
+    {
+      "path": "additional-smokes/results/excluded_hello-format-tier1_dawn-300.json",
+      "bytes": 1459,
+      "sha256": "b2a7db5c0cb6972970ea63492d3bccd00cced7a67b66da85f8eccdcb2fc138fe"
+    },
+    {
+      "path": "additional-smokes/results/excluded_hello-m3-programmable-rendering_m10-dawn.json",
+      "bytes": 1180,
+      "sha256": "ce0237311ea856b7b98e3d0b6d9ee63f5de09d3510b806718bdcd4c5cbb04334"
+    },
+    {
+      "path": "additional-smokes/results/excluded_hello-m8-integrated-capstone_smoke.json",
+      "bytes": 1150,
+      "sha256": "98b5737216248297ad379519bfd3b1aa8c42fa1d56b7b908f0257f138760efc6"
+    },
+    {
+      "path": "additional-smokes/results/excluded_hello-physical-material_smoke.json",
+      "bytes": 1537,
+      "sha256": "36456aca36059f9b465c1fef52a1512b8e5b02c401c373df6b30a6a2a8aa29a9"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-1-1_hello-window.json",
+      "bytes": 1680,
+      "sha256": "559b55009a6e31da0e79dd7835a6541f0f0c827e20fcde92dc110174aeb2eaa0"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-1-3_shaders.json",
+      "bytes": 1700,
+      "sha256": "27828340f26fb0e653cd5cd5da55779c11085f11b2ae934c5ed10c1d28b69898"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-1-5_transformations.json",
+      "bytes": 1746,
+      "sha256": "a5e11a11532b298e9d9f5707560c778364ec05535206958b8fb7ef6f367e2af3"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-1-6_coordinate-systems.json",
+      "bytes": 71422,
+      "sha256": "f51d6acad184026e3779d45725f2f3ab41341e90cec3e388ab594bc051315780"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-6-2_ibl-irradiance.json",
+      "bytes": 1411,
+      "sha256": "c282d5982e5f1d451d74047d20102ff2cae74183bce1e9df88814f75e2ff6671"
+    },
+    {
+      "path": "additional-smokes/results/excluded_learn-render-6-3_ibl-specular.json",
+      "bytes": 1397,
+      "sha256": "26715c53449cadab33565327d948ad676e41bb91c614ea5efd7d7297e28bdebc"
+    },
+    {
+      "path": "additional-smokes/results/independent_hello-animation-graph_numerical.json",
+      "bytes": 1123,
+      "sha256": "6a3a812499b434dc4627b289ff6809caa832f1169882b2639e139e4d0ced669b"
+    },
+    {
+      "path": "additional-smokes/results/independent_hello-custom-shader_composite.json",
+      "bytes": 1559,
+      "sha256": "ac60a448c0b5e851e6282b8d156898078b104e73b341b76116f7f6c4c4161156"
+    },
+    {
+      "path": "additional-smokes/results/independent_hello-skin_writeback.json",
+      "bytes": 1077,
+      "sha256": "9304724315548e27ff0571742f49bb19d181a8e1135002172f7235e97b76f509"
+    },
+    {
+      "path": "additional-smokes/results/independent_learn-render-framebuffers_gauntlet.json",
+      "bytes": 1252,
+      "sha256": "e86c88669e16182569ed232b9e159ab668a73b30af54578e5b8ec0ee8e7ae47d"
+    },
+    {
+      "path": "additional-smokes/summary.json",
+      "bytes": 103241,
+      "sha256": "27b72c4d912fca88253c9ba2457f42992a7ff9fd44241a109f2679a33a70b0e1"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-2-lighting-1-colors.log",
+      "bytes": 8974,
+      "sha256": "8729b1570c25d3a676ba6c23b27089165723c8064ba1b7a6c9239329725f5793"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-2-lighting-2-basic-lighting.log",
+      "bytes": 807,
+      "sha256": "5067d31f29c74d1f3991d3766004a9c4e874b924dc8dc10a5a37ec7c66c49579"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-2-lighting-3-materials.log",
+      "bytes": 808,
+      "sha256": "57b696ff8fcfb9b9c69e22a59fc21e197ec3a77e75c26e4616e450b5a54a78a8"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-2-lighting-4-lighting-maps.log",
+      "bytes": 912,
+      "sha256": "3afdd32386657e7354e9f893f4fecf04c42b110c750745104e6eeeb70265b6b9"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-2-lighting-6-multiple-lights.log",
+      "bytes": 835,
+      "sha256": "ca9e876c84cb9b8278395f6c9b440bba88943c402a80186e799d6218794885c4"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-4-advanced-opengl-1-depth-testing.log",
+      "bytes": 853,
+      "sha256": "ca972dc1761e11df52bfa3244ebf340093e2f2c92ae9b9cf5716a90a2e7b9a7c"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-4-advanced-opengl-10-anti-aliasing-msaa.log",
+      "bytes": 346,
+      "sha256": "3d29c48a2c6637600a9aac96e38e7726676f25fbaad3783700caedb903699a79"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-4-advanced-opengl-2-stencil-testing.log",
+      "bytes": 1024,
+      "sha256": "79017b7f4747d710c2ef9637494793ed50975ede5e97702c3230d4d2332a85ba"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-4-advanced-opengl-3-blending.log",
+      "bytes": 932,
+      "sha256": "f12a4d36efc059db50bfacc496fb80608d9c82c4c1324d1ec9c7b5783f00d827"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-4-advanced-opengl-4-face-culling.log",
+      "bytes": 1019,
+      "sha256": "c3dd0dee583aaef676ff2a97cdab644d53cdbbf813441c1d43fb47d5887cc1f4"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-5-advanced-lighting-5-parallax-mapping.log",
+      "bytes": 377,
+      "sha256": "194212ad1348ba4f19370c67f6224585ed3aa8cdb4bf19d7bf30a619b7d38cfb"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-5-advanced-lighting-9-ssao.log",
+      "bytes": 326,
+      "sha256": "98a82c9faa017a6c458355fbb11c213d4f9dcb9b6f3e10b784ee92391ea17a24"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_app-learn-render-6-pbr-4-transmission-refraction.log",
+      "bytes": 292,
+      "sha256": "22cbfbb05f9de669f12096168871151410fa01d8232a33bb82ef344d478f79d5"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-cinder-fall.log",
+      "bytes": 1652,
+      "sha256": "3b2986e942960ce45f00ea09e009ffb02f8dd3696526b4206f38290287d8ba3f"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-cube.log",
+      "bytes": 559,
+      "sha256": "815626de2ee1c6c3ecc68bf78fd5cf28b3cc80cfd8b7dfc5b5649785df403400"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-deep-agent-feedback.log",
+      "bytes": 177,
+      "sha256": "8483bebdb37ae8d729eee4c6dbb34655ee3647bd09c2d59b8bcd81bd81383683"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-level-switch.log",
+      "bytes": 981,
+      "sha256": "810c9ef9d948b3b1144ac7754a71fe431971520ffb225d55a72d612aee67375b"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-physics.log",
+      "bytes": 693,
+      "sha256": "ed91df7e91474a744cc2816777d603a356cafcc8b892412e24ece68d61cae601"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-sprite-lit.log",
+      "bytes": 342,
+      "sha256": "d49a2066ed6124e6d3c4c1703c70bde44751f8acc0fcf906b5266bbd1adcf5a1"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-sprite.log",
+      "bytes": 1032,
+      "sha256": "61ed6cac100c2a669f4f330de186459c7b1be68cc24e15130314c208d4af4692"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-tilemap.log",
+      "bytes": 115,
+      "sha256": "210b11fd7254fb3f1cdaf404a72fd2c10b67e4c91beb48a2c4583f8fa93cbdcc"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-triangle.log",
+      "bytes": 329,
+      "sha256": "d000a1a3e77e85a4ebabbc682a6e3810612d3550b77ae38f1414a200a6248eba"
+    },
+    {
+      "path": "dawn-smokes/logs/@forgeax_hello-volumetric-fog.log",
+      "bytes": 319,
+      "sha256": "b09d341d8a975b2b8f25a88a7fbea7486923e59946a5e43474e8847cb20e7f05"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-1-getting-started-4-textures_smoke-smoke.log",
+      "bytes": 840,
+      "sha256": "2682eb4285b0726f1c74e1f1c5a9c985573d49c4cbfee52a822b085571637a1a"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-1-getting-started-7-camera_smoke-smoke.log",
+      "bytes": 683,
+      "sha256": "8b8d7d7d8c5a2c0f8bb74e37ac26587433c1cc9a3989d743d75edf8c21c82fd9"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-2-lighting-5-light-casters_smoke-smoke.log",
+      "bytes": 1026,
+      "sha256": "ec58dc0aca7e6b0244f14392cbdaca0cc57abfa72634bc8c2c725e6ca61bed9b"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-3-model-loading-1-model-loading_smoke-smoke.log",
+      "bytes": 606,
+      "sha256": "4b3502f9b905463a81c83b526949398fa8eccc054e3eafc6648920813d931243"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-4-advanced-opengl-6-cubemaps_smoke-smoke.log",
+      "bytes": 434,
+      "sha256": "be4d2d4e06c8152b9212aab835196ca4ded0868d26637aecdbd5988c21b29c68"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo_smoke-smoke.log",
+      "bytes": 262,
+      "sha256": "c297888182f7631466604112f1b0c6595b0cab64abce1e8867ecdd728f23ebe1"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-4-advanced-opengl-9-instancing_smoke-smoke.log",
+      "bytes": 667,
+      "sha256": "3b34a6954a93145f7b963da0d6c7977f25dc68580fc949ecef64de8ec27b3c0b"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-1-advanced-lighting_smoke-smoke.log",
+      "bytes": 422,
+      "sha256": "03614f6b0bfad4a6ef62143f2e674ad4b38bc083892a95703b5ad3eb152681f6"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-2-gamma-correction_smoke-smoke.log",
+      "bytes": 334,
+      "sha256": "a3443a4294e9569b26d687c30b63feac798b008c1393a759e52f00b79fcbe4c6"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-3-1-shadow-mapping-3-full_smoke-smoke.log",
+      "bytes": 311,
+      "sha256": "4b763e0f9e5452608cca7b7b325e2247fc4e52acaf026fb264a5cfc67ae951c9"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-3-2-point-shadows_smoke-smoke.log",
+      "bytes": 1217,
+      "sha256": "d7403b429ec1d060a4d70b0f12062d5bb2744145aa82adf125b31d28b6e9a6a1"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-3-3-csm_smoke-smoke.log",
+      "bytes": 1646,
+      "sha256": "1bcd425cd573af36ddd453a8c77479de79e634c3620ad8586ea5598254aaa2f7"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-4-normal-mapping_smoke-smoke.log",
+      "bytes": 466,
+      "sha256": "f0fc578aafa9a052ff7fce28a3d97d11c84d4f70cd793be92705d30e53563351"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-6-hdr_smoke-smoke.log",
+      "bytes": 419,
+      "sha256": "e48a4083386e58782a1b8f0c6c8e336f504c60eb7ce812fbcb7e81358f56d8b0"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-7-bloom_smoke-smoke.log",
+      "bytes": 512,
+      "sha256": "c57f87aa023f7c2e68148f66d2308b4e694271b0502db75bd08e26cf96175f61"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-5-advanced-lighting-8-deferred-shading_smoke-smoke.log",
+      "bytes": 265,
+      "sha256": "2f1f6e47804dbe2b73b6cc5bb246712f7fa4cc62b56e6dd1dd70f5f843b399d8"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-app-learn-render-6-pbr-4-render-target-reflection_smoke-smoke.log",
+      "bytes": 45582,
+      "sha256": "245ef80a0e7efb8457db098312b075bcb851ec4765354fbdb70140b09b8d2c70"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-collectathon_smoke-smoke.log",
+      "bytes": 534,
+      "sha256": "79d4c485f1eb6f9863893b9cf6b9e462602485438dd94c76d8a3158ba8d8dcce"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-2d-flashlight_smoke-smoke.log",
+      "bytes": 444,
+      "sha256": "d9c3b3675c870258ce5db222e841ee835da6fb78229435d0a86ff17eeca25133"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-app_smoke-smoke.log",
+      "bytes": 483,
+      "sha256": "e9e6a00c8b2de220e6bffae1fa224111f119574a4fb107521e8f142c1bd42513"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-asi-world_smoke-smoke.log",
+      "bytes": 365,
+      "sha256": "dfc11c1acb0953a86a05b1b38f9cb24ad40ec69366c41b94271c3fccd4da38b4"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-audio_smoke-smoke.log",
+      "bytes": 183,
+      "sha256": "40f379db6343984596c42fcacfcb32d71283dcbf3a5139b1cc123121790aa979"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-bloom_smoke-smoke.log",
+      "bytes": 4330,
+      "sha256": "0c8065c2b09c7587d773739e2ca49a5bb2669c79998b929c3b1d791fa31b5363"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-boss-lightning_smoke-smoke.log",
+      "bytes": 2525,
+      "sha256": "8d3cdbc4772d8292d4217075bb767b4e05752594683383a13b7e8d7e78409e07"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-character_smoke-smoke.log",
+      "bytes": 266,
+      "sha256": "257f3d9823bab6cdc0f6bad8c5f69c383a2798072e68af04a1c88e7f319df998"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-compressed-texture_smoke-smoke.log",
+      "bytes": 256,
+      "sha256": "117b3ec91a56f8d86f63c68bb753cf6b4ab895709e584725840b27a96d4f6539"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-culling_smoke-smoke.log",
+      "bytes": 872,
+      "sha256": "6a5eb019724f1b3886380394608b1cc9f07db531870d2f6589f8366eb4cdca28"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-custom-importer_smoke-smoke.log",
+      "bytes": 123720,
+      "sha256": "b711d090de75605a058ebaa742fa103029652e7b961d1a1c42233ce6a7d73ec6"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-custom-shader_direct-dawn-smoke.log",
+      "bytes": 1316,
+      "sha256": "708a88e3146e89d2e65603fc38f0e052ae1876a664b058ffef7515c64419a5dc"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-debug-draw_smoke-smoke.log",
+      "bytes": 2384,
+      "sha256": "e404a40266c0b2b8f7036fa75d5809d9649f7fb42bdfecd7eb84982cf23fc117"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-entity-visibility_smoke-smoke.log",
+      "bytes": 704,
+      "sha256": "d5b3fd464d13cf079236730da90e973778c5e966f361a1e636a856b565a643e8"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-fbx-cube_smoke-smoke.log",
+      "bytes": 353,
+      "sha256": "8acc27eea548b83cc8f666483daf2e7d59010c0bf40131f719dff572d333c073"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-fbx-skin_smoke-smoke.log",
+      "bytes": 394,
+      "sha256": "d6a1589654ba0390555c9a084fc873067bfea362f8db35d5466d27ebdd3edc4a"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-fxaa_smoke-smoke.log",
+      "bytes": 4273,
+      "sha256": "7535dc78af559a68c211b7308181eae5470d1f3b7079af433a22442833d41303"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-gltf-instancing_smoke-smoke.log",
+      "bytes": 826,
+      "sha256": "41a866b4919dbe312ac4577756e817fc88b0528b0efece22f69d032aa3535dc9"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-gltf_smoke-smoke.log",
+      "bytes": 804,
+      "sha256": "ad495985a814f5f81192f0fdd7bfbbe27b81a398f120cb75a11c7618840a233d"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-hdrp-lighting_smoke-smoke.log",
+      "bytes": 374,
+      "sha256": "a93d19ece426c9d39dffc1a077229b4bc3240dedaed21c184c83719d1866737b"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-lod-occlusion_smoke-smoke.log",
+      "bytes": 129,
+      "sha256": "776585052cbc8a0ed2171404bc14b59311f7dd1a4e55bb5ed5e19bbbff7c2499"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-multi-material_smoke-smoke.log",
+      "bytes": 292,
+      "sha256": "d288f246fda17dc427efa0cde7e8572b61c7b424ad1138a2046ab056869c9458"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-multi-world_smoke-smoke.log",
+      "bytes": 465,
+      "sha256": "f2960ac1eea1f5bdea6c2c0646102e055ab14959a87fc8c7a6075193f639d553"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-picking_smoke-smoke.log",
+      "bytes": 552,
+      "sha256": "5396db69d18ad42a31644ca5222edc07817acfa48cf4449dfece155a669a0d7a"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-room_smoke-smoke.log",
+      "bytes": 881,
+      "sha256": "7d2b5c7f2b1b4419792d6f12c9adb3d6af965ab8c3f51f70349f39df5323c344"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-scene-nesting_smoke-smoke.log",
+      "bytes": 555,
+      "sha256": "975cf464591371ebf0e0692176dcc80d250d05e24b80a01f78ddce9955663820"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-shadow-opt-out_smoke-smoke.log",
+      "bytes": 164,
+      "sha256": "2d17825f9f0a4bc9506690da99dc1951feea4baf8d796da277cc9245789fa338"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-skin_direct-dawn-direct-dawn.log",
+      "bytes": 674,
+      "sha256": "938426e2fa94c58ea45420c7be51b4976137090021cdb5d696aa77a0ceb733a9"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-sprite-atlas_smoke-smoke.log",
+      "bytes": 382,
+      "sha256": "a8a7a9a7335d8ecd55c921dc99a086201031f71b3a12c6d6308aea45e5feeec4"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-ssr_smoke-smoke.log",
+      "bytes": 65599,
+      "sha256": "18fcf65283baeb68bd10ac2f53d1eb82699b2747ba770264f561479138342c92"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-taa_smoke-smoke.log",
+      "bytes": 13029,
+      "sha256": "2f4bf0a81c80b0b850b0123f08927e204540d5a6193a89f8d0f2ebf69e01d52d"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-text_smoke-smoke.log",
+      "bytes": 409,
+      "sha256": "d2de282302ff74ce08f4a5c71f713461103656fb1706807adc676065fa177efd"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-tilemap-object-layer_smoke-smoke.log",
+      "bytes": 538,
+      "sha256": "85b2ef22cf552b8fee8a2dffcc476fba33d529fd2fb02034556a78e330a97d4b"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-tonemap_smoke-smoke.log",
+      "bytes": 662,
+      "sha256": "bcabe7d855f0a4dd668de1ba0f6fbf20a019fbbd1a55ed7efa63530b88e73271"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-topology_smoke-smoke.log",
+      "bytes": 1338,
+      "sha256": "19a9bb8b39d11cac9d53dae07dd04a8bd74ed9f257ac5643aa27ab24b7578430"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-transform-hierarchy_smoke-smoke.log",
+      "bytes": 953,
+      "sha256": "877550df3cca850b1fef37121faf6a0b82d11f730f43bbe5d7a043fc4e0621f3"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-hello-video-cutscene_smoke-smoke.log",
+      "bytes": 501,
+      "sha256": "d25d39c523f69273ee40328e38179538c5edca336f3826dbce5360de1224340e"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-learn-render-framebuffers_direct-dawn-smoke.log",
+      "bytes": 232,
+      "sha256": "c01f972b2fc98163597c40b9205ec47c31b43d3c60f9b77b913dbff20ca73040"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-shadertoy_happy-blob_smoke-smoke.log",
+      "bytes": 398,
+      "sha256": "3b26ee068ad1334091666441073696ab5c3b553703094ab40a2d3a01c3b1e92a"
+    },
+    {
+      "path": "dawn-smokes/logs/independent-video-texture_smoke-smoke.log",
+      "bytes": 507,
+      "sha256": "4fce233b968610c82e66eb6b1feff81a280e5af3d17abff33b30802171762670"
+    },
+    {
+      "path": "dawn-smokes/plan.json",
+      "bytes": 65290,
+      "sha256": "4595265a8552efcb49606cdd51e09869dc61088e9396d5dcef906b15aa6989cb"
+    },
+    {
+      "path": "dawn-smokes/shard-0.json",
+      "bytes": 103925,
+      "sha256": "4ff3415d319190e32463be5f58287f88a8668fa0890bc3e4017999966971c7fc"
+    },
+    {
+      "path": "dawn-smokes/shard-1.json",
+      "bytes": 104235,
+      "sha256": "02692213ec33c9b32de41bb5f594a114b5e78f493e5d690b5b3136ff83eda066"
+    },
+    {
+      "path": "dawn-smokes/shard-2.json",
+      "bytes": 103825,
+      "sha256": "2e539680f587ceabc477bce3976b624e66c8b2bdd2292a6498045eff356b4e57"
+    },
+    {
+      "path": "dawn-smokes/shard-3.json",
+      "bytes": 102694,
+      "sha256": "e25bc756455791a7f6c909df35aac4fb6921debdf40cc55b989fee7f81e725f3"
+    },
+    {
+      "path": "dawn-smokes/summary.json",
+      "bytes": 85629,
+      "sha256": "774e89de28bc558c02a190dd6ef8592b9cde9f90ab4a265bc6215b9136c6bb22"
+    },
+    {
+      "path": "ibl-baseline-974757dc/irradiance.log",
+      "bytes": 750,
+      "sha256": "5973858c6c44c17ec6d6cddc7d73008979376fb67e4e91d05f01ab7d69fb2a6f"
+    },
+    {
+      "path": "ibl-baseline-974757dc/specular.log",
+      "bytes": 824,
+      "sha256": "852e0c1ef91b609e730c7871195eaf36fedb23e62d5c148814308c7121e6af2c"
+    },
+    {
+      "path": "validation/happy-blob-smoke-falsify-rerun.log",
+      "bytes": 807,
+      "sha256": "93d383db7a04772e647f6b0bab26f2c10d1b730d58747cb8984d643d0a386ff5"
+    },
+    {
+      "path": "validation/happy-blob-smoke-rerun-2.log",
+      "bytes": 394,
+      "sha256": "31fe1cfc0f82a6ef4b945bb86bfb26203810797cf976eafb99884f8b07447fd1"
+    },
+    {
+      "path": "validation/happy-blob-smoke-rerun.log",
+      "bytes": 697,
+      "sha256": "c5aa9331f6e4e8453e9462c0cc4bc14394d9df33406bd65781c7af2984bcadbd"
+    },
+    {
+      "path": "validation/msaa-smoke-falsify-rerun.log",
+      "bytes": 649,
+      "sha256": "14afffa0b5923059d5d3cb02922b3ffc2ab1709955380047b9f862fa3e317207"
+    },
+    {
+      "path": "validation/msaa-smoke-rerun.log",
+      "bytes": 374,
+      "sha256": "1b44590f58b6b97c5e85d77dc74655af70a4904784130e45e20e08ee600de82a"
+    },
+    {
+      "path": "validation/transmission-ordinary-rerun-2.log",
+      "bytes": 6027,
+      "sha256": "56198baf2c2d60c7a04c646898b2888f12a486129361a6bd5a4312f3f8057453"
+    },
+    {
+      "path": "validation/transmission-ordinary-rerun-3.log",
+      "bytes": 262,
+      "sha256": "483256037be4af2a4f59c59589f9ec4db5e0a51842bd2bdc712520a31822992f"
+    },
+    {
+      "path": "validation/transmission-ordinary-rerun.log",
+      "bytes": 5952,
+      "sha256": "a6a7f4d1c18c0d87e7975103cb2c1ec2ca2a565926e6e33775540a34e5b57ab0"
+    },
+    {
+      "path": "validation/transmission-smoke-rerun-2.log",
+      "bytes": 320,
+      "sha256": "915a69feb273b47f0e2063c83699b0d1c1c4b52a92bbbfb2266747cbabc55fce"
+    },
+    {
+      "path": "validation/transmission-smoke-rerun.log",
+      "bytes": 3497,
+      "sha256": "3faeadd9e916bdf0243e2e8768fb7576f231ee5d7c66c6a8e8f6f0919d1544da"
+    }
+  ]
+}

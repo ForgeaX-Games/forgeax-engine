@@ -17,18 +17,14 @@
 //   (C) edge -- vertex count zero (empty mesh, empty skin streams) does
 //       not panic and unpacks to a vertex-less mesh with no skin streams.
 
-import { unpackMeshBinV4 } from '@forgeax/engine-assets-runtime';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
+import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import { packMeshBin } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
-
-const FLOATS_PER_VERTEX_18 = 18;
-const FLOATS_PER_VERTEX_12 = 12;
 
 describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () => {
   it('preserves skinIndex (Uint16Array) and skinWeight (Float32Array) through pack -> unpack', () => {
     const vertexCount = 4;
-    const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX_18);
-    for (let i = 0; i < vertices.length; i++) vertices[i] = i * 0.5;
     const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
     const skinIndex = new Uint16Array(vertexCount * 4);
     const skinWeight = new Float32Array(vertexCount * 4);
@@ -37,30 +33,24 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
       skinWeight[i] = i / skinIndex.length;
     }
 
-    const packed = packMeshBinV4(
-      {
-        vertices,
-        indices,
-        attributes: {
-          position: new Float32Array(vertexCount * 3),
-          normal: new Float32Array(vertexCount * 3),
-          uv: new Float32Array(vertexCount * 2),
-          tangent: new Float32Array(vertexCount * 4),
-          skinIndex,
-          skinWeight,
-        },
-      },
-      'runtime://skin-roundtrip',
-    );
+    const attributes = {
+      position: Float32Array.from({ length: vertexCount * 3 }, (_, i) => i * 0.5),
+      normal: new Float32Array(vertexCount * 3),
+      uv: new Float32Array(vertexCount * 2),
+      tangent: new Float32Array(vertexCount * 4),
+      skinIndex,
+      skinWeight,
+    };
+    const { vertices } = packInterleavedVertexAttributes(attributes, vertexCount).unwrap();
+    const packed = packMeshBin({ vertices, indices, attributes }, 'runtime://skin-roundtrip');
     expect(packed.ok).toBe(true);
     if (!packed.ok) return;
-    const unpacked = unpackMeshBinV4(packed.value, 'runtime://skin-roundtrip');
+    const unpacked = unpackMeshBin(packed.value, 'runtime://skin-roundtrip');
     expect(unpacked.ok).toBe(true);
     if (!unpacked.ok) return;
 
     expect(unpacked.value.vertices).toBeInstanceOf(Float32Array);
-    expect(unpacked.value.vertices.length).toBe(vertices.length);
-    expect(unpacked.value.vertices.length).toBe(vertices.length);
+    expect(unpacked.value.vertices).toEqual(vertices);
 
     expect(unpacked.value.indices).toBeInstanceOf(Uint16Array);
     expect(Array.from(unpacked.value.indices ?? [])).toEqual(Array.from(indices));
@@ -80,8 +70,6 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
 
   it('unskinned mesh: pack omits skin streams; unpack returns no skin attributes', () => {
     const vertexCount = 4;
-    const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX_12);
-    for (let i = 0; i < vertices.length; i++) vertices[i] = i;
     const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
 
     const attributes = {
@@ -90,8 +78,9 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
       uv: new Float32Array(vertexCount * 2),
       tangent: new Float32Array(vertexCount * 4),
     };
-    const packedNoSkin = packMeshBinV4({ vertices, indices, attributes }, 'runtime://no-skin');
-    const packedEmptyAttrs = packMeshBinV4({ vertices, indices, attributes }, 'runtime://no-skin');
+    const { vertices } = packInterleavedVertexAttributes(attributes, vertexCount).unwrap();
+    const packedNoSkin = packMeshBin({ vertices, indices, attributes }, 'runtime://no-skin');
+    const packedEmptyAttrs = packMeshBin({ vertices, indices, attributes }, 'runtime://no-skin');
     expect(packedNoSkin.ok).toBe(true);
     expect(packedEmptyAttrs.ok).toBe(true);
     if (!packedNoSkin.ok || !packedEmptyAttrs.ok) return;
@@ -102,7 +91,7 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
     // skin payload, no skin keys in JSON tail).
     expect(bytesNoSkin.byteLength).toBe(bytesEmptyAttrs.byteLength);
 
-    const unpacked = unpackMeshBinV4(bytesNoSkin, 'runtime://no-skin');
+    const unpacked = unpackMeshBin(bytesNoSkin, 'runtime://no-skin');
     expect(unpacked.ok).toBe(true);
     if (!unpacked.ok) return;
     expect(unpacked.value.attributes.skinIndex).toBeUndefined();
@@ -117,7 +106,7 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
     const skinIndex = new Uint16Array(0);
     const skinWeight = new Float32Array(0);
 
-    const packed = packMeshBinV4(
+    const packed = packMeshBin(
       {
         vertices,
         indices,
@@ -134,7 +123,7 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
     );
     expect(packed.ok).toBe(true);
     if (!packed.ok) return;
-    const unpacked = unpackMeshBinV4(packed.value, 'runtime://empty-skin');
+    const unpacked = unpackMeshBin(packed.value, 'runtime://empty-skin');
     expect(unpacked.ok).toBe(true);
     if (!unpacked.ok) return;
     expect(unpacked.value.vertices.length).toBe(0);

@@ -6,6 +6,12 @@
 
 ## Explicit DDC lifecycle contract
 
+### Development publication
+
+Virtual modules are invalidated after an accepted rebind, while page refresh
+remains the existing optional host callback. Generated asset declarations use
+the resolved Vite root and are replaced only when their content changes.
+
 The host owns project identity and injects both DDC roots. The plugin does not
 derive a root from the working directory, an asset root, a game basename, or a
 URL:
@@ -36,6 +42,20 @@ silently promoted or shipped. `runtimeBinding` carries the active scope and
 generation to the browser consumer. Closing or rebinding a host releases the
 old lease and cannot publish a discarded candidate.
 
+External Meta imports use the same publication boundary in dev mode. The Pack
+finalizer returns the complete artifact closure, including each producer MIME
+type; the live artifact transport map is updated only after the DDC publication
+is accepted. A staged production candidate owns disposable Pack and artifact
+maps until its outer generation commits. Failed, aborted, or discarded
+candidates therefore leave the accepted Catalog, Pack body, artifact bytes,
+and imported GUID set available for the next same-source retry.
+
+After a process restart, dev transport may rebuild its in-memory Pack and
+artifact maps from the matching `current` DDC entry when the complete closure
+is present. This is a read-through cache warm-up only: an incomplete or
+non-current entry falls back to the declared producer, while `lastKnownGood`
+and `stale` entries remain unavailable for serving.
+
 Consumers should pass the same explicit `ddc` object to every plugin entry
 point. Do not add legacy, v1, compatibility, basename, or URL fallback paths.
 
@@ -43,7 +63,7 @@ point. Do not add legacy, v1, compatibility, basename, or URL fallback paths.
 
 ### Public ScriptablePack consumer contract
 
-`SCRIPTABLE_PACK_CAPABILITY_MANIFEST` publishes the 16 durable kinds and the
+`SCRIPTABLE_PACK_CAPABILITY_MANIFEST` publishes the 17 durable kinds and the
 three Host capability boundaries. Dev and production use the same Pack v2,
 Catalog, payload, `refs`, `artifacts`, receipts, and structured recovery
 fields; only the transport locator changes. Do not add a sidecar fallback for
@@ -52,12 +72,48 @@ a valid ScriptablePack GUID.
 The ordered durable matrix is `mesh`, `material`, `scene`, `texture`,
 `equirect`, `sampler`, `font`, `render-pipeline`, `tileset`, `video`,
 `skeleton`, `skin`, `animation-clip`, `animation-graph`, `audio`, and
-`particle-effect`; its SSOT is `SCRIPTABLE_PACK_ASSET_KINDS` in
+`particle-effect`, and `ies-profile`; its SSOT is `SCRIPTABLE_PACK_ASSET_KINDS` in
 `@forgeax/engine-pack`.
 
 ### ScriptablePack publication
 
+Development publication acquires a fresh source lease only when the worklist
+builds that source or instance. One recyclable worker serves the serial
+worklist; each retry reloads the module, and the whole pool closes on either
+publication success or failure. Inventory keeps metadata, not pending worker
+leases. Module/build timeouts and accepted-publication recovery remain unchanged.
+
+Custom Material outputs use the host's registered `material` NativeCooker in
+both dev and build. Its transitive WGSL paths participate in the same watcher
+closure and its fingerprint participates in the same publication identity.
+No Pack source edit is required to notice a WGSL-only change.
+
+After a failed rebuild, the scoped Catalog reports degraded authority and its
+diagnostics while preserving accepted entries and bytes. New lazy imports are
+fenced; explicit `x-forgeax-import-mode: rebuild` requests and already-published
+asset URLs remain usable for recovery. A degraded rebuild scan fails the production
+transaction before publication, including scans that return diagnostics without
+throwing. Its HMR delta carries diagnostics with empty identity changes, so a
+failed scan cannot remove accepted rows. Unknown asset URLs cannot start new
+production through this exception. Initial startup failure serves a structured failure until a watcher rebuild
+accepts a complete inventory; it creates no accepted empty snapshot. After
+repair, GUID materialization uses that accepted generation rather than the
+cached first startup result. Expired runtime generations remain closed. An external Meta importer can instead publish one
+failed row while unrelated rows remain authoritative. Its row diagnostics are
+the rejection signal, and the watcher retains the current page so consumers can
+keep their last accepted payload and recover in place.
+
+Repeated scoped Catalog reads reuse one serialized body per accepted projection
+and runtime binding. Lazy publications, changed diagnostics and scope changes
+invalidate that body; the request freshness barrier still runs before reuse.
+
 `pluginPack({ roots })` automatically inventories trusted `*.pack.ts` sources. The production defaults compose the standard output registry and a fixed staged generation; hosts inject only roots, importers, native cookers, runtime binding, refresh, and DDC policy. A bounded authored build timeout is returned as the structured build-phase failure and the generation keeps its previous Catalog/Pack publication until a corrected source succeeds. Scanner/Catalog projection reads only the validated definition; explicit cook calls `build`, finalizes all outputs into one Pack v2 transaction, publishes one receipt per output GUID, and stores canonical Meta as `scriptable-pack.meta.json` in that package.
+
+Development serializes watcher rebuilds and explicit imports through the
+same production session, so independent lazy publications retain each other's
+Catalog, Pack and artifact changes. Close aborts active work and drains queued
+requests before the session releases ownership. Every rebuild inventories all
+configured roots; a request GUID never narrows the authoritative inventory.
 
 Dev and build share one scanner inventory and one bounded producer session. The
 inventory contains canonical declaration identity, producer kind, projected
@@ -97,7 +153,7 @@ never silently reach the runtime loader.
 
 ## Authoring and recovery index
 
-The audit input and category conclusions live in [`asset-authority.schema.json`](../../asset-authority.schema.json); the executable gate is [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs). This plugin projects producer facts into Catalog rows. It does not become the author authority, DDC owner, or Editor write gateway.
+The audit input and category conclusions live in [`schemas/asset-authority.schema.json`](../../schemas/asset-authority.schema.json); the executable gate is [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs). This plugin projects producer facts into Catalog rows. It does not become the author authority, DDC owner, or Editor write gateway.
 
 | Need | Entry | Safe action |
 |:--|:--|:--|
@@ -138,10 +194,25 @@ When source bytes change, keep the evidence state explicit: `notCooked`, `ready/
 
 # Catalog transport and host refresh
 
+`watch: false` freezes a development catalog session. DevKit uses it while compiling a replacement plugin session; its Vite watcher owns the eventual full reload. Ordinary Pack hosts retain source watching by default. Changed-source requests cannot refresh a frozen catalog in place.
+
 > [!IMPORTANT]
 `pluginPack` publishes a typed Catalog delta through the scoped Vite channel. A
 `CatalogDelta` says which rows were added, changed, or removed; it does not
-decide whether a host reloads. Hosts that need a reload opt in explicitly.
+decide whether a host reloads. Hosts that need a reload on ordinary successful
+edits opt in explicitly.
+
+Repeated file notifications for an already accepted authored publication keep
+the Catalog authoritative when its source/output tuple is unchanged. The
+producer validates that tuple; watcher timing alone cannot establish a revision
+conflict. Rows without publication evidence retain the Catalog revision guard.
+
+Recovery from a degraded watcher generation has a mandatory refresh: once an
+authoritative rebuild succeeds, the plugin sends `full-reload` to every Vite
+server configured on that plugin, even if the repaired source restores the
+same Catalog revision or the host supplies an empty `refresh` callback. Failed
+rebuilds keep the current page. Independent plugin instances retain their own
+server sets.
 
 The browser adapter is `createCatalogClient(enumerate, import.meta.hot)`. It
 provides the browser-side subscription and enumeration pair; the application
@@ -239,6 +310,16 @@ and materializes the owning declaration at the first GUID request. Both modes
 use the same producer and finalizer; an absent importer, cooker, or source
 dependency returns a structured failure and never invents a raw runtime row.
 
+A failed startup or failed Pack session returns HTTP 500 with the original
+producer diagnostic. Starting and transitioning sessions keep HTTP 503.
+Callers therefore stop polling an already failed producer without spending a
+second startup deadline. Repair and reopen the project explicitly.
+
+Catalog diagnostics and HTTP failures retain a bounded, JSON-safe `cause`
+projection, including nested producer codes, source paths, and module diagnostics.
+Only the named diagnostic fields cross this boundary; arbitrary objects and
+stacks are omitted. Inspect these fields before repairing the owning source.
+
 The `runtimeBinding` identifies the active scope and generation for dev
 transport. A late request from an old generation is rejected, and a failed
 rebuild serves only the previous accepted publication. `lastKnownGood` remains
@@ -284,3 +365,13 @@ The plugin owns Catalog projection and dev/build transport projection. It does n
 source authoring, DDC persistence policy, runtime payload semantics, or Editor
 write operations. Those boundaries remain in the source package, producer,
 assets-runtime, and asset-authoring gateway respectively.
+
+## Idle revision probes
+
+Native watcher hints reconcile immediately. The missed-event probe waits after
+snapshot completion for `max(probeMs, min(snapshotMs * 10, 60000))` milliseconds,
+so expensive filesystem walks do not continuously occupy the dev server. The
+60-second bound applies to the wait, not to snapshot or cook execution time.
+`drain()` requests a fresh snapshot even when an earlier crawl is in flight,
+so writes preceding the call are observed without waiting for the next probe
+deadline. Shutdown cancels the timer and awaits in-flight work.

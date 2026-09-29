@@ -58,7 +58,6 @@ function buildMockInstanceWithRealDevice(): {
     e.copyTextureToTexture = vi.fn();
     e.clearBuffer = vi.fn();
     e.resolveQuerySet = vi.fn(() => rOk(undefined));
-    e.writeTimestamp = vi.fn();
     e.pushDebugGroup = vi.fn();
     e.popDebugGroup = vi.fn();
     e.insertDebugMarker = vi.fn();

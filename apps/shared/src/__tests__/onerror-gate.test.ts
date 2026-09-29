@@ -260,6 +260,75 @@ describe('SUT GPU lifecycle', () => {
     expect(rendererDisposeCount).toBe(1);
   });
 
+  it('retains an app when a real smoke bootstrap has no test owner', async () => {
+    let disposalStarted = false;
+    let releaseDispose!: () => void;
+    const owner = {};
+    const app = {
+      renderer: { dispose() {} },
+      dispose() {
+        disposalStarted = true;
+        return new Promise<void>((resolve) => {
+          releaseDispose = resolve;
+        });
+      },
+    };
+
+    trackLearnRenderTestBootstrap(Promise.resolve(), owner);
+    exposeLearnRenderTestApp(app, owner);
+    await Promise.resolve();
+
+    expect(disposalStarted).toBe(false);
+
+    const disposing = disposeLearnRenderTestApp(owner);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposalStarted).toBe(true);
+    releaseDispose();
+    await disposing;
+  });
+
+  it('disposes a late app while its tracked bootstrap is still pending', async () => {
+    let releaseBootstrap!: () => void;
+    let appDisposeCount = 0;
+    let rendererDisposeCount = 0;
+    const owner = {};
+    await beginLearnRenderTestLifecycle(owner);
+
+    const bootstrap = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    trackLearnRenderTestBootstrap(bootstrap, owner);
+
+    const teardown = disposeLearnRenderTestApp(owner);
+    await Promise.resolve();
+    exposeLearnRenderTestApp(
+      {
+        renderer: {
+          dispose() {
+            rendererDisposeCount += 1;
+          },
+        },
+        async dispose() {
+          appDisposeCount += 1;
+        },
+      },
+      owner,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(appDisposeCount).toBe(1);
+    expect(rendererDisposeCount).toBe(1);
+
+    releaseBootstrap();
+    await teardown;
+    await disposeLearnRenderTestApp(owner);
+    expect(appDisposeCount).toBe(1);
+    expect(rendererDisposeCount).toBe(1);
+    await disposeLearnRenderTestApp(owner);
+    expect(appDisposeCount).toBe(1);
+    expect(rendererDisposeCount).toBe(1);
+  });
+
   it('propagates a tracked bootstrap rejection through the wait API', async () => {
     const owner = {};
     const failure = new Error('bootstrap wait failed');

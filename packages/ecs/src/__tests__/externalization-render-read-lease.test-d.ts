@@ -13,7 +13,7 @@ const lease = createRenderReadLease(world);
 const request: RenderProjectionRequest = {
   components: [{ component: Position, fields: ['x'] }],
 };
-const batch = lease.readChanges(lease.inspectCursor());
+const batch = lease.readChanges(lease.captureVersion());
 const projection = lease.querySpans(request);
 
 expectTypeOf(lease.worldIdentity).toEqualTypeOf<string>();

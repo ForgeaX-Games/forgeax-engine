@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { solidTexture } from './texture-fixture.mjs';
 // smoke-falsify.mjs -- feat-20260629-multi-uv-set-support m5-w4
 //
 // Visual falsification variant for AC-10. Constructs the same 2-UV-set
@@ -21,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const SMOKE_MIN_FRAMES = 300;
+const SMOKE_MIN_FRAMES = 60;
 const SMOKE_PIXEL_THRESHOLD = 0.05;
 
 const WIDTH = 200;
@@ -194,36 +195,8 @@ const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@fo
 
 const world = new World();
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
-const baseColorTexture = {
-  kind: 'texture',
-  width: 2,
-  height: 2,
-  format: 'rgba8unorm',
-  data: new Uint8Array([
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-  ]),
-  colorSpace: 'linear',
-  mipmap: false,
-};
-const baseColorTextureHandle = world.allocSharedRef('TextureAsset', baseColorTexture);
-const detailTexture = {
-  kind: 'texture',
-  width: 2,
-  height: 2,
-  format: 'rgba8unorm',
-  data: new Uint8Array([
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-  ]),
-  colorSpace: 'linear',
-  mipmap: false,
-};
-const detailTextureHandle = world.allocSharedRef('TextureAsset', detailTexture);
+const baseColorTextureHandle = world.allocSharedRef('TextureAsset', solidTexture([255, 128, 64, 255]));
+const detailTextureHandle = world.allocSharedRef('TextureAsset', solidTexture([64, 192, 255, 255]));
 const meshAsset = {
   kind: 'mesh',
   vertices,
@@ -280,7 +253,9 @@ try {
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const created = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!created.ok) throw created.error;
+  renderer = created.value;
 } catch (err) {
   console.error(`[falsify-smoke] FAIL - createRenderer threw: ${err}`);
   process.exit(1);
@@ -289,10 +264,21 @@ try {
 }
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
+const drawFrame = () => renderer.draw({
+  leases: [lease],
+  camera: { lease },
+  environment: { lease },
+});
 
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') {
+    if (errors.length === 0) console.error('[falsify-smoke] first renderer error:', JSON.stringify(event.error));
+    errors.push(event.error);
+  }
+});
 
 const demoShaderEntry = (manifestParsed.materialShaders ?? []).find(
   (entry) => entry?.identifier === DEMO_MATERIAL_SHADER_PATH,
@@ -324,29 +310,17 @@ if (
   process.exit(1);
 }
 console.log('[falsify-smoke] texture binding: PASS schema=baseColorTexture+detailTexture textureSample=true');
-if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
-  renderer.shader.installMaterialArtifact(DEMO_MATERIAL_SHADER_PATH, {
-    source: demoComposedWgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'baseColorUvTransform', type: 'vec4' },
-      { name: 'baseColorTexture', type: 'texture2d' },
-      { name: 'detailTexture', type: 'texture2d' },
-    ],
-    bindingLayout: [],
-  });
-}
 
 const yieldTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 for (let warm = 0; warm < 16; warm++) {
   world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  drawFrame();
   await yieldTick();
 }
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[falsify-smoke] draw frame ${i} error: ${r.error.code}`);
 }
 await sharedDevice.queue.onSubmittedWorkDone();

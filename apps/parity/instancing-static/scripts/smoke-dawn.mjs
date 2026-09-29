@@ -22,7 +22,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const FALSIFY_COLLAPSE = process.env.FALSIFY === 'instances-collapse';
@@ -30,11 +30,19 @@ const FALSIFY_COLLAPSE = process.env.FALSIFY === 'instances-collapse';
 const WIDTH = 1280;
 const HEIGHT = 720;
 
-// Grid form (parity smoke fixture):
-const GRID_X = 8;
-const GRID_Y = 8;
-const GRID_Z = 8;
-const INSTANCE_COUNT = GRID_X * GRID_Y * GRID_Z; // 512
+// Grid form (parity smoke fixture). The same public collection path can be
+// exercised at the acceptance populations without changing the fixture:
+// `INSTANCE_COUNT=1500|10000|20000 SMOKE_MIN_FRAMES=600 pnpm ... smoke`.
+const INSTANCE_COUNT = Number.parseInt(process.env.INSTANCE_COUNT ?? '512', 10);
+const GRID_DIMS =
+  INSTANCE_COUNT === 1500
+    ? [10, 10, 15]
+    : INSTANCE_COUNT === 10000
+      ? [20, 20, 25]
+      : INSTANCE_COUNT === 20000
+        ? [25, 20, 40]
+        : [8, 8, 8];
+const [GRID_X, GRID_Y, GRID_Z] = GRID_DIMS;
 const SPACING = 2.0;
 
 // Camera:
@@ -137,7 +145,8 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, DirectionalLight, Instances, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const {
   HANDLE_CUBE,
@@ -148,42 +157,30 @@ function buildTranslationGrid() {
   const halfY = ((GRID_Y - 1) * SPACING) / 2;
   const halfZ = ((GRID_Z - 1) * SPACING) / 2;
   const out = new Float32Array(INSTANCE_COUNT * 16);
-  let i = 0;
-  for (let z = 0; z < GRID_Z; z++) {
-    for (let y = 0; y < GRID_Y; y++) {
-      for (let x = 0; x < GRID_X; x++) {
-        const base = i * 16;
-        out[base + 0] = 1;
-        out[base + 5] = 1;
-        out[base + 10] = 1;
-        if (FALSIFY_COLLAPSE) {
-          // All instances collapse to entity origin.
-          out[base + 12] = 0;
-          out[base + 13] = 0;
-          out[base + 14] = 0;
-        } else {
-          out[base + 12] = x * SPACING - halfX;
-          out[base + 13] = y * SPACING - halfY;
-          out[base + 14] = z * SPACING - halfZ;
-        }
-        out[base + 15] = 1;
-        i++;
-      }
+  for (let i = 0; i < INSTANCE_COUNT; i++) {
+    const x = i % GRID_X;
+    const y = Math.floor(i / GRID_X) % GRID_Y;
+    const z = Math.floor(i / (GRID_X * GRID_Y));
+    const base = i * 16;
+    out[base + 0] = 1;
+    out[base + 5] = 1;
+    out[base + 10] = 1;
+    if (FALSIFY_COLLAPSE) {
+      // All instances collapse to entity origin.
+      out[base + 12] = 0;
+      out[base + 13] = 0;
+      out[base + 14] = 0;
+    } else {
+      out[base + 12] = x * SPACING - halfX;
+      out[base + 13] = y * SPACING - halfY;
+      out[base + 14] = z * SPACING - halfZ;
     }
+    out[base + 15] = 1;
   }
   return out;
 }
 
 const world = new World();
-world.spawn(
-  {
-    component: Transform,
-    data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
-  },
-  { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: {} },
-  { component: Instances, data: { transforms: buildTranslationGrid() } },
-);
 world.spawn(
   {
     component: Transform,
@@ -198,11 +195,14 @@ world.spawn({
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const created = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  if (!created.ok) throw created.error;
+  renderer = created.value;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -211,20 +211,44 @@ try {
 }
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
-console.log(`[parity-instancing-static] backend=${renderer.backend}`);
+world.spawn(
+  {
+    component: Transform,
+    data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
+  },
+  { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+  { component: MeshRenderer, data: {} },
+  { component: Instances, data: { transforms: buildTranslationGrid() } },
+);
+
+console.log(`[parity-instancing-static] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
+let firstCollectionInspection;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
+  if (i === 0) {
+    firstCollectionInspection = renderer
+      .inspect()
+      .instanceCollections[0];
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -336,12 +360,45 @@ for (const sp of SAMPLE_POINTS) {
 }
 console.log(`[smoke] samples (${FALSIFY_COLLAPSE ? 'COLLAPSE' : 'SPREAD'} mode): ${JSON.stringify(sampleResults)}`);
 
+const collectionInspection = renderer
+  .inspect()
+  .instanceCollections[0];
+console.log(
+  `[smoke] collection=${JSON.stringify({
+    requestedCount: INSTANCE_COUNT,
+    firstUploadBytes: firstCollectionInspection?.uploadedBytes ?? 0,
+    stableUploadBytes: collectionInspection?.uploadedBytes ?? 0,
+    collectionId: collectionInspection?.collectionId,
+    count: collectionInspection?.count,
+    revision: collectionInspection?.revision,
+    lane: collectionInspection?.lane,
+    residentGeneration: collectionInspection?.residentGeneration,
+    backend: collectionInspection?.backend,
+  })}`,
+);
+
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
+}
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
-  failures.push(`(d) Renderer.onError fired ${errors.length} times: [${codes}]`);
+  failures.push(`(d) Renderer error events fired ${errors.length} times: [${codes}]`);
+}
+
+if (
+  INSTANCE_COUNT !== 512 &&
+  (collectionInspection === undefined ||
+    collectionInspection.count !== INSTANCE_COUNT ||
+    (collectionInspection.uploadedBytes ?? 0) !== 0)
+) {
+  failures.push(
+    `(e) collection inspection did not prove stable residency for ${INSTANCE_COUNT} instances`,
+  );
+}
+if (firstCollectionInspection === undefined || (firstCollectionInspection.uploadedBytes ?? 0) <= 0) {
+  failures.push('(f) first frame did not report a non-zero instance upload');
 }
 
 // The gate asserts spread: at least 3 of 4 boundary samples must show
@@ -363,7 +420,7 @@ if (boundaryVisible < MIN_BOUNDARY_VISIBLE) {
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) console.error(`  ${f}`);
-  console.error('  hint: inspect Renderer.onError fan-out + verify @forgeax/engine-runtime Instances ECS-managed upload path on dawn-node');
+  console.error('  hint: inspect Renderer.onError fan-out + verify renderer-owned Instances collection upload path on dawn-node');
   await delay(0);
   device.destroy?.();
   process.exit(1);

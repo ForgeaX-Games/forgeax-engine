@@ -1,5 +1,6 @@
 import type { TextureFormat } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
+import type { DeviceScope, LifecycleResourceSpec } from '../device/device-scope';
 import { type RenderError, RenderFeaturePreparationFailedError } from '../errors/render';
 import type {
   PreparedKind,
@@ -10,9 +11,16 @@ import type {
   RenderFeaturePreparedRef,
   RenderFeatureVertexDataDescriptor,
 } from './prepared-graphics';
+import { RENDER_FEATURE_VERTEX_LAYOUTS } from './prepared-graphics';
 import type { RenderFeatureTargetHandle } from './targets';
 
 export type PreparedGraphicsKind = Exclude<PreparedKind, 'attachment'>;
+
+const PARTICLE_MATERIAL_INPUT_LAYOUTS: ReadonlySet<string> = new Set([
+  RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInputInstance,
+  RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentMaterialInputInstance,
+  RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInputInstance,
+]);
 
 export type PreparedGraphicsRequestByKind = {
   pipeline: RenderFeaturePipelineDescriptor;
@@ -63,6 +71,7 @@ export interface PreparedGraphicsTransaction {
     name: string,
     descriptor: PreparedGraphicsRequestByKind[Kind] | PreparedGraphicsSignature,
   ): Result<RenderFeaturePreparedRef<Kind>, RenderError>;
+  retainResources(matches: (name: string) => boolean): void;
   committedItems(): readonly PreparedGraphicsItem[];
   overlayItems(): readonly PreparedGraphicsItem[];
   owns(reference: RenderFeaturePreparedRef): boolean;
@@ -81,6 +90,7 @@ export interface PreparedGraphicsStore {
   beginFrame(featureIdentity: string, generation: number): PreparedGraphicsTransaction;
   snapshot(featureIdentity: string): PreparedGraphicsStoreSnapshot;
   invalidate(featureIdentity: string, generation: number): void;
+  createRecoveryRoot(scope: DeviceScope): LifecycleResourceSpec<unknown>;
 }
 
 interface Slot {
@@ -183,6 +193,9 @@ function normalizeDescriptor(
         kind,
         shader: pipeline.shader,
         vertexLayout: pipeline.vertexLayout,
+        ...(pipeline.particleInputLanes === undefined
+          ? {}
+          : { particleInputLanes: pipeline.particleInputLanes }),
         colorFormats: Object.freeze([...pipeline.colorFormats]),
         ...(pipeline.depthFormat === undefined ? {} : { depthFormat: pipeline.depthFormat }),
         ...(pipeline.sampleCount === undefined ? {} : { sampleCount: pipeline.sampleCount }),
@@ -261,6 +274,27 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     name: string,
     request: PreparedGraphicsRequestByKind[Kind] | PreparedGraphicsSignature,
   ): Result<RenderFeaturePreparedRef<Kind>, RenderError> {
+    if (kind === 'pipeline' && !('signature' in request)) {
+      const pipeline = request as RenderFeaturePipelineDescriptor;
+      const lanes = pipeline.particleInputLanes;
+      const usesParticleMaterialInputs = PARTICLE_MATERIAL_INPUT_LAYOUTS.has(pipeline.vertexLayout);
+      const validLanes =
+        typeof lanes === 'number' && Number.isInteger(lanes) && lanes >= 1 && lanes <= 4;
+      if (
+        (usesParticleMaterialInputs && !validLanes) ||
+        (!usesParticleMaterialInputs && lanes !== undefined)
+      ) {
+        return err(
+          preparationFailure(
+            this.featureIdentity,
+            this.generation,
+            kind,
+            name,
+            'particle-input-lanes-require-material-input-layout-and-1-through-4-lanes',
+          ),
+        );
+      }
+    }
     const normalized = normalizeDescriptor(kind, request);
     if (this.aborted || this.committed || name.length === 0 || normalized.signature.length === 0) {
       return err(
@@ -275,24 +309,29 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     }
     const key = itemKey(kind, name);
     const committed = this.committedSlot?.items.get(key);
-    if (committed !== undefined) {
-      if (committed.signature !== normalized.signature) {
-        return err(
-          preparationFailure(
-            this.featureIdentity,
-            this.generation,
-            kind,
-            name,
-            'prepared-signature-mismatch',
-          ),
-        );
-      }
+    const sameReferences = (item: PreparedGraphicsItem): boolean => {
+      const previous = item.descriptor;
+      const next = normalized.descriptor;
+      if (previous?.kind === 'bindings' && next?.kind === 'bindings')
+        return previous.pipeline === next.pipeline;
+      if (
+        (previous?.kind === 'vertex-data' && next?.kind === 'vertex-data') ||
+        (previous?.kind === 'index-data' && next?.kind === 'index-data')
+      )
+        return previous.buffer === next.buffer;
+      return true;
+    };
+    if (
+      committed !== undefined &&
+      committed.signature === normalized.signature &&
+      sameReferences(committed)
+    ) {
       this.touchedCommitted.add(key);
       return ok(committed.reference as RenderFeaturePreparedRef<Kind>);
     }
     const existing = this.overlay.get(key);
     if (existing !== undefined) {
-      if (existing.signature !== normalized.signature) {
+      if (existing.signature !== normalized.signature || !sameReferences(existing)) {
         return err(
           preparationFailure(
             this.featureIdentity,
@@ -322,6 +361,21 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     this.store.registerReference(reference, item);
     this.overlay.set(key, item);
     return ok(reference);
+  }
+
+  retainResources(matches: (name: string) => boolean): void {
+    const retain = (item: PreparedGraphicsItem): void => {
+      const key = itemKey(item.kind, item.name);
+      if (this.touchedCommitted.has(key)) return;
+      this.touchedCommitted.add(key);
+      if (item.descriptor?.kind === 'bindings') {
+        const pipeline = this.store.itemFor(item.descriptor.pipeline);
+        if (pipeline !== undefined) retain(pipeline);
+      }
+    };
+    for (const item of this.committedSlot?.items.values() ?? []) {
+      if (matches(item.name)) retain(item);
+    }
   }
 
   committedItems(): readonly PreparedGraphicsItem[] {
@@ -416,6 +470,21 @@ class PreparedGraphicsStoreImpl implements PreparedGraphicsStore {
     if (slot !== undefined && slot.generation < generation) {
       this.slots.delete(featureIdentity);
     }
+  }
+
+  createRecoveryRoot(scope: DeviceScope): LifecycleResourceSpec<unknown> {
+    return {
+      kind: 'buffer',
+      create: () => {
+        if (!scope.isAlive()) throw new Error('Prepared graphics candidate scope is not active.');
+        const itemCount = [...this.slots.values()].reduce(
+          (count, slot) => count + slot.items.size,
+          0,
+        );
+        return Object.freeze({ generation: scope.generation, itemCount });
+      },
+      cleanup: () => undefined,
+    };
   }
 
   registerReference(reference: object, item: PreparedGraphicsItem): void {

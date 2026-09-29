@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startEngineWorker } from '../execution/engine-worker';
 import type { EngineToHostMessage, HostToEngineMessage } from '../execution/protocol';
+import { workerSelection } from './execution-fixtures';
 
-class FakeWorker {
+class FakeWorker extends EventTarget {
   onmessage: ((event: MessageEvent<EngineToHostMessage>) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
   readonly posts: Array<{
@@ -13,6 +14,10 @@ class FakeWorker {
 
   postMessage(message: HostToEngineMessage, transfer: Transferable[] = []): void {
     this.posts.push({ message, transfer });
+    if (message.kind === 'dispose')
+      queueMicrotask(() =>
+        this.dispatchEvent(new MessageEvent('message', { data: { kind: 'disposed' } })),
+      );
     if (message.kind !== 'init') return;
     queueMicrotask(() => {
       this.onmessage?.({
@@ -42,8 +47,9 @@ describe('Engine Worker thick bootstrap channel', () => {
         url: '/__pack/scopes/sample/7/catalog.json',
         expectedScope: { scopeId: 'sample', generation: 7 },
       },
+      build: 'build-test',
       timeoutMs: 100,
-      tier: 'engine-worker',
+      workers: workerSelection({ engine: true, render: false, kernels: false }),
       workerFactory: () => worker as unknown as Worker,
     });
 
@@ -51,15 +57,17 @@ describe('Engine Worker thick bootstrap channel', () => {
     expect(transferControlToOffscreen).toHaveBeenCalledOnce();
     expect(worker.posts[0]?.message).toMatchObject({
       kind: 'init',
+      startupTimeoutMs: 100,
       bootstrapData: { gameId: 'sample' },
       bootstrapPort: channel.port2,
       assetCatalog: {
         url: '/__pack/scopes/sample/7/catalog.json',
         expectedScope: { scopeId: 'sample', generation: 7 },
       },
+      build: 'build-test',
     });
     expect(worker.posts[0]?.transfer).toEqual([offscreen, channel.port2]);
-    started.ok && started.value.dispose();
+    started.ok && (await started.value.dispose()).unwrap();
     channel.port1.close();
   });
 
@@ -71,7 +79,7 @@ describe('Engine Worker thick bootstrap channel', () => {
       bootstrapUrl: 'https://example.test/bootstrap.js',
       bootstrapData: { callback: (() => {}) as never },
       timeoutMs: 100,
-      tier: 'engine-worker',
+      workers: workerSelection({ engine: true, render: false, kernels: false }),
       workerFactory,
     });
 

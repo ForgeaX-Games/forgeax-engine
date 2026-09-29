@@ -1,3 +1,4 @@
+import { projectRuntimeAsset } from './runtime-content';
 // M8 w59 (round 5 D-18 atomic): two-tier resolution + material-walk over
 // world.sharedRefs.
 //
@@ -34,6 +35,16 @@ import {
 } from '@forgeax/engine-types';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
 
+/** A realm-local asset view; publication receivers never construct a World. */
+export interface AssetReader {
+  readonly identity: string;
+  resolveAsset<T extends Asset>(
+    handle: Handle<string, 'shared'>,
+  ): Result<T, AssetErrorType | SharedRefStaleError | UniqueRefStaleError>;
+}
+
+export type AssetReadSource = World | AssetReader;
+
 /**
  * Resolve a handle to its asset payload with two-tier slot-range dispatch.
  *
@@ -50,13 +61,15 @@ import { BuiltinAssetRegistry } from './builtin-asset-registry';
  * @returns `Result.ok(payload)` on hit, `Result.err(AssetError)` on miss.
  */
 export function resolveAssetHandle<T extends Asset>(
-  world: World,
+  world: AssetReadSource,
   handle: Handle<string, 'shared'>,
 ): Result<T, AssetErrorType | SharedRefStaleError | UniqueRefStaleError> {
+  if ('resolveAsset' in world) return world.resolveAsset<T>(handle);
   const slot = handleSlot(handle);
   if (slot < BUILTIN_BASE) {
     const builtin = BuiltinAssetRegistry.resolve(handle);
-    if (builtin !== null) return ok(builtin as unknown as T);
+    if (builtin !== null)
+      return projectRuntimeAsset(world, Number(handle), builtin as unknown as T);
     return err(
       new AssetError({
         code: 'asset-not-found',
@@ -66,7 +79,7 @@ export function resolveAssetHandle<T extends Asset>(
     );
   }
   const res = world.sharedRefs.resolve<string, T>(handle);
-  if (res.ok) return ok(res.value);
+  if (res.ok) return projectRuntimeAsset(world, Number(handle), res.value);
   // Forward the closed error code transparently. Checking the discriminant,
   // rather than constructor identity, preserves the structured stale detail
   // when a browser bundles the bridge and its World through different module
@@ -111,6 +124,7 @@ export function walkMaterialPassesOverSharedRefs(
     parameters: MaterialAsset['parameters'];
     values: NonNullable<MaterialAsset['values']>;
     colorSpace: MaterialAsset['colorSpace'];
+    surface: MaterialAsset['surface'];
   },
   AssetErrorType | MaterialError | SharedRefStaleError | UniqueRefStaleError
 > {
@@ -141,7 +155,15 @@ export function walkMaterialPassesOverSharedRefs(
   return ok({
     passes: [...(resolved.value.asset.passes ?? [])],
     parameters: resolved.value.asset.parameters ?? [],
-    values: { ...(resolved.value.asset.values ?? {}) },
+    values: {
+      ...Object.fromEntries(
+        (resolved.value.asset.parameters ?? []).flatMap((parameter) =>
+          parameter.default === undefined ? [] : [[parameter.name, parameter.default]],
+        ),
+      ),
+      ...(resolved.value.asset.values ?? {}),
+    },
     colorSpace: resolved.value.asset.colorSpace,
+    surface: resolved.value.asset.surface,
   });
 }

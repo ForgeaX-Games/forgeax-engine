@@ -17,9 +17,9 @@
 //      world (1, 0) sits outside the quartic window (factor clamped to 0)
 //      so its brightness must be < 0.1.
 //
-// Falsifier: rebuild sweep-spot with SpotLight intensity=0 and assert the
-// wedge-center pixel drops below the AC-1 threshold. This proves the
-// smoke can detect a regression where the SpotLight contribution silently
+// Falsifiers: rebuild each local-light scene with intensity=0 and assert the
+// sampled contribution drops below its positive-light threshold. This proves
+// the smoke can detect a regression where a punctual contribution silently
 // falls off the sprite-lit accumulator (charter feedback 61).
 //
 // Output literals (grep-friendly):
@@ -27,15 +27,17 @@
 //   [smoke] case sweep-spot center=<r>,<g>,<b>
 //   [smoke] case point-circle center=<r>,<g>,<b> edge=<r>,<g>,<b>
 //   [smoke] case falsifier sweep-spot-zero center=<r>,<g>,<b>
+//   [smoke] case falsifier point-circle-zero center=<r>,<g>,<b>
 //   [smoke] PASS / FAIL - <reason>
 
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 void HERE;
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 800;
 const HEIGHT = 600;
 // AC-1 / AC-2 assertion thresholds (max-channel-brightness / 255).
@@ -160,7 +162,8 @@ const {
 const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 function buildCheckerboardRgba(side) {
   const w = side;
@@ -210,12 +213,11 @@ console.log(`[hello-2d-flashlight] backend=${renderer.inspect().capabilities.bac
 const checker = buildCheckerboardRgba(8);
 const synthPod = {
   kind: 'texture',
-  width: checker.width,
-  height: checker.height,
+  shape: { viewDimension: '2d', extent: { width: checker.width, height: checker.height } },
   format: 'rgba8unorm-srgb',
   data: checker.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 
 function expectOk(r, label) {
@@ -335,7 +337,7 @@ async function buildSweepSpotWorld({ intensity }) {
   return { ok: true, world };
 }
 
-async function buildPointCircleWorld() {
+async function buildPointCircleWorld({ intensity = 2.0 } = {}) {
   const world = new World();
   const texRes = await buildTexture(world);
   if (!texRes.ok) return { ok: false, error: texRes.error };
@@ -356,7 +358,7 @@ async function buildPointCircleWorld() {
         component: PointLight,
         data: {
           color: [1.0, 1.0, 1.0],
-          intensity: 2.0,
+          intensity,
           range: 1.0,
         },
       },
@@ -515,6 +517,24 @@ if (!pointRes.ok) {
   }
 }
 
+const pointFalsifierRes = await runSceneCase(
+  'falsifier-point',
+  () => buildPointCircleWorld({ intensity: 0.0 }),
+  { center: PIXEL_POINT_CENTER },
+);
+if (!pointFalsifierRes.ok) {
+  failures.push(pointFalsifierRes.error);
+} else {
+  const c = pointFalsifierRes.samples.center;
+  console.log(`[smoke] case falsifier point-circle-zero center=${c[0]},${c[1]},${c[2]}`);
+  const b = brightness(c);
+  if (b >= AC2_EDGE_MAX) {
+    failures.push(
+      `falsifier: point-circle-zero brightness ${b.toFixed(3)} >= ${AC2_EDGE_MAX}; PointLight contribution not gating the circle`,
+    );
+  }
+}
+
 // Falsifier: same sweep-spot scene but SpotLight intensity=0 -- the wedge
 // center must drop below the AC-1 threshold, proving the smoke's positive
 // assertion is not blind to a zero-light regression.
@@ -545,7 +565,11 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - backend=${renderer.inspect().capabilities.backendKind}; sweep-spot + point-circle rendered ${SMOKE_MIN_FRAMES} frames; AC-1 wedge > ${AC1_WEDGE_MIN}; AC-2 center > ${AC2_CENTER_MIN} / edge < ${AC2_EDGE_MAX}; falsifier gates zero-intensity`,
+  `[smoke] PASS - backend=${renderer.inspect().capabilities.backendKind}; sweep-spot + point-circle rendered ${SMOKE_MIN_FRAMES} frames; AC-1 wedge > ${AC1_WEDGE_MIN}; AC-2 center > ${AC2_CENTER_MIN} / edge < ${AC2_EDGE_MAX}; falsifiers gate zero-intensity spot + point`,
+);
+emitSmokeReceipt(
+  'hello-2d-flashlight/smoke',
+  Math.min(sweepRes.draws, pointRes.draws, pointFalsifierRes.draws, falsifierRes.draws),
 );
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

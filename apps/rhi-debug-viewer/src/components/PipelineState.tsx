@@ -4,7 +4,7 @@ import { useSelection } from '../selection-context';
 import { pipelineStateAnchor } from '../selectors';
 import type { ShaderPreviewSelection, ShaderPreviewWorkFacts } from '../shader-preview/session';
 import { useViewModel } from '../viewer-context';
-import type { ViewerModel } from '../viewer-model';
+import type { ViewerModel, WorkPipeline } from '../viewer-model';
 import { CodeMirrorShader } from './CodeMirrorShader';
 
 export const ALL_SECTIONS = [
@@ -43,12 +43,10 @@ function modelDigest(model: ViewerModel): string {
 export function selectedShaderPreview(
   model: ViewerModel,
   workIndex: number,
-  shaderModuleId: string,
+  stage: WorkPipeline['shaders'][number]['stage'],
 ): ShaderPreviewSelection | null {
   const work = model.works.find((candidate) => candidate.workIndex === workIndex);
-  const shader = work?.pipeline.shaders.find(
-    (candidate) => candidate.moduleHandleId === shaderModuleId,
-  );
+  const shader = work?.pipeline.shaders.find((candidate) => candidate.stage === stage);
   if (work === undefined || shader === undefined) return null;
   const stages = Object.fromEntries(
     work.pipeline.shaders
@@ -179,10 +177,10 @@ export function PipelineState(_props?: { readonly className?: string }) {
                 : JSON.stringify(work.pipeline.descriptor)}
             </span>
             {work.pipeline.shaders.map((shader) => {
-              const selection = selectedShaderPreview(model, work.workIndex, shader.moduleHandleId);
+              const selection = selectedShaderPreview(model, work.workIndex, shader.stage);
               return (
                 <div
-                  key={shader.moduleHandleId}
+                  key={shader.stage}
                   className="col-span-2 rounded-md border border-border/70 bg-background/50 p-2"
                 >
                   <span className="font-mono">

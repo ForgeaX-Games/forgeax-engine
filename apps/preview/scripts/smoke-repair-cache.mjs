@@ -244,7 +244,7 @@ try {
   browser = await chromium.launch({
     headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
     channel: process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome',
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--use-vulkan=swiftshader', '--disable-vulkan-surface', '--ignore-gpu-blocklist', '--disable-gpu-driver-bug-workarounds', '--disable-dawn-features=disallow_unsafe_apis', '--autoplay-policy=no-user-gesture-required'],
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--use-vulkan=swiftshader', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-driver-bug-workarounds', '--disable-dawn-features=disallow_unsafe_apis', '--autoplay-policy=no-user-gesture-required'],
   });
   page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
   page.on('pageerror', (error) => pageErrors.push(error.message));

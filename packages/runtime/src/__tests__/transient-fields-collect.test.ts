@@ -49,7 +49,7 @@ describe('w1 — AC-07 transient exclusion (SpriteAnimation, VideoPlayer)', () =
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const entity = collected.value.entities[0];
+    const entity = Object.values(collected.value.entities)[0];
     expect(entity).toBeDefined();
     if (!entity) return;
 
@@ -80,7 +80,7 @@ describe('w1 — AC-07 transient exclusion (SpriteAnimation, VideoPlayer)', () =
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const entity = collected.value.entities[0];
+    const entity = Object.values(collected.value.entities)[0];
     expect(entity).toBeDefined();
     if (!entity) return;
 
@@ -117,7 +117,7 @@ describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const entity = collected.value.entities[0];
+    const entity = Object.values(collected.value.entities)[0];
     expect(entity).toBeDefined();
     if (!entity) return;
 
@@ -173,7 +173,7 @@ describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const entity = collected.value.entities[0];
+    const entity = Object.values(collected.value.entities)[0];
     expect(entity).toBeDefined();
     if (!entity) return;
 

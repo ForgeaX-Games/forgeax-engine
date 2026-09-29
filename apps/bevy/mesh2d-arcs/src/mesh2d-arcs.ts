@@ -55,12 +55,14 @@ export function makeTexturePixels(): Uint8Array {
 export function makeTextureAsset(pixels: Uint8Array): TextureAsset {
   return {
     kind: 'texture',
-    width: TEXTURE_SIZE,
-    height: TEXTURE_SIZE,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE },
+    },
     format: 'rgba8unorm-srgb',
     data: pixels,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 
@@ -99,7 +101,6 @@ export function buildMesh2dArcsWorld(world: World, texture: number): Mesh2dArcsS
     Materials.unlit([1, 1, 1, 1], {
       alphaCutoff: 0.1,
       baseColorTexture: texture,
-      castShadow: false,
       renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
     }),
   );

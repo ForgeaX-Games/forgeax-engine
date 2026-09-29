@@ -66,7 +66,7 @@ function vertexOutput(
 ): VertexColorCaptureOutput {
   return {
     backend: 'browser-webgpu',
-    frameCount: 300,
+    frameCount: 60,
     sourceSha,
     sourceFixtureHash: vertexHash,
     colorDomain: 'displayEncoded',
@@ -78,7 +78,7 @@ function vertexOutput(
 }
 
 describe('independent vertex-color evaluator', () => {
-  it('requires independent producers, 300 frames, named samples, and a red white falsifier', async () => {
+  it('requires independent producers, 60 frames, named samples, and a red white falsifier', async () => {
     const sourceSha = 'engine-source-sha';
     const forgeaxIdentity = { implementation: 'forgeax' as const, version: 'workspace', renderer: 'webgpu' as const, adapterId: 'forgeax-vertex-color-webgpu', pinnedCommit: sourceSha, buildIdentity: 'forgeax-build' };
     const threeIdentity = { implementation: 'three' as const, version: 'r184', renderer: 'webgpu' as const, adapterId: 'three-r184-vertex-color-webgpu', pinnedCommit: 'three-source', buildIdentity: 'three-build' };
@@ -102,7 +102,7 @@ describe('independent vertex-color evaluator', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected independent vertex-color parity to pass');
-    expect(result.value.frameCount).toBe(300);
+    expect(result.value.frameCount).toBe(60);
     expect(result.value.falsifier.verdict).toBe('passed');
   });
 

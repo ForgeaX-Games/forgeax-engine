@@ -1,5 +1,6 @@
 import type { MaterialError, Result } from '@forgeax/engine-types';
 import { createMaterialError, err, ok } from '@forgeax/engine-types';
+import { shaderModuleId } from '../module-path.js';
 
 export interface MaterialSourceInput {
   readonly source: string;
@@ -19,11 +20,10 @@ export interface MaterialSourceCatalogInput {
   readonly project: readonly MaterialSourceInput[];
 }
 
-const MODULE_ID_RE = /^\s*#define_import_path\s+([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)\s*$/m;
 const SLOT_RE = /^\s*#pragma\s+material_slot\s+([A-Za-z0-9_-]+)\s*$/gm;
 
 function moduleIdOf(source: MaterialSourceInput): string | undefined {
-  return MODULE_ID_RE.exec(source.source)?.[1];
+  return shaderModuleId(source.source);
 }
 
 function slotsOf(source: MaterialSourceInput): readonly string[] {
@@ -113,6 +113,60 @@ export class MaterialSourceCatalog {
     if (selected === undefined) return missingModule(moduleId, sourceModuleId);
     if (!source.source.includes(`forgeax_material::slot::${slotName}`)) {
       return err(slotError(sourceModuleId, slotName, moduleId));
+    }
+    return ok(selected);
+  }
+
+  resolveSurfaceSlot(
+    material: string,
+    pass: string,
+    sourceModuleId: string,
+    moduleId: string | undefined,
+  ): Result<MaterialSourceRecord, MaterialError> {
+    const source = this.#modules.get(sourceModuleId);
+    if (source === undefined || !source.slots.includes('surface')) {
+      return err(
+        createMaterialError('material-surface-slot-missing', {
+          code: 'material-surface-slot-missing',
+          material,
+          pass,
+          source: source?.path ?? sourceModuleId,
+          slot: 'surface',
+          action: 'add-surface-slot',
+        }),
+      );
+    }
+    const selectedId =
+      moduleId ??
+      (sourceModuleId === 'forgeax::default-shadow-caster'
+        ? 'forgeax_material::opaque_surface'
+        : sourceModuleId === 'forgeax::single-layer-medium'
+          ? 'forgeax_material::default_single_layer_medium_surface'
+          : 'forgeax_material::default_standard_surface');
+    const selected = this.#modules.get(selectedId);
+    if (selected === undefined) {
+      return err(
+        createMaterialError('material-surface-slot-missing', {
+          code: 'material-surface-slot-missing',
+          material,
+          pass,
+          source: selectedId,
+          slot: 'surface',
+          action: 'add-surface-slot',
+        }),
+      );
+    }
+    if (!source.source.includes('forgeax_material::slot::surface')) {
+      return err(
+        createMaterialError('material-surface-slot-missing', {
+          code: 'material-surface-slot-missing',
+          material,
+          pass,
+          source: source.path,
+          slot: 'surface',
+          action: 'add-surface-slot',
+        }),
+      );
     }
     return ok(selected);
   }

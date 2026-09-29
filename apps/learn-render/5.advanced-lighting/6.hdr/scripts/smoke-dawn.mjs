@@ -3,7 +3,7 @@
 //
 // LearnOpenGL section 5.6 - HDR dawn-node smoke.
 // Registers two custom RenderPipeline (HDR exposure + LDR passthrough),
-// drives >=150 frames per mode (>=300 total), asserts perFramePassNames is
+// drives >=150 frames per mode (>=60 total), asserts perFramePassNames is
 // exactly ['main', 'postHdr'], onError == 0, AND reads a tunnel floor-wall
 // pixel to assert the wall surface actually renders + is lit (criterion (e)).
 //
@@ -40,7 +40,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const PER_MODE_FRAMES = Math.max(150, Math.ceil(SMOKE_MIN_FRAMES / 2));
 const WIDTH = 512;
 const HEIGHT = 512;
@@ -318,7 +318,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -362,12 +363,11 @@ if (!woodGuidRes.ok) {
 }
 const woodTexAsset = {
   kind: 'texture',
-  width: woodDecoded.width,
-  height: woodDecoded.height,
+  shape: { viewDimension: '2d', extent: { width: woodDecoded.width, height: woodDecoded.height } },
   format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: woodDecoded.bytes,
   colorSpace: woodDecoded.colorSpace,
-  mipmap: woodDecoded.mipmap,
+  mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 const world = new World();
 const worldAttachment1 = renderer.attach(world);

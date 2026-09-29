@@ -2,17 +2,19 @@
 // Browser HMR smoke for the host-importer content path.
 //
 // This is deliberately a source mutation, not a direct API probe:
-//   edit source -> Vite watcher -> explicit full-reload policy -> browser
+//   edit source -> Vite watcher -> catalog delta -> browser
 //   -> dev pack/import route -> loadByGuid -> host-driven scene.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
+import { createOwnedProcessGroupStopper } from '../../../shared/scripts/rhi-debug-process.mjs';
+import { observeViteHttpReadiness } from '../../../../scripts/lib/vite-http-readiness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
@@ -49,40 +51,24 @@ const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-custom-importer', 'dev'], 
   cwd: repoRoot,
   env: { ...process.env, FORCE_COLOR: '0' },
   stdio: ['ignore', 'pipe', 'pipe'],
+  detached: process.platform !== 'win32',
 });
-let portUrl;
-let viteOutput = '';
-viteProc.stdout.on('data', (chunk) => {
-  const text = chunk.toString();
-  viteOutput += text;
-  process.stdout.write(`[vite] ${text}`);
-  portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1];
-});
-viteProc.stderr.on('data', (chunk) => {
-  const text = chunk.toString();
-  viteOutput += text;
-  process.stderr.write(`[vite-err] ${text}`);
+const stopVite = createOwnedProcessGroupStopper(viteProc);
+const viteReadiness = observeViteHttpReadiness(viteProc, {
+  timeoutEnvName: 'FORGEAX_CUSTOM_IMPORTER_STARTUP_TIMEOUT_MS',
 });
 
 let browser;
 let failure;
 try {
-  const deadline = Date.now() + 30_000;
-  while (!portUrl && Date.now() < deadline) {
-    if (viteProc.exitCode !== null) break;
-    await sleep(100);
-  }
-  if (!portUrl) throw new Error(`Vite did not publish a URL: ${viteOutput}`);
+  const { origin: portUrl } = await viteReadiness.wait();
   if (!portUrl.includes(`:${port}`)) throw new Error(`unexpected Vite URL: ${portUrl}`);
 
   browser = await chromium.launch({
-    headless: true,
-    channel: 'chrome',
-    args: [
-      '--enable-unsafe-webgpu',
-      '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-      '--ignore-gpu-blocklist',
-    ],
+    ...browserLaunch,
+    args: [...browserLaunch.args, ...(process.env.CI ? ['--use-angle=swiftshader'] : [])],
+    headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' && !!process.env.CI,
+    channel: process.env.FORGEAX_CHROME_CHANNEL ?? browserLaunch.channel,
   });
   const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
   const logs = [];
@@ -143,8 +129,7 @@ try {
   writeFileSync(sourcePath, originalSource);
   writeFileSync(metaPath, originalMetaSource);
   if (browser) await browser.close();
-  viteProc.kill('SIGTERM');
-  await sleep(300);
+  await stopVite();
 }
 
 if (failure) {

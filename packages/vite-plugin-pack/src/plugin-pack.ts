@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ScriptablePackPublicationSnapshot } from '@forgeax/engine-ddc';
-import { createAcceptedPublicationStore, resolveDdcRoot } from '@forgeax/engine-ddc';
+import { createAcceptedPublicationStore, DdcLifecycle, resolveDdcRoot } from '@forgeax/engine-ddc';
 import {
   canonicalScriptableSourcePath,
   commitImportPublication,
@@ -14,17 +14,25 @@ import {
 } from '@forgeax/engine-import';
 import type { CatalogBuildResult } from '@forgeax/engine-pack/build';
 import {
+  bindRuntimePackScope,
   currentProjectionFor,
   metaPathForGuid,
-  upgradeLegacyAuthoredPack,
 } from '@forgeax/engine-pack/build';
+import { validatePluginAsset } from '@forgeax/engine-pack/runtime';
 import type { ScanSourceDeclaration } from '@forgeax/engine-pack/scanner';
+import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
 import {
   type PackIndexEntry,
   RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
   type RuntimeAssetBinding,
+  type RuntimeCatalogSnapshot,
   runtimeScopePath,
 } from '@forgeax/engine-types';
+import {
+  type AssetBindingCatalog,
+  assetBindingDeclarationSource,
+  assetBindingModuleSource,
+} from './build/asset-bindings.js';
 import { createPluginBuild } from './build/plugin-build.js';
 import { publishAuthoredDevPacks as publishAuthoredDevPacksOwner } from './dev/authored-pack-publication.js';
 import { startMetaImport as startMetaImportOwner } from './dev/meta-import.js';
@@ -33,6 +41,8 @@ import {
   type PluginServerProjectionState,
   type PluginServerState,
 } from './dev/plugin-server.js';
+import { sourceDeclarationForCatalogPath } from './dev/source-path.js';
+import { scopedEntry } from './dev/transport-routes.js';
 import type {
   AssetHostRefreshPolicy,
   PluginPack,
@@ -50,9 +60,20 @@ const AUTHORED_COOKED_CURRENT_PROJECTION = currentProjectionFor('internal-asset'
 
 const VIRTUAL_RUNTIME_ID = 'virtual:forgeax/pack-runtime';
 const VIRTUAL_RUNTIME_TRANSPORT_ID = 'virtual:forgeax/pack-runtime-transport';
+const VIRTUAL_ASSETS_ID = 'virtual:forgeax/assets';
+const RESOLVED_VIRTUAL_ASSETS_ID = `\0${VIRTUAL_ASSETS_ID}`;
+const VIRTUAL_ASSETS_DTS_ID = 'virtual:forgeax/assets.d.ts';
+const RESOLVED_VIRTUAL_ASSETS_DTS_ID = `\0${VIRTUAL_ASSETS_DTS_ID}`;
+
+function extractSceneEntityKeys(payload: Readonly<Record<string, unknown>>): readonly string[] {
+  const entities = payload.entities;
+  if (entities === null || typeof entities !== 'object' || Array.isArray(entities)) return [];
+  return Object.keys(entities);
+}
 
 type PackViteConfig = {
   readonly base: string;
+  readonly root?: string;
   readonly command?: 'build' | 'serve';
 };
 
@@ -97,6 +118,7 @@ export function createPluginPackInternal(
   const composition = { ...opts, ...internal };
   const explicitTransportBase = composition.transportBase;
   let transportBase = explicitTransportBase;
+  let declarationTarget = resolve(process.cwd(), '.forgeax', 'generated', 'assets.d.ts');
   let projectDdcRoot = composition.ddc?.projectDdcRoot ?? resolveDdcRoot(process.cwd());
   const emptyCatalogProjection = (): CatalogBuildResult => ({
     schemaVersion: 'catalog-legacy-v1',
@@ -127,19 +149,63 @@ export function createPluginPackInternal(
   >();
   const DEV_PACK_PREFIX = '/__forgeax-ddc/';
 
-  function projectScopedEntry(entry: PackIndexEntry): PackIndexEntry {
-    if (entry.publication === undefined) return entry;
+  function devPackGuidForUrl(url: string): string | undefined {
+    if (!url.startsWith(DEV_PACK_PREFIX) || !url.endsWith('.pack.json')) return undefined;
+    const guid = url.slice(DEV_PACK_PREFIX.length, -'.pack.json'.length).toLowerCase();
+    return guid.length === 0 || guid.includes('/') ? undefined : guid;
+  }
+
+  function persistedArtifactPaths(pack: unknown): readonly string[] | undefined {
+    if (pack === null || typeof pack !== 'object' || !('assets' in pack)) return undefined;
+    const assets = (pack as { readonly assets?: unknown }).assets;
+    if (!Array.isArray(assets)) return undefined;
+    const paths: string[] = [];
+    for (const asset of assets) {
+      if (asset === null || typeof asset !== 'object' || !('artifacts' in asset)) return undefined;
+      const artifacts = (asset as { readonly artifacts?: unknown }).artifacts;
+      if (artifacts === null || typeof artifacts !== 'object' || Array.isArray(artifacts)) {
+        return undefined;
+      }
+      for (const descriptor of Object.values(artifacts)) {
+        if (
+          descriptor === null ||
+          typeof descriptor !== 'object' ||
+          !('path' in descriptor) ||
+          typeof (descriptor as { readonly path?: unknown }).path !== 'string'
+        ) {
+          return undefined;
+        }
+        paths.push((descriptor as { readonly path: string }).path);
+      }
+    }
+    return paths;
+  }
+
+  function devArtifactClosureReady(body: string): boolean {
+    try {
+      const paths = persistedArtifactPaths(JSON.parse(body));
+      return (
+        paths?.every((path) => state.devArtifactBodies.has(`${DEV_PACK_PREFIX}${path}`)) ?? false
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function scopedCatalogEntry(binding: RuntimeAssetBinding, entry: PackIndexEntry): PackIndexEntry {
+    const scoped = scopedEntry({ scopedPackageUrl }, binding, entry);
+    if (scoped.publication === undefined) return scoped;
     const sourcePath = canonicalScriptableSourcePath(entry.sourcePath);
     return {
-      ...entry,
+      ...scoped,
       sourcePath,
       publication: {
-        ...entry.publication,
+        ...scoped.publication,
         sourcePath,
-        receipt: { ...entry.publication.receipt, sourcePath },
-        ...(entry.publication.failure === undefined
+        receipt: { ...scoped.publication.receipt, sourcePath },
+        ...(scoped.publication.failure === undefined
           ? {}
-          : { failure: { ...entry.publication.failure, sourcePath } }),
+          : { failure: { ...scoped.publication.failure, sourcePath } }),
       },
     };
   }
@@ -149,6 +215,85 @@ export function createPluginPackInternal(
     inFlightMetaImports.clear();
     state.metaPackBodies.clear();
     state.devArtifactBodies.clear();
+    invalidateBindingModules();
+  }
+  function invalidateBindingModules(): void {
+    serverLifecycle.invalidateModules([
+      RESOLVED_VIRTUAL_ASSETS_ID,
+      RESOLVED_VIRTUAL_ASSETS_DTS_ID,
+      VIRTUAL_RUNTIME_ID,
+    ]);
+  }
+  function assetBindingCatalog(
+    catalogProjection: CatalogBuildResult = state.catalogProjection,
+  ): AssetBindingCatalog {
+    const assets = catalogProjection.entries.flatMap((entry) =>
+      entry.sourceKey === undefined
+        ? []
+        : [{ guid: entry.guid, sourceKey: entry.sourceKey, kind: entry.kind }],
+    );
+    const scenes = [...catalogProjection.sourceDeclarations.values()].flatMap((source) => {
+      const rows =
+        source.format !== 'pack.json'
+          ? []
+          : source.value.schemaVersion === '3.0.0'
+            ? (() => {
+                const parsed = parsePackSourceJson(source.value);
+                if (!parsed.ok || parsed.value.format !== 'direct') return [];
+                const projected = projectDirectPackJson(parsed.value);
+                return projected.ok
+                  ? projected.value.assets.flatMap((asset) =>
+                      asset.kind === 'scene'
+                        ? [
+                            {
+                              sourceKey: asset.sourceKey,
+                              entityKeys: extractSceneEntityKeys(asset.payload),
+                            },
+                          ]
+                        : [],
+                    )
+                  : [];
+              })()
+            : source.value.assets.flatMap((asset) =>
+                asset.kind === 'scene' && asset.sourceKey !== undefined
+                  ? [
+                      {
+                        sourceKey: asset.sourceKey,
+                        entityKeys: extractSceneEntityKeys(asset.payload),
+                      },
+                    ]
+                  : [],
+              );
+      return rows.flatMap((row) =>
+        'entityKeys' in row && row.entityKeys.length > 0
+          ? [{ sourceKey: row.sourceKey, entityKeys: row.entityKeys }]
+          : [],
+      );
+    });
+    return { assets, scenes };
+  }
+  async function writeAssetBindingDeclaration(
+    catalogProjection: CatalogBuildResult = state.catalogProjection,
+  ): Promise<void> {
+    const source = assetBindingDeclarationSource(assetBindingCatalog(catalogProjection));
+    try {
+      if ((await readFile(declarationTarget, 'utf8')) === source) return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const generatedDirectory = dirname(declarationTarget);
+    const temporary = resolve(
+      generatedDirectory,
+      `assets.d.ts.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`,
+    );
+    await mkdir(generatedDirectory, { recursive: true });
+    try {
+      await writeFile(temporary, source, 'utf8');
+      await rename(temporary, declarationTarget);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
   }
   async function publishAuthoredDevPacks(
     raw: readonly PackIndexEntry[],
@@ -166,6 +311,7 @@ export function createPluginPackInternal(
       importedGuids: projection.importedGuids,
       publicationCandidates: projection.publicationCandidates,
       publicationStore,
+      previousCatalogEntries: state.catalogProjection.entries,
       ...(runtimeBinding === undefined ? {} : { scopeId: runtimeBinding.scopeId }),
       sourceDeclarations: declarations,
       importerRegistry,
@@ -189,22 +335,39 @@ export function createPluginPackInternal(
     if (base.length === 0) return scopedPath;
     return base.endsWith(scopedNamespace) ? `${base}${internalUrl}` : `${base}${scopedPath}`;
   }
-  function scopedCatalogResponse(binding: RuntimeAssetBinding) {
+  let serializedCatalog:
+    | { projection: CatalogBuildResult; binding: RuntimeAssetBinding; body: string }
+    | undefined;
+
+  function scopedCatalogBody(binding: RuntimeAssetBinding): string {
     const projection = state.catalogProjection;
-    return {
+    // Accepted and lazy publications replace the projection, even within one
+    // runtime generation. Keep one body for that projection and its wire scope;
+    // never cache only by generation or bypass the route's freshness barrier.
+    if (
+      serializedCatalog?.projection === projection &&
+      serializedCatalog.binding.scopeId === binding.scopeId &&
+      serializedCatalog.binding.generation === binding.generation &&
+      serializedCatalog.binding.packageUrlBase === binding.packageUrlBase &&
+      serializedCatalog.binding.authority === binding.authority &&
+      (binding.authority !== 'degraded' ||
+        serializedCatalog.binding.diagnostics === binding.diagnostics)
+    ) {
+      return serializedCatalog.body;
+    }
+    const body = JSON.stringify({
       schemaVersion: RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
       scopeId: binding.scopeId,
       generation: binding.generation,
-      authority: projection.authority,
-      entries: projection.entries.map((entry) => ({
-        ...projectScopedEntry(entry),
-        packageUrl: scopedPackageUrl(binding, entry.packageUrl),
-      })),
+      authority: binding.authority === 'degraded' ? ('degraded' as const) : projection.authority,
+      entries: projection.entries.map((entry) => scopedCatalogEntry(binding, entry)),
       diagnostics:
-        binding.status === 'degraded' && binding.diagnostics !== undefined
-          ? binding.diagnostics
+        binding.authority === 'degraded'
+          ? (binding.diagnostics ?? projectRuntimeDiagnostics(projection.diagnostics))
           : projectRuntimeDiagnostics(projection.diagnostics),
-    };
+    } satisfies RuntimeCatalogSnapshot);
+    serializedCatalog = { projection, binding, body };
+    return body;
   }
   async function ensureVersionedMetaImport(
     metaPath: string,
@@ -258,6 +421,7 @@ export function createPluginPackInternal(
         metaPackBodies: target.metaPackBodies,
         devArtifactBodies: target.devArtifactBodies,
         importerRegistry,
+        cookers: opts.cookers,
         fsForImport,
         publishCatalogDelta,
         cookedProjection: COOKED_CURRENT_PROJECTION,
@@ -275,19 +439,99 @@ export function createPluginPackInternal(
     if (projection === undefined) inFlightMetaImports.set(metaPath, { metaContents, promise });
     return promise;
   }
-  async function ensureMetaPackBody(url: string): Promise<string | undefined> {
+  async function restoreDdcPackBody(
+    url: string,
+    binding: RuntimeAssetBinding,
+    existingBody?: string,
+  ): Promise<string | undefined> {
+    const guid = devPackGuidForUrl(url);
+    if (guid === undefined) return undefined;
+    try {
+      const ddcRoot = runtimeDdcRoot(projectDdcRoot, binding);
+      const current = await new DdcLifecycle(ddcRoot).readCurrentEntry(guid);
+      if (
+        current.head.state !== 'current' ||
+        current.entry === null ||
+        current.entry.guid.toLowerCase() !== guid ||
+        current.entry.key !== current.head.currentKey
+      ) {
+        return undefined;
+      }
+      const publicationGeneration = state.catalogProjection.entries.find(
+        (entry) => entry.guid.toLowerCase() === guid,
+      )?.publication?.generation;
+      const payloadGeneration =
+        current.entry.payload !== null &&
+        typeof current.entry.payload === 'object' &&
+        !Array.isArray(current.entry.payload) &&
+        typeof (current.entry.payload as { readonly generation?: unknown }).generation === 'number'
+          ? (current.entry.payload as { readonly generation: number }).generation
+          : undefined;
+      const persistedGeneration = current.entry.receipt.publicationGeneration ?? payloadGeneration;
+      const payload = bindRuntimePackScope(
+        current.entry.payload,
+        binding.scopeId,
+        publicationGeneration ?? persistedGeneration ?? binding.generation,
+      );
+      const artifactPaths = persistedArtifactPaths(payload);
+      const body = JSON.stringify(payload);
+      if (existingBody !== undefined && existingBody !== body) return undefined;
+      if (
+        artifactPaths === undefined ||
+        artifactPaths.some((path) => current.entry?.artifacts[path] === undefined)
+      ) {
+        return undefined;
+      }
+      for (const [path, artifact] of Object.entries(current.entry.artifacts)) {
+        state.devArtifactBodies.set(`${DEV_PACK_PREFIX}${path}`, {
+          bytes: artifact.bytes,
+          mimeType: artifact.mediaType,
+        });
+      }
+      if (existingBody === undefined) state.metaPackBodies.set(url, body);
+      return body;
+    } catch {
+      // A corrupt or incomplete DDC entry is not a transport authority. Let
+      // the declared producer repair it through the normal import path.
+      return undefined;
+    }
+  }
+  async function ensureMetaPackBody(
+    url: string,
+    runtimeBinding?: RuntimeAssetBinding,
+  ): Promise<string | undefined> {
     const existing = state.metaPackBodies.get(url);
+    const devImportPack = runtimeBinding !== undefined && devPackGuidForUrl(url) !== undefined;
+    const needsProducerRecovery =
+      devImportPack && (existing === undefined || !devArtifactClosureReady(existing));
+    if (needsProducerRecovery) {
+      const restored = await restoreDdcPackBody(url, runtimeBinding, existing);
+      if (restored !== undefined) return existing ?? restored;
+    }
+    const dynamicInstance = state.catalogProjection.entries.find(
+      (entry) =>
+        entry.packageUrl === url &&
+        entry.sourcePath.endsWith('.pack.json') &&
+        entry.provenance?.provider === 'pack-ts',
+    );
+    // Dynamic v3 instances are materialized during the accepted production
+    // generation and have no legacy source-refresh route. Their source path
+    // is a Catalog identity, so serve the already staged body before trying to
+    // resolve it as a cwd-relative declaration.
+    if (existing !== undefined && dynamicInstance !== undefined) return existing;
     const authoredSourcePath = state.catalogProjection.entries.find(
       (entry) => entry.packageUrl === url && entry.sourcePath.endsWith('.pack.json'),
     )?.sourcePath;
     if (authoredSourcePath !== undefined) {
-      const sourceDeclaration = state.catalogProjection.sourceDeclarations.get(
-        resolve(authoredSourcePath),
+      const sourceDeclaration = sourceDeclarationForCatalogPath(
+        authoredSourcePath,
+        state.catalogProjection.sourceDeclarations,
+        composition.sourceIdentityFor,
       );
-      if (existing !== undefined && sourceDeclaration?.format === 'pack.json')
+      if (existing !== undefined && sourceDeclaration?.declaration.format === 'pack.json')
         if (
           (await readFile(sourceDeclaration.sourcePath, 'utf8').catch(() => undefined)) ===
-          sourceDeclaration.sourceText
+          sourceDeclaration.declaration.sourceText
         )
           return existing;
       if (inFlightSourceRefresh === undefined)
@@ -295,10 +539,12 @@ export function createPluginPackInternal(
           () => (inFlightSourceRefresh = undefined),
         );
       await inFlightSourceRefresh;
-      const declaration = state.catalogProjection.sourceDeclarations.get(
-        resolve(authoredSourcePath),
+      const declaration = sourceDeclarationForCatalogPath(
+        authoredSourcePath,
+        state.catalogProjection.sourceDeclarations,
+        composition.sourceIdentityFor,
       );
-      if (declaration?.format !== 'pack.json') {
+      if (declaration?.declaration.format !== 'pack.json') {
         throw structuredPluginError({
           code: 'catalog-declaration-missing',
           expected: 'the accepted inventory to retain the authored Pack declaration',
@@ -308,16 +554,49 @@ export function createPluginPackInternal(
       }
       const refreshed = state.metaPackBodies.get(url);
       if (refreshed !== undefined) return refreshed;
-      const pack = upgradeLegacyAuthoredPack(declaration.value);
-      const cooked =
-        pack.schemaVersion === '2.0.0' &&
-        pack.assets !== undefined &&
-        pack.assets.some((asset) => asset.execution === 'cooked');
+      if (declaration.declaration.value.schemaVersion === '3.0.0') {
+        const parsed = parsePackSourceJson(declaration.declaration.value);
+        if (!parsed.ok || parsed.value.format !== 'direct') {
+          throw structuredPluginError({
+            code: 'pack-source-output-invalid',
+            expected: 'a direct v3 Pack document for a materialized development route',
+            hint: 'instances and ScriptablePack sources are published by the dynamic generation owner',
+            detail: { stage: 'route', sourcePath: authoredSourcePath },
+          });
+        }
+        const projected = projectDirectPackJson(parsed.value);
+        if (!projected.ok) throw structuredPluginError(projected.error);
+        throw structuredPluginError({
+          code: 'pack-source-output-invalid',
+          expected: 'the accepted direct Pack publication to stage a Pack v2 body and artifacts',
+          hint: 'rebuild the direct Pack through the production publisher before requesting its body',
+          detail: {
+            stage: 'route',
+            sourcePath: authoredSourcePath,
+            packageId: projected.value.packageId,
+          },
+        });
+      }
+      const pack = {
+        schemaVersion: '2.0.0' as const,
+        kind: 'internal-text-package' as const,
+        assets: declaration.declaration.value.assets.map((asset) => ({
+          guid: asset.guid,
+          kind: asset.kind,
+          ...(asset.name === undefined ? {} : { name: asset.name }),
+          payload: asset.payload,
+          refs: asset.refs,
+          artifacts: asset.artifacts ?? {},
+        })),
+      };
+      const cooked = declaration.declaration.value.assets.some(
+        (asset) => asset.execution === 'cooked',
+      );
       if (cooked) {
         const refreshedAfterCook = state.metaPackBodies.get(url);
         if (refreshedAfterCook !== undefined) return refreshedAfterCook;
       }
-      if (pack.schemaVersion !== '2.0.0' || pack.assets === undefined || cooked) {
+      if (cooked) {
         throw structuredPluginError({
           code: 'pack-source-output-invalid',
           expected: 'an authored Pack source without cooked assets for direct transport',
@@ -325,11 +604,15 @@ export function createPluginPackInternal(
           detail: { stage: 'route', sourcePath: authoredSourcePath },
         });
       }
-      return declaration.value.schemaVersion === '2.0.0'
-        ? (declaration.sourceText ?? JSON.stringify(pack))
+      return declaration.declaration.value.schemaVersion === '2.0.0'
+        ? (declaration.declaration.sourceText ?? JSON.stringify(pack))
         : JSON.stringify(pack);
     }
-    if (existing !== undefined) return existing;
+    // A scoped imported Pack with an incomplete in-memory closure must go
+    // through its producer after the DDC recovery read misses. Returning the
+    // body here would make the package URL look healthy while its artifact
+    // route still has no bytes to serve.
+    if (existing !== undefined && !needsProducerRecovery) return existing;
     if (!url.startsWith(DEV_PACK_PREFIX) || !url.endsWith('.pack.json')) return undefined;
 
     const guid = url.slice(DEV_PACK_PREFIX.length, -'.pack.json'.length).toLowerCase();
@@ -348,6 +631,9 @@ export function createPluginPackInternal(
     importerRegistry.registeredImporters(),
   );
   const fsForImport: ImportRunnerFs = {
+    ...(composition.sourceIdentityFor === undefined
+      ? {}
+      : { sourceIdentityFor: composition.sourceIdentityFor }),
     async readSource(sourcePath: string) {
       try {
         const buf = await readFile(sourcePath);
@@ -382,7 +668,8 @@ export function createPluginPackInternal(
     catalogVisibility: (input) => importerRegistry.shouldPublishCatalog(input),
     resetState: resetDevState,
     scopedPackageUrl,
-    scopedCatalogResponse,
+    scopedCatalogEntry,
+    scopedCatalogBody,
     state,
     setSourceRefresh: (refresh) => {
       refreshAcceptedSource = refresh;
@@ -473,6 +760,8 @@ export function createPluginPackInternal(
             }
           }
           assertOpen();
+          await writeAssetBindingDeclaration(candidate.catalogProjection);
+          invalidateBindingModules();
         } catch (error) {
           await rollback();
           throw error;
@@ -506,31 +795,114 @@ export function createPluginPackInternal(
     cookedCurrentProjection: COOKED_CURRENT_PROJECTION,
     directCurrentProjection: DIRECT_CURRENT_PROJECTION,
     authoredCookedCurrentProjection: AUTHORED_COOKED_CURRENT_PROJECTION,
+    onPack: (url, body) => {
+      state.metaPackBodies.set(url, body);
+    },
+    onPublication: (inventory) => {
+      state.catalogProjection = inventory;
+    },
+    onInventory: async (inventory) => {
+      // If build inventory arrives after a bound dev session, retain accepted
+      // publication rows with their transport URLs and evidence.
+      const acceptedPublications = state.catalogProjection.entries.filter(
+        (entry) => entry.publication !== undefined,
+      );
+      if (serverLifecycle.runtimeBinding() === undefined && acceptedPublications.length === 0) {
+        state.catalogProjection = inventory;
+      } else if (acceptedPublications.length > 0) {
+        const byGuid = new Map(
+          inventory.entries.map((entry) => [entry.guid.toLowerCase(), entry] as const),
+        );
+        for (const entry of acceptedPublications) {
+          byGuid.set(entry.guid.toLowerCase(), entry);
+        }
+        state.catalogProjection = {
+          ...inventory,
+          entries: [...byGuid.values()],
+        };
+      }
+      await writeAssetBindingDeclaration();
+    },
   });
   let viteCommand: PackViteConfig['command'];
   return {
     name: 'forgeax:pack',
+    catalogSnapshot: () => state.catalogProjection.entries,
+    async readPluginDefinitions() {
+      const definitions = [];
+      for (const row of state.catalogProjection.entries) {
+        if (row.kind !== 'plugin') continue;
+        const body =
+          state.metaPackBodies.get(row.packageUrl) ??
+          (await ensureMetaPackBody(row.packageUrl, serverLifecycle.runtimeBinding()));
+        if (body === undefined)
+          throw new TypeError(`${row.guid}: accepted plugin Pack body unavailable`);
+        const pack = JSON.parse(body);
+        const envelope = pack.assets.find((asset: { guid: string }) => asset.guid === row.guid);
+        const asset = validatePluginAsset(envelope?.payload).unwrap();
+        const { scopeId, generation, digest, outputSetDigest } = pack;
+        definitions.push({
+          definition: {
+            guid: row.guid,
+            asset,
+            evidence: {
+              kind: 'publication' as const,
+              publication: { scopeId, generation, digest, outputSetDigest },
+            },
+          },
+          sourcePath: row.sourcePath,
+          refs: envelope.refs as string[],
+        });
+      }
+      return definitions;
+    },
     resolveId(source: string): string | null {
       if (source === VIRTUAL_RUNTIME_ID) return VIRTUAL_RUNTIME_ID;
+      if (source === VIRTUAL_ASSETS_ID) return RESOLVED_VIRTUAL_ASSETS_ID;
+      if (source === VIRTUAL_ASSETS_DTS_ID) return RESOLVED_VIRTUAL_ASSETS_DTS_ID;
       if (source === VIRTUAL_RUNTIME_TRANSPORT_ID) {
         return fileURLToPath(import.meta.resolve('@forgeax/engine-runtime'));
       }
       return null;
     },
     load(id: string): string | null {
-      return id === VIRTUAL_RUNTIME_ID
-        ? virtualRuntimeSource(composition.runtimeBinding, viteCommand)
-        : null;
+      if (id === VIRTUAL_ASSETS_ID || id === RESOLVED_VIRTUAL_ASSETS_ID) {
+        return assetBindingModuleSource(assetBindingCatalog());
+      }
+      if (id === VIRTUAL_ASSETS_DTS_ID || id === RESOLVED_VIRTUAL_ASSETS_DTS_ID) {
+        return assetBindingDeclarationSource(assetBindingCatalog());
+      }
+      if (id !== VIRTUAL_RUNTIME_ID) return null;
+      const activeBinding = serverLifecycle.runtimeBinding();
+      return virtualRuntimeSource(
+        viteCommand === 'serve' &&
+          activeBinding !== undefined &&
+          activeBinding.status !== 'transitioning'
+          ? activeBinding
+          : composition.runtimeBinding,
+        viteCommand,
+      );
     },
     configResolved(config: PackViteConfig): void {
       viteCommand = config.command;
+      declarationTarget = resolve(
+        config.root ?? process.cwd(),
+        '.forgeax',
+        'generated',
+        'assets.d.ts',
+      );
+      if (config.command !== undefined) buildLifecycle.configResolved({ command: config.command });
       if (explicitTransportBase === undefined) transportBase = config.base;
     },
+    ready: serverLifecycle.ready,
     rebind: serverLifecycle.rebind,
+    rebuildCatalogInPlace: serverLifecycle.rebuildCatalogInPlace,
     runtimeBinding: serverLifecycle.runtimeBinding,
     configureServer: serverLifecycle.configureServer,
+    buildStart: buildLifecycle.buildStart,
     generateBundle: buildLifecycle.generateBundle,
     closeBundle: async () => {
+      serializedCatalog = undefined;
       await serverLifecycle.close();
       await buildLifecycle.closeBundle();
     },

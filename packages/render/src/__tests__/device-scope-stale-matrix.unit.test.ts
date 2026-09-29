@@ -40,3 +40,21 @@ describe('DeviceScope stale resource matrix', () => {
     expect(abandoned.isAlive()).toBe(false);
   });
 });
+
+describe('auto exposure generation fence', () => {
+  it('rejects a candidate prepared for a retired device generation', async () => {
+    const { createAutoExposureState, prepareAutoExposureCandidate } = await import(
+      '../pipeline/standard-output/auto-exposure/state'
+    );
+    const state = createAutoExposureState({ fallback: 1, targetGeneration: 4, deviceEpoch: 2 });
+    if (!state.ok) throw state.error;
+    expect(
+      prepareAutoExposureCandidate(state.value, {
+        ev: 1,
+        generation: 4,
+        deviceEpoch: 3,
+        frameId: 1,
+      }),
+    ).toMatchObject({ ok: false, error: { code: 'auto-exposure-stale-generation' } });
+  });
+});

@@ -1,6 +1,6 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
-import { ChildOf, Name, scenePlugin, Transform } from '@forgeax/engine-scene';
+import { ChildOf, GlobalTransform, Name, scenePlugin, Transform } from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AnimationPlayer } from '../animation-player';
@@ -124,7 +124,7 @@ function expectTrsAt(
   ]);
   expect(transform.quat[2]).toBeCloseTo(Math.sin((Math.PI / 2) * alpha), 4);
   expect(transform.quat[3]).toBeCloseTo(Math.cos((Math.PI / 2) * alpha), 4);
-  expect(transform.world[12]).toBeCloseTo(10 + 4 * alpha, 4);
+  expect(world.get(target, GlobalTransform).unwrap().world[12]).toBeCloseTo(10 + 4 * alpha, 4);
 }
 
 describe('generic Transform target playback', () => {

@@ -31,7 +31,8 @@ import { detectNineSliceScaleTooSmall } from '../../../render/src/record/main-pa
 import * as spriteRecordModule from '../../../render/src/record/main-pass-sprite-draws';
 import { filterDispatchBySelector } from '../../../render/src/record/shadow-pass';
 import type { DispatchEntry, MaterialSnapshot } from '../../../render/src/render-system-extract';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
 {
@@ -55,7 +56,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
   // asserts the PBR baseline against literal byte values.
   //
   // Coverage:
-  //   - 304 B payload (STANDARD_PBR_UBO_SIZE)
+  //   - 1040 B payload (STANDARD_PBR_UBO_SIZE)
   //   - slot 0 = baseColor.rgb + 1 (alpha hardcoded)
   //   - slot 1 first 8 B = metallic, roughness (f32x2)
   //   - slot 1 last 4 u32 (channelMap) = [2, 1, 0, 0]
@@ -84,9 +85,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
     emissive?: readonly [number, number, number];
     emissiveIntensity?: number;
     occlusionStrength?: number;
-    clearcoat?: number;
-    clearcoatRoughness?: number;
-    specularTint?: readonly [number, number, number];
+    specularColor?: readonly [number, number, number];
   }): MaterialSnapshot {
     return {
       baseColor: opts.baseColor ?? [0.5, 0.6, 0.7, 1],
@@ -97,9 +96,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       ...(opts.emissive !== undefined && { emissive: opts.emissive }),
       ...(opts.emissiveIntensity !== undefined && { emissiveIntensity: opts.emissiveIntensity }),
       ...(opts.occlusionStrength !== undefined && { occlusionStrength: opts.occlusionStrength }),
-      ...(opts.clearcoat !== undefined && { clearcoat: opts.clearcoat }),
-      ...(opts.clearcoatRoughness !== undefined && { clearcoatRoughness: opts.clearcoatRoughness }),
-      ...(opts.specularTint !== undefined && { specularTint: opts.specularTint }),
+      ...(opts.specularColor !== undefined && { specularColor: opts.specularColor }),
     } as unknown as MaterialSnapshot;
   }
 
@@ -108,7 +105,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('304 B payload size + standard PBR slot layout (baseline)', () => {
+    it('1040 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -119,12 +116,10 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
         emissive: [0, 0, 0],
         emissiveIntensity: 0,
         occlusionStrength: 1,
-        clearcoat: 0.85,
-        clearcoatRoughness: 0.12,
-        specularTint: [0.11, 0.22, 0.33],
+        specularColor: [0.11, 0.22, 0.33],
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(304);
+      expect(buf.byteLength).toBe(1040);
       const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
@@ -154,14 +149,12 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(f32[16]).toBe(1);
       // alphaCutoff (offset 68).
       expect(f32[17]).toBe(0);
-      // clearcoat layer (offsets 72..79).
-      expect(f32[18]).toBeCloseTo(0.85);
-      expect(f32[19]).toBeCloseTo(0.12);
-      // specularTint vec3 (offsets 80..92).
+      // specularColor vec3 (offsets 80..92; vec3 alignment preserves the slot).
       expect(f32[20]).toBeCloseTo(0.11);
       expect(f32[21]).toBeCloseTo(0.22);
       expect(f32[22]).toBeCloseTo(0.33);
-      expect(f32[72]).toBe(1);
+      // The vec2 strength aligns to 8 bytes after specularColor.
+      expect(f32.slice(24, 26)).toEqual(new Float32Array([1, 1]));
     });
 
     it('writes schema-carried alphaCutoff into the baseline PBR payload', () => {
@@ -180,15 +173,12 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       const apply = mod.applyMaterialTextureUvScales;
       if (typeof apply !== 'function') throw new Error('helper not exported yet');
       const world = new World();
-      const pbrPayload = new ArrayBuffer(304);
+      const pbrPayload = new ArrayBuffer(1040);
       apply(pbrPayload, makePbrSnapshot({}), world);
       const pbrF32 = new Float32Array(pbrPayload);
-      expect(pbrF32[26]).toBe(1);
-      expect(pbrF32[34]).toBe(1);
-      expect(pbrF32[42]).toBe(1);
-      expect(pbrF32[50]).toBe(1);
-      expect(pbrF32[58]).toBe(1);
-      expect(pbrF32[66]).toBe(1);
+      expect(Array.from(pbrF32.slice(36, 100))).toEqual(
+        Array.from({ length: 8 }, () => [0, 0, 1, 1, 0, 0, 1, 1]).flat(),
+      );
 
       const spritePayload = new ArrayBuffer(128);
       apply(
@@ -1064,9 +1054,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
     { name: 'emissiveIntensity', type: 'f32', default: 0 },
     { name: 'occlusionStrength', type: 'f32', default: 1 },
     { name: 'alphaCutoff', type: 'f32', default: 0 },
-    { name: 'clearcoat', type: 'f32', default: 0 },
-    { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
-    { name: 'specularTint', type: 'vec3', default: [1, 1, 1] },
+    { name: 'specularColor', type: 'vec3', default: [1, 1, 1] },
   ];
 
   describe('applyParamSnapshotToUbo: standard-pbr byte-identical via derive (M1 / w2)', () => {
@@ -1086,9 +1074,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
       expect(byName.get('emissiveIntensity')?.offset).toBe(60);
       expect(byName.get('occlusionStrength')?.offset).toBe(64);
       expect(byName.get('alphaCutoff')?.offset).toBe(68);
-      expect(byName.get('clearcoat')?.offset).toBe(72);
-      expect(byName.get('clearcoatRoughness')?.offset).toBe(76);
-      expect(byName.get('specularTint')?.offset).toBe(80);
+      expect(byName.get('specularColor')?.offset).toBe(80);
     });
 
     it('generic writer over standard-pbr snapshot equals buildPbrMaterialUboPayload bytes', () => {
@@ -1118,9 +1104,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
         emissiveIntensity,
         occlusionStrength,
         alphaCutoff: 0,
-        clearcoat: 0,
-        clearcoatRoughness: 0.5,
-        specularTint: [1, 1, 1],
+        specularColor: [1, 1, 1],
       } as unknown as MaterialSnapshot;
       const baseline = mod.buildPbrMaterialUboPayload(material);
       // Construct the generic-writer output: start from the same explicit
@@ -1140,7 +1124,7 @@ import { extractFrame, prepareExtractContext } from '../../../render/src/render-
         emissive,
         emissiveIntensity,
         occlusionStrength,
-        specularTint: [1, 1, 1],
+        specularColor: [1, 1, 1],
       };
       mod.applyParamSnapshotToUbo(candidate, STANDARD_PBR_SCHEMA, snapshot);
       expect(new Uint8Array(candidate)).toEqual(new Uint8Array(baseline));

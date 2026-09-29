@@ -32,7 +32,7 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
   let color = textureSample(screenTexture, screenSampler, in.uv);
   let depthPosition = vec2<i32>(in.position.xy);
   let depth = textureLoad(sceneDepth, depthPosition, 0u);
-  let proximity = clamp((1.0 - depth) * 40.0, 0.0, 1.0);
+  let proximity = clamp(depth * 40.0, 0.0, 1.0);
   let depthColor = vec3<f32>(proximity, 0.35 + proximity * 0.65, 1.0 - proximity);
   let strength = clamp(0.72 + params.strength * 0.0, 0.0, 1.0);
   return vec4<f32>(mix(color.rgb, depthColor, strength), 1.0);

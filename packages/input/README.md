@@ -93,6 +93,13 @@ detach();
 | `snap.keyboard.justPressedCode(code)` | `boolean` | physical code 上一帧未按、本帧按下（一帧寿命） |
 | `snap.keyboard.upCode(code)` | `boolean` | physical code 上一帧按下、本帧释放（一帧寿命） |
 
+键盘和鼠标的 press/release 是 backend 在事件到达时记录的边沿，而不
+是扫描时用 held 状态反推。因而一次 `keydown → keyup` 或
+`pointerdown → pointerup` 若发生在两个帧首扫描之间，仍会在下一份
+`InputSnapshot` 中同时留下 press 与 release；扫描后各边沿只保留一帧。
+`InputFrameStartScan` 每帧只调用一次 `sample()`，因此用户系统不会看到
+半更新的输入状态，也不应自行读取 DOM 事件。
+
 ### mouse（5 读点）
 
 | 调用 | 返回 | 语义 |
@@ -218,6 +225,14 @@ Five gesture recognizers running in the backend closure (C-3 single legal cross-
 | `setPointerLockAllowed(false)` immediate release | When `gameGate` transitions from `true` to `false` and a lock is active, the backend immediately releases: W3C path calls `exitPointerLock()`, provider path calls `exitLock()` + clears `providerLocked`. This solves the "mode switches to top-down while locked" boundary. |
 | lockProvider error → onLockError | W3C `requestPointerLock` promise rejection and provider `requestLock` throw/reject both route through `onLockError({ path, cause })`. Provider failure also rolls back `providerLocked = false`. The callback is wired by `attachInputAuto` into `AppError({ code: 'app-pointer-lock-failed' })` on the app's `onError` fan-out. |
 
+Pointer Lock is attempted from the trusted canvas click when the two explicit
+game/host gates allow it; `document.hasFocus()` is not a third gate because a
+browser may report a transient false value during the same activation. Both a
+rejected W3C request and the browser `pointerlockerror` event are converted to
+the same `onLockError` diagnostic and are caught before they can become an
+unhandled Promise rejection. Lock state remains a boolean readpoint in the
+snapshot; DOM error events never cross the consumer boundary.
+
 ## Pointer-lock contract: PointerLockProvider / lockProvider / setPointerLockAllowed / pointerLocked
 
 Four anchors cover the full pointer-lock surface across the input-backend boundary.
@@ -295,6 +310,8 @@ const sample = { tick: fixedTick + 1, input: snapshot.action('moveForward').isPr
 
 The input package freezes the snapshot. ECS owns `record`, `restore`, `trace`,
 participant registration, comparison tolerance, and closed simulation errors.
+The current snapshot does not retain previous snapshots after edge derivation;
+holding one reader must not retain an unbounded frame history.
 Use the same snapshot source for source and fresh target Worlds. Do not add a
 second input recorder, a replay action, or a browser event queue to Remote.
 

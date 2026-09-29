@@ -36,6 +36,7 @@ export {
   SpriteInstancesRequiresSpriteShaderError,
 } from './errors/sprite-and-shared-errors';
 export {
+  ArrayRangeOutOfBoundsError,
   ComponentFieldInvalidValueError,
   ComponentNumericValueInvalidError,
   ManagedArrayInvalidValueError,
@@ -396,6 +397,20 @@ export class ChangeEpochExhaustedError extends Error {
   constructor(epoch: number) {
     super(`World mutation epoch is exhausted at ${epoch}.\n  hint: Rebuild the World.`);
     this.detail = { epoch };
+  }
+}
+
+export class DerivedRangeOutOfBoundsError extends Error {
+  override readonly name = 'DerivedRangeOutOfBoundsError';
+  readonly code = 'derived-range-out-of-bounds' as const;
+  readonly expected = 'a non-negative span-relative range with start + count <= span.length';
+  readonly hint =
+    'check start and count against the QuerySpan length, then retry without changing World state';
+  readonly detail: { readonly start: number; readonly count: number; readonly spanLength: number };
+
+  constructor(start: number, count: number, spanLength: number) {
+    super(`Derived range [${start}, ${start + count}) exceeds QuerySpan length ${spanLength}.`);
+    this.detail = { start, count, spanLength };
   }
 }
 
@@ -1083,6 +1098,8 @@ export type EcsErrorCode =
   | 'component-field-invalid-value'
   | 'component-numeric-value-invalid'
   | 'managed-array-invalid-value'
+  // In-place numeric array range writes never resize the array.
+  | 'array-range-out-of-bounds'
   | 'shared-kernel-ineligible'
   | 'shared-kernel-failed'
   | 'world-poisoned'
@@ -1189,15 +1206,25 @@ export type EcsErrorDetail =
       readonly actualLength: number;
       readonly expectedStride: 16;
     }
-  // feat-20260519-light-casters-point-spot-pbr w2 — PointLight / SpotLight
+  // feat-20260519-light-casters-point-spot-pbr w2 — light and local probe
   // spawn-time payload bound violation (plan-strategy D-S3 a). detail.field
-  // three-branch ('range' | 'innerOuter' | 'outerNinety') keeps four bound
-  // violations under one code; AI users narrow on `.detail.field` after the
+  // names the validated scalar or RGB payload while one code keeps the
+  // recovery surface closed; AI users narrow on `.detail.field` after the
   // outer `switch (err.code)` to pick the specific recovery hint.
   | {
       readonly code: 'spawn-light-invalid-bounds';
-      readonly field: 'range' | 'innerOuter' | 'outerNinety';
-      readonly got: number;
+      readonly field:
+        | 'direction'
+        | 'intensity'
+        | 'color'
+        | 'width'
+        | 'height'
+        | 'irradiance'
+        | 'radius'
+        | 'range'
+        | 'innerOuter'
+        | 'outerNinety';
+      readonly got: number | readonly number[];
     }
   // feat-20260520-2d-sprite-layer-mvp M-2 w13 — resource-setter bound
   // violation (plan-strategy D-4). receivedMode carries the rejected
@@ -1362,6 +1389,14 @@ export type EcsErrorDetail =
       readonly field: string;
       readonly fieldType: string;
       readonly actualValue: unknown;
+    }
+  | {
+      readonly code: 'array-range-out-of-bounds';
+      readonly component: string;
+      readonly field: string;
+      readonly offset: number;
+      readonly length: number;
+      readonly size: number;
     }
   // feat-20260714-bevy-style-system-sets M2 / w12 — structured cyclic-dependency
   // detail. `.detail.cycle` is the ordered cycle path array; consumers read

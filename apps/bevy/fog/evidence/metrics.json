@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "forgeax-render-metrics/1",
+  "featureId": "feat-20260827-render-temporal-environment-bloom-syntax-corrected",
+  "source": { "path": "apps/bevy/fog/src/main.ts", "sha256": "cacd50be5f2d207d57df76c1264d25ac6d67cf871509056806b322681d345ef3" },
+  "build": { "command": "pnpm --filter @forgeax/bevy-fog build", "status": "pass" },
+  "backend": "dawn-node",
+  "runner": "dawn.node",
+  "frames": 300,
+  "roster": { "uniform": ["environment", "fog"], "height": ["environment", "fog"], "recovery": ["environment", "fog"] },
+  "counters": { "bloomOffResources": 0, "bloomOffPasses": 0, "bloomOffUploads": 0, "fogHistory": 0 },
+  "status": "pass"
+}

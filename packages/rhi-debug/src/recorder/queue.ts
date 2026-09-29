@@ -3,7 +3,7 @@
 import type { Buffer, CommandBuffer, RhiQueue } from '@forgeax/engine-rhi';
 import type { RhiCallEventWriteTexture } from '../types';
 import type { RecorderInternal } from './core';
-import { getHandleId, pushEvent, shouldRecord, storeBlob } from './core';
+import { getHandleId, pushEvent, shouldRecord, storeOwnedBlob } from './core';
 
 export function createQueueProxy(s: RecorderInternal, realQueue: RhiQueue): RhiQueue {
   return {
@@ -15,7 +15,7 @@ export function createQueueProxy(s: RecorderInternal, realQueue: RhiQueue): RhiQ
       size?: number,
     ) {
       // Idle fast-path: when not recording, skip getHandleId + slice + the
-      // storeBlob hash-and-double-copy entirely (they would only feed a
+      // storeOwnedBlob hash-and-copy entirely (they would only feed a
       // pushEvent that the state gate drops, and blobPool is reset on arm()).
       // Same-condition-as-pushEvent, so a recording call still records.
       if (!shouldRecord(s)) {
@@ -27,7 +27,7 @@ export function createQueueProxy(s: RecorderInternal, realQueue: RhiQueue): RhiQ
         : new Uint8Array(data as ArrayBuffer);
       const sz = size ?? raw.byteLength - (dataOffset ?? 0);
       const slice = raw.slice(dataOffset ?? 0, (dataOffset ?? 0) + sz);
-      const dataHash = storeBlob(s, slice.buffer as ArrayBuffer);
+      const dataHash = storeOwnedBlob(s, slice.buffer as ArrayBuffer);
 
       pushEvent(s, {
         kind: 'writeBuffer',
@@ -40,7 +40,7 @@ export function createQueueProxy(s: RecorderInternal, realQueue: RhiQueue): RhiQ
     },
 
     writeTexture(destination, data, dataLayout, copySize) {
-      // Idle fast-path (see writeBuffer): skip storeBlob hash+copy when the
+      // Idle fast-path (see writeBuffer): skip storeOwnedBlob hash+copy when the
       // recorded event would be dropped anyway.
       if (!shouldRecord(s)) {
         return realQueue.writeTexture(destination, data, dataLayout, copySize);
@@ -49,7 +49,9 @@ export function createQueueProxy(s: RecorderInternal, realQueue: RhiQueue): RhiQ
       const raw = ArrayBuffer.isView(data)
         ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
         : new Uint8Array(data as ArrayBuffer);
-      const dataHash = storeBlob(s, raw.buffer as ArrayBuffer);
+      // Store exactly the view: a subarray upload (one mip of a packed chain)
+      // must not record its whole backing buffer.
+      const dataHash = storeOwnedBlob(s, raw.slice().buffer as ArrayBuffer);
 
       pushEvent(s, {
         kind: 'writeTexture',

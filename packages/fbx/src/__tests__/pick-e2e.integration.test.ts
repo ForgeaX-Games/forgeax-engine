@@ -29,7 +29,7 @@
 // (M5 parallel structure, different chain entry point).
 
 import { World } from '@forgeax/engine-ecs';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import';
 import { decodeMeshBinHeader } from '@forgeax/engine-pack';
 import { pick } from '@forgeax/engine-picking';
 import { Camera, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
@@ -99,7 +99,7 @@ describe('fbx e2e pick probe over pack JSON roundtrip (m8-1)', () => {
     expect(meshAsset.aabb?.[5] as number).toBe(-3);
 
     // --- 3. Encode via packMeshBin ---
-    const packed = packMeshBinV4(
+    const packed = packMeshBin(
       {
         vertices: meshAsset.vertices,
         indices: meshAsset.indices,

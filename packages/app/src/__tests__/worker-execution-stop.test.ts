@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineToHostMessage } from '../execution/protocol';
+import { workerSelection } from './execution-fixtures';
 
 type SessionListener = (message: EngineToHostMessage) => void;
 
@@ -96,13 +97,7 @@ describe('Worker ExecutionApp terminal stop', () => {
       canvas: {} as HTMLCanvasElement,
       appOptions: { execution: { bootstrap: 'https://example.test/game.js' } } as never,
       capabilities,
-      selection: {
-        requestedTier: 'engine-worker',
-        actualTier: 'engine-worker',
-        selectionReason: 'explicit-request',
-        missingCapabilities: [],
-        sharedEvidencePassed: false,
-      },
+      selection: workerSelection({ render: false, kernels: false }),
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -135,13 +130,7 @@ describe('Worker ExecutionApp terminal stop', () => {
       canvas: {} as HTMLCanvasElement,
       appOptions: { execution: { bootstrap: 'https://example.test/game.js' } } as never,
       capabilities,
-      selection: {
-        requestedTier: 'engine-worker',
-        actualTier: 'engine-worker',
-        selectionReason: 'explicit-request',
-        missingCapabilities: [],
-        sharedEvidencePassed: false,
-      },
+      selection: workerSelection({ render: false, kernels: false }),
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;

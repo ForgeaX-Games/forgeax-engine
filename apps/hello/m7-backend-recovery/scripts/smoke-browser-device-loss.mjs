@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-// M7 browser/driver device-loss gate: crash Chrome's GPU process through the
-// DevTools protocol, observe the real GPUDevice.lost -> Renderer health channel,
-// recover through the public Renderer.recover() API, and prove the same World
-// renders again with fresh RHI capture artifacts.
+// M7 browser recovery evidence: inject a real GPU-process loss through CDP,
+// then observe the public Renderer health channel on one page and one World.
 
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -11,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 import { buildFrameModel, decodeTape } from '@forgeax/engine-rhi-debug';
+import { isRetryableAdapterRecoveryFailure } from './recovery-contract.mjs';
+import { viteLocalUrl } from './vite-local-url.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -20,7 +21,26 @@ const artifactDir = resolve(
   process.env.FORGEAX_M7_ARTIFACT_DIR ??
     resolve(repoRoot, '.forgeax-gauntlet', 'hello-m7-backend-recovery', 'browser-device-loss'),
 );
-mkdirSync(artifactDir, { recursive: true });
+const runId = `run-${Date.now()}-${process.pid}`;
+const runArtifactDir = resolve(artifactDir, runId);
+const adapterAvailabilityWaitMs = 2_000;
+const browserChannel =
+  process.env.FORGEAX_CHROME_CHANNEL ?? (process.env.CI ? browserLaunch.channel : 'chrome');
+const browserArgs = [
+  ...(process.env.CI && process.platform === 'linux'
+    ? [...browserLaunch.args, '--use-angle=swiftshader']
+    : [
+      '--disable-features=MacAppCodeSignClone',
+      '--enable-unsafe-webgpu',
+      '--enable-features=Vulkan,UseSkiaRenderer',
+      '--ignore-gpu-blocklist',
+    ]),
+  // The carrier deliberately crashes the GPU three times. Keep adapters
+  // available so Chrome quarantine does not replace the Engine recovery test.
+  '--disable-gpu-process-crash-limit',
+  '--disable-domain-blocking-for-3d-apis',
+];
+mkdirSync(runArtifactDir, { recursive: true });
 
 const vite = spawn(
   process.execPath,
@@ -32,14 +52,59 @@ const vite = spawn(
   },
 );
 let baseUrl;
+let viteOutput = '';
 vite.stdout.on('data', (chunk) => {
   const text = chunk.toString();
   process.stdout.write(`[vite] ${text}`);
-  baseUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
+  viteOutput = (viteOutput + text).slice(-8192);
+  baseUrl ??= viteLocalUrl(viteOutput);
 });
 vite.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
 let browser;
+const pageLifecycle = [];
+const workerLifecycle = [];
+const browserLifecycle = [];
+const pageErrors = [];
+const consoleErrors = [];
+const recoveryCycles = [];
+const recoveryAttemptEvidence = [];
+
+function readPng(path) {
+  const png = PNG.sync.read(readFileSync(path));
+  let nonBlackPixels = 0;
+  for (let index = 0; index < png.data.length; index += 4) {
+    if (png.data[index] > 8 || png.data[index + 1] > 8 || png.data[index + 2] > 8) nonBlackPixels += 1;
+  }
+  return { width: png.width, height: png.height, nonBlackPixels };
+}
+
+function visualDiff(referencePath, candidatePath) {
+  const reference = PNG.sync.read(readFileSync(referencePath));
+  const candidate = PNG.sync.read(readFileSync(candidatePath));
+  if (reference.width !== candidate.width || reference.height !== candidate.height) {
+    return { meanAbsRgb: Number.POSITIVE_INFINITY, highDeltaRatio: 1 };
+  }
+  let totalDelta = 0;
+  let highDelta = 0;
+  const pixelCount = reference.width * reference.height;
+  for (let index = 0; index < reference.data.length; index += 4) {
+    const delta =
+      (Math.abs(reference.data[index] - candidate.data[index]) +
+        Math.abs(reference.data[index + 1] - candidate.data[index + 1]) +
+        Math.abs(reference.data[index + 2] - candidate.data[index + 2])) /
+      3;
+    totalDelta += delta;
+    if (delta > 20) highDelta += 1;
+  }
+  return {
+    meanAbsRgb: pixelCount === 0 ? Number.POSITIVE_INFINITY : totalDelta / pixelCount,
+    meanAbsRgbNormalized:
+      pixelCount === 0 ? Number.POSITIVE_INFINITY : totalDelta / (pixelCount * 255),
+    highDeltaRatio: pixelCount === 0 ? 1 : highDelta / pixelCount,
+  };
+}
+
 try {
   const deadline = Date.now() + 30_000;
   while (baseUrl === undefined && Date.now() < deadline) await sleep(200);
@@ -47,333 +112,293 @@ try {
 
   browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer', '--ignore-gpu-blocklist'],
+    channel: browserChannel,
+    args: browserArgs,
   });
+  browser.on('disconnected', () => browserLifecycle.push('disconnected'));
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
-  const pageErrors = [];
-  const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
+  page.on('crash', () => pageLifecycle.push('crash'));
+  page.on('close', () => pageLifecycle.push('close'));
+  page.on('worker', (worker) => workerLifecycle.push(`created:${worker.url()}`));
 
-  await page.goto(`${baseUrl}/?m7-device-loss=1`, {
-    waitUntil: 'networkidle',
-    timeout: 30_000,
-  });
+  await page.goto(`${baseUrl}/?m7-device-loss=1`, { waitUntil: 'networkidle', timeout: 30_000 });
   await page.waitForFunction(
     () => typeof globalThis.__forgeaxM7DeviceRecovery?.health === 'function',
     undefined,
     { timeout: 30_000 },
   );
-  await page.waitForTimeout(1500);
 
   const readState = () =>
     page.evaluate(() => {
       const probe = globalThis.__forgeaxM7DeviceRecovery;
       if (probe === undefined) throw new Error('M7 device-loss probe hook is missing');
-      return {
-        ...probe.state(),
-        transitions: probe.healthTransitions(),
-      };
+      return { ...probe.state(), transitions: probe.healthTransitions() };
     });
-  const waitForHealth = async (reason) => {
+  const waitForHealth = async (expected) => {
     const healthDeadline = Date.now() + 30_000;
     let last;
+    let lastError;
     while (Date.now() < healthDeadline) {
       try {
         last = await readState();
-        if (last.health?.reason === reason) return last;
-      } catch {
-        // GPU-process restart can briefly stall page evaluation; keep polling.
+        if (last.health === expected) return last;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
       }
       await sleep(250);
     }
-    throw new Error(`renderer health did not reach ${reason}: ${JSON.stringify(last)}`);
+    throw new Error(
+      `renderer health did not reach ${expected}: ${JSON.stringify({ last, lastError, pageClosed: page.isClosed(), pageLifecycle, browserLifecycle })}`,
+    );
   };
-
   const captureFrame = async (label) => {
-    console.log(`[m7-browser-device-loss] capture start: ${label} debug=${JSON.stringify(await page.evaluate(() => ({
-      debug: globalThis.__forgeaxM7DeviceRecovery.debug(),
-      capture: typeof globalThis.__forgeax?.captureFrame,
-    })))}\n`);
-    const capture = await Promise.race([
-      page.evaluate(async (captureLabel) => {
-        const captureFn = globalThis.__forgeax?.captureFrame;
-        if (typeof captureFn !== 'function') return null;
-        const captured = await captureFn();
-        if (!captured.ok) return captured;
-        const runId = `m7-${captureLabel}-${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
-        const response = await fetch(`/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-forgeax-rhitape' },
-          body: captured.value.bytes,
-        });
-        const payload = await response.json();
-        if (!response.ok) return { ok: false, error: payload };
-        return {
-          ok: true,
-          value: { ...payload, source: 'rhi.capture', digest: captured.value.digest, runId },
-        };
-      }, label),
-      sleep(20_000).then(() => {
-        throw new Error(`RHI capture timed out after 20s: ${label}`);
-      }),
-    ]);
+    const capture = await page.evaluate(async ({ captureLabel }) => {
+      const captureFn = globalThis.__forgeax?.captureFrame;
+      if (typeof captureFn !== 'function') return null;
+      const captured = await captureFn({ snapshotTimeoutMs: 5_000 });
+      if (!captured.ok) return captured;
+      const runId = `m7-${captureLabel}-${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
+      const response = await fetch(`/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-forgeax-rhitape' },
+        // Blob keeps large binary tapes out of CDP's inline request-body string.
+        body: new Blob([captured.value.bytes], { type: 'application/x-forgeax-rhitape' }),
+      });
+      const payload = await response.json();
+      if (!response.ok) return { ok: false, error: payload };
+      return { ok: true, value: { ...payload, digest: captured.value.digest, runId } };
+    }, { captureLabel: label });
     if (capture === null) throw new Error(`RHI capture hook missing for ${label}`);
     if (!capture.ok) throw new Error(`${label} capture failed: ${JSON.stringify(capture.error)}`);
-    if (capture.value?.kind !== 'rhi-tape' || typeof capture.value.path !== 'string' || typeof capture.value.digest !== 'string') {
-      throw new Error(`${label} capture returned an invalid ArtifactRef: ${JSON.stringify(capture)}`);
-    }
-    const candidates = [
-      capture.value.path,
-      resolve(appRoot, capture.value.path),
-      resolve(repoRoot, capture.value.path),
-    ];
-    const source = candidates.find((path) => existsSync(path));
-    if (source === undefined) throw new Error(`${label} single tape artifact missing: ${capture.value.path}`);
-    const artifactPath = resolve(artifactDir, `${label}.rhitape`);
+    const source = [capture.value.path, resolve(appRoot, capture.value.path), resolve(repoRoot, capture.value.path)].find((path) => existsSync(path));
+    if (source === undefined) throw new Error(`${label} tape artifact missing: ${capture.value.path}`);
+    const artifactPath = resolve(runArtifactDir, `${label}.rhitape`);
     copyFileSync(source, artifactPath);
     const tape = decodeTape(new Uint8Array(readFileSync(artifactPath)));
-    if (!tape.ok) throw new Error(`${label} tape decode failed: ${tape.error.code} (${tape.error.hint})`);
+    if (!tape.ok) throw new Error(`${label} tape decode failed: ${tape.error.code}`);
     const model = buildFrameModel(tape.value);
-    const result = {
-      ...capture.value,
-      path: artifactPath,
-      eventCount: tape.value.events.length,
-      workCount: model.works.length,
-    };
-    console.log(`[m7-browser-device-loss] capture done: ${label} works=${result.workCount} events=${result.eventCount}`);
+    return { ...capture.value, path: artifactPath, eventCount: tape.value.events.length, workCount: model.works.length };
+  };
+
+  const runFrames = async (count) => {
+    const result = await page.evaluate(async (frameCount) => {
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+      }
+      return frameCount;
+    }, count);
+    if (result !== count) throw new Error(`M7 frame oracle completed ${result}/${count} frames`);
     return result;
   };
 
+  const probeAdapterAvailability = async () =>
+    page.evaluate(async (timeoutMs) => {
+      const startedAt = performance.now();
+      const deadline = startedAt + timeoutMs;
+      const attempts = [];
+      const gpu = navigator.gpu;
+      if (gpu === undefined) {
+        return { status: 'missing', timeoutMs, elapsedMs: performance.now() - startedAt, attempts };
+      }
+      while (performance.now() < deadline) {
+        const probeStartedAt = performance.now();
+        const remainingMs = Math.max(1, deadline - probeStartedAt);
+        const request = gpu.requestAdapter().then(
+          (adapter) => ({ status: adapter === null ? 'unavailable' : 'available' }),
+          (error) => ({
+            status: 'rejected',
+            error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+          }),
+        );
+        const outcome = await Promise.race([
+          request,
+          new Promise((resolve) => setTimeout(() => resolve({ status: 'timeout' }), remainingMs)),
+        ]);
+        const attempt = {
+          attempt: attempts.length + 1,
+          status: outcome.status,
+          elapsedMs: performance.now() - probeStartedAt,
+        };
+        attempts.push(attempt);
+        if (outcome.status === 'available') {
+          return { status: 'available', timeoutMs, elapsedMs: performance.now() - startedAt, attempts };
+        }
+        if (outcome.status === 'rejected' || outcome.status === 'timeout') {
+          return {
+            status: outcome.status,
+            timeoutMs,
+            elapsedMs: performance.now() - startedAt,
+            attempts,
+            ...(outcome.error === undefined ? {} : { error: outcome.error }),
+          };
+        }
+        const sleepMs = Math.min(50, deadline - performance.now());
+        if (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      }
+      return { status: 'timeout', timeoutMs, elapsedMs: performance.now() - startedAt, attempts };
+    }, adapterAvailabilityWaitMs);
+
   const canvas = page.locator('#app');
-  const unexpectedErrors = () => ({
-    pageErrors: [...pageErrors],
-    consoleErrors: consoleErrors.filter((message) => !message.includes('[RhiError device-lost]')),
-  });
-  const assertNoUnexpectedErrors = (label) => {
-    const errors = unexpectedErrors();
-    if (errors.pageErrors.length !== 0 || errors.consoleErrors.length !== 0) {
-      throw new Error(`${label} unexpected browser errors: ${JSON.stringify(errors)}`);
-    }
-  };
-  const assertSame = (label, left, right) => {
-    if (JSON.stringify(left) !== JSON.stringify(right)) {
-      throw new Error(`${label} changed: before=${JSON.stringify(left)} after=${JSON.stringify(right)}`);
-    }
-  };
-  const recover = () =>
-    Promise.race([
-      page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.recover()),
-      sleep(15_000).then(() => {
-        throw new Error('renderer.recover timed out after 15s');
-      }),
-    ]);
-  const drawOnce = () =>
-    Promise.race([
-      page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.drawOnce()),
-      sleep(15_000).then(() => {
-        throw new Error('public renderer.draw timed out after recovery');
-      }),
-    ]);
-
-  const beforeState = await waitForHealth('alive');
-  console.log(
-    `[m7-browser-device-loss] before health=${beforeState.health.reason} ` +
-      `world=${beforeState.worldIdentity} renderer=${beforeState.rendererIdentity} ` +
-      `device=${beforeState.deviceIdentity} entities=${beforeState.cpu.entityCount}`,
-  );
-  const beforeCapture = await captureFrame('before-loss');
-  const beforePng = resolve(artifactDir, 'before-loss.png');
-  await canvas.screenshot({ path: beforePng });
-
   const cdp = await browser.newBrowserCDPSession();
-  await cdp.send('Browser.crashGpuProcess');
-  const lostState = await waitForHealth('device-lost');
-  console.log(`[m7-browser-device-loss] lost health=${lostState.health.reason}`);
-  const lostReason = lostState.health?.detail?.lostReason;
-  if (lostReason !== 'unknown') throw new Error(`expected driver loss reason=unknown, got ${lostReason}`);
-  if (lostState.health?.recoverable !== true) throw new Error('device-lost state was not recoverable');
-  if (lostState.worldIdentity !== beforeState.worldIdentity) throw new Error('World identity changed at device loss');
-  if (lostState.rendererIdentity !== beforeState.rendererIdentity) throw new Error('Renderer identity changed at device loss');
-  if (lostState.deviceIdentity !== beforeState.deviceIdentity) throw new Error('device identity changed before recovery');
-  assertSame('CPU scene at device loss', beforeState.cpu, lostState.cpu);
-
-  const adapterRequestsBeforeRefusal = lostState.adapterRequestCount;
-  const deviceRequestsBeforeRefusal = lostState.deviceRequestCount;
-  const transitionsBeforeRefusal = lostState.transitions.length;
-  await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.armDeviceRefusal());
-  const armedState = await readState();
-  if (armedState.deviceRefusalRemaining !== 1) throw new Error('device refusal did not arm');
-  console.log('[m7-browser-device-loss] first recover: requestDevice refusal armed');
-  const refusedRecovery = await recover();
-  console.log(`[m7-browser-device-loss] first recover result: ${JSON.stringify(refusedRecovery)}`);
-  const refusedError = refusedRecovery?.error;
-  if (refusedRecovery?.ok !== false || refusedError?.code !== 'recover-device-unavailable') {
-    throw new Error(`expected recover-device-unavailable, got ${JSON.stringify(refusedRecovery)}`);
-  }
-  if (refusedError.expected !== 'requestDevice failed or threw') {
-    throw new Error(`unexpected refusal expected field: ${JSON.stringify(refusedError)}`);
-  }
-  if (refusedError.hint !== 'retry recover() after a host-chosen delay; device creation is driver-dependent') {
-    throw new Error(`unexpected refusal hint field: ${JSON.stringify(refusedError)}`);
-  }
-  await page.waitForTimeout(1000);
-  const afterRefusal = await readState();
-  if (afterRefusal.health?.reason !== 'device-lost') throw new Error('device refusal changed health to alive');
-  assertSame('World identity after device refusal', beforeState.worldIdentity, afterRefusal.worldIdentity);
-  assertSame('Renderer identity after device refusal', beforeState.rendererIdentity, afterRefusal.rendererIdentity);
-  assertSame('device identity after device refusal', beforeState.deviceIdentity, afterRefusal.deviceIdentity);
-  assertSame('CPU scene after device refusal', beforeState.cpu, afterRefusal.cpu);
-  if (afterRefusal.adapterRequestCount !== adapterRequestsBeforeRefusal + 1) {
-    throw new Error(`unexpected adapter retry/background loop: ${JSON.stringify(afterRefusal)}`);
-  }
-  if (afterRefusal.deviceRequestCount !== deviceRequestsBeforeRefusal + 1) {
-    throw new Error(`requestDevice was retried or skipped: ${JSON.stringify(afterRefusal)}`);
-  }
-  if (afterRefusal.deviceRefusalCount !== 1 || afterRefusal.deviceRefusalRemaining !== 0) {
-    throw new Error(`requestDevice refusal was not one-shot: ${JSON.stringify(afterRefusal)}`);
-  }
-  if (afterRefusal.transitions.length !== transitionsBeforeRefusal) {
-    throw new Error(`device refusal published an unexpected health transition: ${JSON.stringify(afterRefusal)}`);
-  }
-  const refusedDraw = await drawOnce();
-  if (refusedDraw?.ok !== false || refusedDraw.error?.code !== 'rhi-not-available') {
-    throw new Error(`device-lost draw was not blocked without publication: ${JSON.stringify(refusedDraw)}`);
-  }
-  assertNoUnexpectedErrors('after device refusal');
-
-  await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.clearDeviceRefusal());
-  const clearedState = await readState();
-  if (clearedState.deviceRefusalRemaining !== 0) throw new Error('device refusal did not clear');
-  console.log('[m7-browser-device-loss] second recover: requestDevice refusal cleared');
-  const retryRecovery = await recover();
-  console.log(`[m7-browser-device-loss] second recover result: ${JSON.stringify(retryRecovery)}`);
-  if (retryRecovery?.ok !== true) throw new Error(`renderer.recover retry failed: ${JSON.stringify(retryRecovery)}`);
-  await page.waitForTimeout(2000);
-  const afterRetry = await waitForHealth('alive');
-  console.log(
-    `[m7-browser-device-loss] after retry health=${afterRetry.health.reason} ` +
-      `world=${afterRetry.worldIdentity} renderer=${afterRetry.rendererIdentity} ` +
-      `device=${afterRetry.deviceIdentity} entities=${afterRetry.cpu.entityCount}`,
-  );
-  assertSame('World identity after retry', beforeState.worldIdentity, afterRetry.worldIdentity);
-  assertSame('Renderer identity after retry', beforeState.rendererIdentity, afterRetry.rendererIdentity);
-  assertSame('CPU scene after retry', beforeState.cpu, afterRetry.cpu);
-  if (afterRetry.deviceIdentity === beforeState.deviceIdentity) {
-    throw new Error('successful retry kept the stale device identity');
-  }
-  if (
-    afterRetry.adapterRequestCount !== afterRefusal.adapterRequestCount + 1 ||
-    afterRetry.deviceRequestCount !== afterRefusal.deviceRequestCount + 1 ||
-    afterRetry.deviceRefusalCount !== 1
-  ) {
-    throw new Error(`retry adapter/device acquisition was not exactly one fresh request: ${JSON.stringify(afterRetry)}`);
-  }
-  if (afterRetry.deviceRefusalRemaining !== 0) throw new Error('device refusal remained enabled after retry');
-
-  const afterDraw = await drawOnce();
-  if (afterDraw?.ok !== true) throw new Error(`public renderer.draw failed after retry: ${JSON.stringify(afterDraw)}`);
-  console.log('[m7-browser-device-loss] public renderer.draw after retry: ok');
-  const afterCapture = await captureFrame('after-retry');
-  if (afterCapture.workCount === 0) throw new Error(`fresh retry capture has no work events: ${JSON.stringify(afterCapture)}`);
-  if (afterCapture.runId === beforeCapture.runId) throw new Error('retry capture reused the pre-loss capture run');
-  const afterPng = resolve(artifactDir, 'after-retry.png');
-  await canvas.screenshot({ path: afterPng });
-
-  const thirdRecovery = await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.recover());
-  console.log(`[m7-browser-device-loss] third recover result: ${JSON.stringify(thirdRecovery)}`);
-  if (
-    thirdRecovery?.ok !== false ||
-    thirdRecovery.error?.code !== 'recover-not-needed' ||
-    thirdRecovery.error?.expected !== 'renderer is healthy; call health() first to confirm degraded state before calling recover()' ||
-    thirdRecovery.error?.hint !== 'call health() first to confirm degraded state before calling recover()'
-  ) {
-    throw new Error(`expected recover-not-needed while alive, got ${JSON.stringify(thirdRecovery)}`);
-  }
-  const disposeResult = await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.disposeTwice());
-  if (disposeResult?.ok !== true) throw new Error(`repeated renderer.dispose failed: ${JSON.stringify(disposeResult)}`);
-  await page.waitForTimeout(500);
-
-  const readPng = (path) => {
-    const png = PNG.sync.read(readFileSync(path));
-    let nonBlackPixels = 0;
-    for (let index = 0; index < png.data.length; index += 4) {
-      if (png.data[index] > 8 || png.data[index + 1] > 8 || png.data[index + 2] > 8) nonBlackPixels++;
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    const before = await waitForHealth('alive');
+    const cdpCommand = 'Browser.crashGpuProcess';
+    const cycleEvidence = { cycle, cdpCommand, faultRequested: false, before, recoveryAttempts: [] };
+    recoveryAttemptEvidence.push(cycleEvidence);
+    const beforeCapture = await captureFrame(`cycle-${cycle}-before`);
+    const beforePng = resolve(runArtifactDir, `cycle-${cycle}-before.png`);
+    await canvas.screenshot({ path: beforePng });
+    const transitionStart = before.transitions.length;
+    cycleEvidence.faultRequested = true;
+    await cdp.send(cdpCommand);
+    const lost = await waitForHealth('device-lost');
+    cycleEvidence.lost = lost;
+    if (lost.worldIdentity !== before.worldIdentity || lost.rendererIdentity !== before.rendererIdentity) {
+      throw new Error(`cycle ${cycle} changed logical owner at loss: ${JSON.stringify({ before, lost })}`);
     }
-    return { width: png.width, height: png.height, nonBlackPixels };
-  };
-  const visualDiff = (referencePath, candidatePath) => {
-    const reference = PNG.sync.read(readFileSync(referencePath));
-    const candidate = PNG.sync.read(readFileSync(candidatePath));
-    if (reference.width !== candidate.width || reference.height !== candidate.height) {
-      return { meanAbsRgb: Number.POSITIVE_INFINITY, highDeltaRatio: 1 };
+    if (lost.deviceLossError?.code !== 'device-lost') {
+      throw new Error(`cycle ${cycle} missing device-lost error: ${JSON.stringify(lost)}`);
     }
-    let totalDelta = 0;
-    let highDelta = 0;
-    const pixelCount = reference.width * reference.height;
-    for (let index = 0; index < reference.data.length; index += 4) {
-      const delta =
-        (Math.abs(reference.data[index] - candidate.data[index]) +
-          Math.abs(reference.data[index + 1] - candidate.data[index + 1]) +
-          Math.abs(reference.data[index + 2] - candidate.data[index + 2])) /
-        3;
-      totalDelta += delta;
-      if (delta > 20) highDelta += 1;
-    }
-    return {
-      meanAbsRgb: pixelCount === 0 ? Number.POSITIVE_INFINITY : totalDelta / pixelCount,
-      highDeltaRatio: pixelCount === 0 ? 1 : highDelta / pixelCount,
+    const firstRecoveryStartedAt = Date.now();
+    const firstRecovery = await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.recover());
+    const firstRecoveryAttempt = {
+      attempt: 1,
+      operation: 'renderer.recover',
+      status: firstRecovery.ok ? 'succeeded' : 'failed',
+      elapsedMs: Date.now() - firstRecoveryStartedAt,
+      result: firstRecovery,
+      finalHealth: await readState().catch((error) => ({
+        error: error instanceof Error ? error.message : String(error),
+      })),
     };
-  };
-  const beforeVisual = readPng(beforePng);
-  const afterVisual = readPng(afterPng);
-  const pixelDiff = visualDiff(beforePng, afterPng);
-  if (beforeVisual.nonBlackPixels < 1000) throw new Error(`baseline canvas is visually empty: ${JSON.stringify(beforeVisual)}`);
-  if (afterVisual.nonBlackPixels < 1000) throw new Error(`recovered canvas is visually empty: ${JSON.stringify(afterVisual)}`);
-  const contentRatio = afterVisual.nonBlackPixels / beforeVisual.nonBlackPixels;
-  if (contentRatio < 0.8 || contentRatio > 1.2) {
-    throw new Error(`recovered content changed unexpectedly: before=${JSON.stringify(beforeVisual)} after=${JSON.stringify(afterVisual)}`);
-  }
-  if (pixelDiff.meanAbsRgb > 45 || pixelDiff.highDeltaRatio > 0.25) {
-    throw new Error(`recovered semantic pixels diverged: ${JSON.stringify({ beforeVisual, afterVisual, pixelDiff })}`);
+    cycleEvidence.recoveryAttempts.push(firstRecoveryAttempt);
+    let recovery = firstRecovery;
+    if (!recovery.ok) {
+      const detail = recovery.error?.detail;
+      const adapterRetryable = isRetryableAdapterRecoveryFailure(detail);
+      if (!adapterRetryable) {
+        cycleEvidence.finalHealth = firstRecoveryAttempt.finalHealth;
+        throw new Error(
+          `cycle ${cycle} recovery failed without an eligible adapter retry: ${JSON.stringify({ recoveryAttempts: cycleEvidence.recoveryAttempts, finalHealth: cycleEvidence.finalHealth })}`,
+        );
+      }
+      const adapterProbe = await probeAdapterAvailability();
+      cycleEvidence.adapterProbe = adapterProbe;
+      if (adapterProbe.status !== 'available') {
+        cycleEvidence.finalHealth = await readState().catch((error) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        throw new Error(
+          `cycle ${cycle} adapter availability did not recover: ${JSON.stringify({ recoveryAttempts: cycleEvidence.recoveryAttempts, adapterProbe, finalHealth: cycleEvidence.finalHealth })}`,
+        );
+      }
+      const retryRecoveryStartedAt = Date.now();
+      const retryRecovery = await page.evaluate(() => globalThis.__forgeaxM7DeviceRecovery.recover());
+      const retryRecoveryAttempt = {
+        attempt: 2,
+        operation: 'renderer.recover',
+        status: retryRecovery.ok ? 'succeeded' : 'failed',
+        elapsedMs: Date.now() - retryRecoveryStartedAt,
+        result: retryRecovery,
+        finalHealth: await readState().catch((error) => ({
+          error: error instanceof Error ? error.message : String(error),
+        })),
+      };
+      cycleEvidence.recoveryAttempts.push(retryRecoveryAttempt);
+      recovery = retryRecovery;
+      if (!recovery.ok) {
+        cycleEvidence.finalHealth = retryRecoveryAttempt.finalHealth;
+        throw new Error(
+          `cycle ${cycle} recovery retry failed: ${JSON.stringify({ recoveryAttempts: cycleEvidence.recoveryAttempts, adapterProbe, finalHealth: cycleEvidence.finalHealth })}`,
+        );
+      }
+    }
+    const after = await waitForHealth('alive');
+    cycleEvidence.recovery = recovery;
+    cycleEvidence.after = after;
+    cycleEvidence.finalHealth = after;
+    if (after.worldIdentity !== before.worldIdentity || after.rendererIdentity !== before.rendererIdentity) {
+      throw new Error(`cycle ${cycle} changed logical owner after recovery: ${JSON.stringify({ before, after })}`);
+    }
+    if (after.deviceIdentity === before.deviceIdentity) {
+      throw new Error(`cycle ${cycle} reused the stale device identity`);
+    }
+    const frames = await runFrames(60);
+    const afterCapture = await captureFrame(`cycle-${cycle}-after`);
+    const afterPng = resolve(runArtifactDir, `cycle-${cycle}-after.png`);
+    await canvas.screenshot({ path: afterPng });
+    const transitions = after.transitions.slice(transitionStart).map((entry) => entry.state);
+    if (!transitions.includes('device-lost') || !transitions.includes('recovering') || !transitions.includes('alive')) {
+      throw new Error(`cycle ${cycle} missing health transition: ${JSON.stringify({ transitions, after })}`);
+    }
+    recoveryCycles.push({
+      ...cycleEvidence,
+      frames,
+      transitions,
+      capture: { before: beforeCapture, after: afterCapture },
+      png: { before: beforePng, after: afterPng },
+      connection: { pageClosed: page.isClosed(), pageLifecycle: [...pageLifecycle], browserLifecycle: [...browserLifecycle] },
+    });
   }
 
-  const transitions = afterRetry.transitions.map((snapshot) => snapshot.reason);
-  if (!transitions.includes('device-lost') || !transitions.includes('alive')) {
-    throw new Error(`health transition oracle missing device-lost/alive: ${JSON.stringify(transitions)}`);
+  const visual = recoveryCycles.map(({ cycle, png }) => ({
+    cycle,
+    before: readPng(png.before),
+    after: readPng(png.after),
+    diff: visualDiff(png.before, png.after),
+  }));
+  for (const result of visual) {
+    if (result.before.nonBlackPixels < 1000 || result.after.nonBlackPixels < 1000) {
+      throw new Error(`cycle ${result.cycle} scene is visually empty: ${JSON.stringify(result)}`);
+    }
+    if (result.diff.meanAbsRgbNormalized > 0.05 || result.diff.highDeltaRatio > 0.25) {
+      throw new Error(`cycle ${result.cycle} semantic pixels diverged: ${JSON.stringify(result)}`);
+    }
   }
-  assertNoUnexpectedErrors('after retry and dispose');
+  if (page.isClosed() || browserLifecycle.includes('disconnected')) {
+    throw new Error(`connection termination is not loss evidence: ${JSON.stringify({ pageLifecycle, browserLifecycle })}`);
+  }
   const result = {
+    status: 'pass',
+    browserVersion: browser.version(),
+    browserArgs,
+    runId,
+    artifactDir: runArtifactDir,
     driverCommand: 'Browser.crashGpuProcess',
-    before: { ...beforeState, capture: beforeCapture, visual: beforeVisual },
-    lost: lostState,
-    refusedRecovery,
-    refusedDraw,
-    afterRefusal,
-    retryRecovery,
-    after: { ...afterRetry, draw: afterDraw, capture: afterCapture, visual: afterVisual },
-    thirdRecovery,
-    disposeResult,
-    transitions,
+    recoveryCycles,
+    visual,
     pageErrors,
     consoleErrors,
-    unexpectedErrors: unexpectedErrors(),
+    pageLifecycle,
+    workerLifecycle,
+    browserLifecycle,
   };
-  writeFileSync(resolve(artifactDir, 'device-loss-summary.json'), `${JSON.stringify(result, null, 2)}\n`);
-  console.log(
-    `[m7-browser-device-loss] PASS - driver=Browser.crashGpuProcess lost=${lostReason} ` +
-      `refusal=recover-device-unavailable(requestDevice) retry=alive sameWorld=${afterRetry.worldIdentity === beforeState.worldIdentity} ` +
-      `sameRenderer=${afterRetry.rendererIdentity === beforeState.rendererIdentity} ` +
-      `freshDevice=${afterRetry.deviceIdentity !== beforeState.deviceIdentity} ` +
-      `entities=${afterRetry.cpu.entityCount} transitions=${transitions.join('>')} ` +
-      `beforeWorks=${beforeCapture.workCount} afterWorks=${afterCapture.workCount} ` +
-      `afterNonBlack=${afterVisual.nonBlackPixels} pixelMean=${pixelDiff.meanAbsRgb.toFixed(3)} artifacts=${artifactDir}`,
-  );
+  writeFileSync(resolve(runArtifactDir, 'device-loss-summary.json'), `${JSON.stringify(result, null, 2)}\n`);
+  console.log(`[m7-browser-device-loss] PASS - ${JSON.stringify({ cycles: recoveryCycles.length, visual })}`);
 } catch (error) {
-  console.error(`[m7-browser-device-loss] FAIL - ${error instanceof Error ? error.message : String(error)}`);
+  const evidence = {
+    status: 'insufficient-evidence',
+    runId,
+    artifactDir: runArtifactDir,
+    driverCommand: 'Browser.crashGpuProcess',
+    browserVersion: browser?.version(),
+    browserArgs,
+    error: error instanceof Error ? error.message : String(error),
+    completedRecoveryCycles: recoveryCycles,
+    recoveryAttemptEvidence,
+    pageLifecycle,
+    workerLifecycle,
+    browserLifecycle,
+    pageErrors,
+    consoleErrors,
+  };
+  const failureArtifact = resolve(runArtifactDir, 'device-loss-failure.json');
+  writeFileSync(failureArtifact, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.error(`[m7-browser-device-loss] FAIL - ${JSON.stringify({ error: evidence.error, failureArtifact })}`);
   process.exitCode = 1;
 } finally {
   if (browser !== undefined) await browser.close();

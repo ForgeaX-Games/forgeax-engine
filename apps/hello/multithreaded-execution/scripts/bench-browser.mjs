@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { preview } from 'vite';
+import { waitForPreview } from './preview-readiness.mjs';
 import {
   assessProductImprovement,
   assessRunnerQualification,
@@ -24,17 +25,6 @@ const server = await preview({
   preview: { host: '127.0.0.1', port, strictPort: true },
   logLevel: 'error',
 });
-
-async function waitForServer() {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/`)).ok) return;
-    } catch {}
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-  }
-  throw new Error('benchmark preview server deadline exceeded');
-}
 
 async function readCgroupEvidence() {
   const read = async (file) => {
@@ -158,7 +148,7 @@ function hostFrameSamples(capture) {
 }
 
 try {
-  await waitForServer();
+  await waitForPreview(server);
   const browser = await chromium.launch(chromeLaunchOptions());
   // Alternate treatment order so a thermal/scheduler epoch cannot be
   // mistaken for a tier effect. Each mode gets one window in each order;
@@ -247,7 +237,7 @@ try {
       },
     },
     inline: {
-      tier: inlineRuns.map((run) => run.result.report.actualTier),
+      workers: inlineRuns.map((run) => run.result.report.workers),
       frame: inlineFrame,
       rawSamplesMs: inlineSamples,
       presentationCadence: summarize(inlineCadence),
@@ -256,7 +246,7 @@ try {
       runs: inlineRuns.map((run) => ({ round: run.round })),
     },
     shared: {
-      tier: sharedRuns.map((run) => run.result.report.actualTier),
+      workers: sharedRuns.map((run) => run.result.report.workers),
       frame: sharedFrame,
       rawSamplesMs: sharedSamples,
       presentationCadence: summarize(sharedCadence),

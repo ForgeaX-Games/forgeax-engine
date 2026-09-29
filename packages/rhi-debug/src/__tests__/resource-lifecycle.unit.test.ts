@@ -34,8 +34,46 @@ function makeTape(tapeEvents: readonly RhiCallEvent[] = events): Tape {
 }
 
 describe('resource lifecycle attribution', () => {
+  it('joins v7 bootstrap ownership to destruction without shifting frame event indices', () => {
+    const tape: Tape = {
+      ...makeTape([
+        { kind: 'destroyBuffer', handleId: 'buf:1' },
+        { kind: 'createBuffer', handleId: 'buf:2', desc: { size: 16, usage: 4 } },
+      ]),
+      bootstrap: [
+        {
+          handleId: 'buf:1',
+          kind: 'buffer',
+          initialData: [],
+          create: { kind: 'createBuffer', handleId: 'buf:1', desc: { size: 64, usage: 4 } },
+        },
+      ],
+    };
+    const model = buildFrameModel(decodeTape(encodeTape(tape).unwrap()).unwrap());
+    expect(model.resourceLifecycle.counts).toMatchObject({
+      created: 2,
+      destroyed: 1,
+      live: 1,
+      destroyEvents: 1,
+      unknownDestroyEvents: 0,
+    });
+    expect(model.resourceLifecycle.resources).toEqual([
+      expect.objectContaining({
+        handleId: 'buf:1',
+        createdEventIndex: null,
+        destroyedEventIndex: 0,
+      }),
+      expect.objectContaining({ handleId: 'buf:2', createdEventIndex: 1, state: 'live' }),
+    ]);
+    expect(model.resources.find((resource) => resource.resourceId === 'buf:1')).toMatchObject({
+      createEventIndex: null,
+      destroyEventIndex: 0,
+      lifecycle: { state: 'destroyed', byteEstimate: { status: 'known', bytes: 64 } },
+    });
+  });
+
   it('joins create/destroy events and keeps unavailable bytes explicit', () => {
-    const report = buildResourceLifecycle(events);
+    const report = buildResourceLifecycle(makeTape(events));
 
     expect(report.scope).toBe('captured-tape-resource-closure');
     expect(report.counts).toEqual({
@@ -88,24 +126,26 @@ describe('resource lifecycle attribution', () => {
   });
 
   it('keeps swapchain textures out of engine-owned attribution', () => {
-    const report = buildResourceLifecycle([
-      {
-        kind: 'createTexture',
-        handleId: 'swapchain:1',
-        origin: 'swapchain',
-        desc: {
-          size: { width: 1280, height: 720, depthOrArrayLayers: 1 },
-          format: 'bgra8unorm',
-          usage: 1,
+    const report = buildResourceLifecycle(
+      makeTape([
+        {
+          kind: 'createTexture',
+          handleId: 'swapchain:1',
+          origin: 'swapchain',
+          desc: {
+            size: { width: 1280, height: 720, depthOrArrayLayers: 1 },
+            format: 'bgra8unorm',
+            usage: 1,
+          },
         },
-      },
-      {
-        kind: 'createTextureView',
-        sourceHandleId: 'swapchain:1',
-        resultHandleId: 'view:1',
-        desc: {},
-      },
-    ]);
+        {
+          kind: 'createTextureView',
+          sourceHandleId: 'swapchain:1',
+          resultHandleId: 'view:1',
+          desc: {},
+        },
+      ]),
+    );
 
     expect(report.originBreakdown.engine.created).toBe(0);
     expect(report.originBreakdown.swapchain.created).toBe(2);

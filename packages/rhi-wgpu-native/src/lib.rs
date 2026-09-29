@@ -3,6 +3,8 @@ pub mod conformance;
 pub mod conformance_registry;
 mod device;
 mod ray_query;
+#[cfg(feature = "reference")]
+pub mod reference;
 mod surface;
 
 use serde::Serialize;
@@ -11,7 +13,7 @@ use thiserror::Error;
 
 pub use ray_query::{RayQueryRenderer, RendererConfig};
 
-pub const WGPU_VERSION: &str = "30.0.0";
+pub const WGPU_VERSION: &str = "30.0.1";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

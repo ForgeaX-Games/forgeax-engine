@@ -2,19 +2,21 @@
 //
 // Verifies that every cache write/read site in the record stage that was
 // identified in plan-strategy D-1a as needing worldEntityKey compositing
-// actually uses worldEntityKey (not bare entityKey / cacheKey).
+// actually uses a world-aware key (worldEntityKey or
+// instanceCollectionCacheKey), not a bare entityKey / cacheKey.
 //
 // Anchors:
 //   plan-tasks.json m2 (patch assignment)
-//   plan-strategy D-1a #1 (instanceBuffers positive half) and #3 (instancesBgPerEntity)
+//   plan-strategy D-1a #1 (instanceBuffers positive half); bind groups are now
+//   shared by opaque buffer handles after the probe/identity layout split.
 //   requirements AC-07
 //
-// The 13 sites under test (plus 2 read-side instancesBgPerEntity reads) are
+// The production instance-buffer sites and the shared bind-group resolver are
 // located by their stable cache operation below; source line numbers are not
 // part of the contract and must not make this gate stale after extraction.
 //
 // Each site check uses a line-range window: we read the source file and verify
-// that within the line range, a `worldEntityKey(...)` call appears on a line
+// that within the line range, a world-aware key call appears on a line
 // that contains the target key expression. This directly falsifies the bug
 // "site uses bare key" — when a site uses a bare key, the worldEntityKey
 // check will fail.
@@ -26,12 +28,12 @@ import { describe, expect, it } from 'vitest';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Verify that a cache site uses a worldEntityKey composite key.
+ * Verify that a cache site uses a world-aware composite key.
  * Scans the source file around the given line (within a window) for both
  * `worldEntityKey` and the cache operation (`targetPattern` such as
- * `instanceBuffers.get`, `instancesBgPerEntity` as second arg, etc.).
+ * `instanceBuffers.get`, etc.).
  */
-function expectWorldEntityKeyAt(
+function expectWorldAwareCacheKeyAt(
   filePath: string,
   line: number,
   description: string,
@@ -44,7 +46,7 @@ function expectWorldEntityKeyAt(
 
   for (let i = start; i < end; i++) {
     const l = lines[i];
-    if (l?.includes('worldEntityKey')) {
+    if (l?.includes('worldEntityKey') || l?.includes('instanceCollectionCacheKey')) {
       // Found — passes
       return;
     }
@@ -55,7 +57,7 @@ function expectWorldEntityKeyAt(
     nearby.push(`  ${i + 1}: ${lines[i]}`);
   }
   expect.fail(
-    `${description}: worldEntityKey NOT found near line ${line} in ${filePath}\nNearby lines:\n${nearby.join('\n')}`,
+    `${description}: world-aware cache key NOT found near line ${line} in ${filePath}\nNearby lines:\n${nearby.join('\n')}`,
   );
 }
 
@@ -73,21 +75,21 @@ function findLine(filePath: string, needle: string, occurrence = 0): number {
 
 // ── Geometry pass instanceBuffers (D-1a #1) ────────────────────────────────
 
-describe('production-path geometry instanceBuffers worldEntityKey', () => {
+describe('production-path geometry instanceBuffers world-aware key', () => {
   const FILE = fileURLToPath(
     new URL('../../../render/src/record/main-pass-geometry.ts', import.meta.url),
   );
 
-  it('inst.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
+  it('inst.cacheKey get uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
       FILE,
       findLine(FILE, 'frameState.instanceBuffers.get('),
       'main-pass-geometry instanceBuffers.get',
     );
   });
 
-  it('inst.cacheKey set uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
+  it('inst.cacheKey set uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
       FILE,
       findLine(FILE, 'frameState.instanceBuffers.set('),
       'main-pass-geometry instanceBuffers.set',
@@ -95,70 +97,61 @@ describe('production-path geometry instanceBuffers worldEntityKey', () => {
   });
 });
 
-// ── Sprite identity BG instancesBgPerEntity (D-1a #3) ──────────────────────
-
 const SPRITE_FILE = fileURLToPath(
   new URL('../../../render/src/record/main-pass-sprite-draws.ts', import.meta.url),
 );
+const FOLD_FILE = fileURLToPath(
+  new URL('../../../render/src/record/fold-instance-buffer.ts', import.meta.url),
+);
 
-describe('production-path sprite identity instancesBgPerEntity worldEntityKey', () => {
-  it('identityInstBg entityKey uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instancesBgPerEntity', 0),
-      'main-pass-sprite-draws instancesBgPerEntity write',
-    );
+describe('production-path shared instance bind-group resolver', () => {
+  it('sprite identity and sprite-instance paths use the shared resolver', () => {
+    const src = readFileSync(SPRITE_FILE, 'utf8');
+    expect(src).toContain('const spriteInstBg = resolveGeometryInstancesBindGroup(');
+    expect(src).toContain('const spriteInstancesBg = resolveGeometryInstancesBindGroup(');
   });
 });
 
 // ── Sprite Instances instanceBuffers (D-1a #1) ─────────────────────────────
 
-describe('production-path sprite Instances instanceBuffers worldEntityKey', () => {
-  it('spriteInst.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
+describe('production-path sprite Instances instanceBuffers world-aware key', () => {
+  it('spriteInst.cacheKey get uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
       SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.get(', 1),
+      findLine(SPRITE_FILE, 'frameState.instanceBuffers.get(', 0),
       'main-pass-sprite-draws sprite instanceBuffers.get',
     );
   });
 
-  it('spriteInst.cacheKey set uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
+  it('spriteInst.cacheKey set uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
       SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.set(', 1),
+      findLine(SPRITE_FILE, 'frameState.instanceBuffers.set(', 0),
       'main-pass-sprite-draws sprite instanceBuffers.set',
-    );
-  });
-});
-
-// ── Sprite pass instancesBgPerEntity (D-1a #3) ─────────────────────────────
-
-describe('production-path sprite pass instancesBgPerEntity worldEntityKey', () => {
-  it('spriteInstancesBg entityKey write uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instancesBgPerEntity', 1),
-      'main-pass-sprite-draws sprite pass instancesBgPerEntity write',
     );
   });
 });
 
 // ── SpriteInstances instanceBuffers (D-1a #1) ──────────────────────────────
 
-describe('production-path SpriteInstances instanceBuffers worldEntityKey', () => {
-  it('spriteInstancesSnap.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.get(', 2),
-      'main-pass-sprite-draws spriteInstances instanceBuffers.get',
+const SPRITE_INSTANCES_FILE = fileURLToPath(
+  new URL('../../../render/src/record/sprite-instance-buffer.ts', import.meta.url),
+);
+
+describe('production-path SpriteInstances instanceBuffers world-aware key', () => {
+  it('spriteInstancesSnap.cacheKey get uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
+      SPRITE_INSTANCES_FILE,
+      findLine(SPRITE_INSTANCES_FILE, 'frameState.instanceBuffers.get('),
+      'sprite-instance-buffer spriteInstances instanceBuffers.get',
     );
   });
 
-  it('spriteInstancesSnap.cacheKey set uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.set(', 2),
-      'main-pass-sprite-draws spriteInstances instanceBuffers.set',
+  it('spriteInstancesSnap.cacheKey set uses a world-aware key', () => {
+    expectWorldAwareCacheKeyAt(
+      SPRITE_INSTANCES_FILE,
+      findLine(SPRITE_INSTANCES_FILE, 'frameState.instanceBuffers.set('),
+      'sprite-instance-buffer spriteInstances instanceBuffers.set',
     );
   });
 });
@@ -169,21 +162,11 @@ const SHADOW_FILE = fileURLToPath(
   new URL('../../../render/src/record/shadow-pass.ts', import.meta.url),
 );
 
-describe('production-path shadow instanceBuffers worldEntityKey', () => {
-  it('shadowInst.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, 'c.frameState.instanceBuffers.get(', 0),
-      'shadow-pass instanceBuffers.get',
-    );
-  });
-
-  it('shadowInst.cacheKey set uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, 'c.frameState.instanceBuffers.set('),
-      'shadow-pass instanceBuffers.set',
-    );
+describe('production-path shadow instanceBuffers world-aware key', () => {
+  it('passes the source entry to the shared world-aware geometry cache', () => {
+    const src = readFileSync(SHADOW_FILE, 'utf8');
+    expect(src).toContain('resolveGeometryInstanceBuffer(c, entry, [], false)');
+    expect(src).not.toContain('c.frameState.instanceBuffers.');
   });
 
   it('spot shadow uses the shared world-aware caster recorder', () => {
@@ -191,20 +174,16 @@ describe('production-path shadow instanceBuffers worldEntityKey', () => {
     const start = src.indexOf('export function encodeSpotShadowPass(');
     expect(start).toBeGreaterThanOrEqual(0);
     expect(src.slice(start)).toContain('recordShadowCasterDraws(');
-    expect(src.slice(start)).toContain(
-      "buildMatchedRenderableIndices(c.dispatch, { LightMode: ['ShadowCaster'] })",
-    );
+    expect(src.slice(start)).toContain('buildMatchedRenderableIndices(');
+    expect(src.slice(start)).toContain("{ LightMode: ['ShadowCaster'] }");
   });
 });
 
-// ── Shadow pass instancesBgPerEntity (D-1a #3) ─────────────────────────────
-
-describe('production-path shadow instancesBgPerEntity worldEntityKey', () => {
-  it('shadowInstancesBg entityKey write uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, 'c.frameState.instancesBgPerEntity', 0),
-      'shadow-pass instancesBgPerEntity write',
+describe('production-path shadow shared instance bind-group resolver', () => {
+  it('shadow pass resolves the bind group from the world-aware buffer cache', () => {
+    const src = readFileSync(SHADOW_FILE, 'utf8');
+    expect(src).toContain(
+      'const shadowInstancesBg = resolveGeometryInstancesBindGroup(c, instanceDraw.buffer);',
     );
   });
 });
@@ -213,9 +192,9 @@ describe('production-path shadow instancesBgPerEntity worldEntityKey', () => {
 
 describe('production-path fold-bucket key NOT worldEntityKey', () => {
   it('fold-bucket bucketCacheKey is NOT worldEntityKey', () => {
-    const src = readFileSync(SPRITE_FILE, 'utf8');
+    const src = readFileSync(FOLD_FILE, 'utf8');
     const lines = src.split('\n');
-    const bucketLine = lines[findLine(SPRITE_FILE, 'const bucketCacheKey =') - 1];
+    const bucketLine = lines[findLine(FOLD_FILE, 'const key =') - 1];
     expect(bucketLine).toBeDefined();
     // Must NOT contain worldEntityKey — fold-bucket keys are material-handle-based
     expect(bucketLine).not.toContain('worldEntityKey');

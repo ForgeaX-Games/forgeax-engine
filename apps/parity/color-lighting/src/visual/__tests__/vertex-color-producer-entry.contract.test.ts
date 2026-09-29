@@ -96,6 +96,12 @@ describe('vertex-color producer entry contract', () => {
     );
   });
 
+  it('opts the ForgeaX producer into the renderer-owned linear-HDR observation', () => {
+    const captureSource = readFileSync(new URL('../vertex-color-capture.ts', import.meta.url), 'utf8');
+    expect(captureSource).toMatch(/tonemap:\s*TONEMAP_LINEAR/);
+    expect(captureSource).toMatch(/zero-config tonemap path writes directly to the display surface/);
+  });
+
   it('accepts the repository Git SHA and reaches the live publisher blocker', async () => {
     process.env.FORGEAX_VERTEX_COLOR_CASE_ID = 'vertex-color-vec3';
     process.env.FORGEAX_VERTEX_COLOR_OUTPUT = '/tmp/vertex-color-entry-contract.json';

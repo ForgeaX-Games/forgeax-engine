@@ -31,6 +31,7 @@
 // AC-04 is covered by unit tests, not this smoke.
 
 import { setTimeout as delay } from 'node:timers/promises';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const WIDTH = 320;
 const HEIGHT = 240;
@@ -182,7 +183,8 @@ void toManaged;
 const world = new World();
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -237,12 +239,11 @@ function buildSyntheticTileAtlas() {
 const synth = buildSyntheticTileAtlas();
 const synthPod = {
   kind: 'texture',
-  width: synth.width,
-  height: synth.height,
+  shape: { viewDimension: '2d', extent: { width: synth.width, height: synth.height } },
   format: 'rgba8unorm-srgb',
   data: synth.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 const atlasHandle = world.allocSharedRef('TextureAsset', synthPod);
 const atlasCatalog = assets.catalog('hello-asi-world/synthetic-atlas', synthPod);
@@ -424,5 +425,6 @@ console.log(
   `[hello-asi-world smoke] PASS - ${derivedCount} chunk entities rendered in ` +
     `${framesDrawn} frames`,
 );
+emitSmokeReceipt('hello-asi-world/smoke', framesDrawn);
 device.destroy?.();
 process.exit(0);

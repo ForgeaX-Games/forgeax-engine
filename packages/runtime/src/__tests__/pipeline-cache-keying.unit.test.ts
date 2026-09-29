@@ -53,6 +53,18 @@ function specOf(
 describe('cacheKeyOf passKind dimension', () => {
   const SHADER_ID = 'forgeax::default-unlit';
 
+  it('separates authored entry selections within one published module', () => {
+    const base = specOf('custom::two-entries', false);
+    const first = {
+      ...base,
+      shader: { ...base.shader, vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+    };
+    const second = { ...base, shader: { ...first.shader, fragmentEntry: 'fs_readability' } };
+    const shadow = { ...base, shader: { ...first.shader, vertexEntry: 'vs_shadow' } };
+    expect(new Set([first, second, shadow].map(cacheKeyOf)).size).toBe(3);
+    expect(cacheKeyOf({ ...first })).toBe(cacheKeyOf(first));
+  });
+
   it('same shaderId + entries produce different keys for forward vs shadow-caster', () => {
     const forwardKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward'));
     const shadowKey = cacheKeyOf(specOf(SHADER_ID, false, 'shadow-caster'));
@@ -127,14 +139,16 @@ describe('cacheKeyOf passKind dimension', () => {
 describe('PassKind open string + KNOWN_PASS_KINDS (feat-20260615 D-10)', () => {
   // M2-T4 expanded KNOWN_PASS_KINDS from 4 to 6 entries by adding 'post-process'
   // and 'skybox'; point-shadow-caster is the engine's depth-only point-light
-  // pass and is part of the discoverable catalogue as well.
-  it('KNOWN_PASS_KINDS has exactly 7 entries', () => {
-    expect(KNOWN_PASS_KINDS).toHaveLength(7);
+  // pass and is part of the discoverable catalogue as well. M3-T4 adds the
+  // Standard temporal producer to the shipped pass catalogue.
+  it('KNOWN_PASS_KINDS has exactly 8 entries', () => {
+    expect(KNOWN_PASS_KINDS).toHaveLength(8);
   });
 
-  it('KNOWN_PASS_KINDS contains the 7 engine-shipped pass kinds', () => {
+  it('KNOWN_PASS_KINDS contains the 8 engine-shipped pass kinds', () => {
     expect(KNOWN_PASS_KINDS).toContain('forward');
     expect(KNOWN_PASS_KINDS).toContain('deferred');
+    expect(KNOWN_PASS_KINDS).toContain('temporal');
     expect(KNOWN_PASS_KINDS).toContain('lighting');
     expect(KNOWN_PASS_KINDS).toContain('shadow-caster');
     expect(KNOWN_PASS_KINDS).toContain('point-shadow-caster');

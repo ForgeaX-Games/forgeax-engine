@@ -24,9 +24,13 @@ import {
   type RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
-import { featureNotEnabledError, webgpuRuntimeError } from './errors';
+import { commandEncoderFinished, featureNotEnabledError, webgpuRuntimeError } from './errors';
 import { aspectToU8, normalizeExtent } from './queue';
-import { makeRhiRenderPassEncoder, type RawRenderPassLike } from './render-pass-encoder';
+import {
+  colorForWasm,
+  makeRhiRenderPassEncoder,
+  type RawRenderPassLike,
+} from './render-pass-encoder';
 
 /**
  * Minimal shape of a raw command-encoder handle the shim consumes. Methods
@@ -55,7 +59,6 @@ export interface RawCommandEncoderLike {
     destination: unknown,
     destinationOffset: number,
   ): void;
-  writeTimestamp?(querySet: unknown, queryIndex: number): void;
   pushDebugGroup?(label: string): void;
   popDebugGroup?(): void;
   insertDebugMarker?(label: string): void;
@@ -114,7 +117,17 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
       // missing a beginRenderPass implementation.
       return makeRhiRenderPassEncoder({});
     }
-    const raw = this.raw.beginRenderPass.call(this.raw, desc);
+    const raw = this.raw.beginRenderPass.call(this.raw, {
+      ...desc,
+      colorAttachments: Array.from(desc.colorAttachments ?? [], (attachment) =>
+        attachment?.clearValue === undefined
+          ? attachment
+          : {
+              ...attachment,
+              clearValue: colorForWasm(attachment.clearValue),
+            },
+      ),
+    });
     return makeRhiRenderPassEncoder(raw);
   }
 
@@ -124,6 +137,14 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
     }
     const raw = this.raw.beginComputePass.call(this.raw, desc) as RawComputePassLike;
     return makeRhiComputePassEncoder(raw);
+  }
+
+  encodeEmptyComputePass(desc: ComputePassDescriptor): void {
+    if (this.raw.beginComputePass === undefined) {
+      throw featureNotEnabledError('compute');
+    }
+    const raw = this.raw.beginComputePass.call(this.raw, desc) as RawComputePassLike;
+    raw.end?.call(raw);
   }
 
   copyBufferToBuffer(...args: unknown[]): void {
@@ -269,11 +290,6 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
     }
   }
 
-  writeTimestamp(querySet: QuerySet, queryIndex: number): void {
-    if (this.raw.writeTimestamp === undefined) return;
-    this.raw.writeTimestamp.call(this.raw, querySet, queryIndex);
-  }
-
   pushDebugGroup(groupLabel: string): void {
     if (this.raw.pushDebugGroup === undefined) return;
     this.raw.pushDebugGroup.call(this.raw, groupLabel);
@@ -290,9 +306,7 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
   }
 
   finish(): Result<CommandBuffer, RhiError> {
-    if (this.finished) {
-      return webgpuRuntimeError(new Error('command encoder already finished'));
-    }
+    if (this.finished) return commandEncoderFinished();
     if (this.raw.finish === undefined) {
       return webgpuRuntimeError(new Error('underlying encoder handle does not expose finish'));
     }

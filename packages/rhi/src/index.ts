@@ -56,7 +56,8 @@ import type {
   FilterMode,
   TextureFormat,
 } from '@forgeax/engine-types';
-import type { Result, RhiError } from './errors';
+import type { RhiTextureFormatCapabilityReceipt } from './capability/texture-format';
+import type { Result, RhiError } from './errors.js';
 
 // ============================================================================
 // 14 opaque handles (MVP-1.3)
@@ -211,6 +212,22 @@ export interface Texture {
   readonly [RhiTextureBrand]: void;
 }
 
+/** RHI-safe source for a texture-to-buffer copy. */
+export interface TextureCopySource {
+  readonly texture: Texture;
+  readonly mipLevel?: number | undefined;
+  readonly origin?: GPUOrigin3D | undefined;
+  readonly aspect?: GPUTextureAspect | undefined;
+}
+
+/** RHI-safe destination for a texture-to-buffer copy. */
+export interface BufferCopyDestination {
+  readonly buffer: Buffer;
+  readonly offset?: number | undefined;
+  readonly bytesPerRow: number;
+  readonly rowsPerImage?: number | undefined;
+}
+
 /** RHI-owned destination for queue.writeTexture. The resource handle remains opaque. */
 export interface TextureWriteDestination {
   readonly texture: Texture;
@@ -294,6 +311,35 @@ declare const RhiCommandEncoderBrand: unique symbol;
 /** GPU command encoder opaque handle (single-use). */
 export interface CommandEncoder {
   readonly [RhiCommandEncoderBrand]: void;
+}
+
+declare const RhiRenderBundleBrand: unique symbol;
+/** Immutable commands, reusable across compatible passes on the issuing device. */
+export interface RenderBundle {
+  readonly [RhiRenderBundleBrand]: void;
+}
+
+export type RenderBundleEncoderDescriptor = ExplicitUndefined<GPURenderBundleEncoderDescriptor>;
+export type RenderBundleDescriptor = ExplicitUndefined<GPURenderBundleDescriptor>;
+
+/** The spec command mixins shared by render passes and bundle encoders. */
+export type RhiRenderCommands = Pick<
+  RhiRenderPassEncoder,
+  | 'setPipeline'
+  | 'setBindGroup'
+  | 'setVertexBuffer'
+  | 'setIndexBuffer'
+  | 'draw'
+  | 'drawIndexed'
+  | 'drawIndirect'
+  | 'drawIndexedIndirect'
+  | 'pushDebugGroup'
+  | 'popDebugGroup'
+  | 'insertDebugMarker'
+>;
+
+export interface RhiRenderBundleEncoder extends RhiRenderCommands {
+  finish(desc?: RenderBundleDescriptor | undefined): Result<RenderBundle, RhiError>;
 }
 
 declare const RhiCommandBufferBrand: unique symbol;
@@ -1078,7 +1124,7 @@ export interface RhiCaps {
    *   spec minimum = 4, defaults to 8 on mainstream backends.
    *   HDRP deferred pipeline requires >= 4 (3 g-buffer RT + 1 depth);
    *   installPipeline checks this cap at install time and throws
-   *   `hdrp-deferred-caps-insufficient` on violation (charter P3).
+   *   a structured Standard transport refusal on violation (charter P3).
    * @note add-only minor (feat-20260612-hdrp-deferred-shading-learn-render-5-8
    *   M1 / w5); no existing field is modified.
    */
@@ -1365,7 +1411,31 @@ export interface RhiSurface {
  * **must NOT be cached across frames** — every frame must call
  * `getCurrentTexture()` afresh.
  */
+/** Configure-time proof that a storage surface can present through its endpoint. */
+export interface RhiCanvasSurfaceDescriptorFacts {
+  readonly format: string;
+  readonly usage: number;
+  readonly width: number;
+  readonly height: number;
+  readonly alphaMode: string;
+  readonly presentMode: string;
+}
+
+export interface RhiCanvasSurfacePresentationProof {
+  readonly descriptor: boolean;
+  readonly acquisition: boolean;
+  readonly validation: boolean;
+  /** Stable identity for the concrete surface that produced this proof. */
+  readonly surfaceIdentity?: string;
+  /** Descriptor requested by the owner at configure time. */
+  readonly requested?: RhiCanvasSurfaceDescriptorFacts;
+  /** Descriptor accepted and validated by the concrete surface. */
+  readonly validated?: RhiCanvasSurfaceDescriptorFacts;
+}
+
 export interface RhiCanvasContext {
+  /** Backend-produced configure-time presentation proof; absent means fail closed. */
+  readonly presentationProof?: RhiCanvasSurfacePresentationProof;
   /**
    * Configure the canvas context with a forgeax CanvasConfiguration.
    *
@@ -1437,6 +1507,9 @@ export interface RhiDevice {
   readonly features: RhiFeatures;
   /** Numeric-limits layer. */
   readonly limits: RhiLimits;
+
+  /** Probe the complete r32float sampled/storage/readback profile once per device generation. */
+  probeTextureFormatCapability(): Promise<Result<RhiTextureFormatCapabilityReceipt, RhiError>>;
 
   /** Create GPU buffer. */
   createBuffer(desc: BufferDescriptor): Result<Buffer, RhiError>;
@@ -1602,6 +1675,11 @@ export interface RhiDevice {
    */
   createQuerySet(desc: QuerySetDescriptor): Result<QuerySet, RhiError>;
 
+  /** Begin recording immutable commands for compatible render passes. */
+  createRenderBundleEncoder(
+    desc: RenderBundleEncoderDescriptor,
+  ): Result<RhiRenderBundleEncoder, RhiError>;
+
   /**
    * Create a command encoder.
    *
@@ -1731,7 +1809,8 @@ export interface RhiQueue {
 /** GPU command encoder - records render / compute passes + resource copies.
  *
  * Method NAMES align byte-for-byte with `@webgpu/types.GPUCommandEncoder` +
- * `GPUDebugCommandsMixin` (research F-1 / D-S4). 12 methods total:
+ * `GPUDebugCommandsMixin` (research F-1 / D-S4). 12 spec methods plus one
+ * ForgeaX compound operation:
  *   - 9 direct: beginRenderPass / beginComputePass / copyBufferToBuffer /
  *               copyBufferToTexture / copyTextureToBuffer / copyTextureToTexture /
  *               clearBuffer / resolveQuerySet / finish
@@ -1762,6 +1841,17 @@ export interface RhiCommandEncoder {
    *   const pass = encoder.beginComputePass();
    */
   beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder;
+  /**
+   * Record an empty timestamp-enabled compute pass and close it immediately.
+   *
+   * This is a ForgeaX compound recording operation equivalent to
+   * `const pass = encoder.beginComputePass(desc); pass.end()`; it is not a
+   * native `GPUCommandEncoder` method and does not write a timestamp directly.
+   *
+   * @throws RhiError code === 'command-encoder-finished' when invoked on a
+   *   finished encoder.
+   */
+  encodeEmptyComputePass(desc: ComputePassDescriptor): void;
   /** Copy a sub-region of a Buffer to another Buffer (5-arg full form).
    *
    * Spec anchor: [@webgpu/types.GPUCommandEncoder.copyBufferToBuffer].
@@ -1812,6 +1902,18 @@ export interface RhiCommandEncoder {
     destination: GPUTexelCopyBufferInfo,
     copySize: GPUExtent3DStrict,
   ): void;
+  /** Opaque RHI handle form for renderer-owned readback. */
+  copyTextureToBuffer(
+    source: TextureCopySource,
+    destination: BufferCopyDestination,
+    copySize: GPUExtent3DStrict,
+  ): void;
+  /** Union form for decorators that transparently forward either handle form. */
+  copyTextureToBuffer(
+    source: GPUTexelCopyTextureInfo | TextureCopySource,
+    destination: GPUTexelCopyBufferInfo | BufferCopyDestination,
+    copySize: GPUExtent3DStrict,
+  ): void;
   /** Copy a Texture sub-region to a Texture sub-region.
    *
    * Spec anchor: [@webgpu/types.GPUCommandEncoder.copyTextureToTexture].
@@ -1858,32 +1960,6 @@ export interface RhiCommandEncoder {
     destination: Buffer,
     destinationOffset: number,
   ): Result<void, RhiError>;
-  /**
-   * Write a u64 GPU timestamp into a timestamp QuerySet at queryIndex.
-   *
-   * Spec anchor: W3C WebGPU §queries / [@webgpu/types.GPUCommandEncoder].
-   * dawn `TimestampOnCommandEncoder` reference (research §2.4): the entry is
-   * gated on the `'timestamp-query'` device feature. K-3 decision
-   * (plan-strategy §2): the forgeax form ships ONLY this CommandEncoder
-   * entry; CPE/RPE inside-pass timestamp writes are deferred to
-   * `feat-future-rhi-perf-timestamp-pass` (additive minor evolution).
-   *
-   * Return shape: `void` per spec literal alignment. When
-   * `caps.timestampQuery === false` the shim fans out a structured
-   * `'feature-not-enabled'` RhiError through the engine `onError` channel
-   * (the forgeax form keeps the spec void return; AI users probe the gate
-   * via `device.caps.timestampQuery` BEFORE calling this entry, charter
-   * proposition 4 explicit failure forward-reachable).
-   *
-   * @throws RhiError code === 'command-encoder-finished' when invoked on a finished encoder (dual-channel; see beginRenderPass JSDoc for the recovery pattern).
-   * @example
-   *   if (device.caps.timestampQuery) {
-   *     encoder.writeTimestamp(qs, 0);
-   *     // ... draw / dispatch ...
-   *     encoder.writeTimestamp(qs, 1);
-   *   }
-   */
-  writeTimestamp(querySet: QuerySet, queryIndex: number): void;
   /** Push a labelled debug group (GPUDebugCommandsMixin).
    *
    * Spec anchor: [@webgpu/types.GPUDebugCommandsMixin.pushDebugGroup].
@@ -1927,12 +2003,8 @@ export interface RhiCommandEncoder {
  *
  * Method NAMES align byte-for-byte with @webgpu/types.GPURenderPassEncoder +
  * GPURenderCommandsMixin + GPUBindingCommandsMixin + GPUDebugCommandsMixin
- * (research F-2 / D-S4): 17 spec stable + 1 setBindGroup overload + 1
- * remaining capability-gated placeholder (`executeBundles` returns
- * Result.err({ code: 'rhi-not-available', hint: 'see
- * feat-future-rhi-render-bundle' })). The 2 occlusion-query methods
- * (`beginOcclusionQuery` / `endOcclusionQuery`) shipped real implementations
- * in M3 (w23) backed by `RenderPassDescriptor.occlusionQuerySet`.
+ * Typed immutable bundles use the same drawing mixins. Occlusion queries
+ * use RenderPassDescriptor.occlusionQuerySet.
  *
  * `setImmediates` (PROPOSED) is intentionally NOT exposed (charter
  * proposition 4: untested features hide behind caps, not surfaces).
@@ -2099,18 +2171,10 @@ export interface RhiRenderPassEncoder {
    */
   insertDebugMarker(markerLabel: string): void;
 
-  // ===== 1 remaining placeholder + 2 real impls (M3 / w23 + w26) =====
-  /** Execute render bundles. Capability-gated placeholder per D-S4: returns
-   *  Result.err({ code: 'rhi-not-available', hint: 'see feat-future-rhi-render-bundle' })
-   *  until that closure lands RenderBundle creation.
-   *
-   * Spec anchor: [@webgpu/types.GPURenderPassEncoder.executeBundles].
-   *
-   * @example
-   *   const out = pass.executeBundles([bundle]);
-   *   if (!out.ok) { ... route via switch (out.error.code) ... }
+  /** Execute immutable bundles; pipeline, bind groups and vertex/index state
+   * are cleared afterwards, including for an empty iterable (WebGPU semantics).
    */
-  executeBundles(bundles: Iterable<unknown>): Result<void, RhiError>;
+  executeBundles(bundles: Iterable<RenderBundle>): Result<void, RhiError>;
   /** Begin an occlusion query. Real implementation (M3 / w23): pairs with
    *  `endOcclusionQuery()` against the `RenderPassDescriptor.occlusionQuerySet`
    *  and validates the spec [[occlusion_query_active]] state machine
@@ -2169,6 +2233,19 @@ export interface RhiComputePipelineOps {
 // re-export errors (charter proposition 1: single entry shows the full surface)
 // ============================================================================
 
+export {
+  type CreateUnavailableR32FloatReceiptOptions,
+  createUnavailableR32FloatReceipt,
+  R32FLOAT_MIP_SAMPLED_STORAGE_PROFILE,
+  R32FLOAT_PROBE_STAGES,
+  type RhiTextureFormatCapabilityReceipt,
+  type RhiTextureFormatProbeEvidence,
+  type RhiTextureFormatProbeStage,
+  type RhiTextureFormatProbeStageReceipt,
+  type RhiTextureFormatProbeVerdict,
+  type RhiTextureFormatReadback,
+  validateR32FloatReceipt,
+} from './capability/texture-format';
 export type {
   DrawOwnerSplit,
   LimitExceededDetail,
@@ -2180,9 +2257,10 @@ export type {
   RhiErrorDetail,
   RhiOwnerOutOfRangeDetail,
   RhiShaderCompileDetail,
+  RhiWebgpuRuntimeCause,
   RhiWebgpuRuntimeDetail,
-} from './errors';
-export { err, ok, RhiError, validateDrawArgs } from './errors';
+} from './errors.js';
+export { err, ok, RhiError, validateDrawArgs } from './errors.js';
 
 // re-export common descriptor-related aliases for single-entry consumption.
 export type { AddressMode, CompareFunction, FilterMode, TextureFormat };

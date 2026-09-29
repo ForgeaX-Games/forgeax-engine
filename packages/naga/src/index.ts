@@ -81,6 +81,8 @@ export interface ShaderReflectionBoundGlobal {
   readonly name?: string;
   readonly members?: readonly ShaderReflectionMember[];
   readonly span?: number;
+  /** Byte stride of an array element for runtime-sized storage buffers. */
+  readonly elementStride?: number;
 }
 
 export interface ShaderReflection {
@@ -149,12 +151,30 @@ function readBoundGlobal(value: unknown, index: number): ShaderReflectionBoundGl
     throw reflectionMalformed(`boundGlobals entry ${index} members must be an array`);
   }
   const hasSpan = value.span !== undefined;
+  const hasElementStride = value.elementStride !== undefined;
   if (resourceKind === 'buffer' || resourceKind === 'storage-buffer') {
     if (!hasMembers || !hasSpan) {
       throw reflectionMalformed(`buffer boundGlobals entry ${index} requires members and span`);
     }
   } else if (hasMembers !== hasSpan) {
     throw reflectionMalformed(`boundGlobals entry ${index} members and span must be paired`);
+  }
+  if (hasElementStride) {
+    if (resourceKind !== 'storage-buffer') {
+      throw reflectionMalformed(
+        `boundGlobals entry ${index} elementStride is only valid for storage-buffer resources`,
+      );
+    }
+    const elementStride = value.elementStride;
+    if (
+      typeof elementStride !== 'number' ||
+      !Number.isSafeInteger(elementStride) ||
+      elementStride <= 0
+    ) {
+      throw reflectionMalformed(
+        `boundGlobals entry ${index} elementStride must be a positive integer`,
+      );
+    }
   }
   if (value.name !== undefined && typeof value.name !== 'string') {
     throw reflectionMalformed(`boundGlobals entry ${index} diagnostic name must be a string`);
@@ -173,6 +193,9 @@ function readBoundGlobal(value: unknown, index: number): ShaderReflectionBoundGl
           ),
           span: requiredNonNegativeInteger(value, 'span'),
         }
+      : {}),
+    ...(hasElementStride
+      ? { elementStride: requiredNonNegativeInteger(value, 'elementStride') }
       : {}),
   };
 }
@@ -294,6 +317,34 @@ export async function validate(
     return ok(validated as ValidatedModule);
   } catch (e) {
     return err(wrapShaderError(e));
+  }
+}
+
+/** Validate a selected vertex/fragment pair against the validated Naga module. */
+export async function validateRenderEntries(
+  module: ValidatedModule,
+  vertex: string,
+  fragment?: string,
+  colorFormats?: readonly string[],
+): Promise<Result<void, ShaderError>> {
+  try {
+    const wasm = await ensureReady();
+    (
+      wasm.validate_render_entries as (
+        module: unknown,
+        vertex: string,
+        fragment?: string,
+        colorFormats?: string,
+      ) => void
+    )(
+      module,
+      vertex,
+      fragment,
+      colorFormats === undefined ? undefined : JSON.stringify(colorFormats),
+    );
+    return ok(undefined);
+  } catch (error) {
+    return err(wrapShaderError(error));
   }
 }
 

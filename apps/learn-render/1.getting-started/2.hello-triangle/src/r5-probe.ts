@@ -110,8 +110,11 @@ async function main(): Promise<void> {
   try {
     const constructed = await constructRuntimeRendererHost(canvas, {}, forgeaxBundlerAdapter());
     if (!constructed.ok) {
-      P.readyError = { code: constructed.error.code, hint: constructed.error.hint };
-      log('renderer construction failed: ' + constructed.error.code);
+      const error = constructed.error;
+      const code = 'code' in error ? error.code : 'engine-environment-error';
+      const hint = 'hint' in error ? error.hint : error.reason;
+      P.readyError = { code, hint };
+      log('renderer construction failed: ' + code);
       _resolveReady();
       return;
     }

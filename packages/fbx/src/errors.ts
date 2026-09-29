@@ -31,6 +31,10 @@ export interface FbxMeshTypeUnsupportedDetail {
   readonly meshName: string;
 }
 
+export interface FbxLodDisplayModeUnsupportedDetail {
+  readonly displayMode: 'eShow' | 'eHide';
+}
+
 export type FbxAnimationTargetInvalidDetail =
   | {
       readonly reason: 'hierarchy-cycle';
@@ -74,6 +78,10 @@ const fbxErrorPolicy = {
       'an acyclic hierarchy where every animation channel uniquely matches one named Scene node and stable target ID',
     hint: 'name every node, keep the hierarchy acyclic, and export unique full animation target paths',
   },
+  'fbx-lod-display-mode-unsupported': {
+    expected: 'FbxLODGroup display mode to preserve one selectable level per view',
+    hint: 'change the FbxLODGroup display mode to eLODGroup or remove the forced display mode before import',
+  },
 } satisfies {
   readonly [Code in FbxErrorCode]: {
     readonly expected: string;
@@ -90,6 +98,7 @@ export const FBX_ERROR_HINTS: Readonly<Record<FbxErrorCode, string>> = Object.fr
 interface DetailFor {
   readonly 'fbx-mesh-type-unsupported': FbxMeshTypeUnsupportedDetail;
   readonly 'fbx-animation-target-invalid': FbxAnimationTargetInvalidDetail;
+  readonly 'fbx-lod-display-mode-unsupported': FbxLodDisplayModeUnsupportedDetail;
 }
 
 /**

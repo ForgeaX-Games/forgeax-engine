@@ -10,13 +10,46 @@
 // the AssetError class + AssetErrorCode union (asset-system-v1); D-8 grep
 // uniqueness forbids the collision.
 
-import type { MeshBinHeaderV4 } from '@forgeax/engine-pack';
+import type { MeshBinHeader } from '@forgeax/engine-pack';
 import {
   AssetError,
   type AssetErrorDetail,
   type AssetMeshBinContractFacts,
   type AssetMeshBinContractViolationReason,
 } from '@forgeax/engine-types';
+
+export type TexturePackVerificationCause =
+  | 'byte-length'
+  | 'digest-mismatch'
+  | 'packing-order-mismatch'
+  | 'shape-mismatch';
+
+export interface TexturePackVerificationDetail {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly generation: number;
+  readonly stage: 'producer' | 'loader';
+  readonly cause: TexturePackVerificationCause;
+  readonly expectedBytes?: number;
+  readonly actualBytes?: number;
+  readonly expectedDigest?: string;
+  readonly actualDigest?: string;
+}
+
+/** Structured failure for the producer/loader texture contract. */
+export class TexturePackVerificationError extends Error {
+  readonly code = 'texture-pack-verification-failed' as const;
+  readonly expected: string;
+  readonly hint = 'repair the producer output and retry the same texture GUID generation';
+  readonly detail: TexturePackVerificationDetail;
+
+  constructor(detail: TexturePackVerificationDetail, expected: string) {
+    super(`[TexturePackVerificationError] ${detail.cause}: ${expected}`);
+    this.name = 'TexturePackVerificationError';
+    this.expected = expected;
+    this.detail = detail;
+  }
+}
 
 export class MeshBinAssetError extends AssetError {
   readonly subject = 'mesh-bin' as const;
@@ -28,13 +61,13 @@ export class MeshBinAssetError extends AssetError {
     readonly sourceKey: string;
     readonly expected: string;
     readonly actual: string;
-    readonly header?: Partial<MeshBinHeaderV4> & { readonly byteLength?: number };
+    readonly header?: Partial<MeshBinHeader> & { readonly byteLength?: number };
     readonly reason?: AssetMeshBinContractViolationReason;
     readonly expectedFacts?: AssetMeshBinContractFacts;
     readonly actualFacts?: AssetMeshBinContractFacts;
   }) {
     const expectedFacts: AssetMeshBinContractFacts = args.expectedFacts ?? {
-      version: 4,
+      version: args.header?.version ?? 5,
       projectionVersion: 1,
     };
     const actualFacts: AssetMeshBinContractFacts = {

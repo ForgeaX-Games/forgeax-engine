@@ -6,11 +6,17 @@
   "$comment": "The ordinary durable consumer matrix is SCRIPTABLE_PACK_ASSET_KINDS in @forgeax/engine-pack/source. Pack kind fields remain open for registered producer extensions.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "kind", "assets"],
+  "required": [
+    "schemaVersion"
+  ],
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "enum": ["1.0.0", "2.0.0"]
+      "enum": [
+        "1.0.0",
+        "2.0.0",
+        "3.0.0"
+      ]
     },
     "kind": {
       "type": "string",
@@ -29,22 +35,111 @@
     },
     "diagnostics": {
       "type": "array",
-      "items": { "$ref": "#/$defs/diagnostic" }
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
     },
     "assets": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/asset"
-      }
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset"
+          }
+        },
+        {
+          "$ref": "#/$defs/authoringAssets"
+        }
+      ]
+    },
+    "parent": {
+      "$ref": "#/$defs/guid36",
+      "description": "Parent ScriptablePack packageId for one v3 instance; the source may declare Pack parameters."
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Sparse shallow parameter overrides for one v3 instance."
     }
   },
+  "oneOf": [
+    {
+      "required": [
+        "kind",
+        "assets"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "enum": [
+            "1.0.0",
+            "2.0.0"
+          ]
+        },
+        "kind": {
+          "const": "internal-text-package"
+        },
+        "assets": {
+          "type": "array"
+        },
+        "parent": false,
+        "values": false
+      }
+    },
+    {
+      "required": [
+        "packageId",
+        "assets"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "3.0.0"
+        },
+        "kind": false,
+        "packageId": {
+          "$ref": "#/$defs/guid36"
+        },
+        "assets": {
+          "$ref": "#/$defs/authoringAssets"
+        },
+        "parent": false,
+        "values": false
+      }
+    },
+    {
+      "required": [
+        "packageId",
+        "parent",
+        "values"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "3.0.0"
+        },
+        "kind": false,
+        "packageId": {
+          "$ref": "#/$defs/guid36"
+        },
+        "parent": {
+          "$ref": "#/$defs/guid36"
+        },
+        "values": {
+          "type": "object"
+        },
+        "assets": false
+      }
+    }
+  ],
   "allOf": [
     {
       "if": {
-        "required": ["packageId"],
+        "required": [
+          "packageId"
+        ],
         "properties": {
           "packageId": {},
-          "schemaVersion": { "const": "2.0.0" }
+          "schemaVersion": {
+            "const": "2.0.0"
+          }
         }
       },
       "then": {
@@ -54,11 +149,17 @@
             "type": "array",
             "items": {
               "allOf": [
-                { "$ref": "#/$defs/assetV2" },
+                {
+                  "$ref": "#/$defs/assetV2"
+                },
                 {
                   "type": "object",
-                  "properties": { "execution": {} },
-                  "required": ["execution"]
+                  "properties": {
+                    "execution": {}
+                  },
+                  "required": [
+                    "execution"
+                  ]
                 }
               ]
             }
@@ -75,7 +176,12 @@
     "asset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["guid", "kind", "payload", "refs"],
+      "required": [
+        "guid",
+        "kind",
+        "payload",
+        "refs"
+      ],
       "properties": {
         "guid": {
           "$ref": "#/$defs/guid36",
@@ -103,7 +209,10 @@
         },
         "execution": {
           "type": "string",
-          "enum": ["direct", "cooked"],
+          "enum": [
+            "direct",
+            "cooked"
+          ],
           "description": "Explicit authoring execution mode; never inferred from package path."
         },
         "payload": {
@@ -112,22 +221,94 @@
         },
         "refs": {
           "type": "array",
-          "items": { "$ref": "#/$defs/guid36" }
+          "items": {
+            "$ref": "#/$defs/guid36"
+          }
         },
-        "artifacts": { "$ref": "#/$defs/artifacts" }
+        "artifacts": {
+          "$ref": "#/$defs/artifacts"
+        }
       }
     },
     "assetV2": {
       "allOf": [
-        { "$ref": "#/$defs/asset" },
+        {
+          "$ref": "#/$defs/asset"
+        },
         {
           "type": "object",
-          "required": ["artifacts"],
+          "required": [
+            "artifacts"
+          ],
           "properties": {
-            "artifacts": { "$ref": "#/$defs/artifacts" }
+            "artifacts": {
+              "$ref": "#/$defs/artifacts"
+            }
           }
         }
       ]
+    },
+    "authoringAssets": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$": {
+          "$ref": "#/$defs/authoringAsset"
+        }
+      }
+    },
+    "authoringAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "type": "object"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guid36"
+          }
+        },
+        "artifacts": {
+          "$ref": "#/$defs/artifacts"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "plugin"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "refs": false
+        }
+      },
+      "else": {
+        "properties": {
+          "refs": {}
+        },
+        "required": [
+          "refs"
+        ]
+      }
     },
     "artifacts": {
       "type": "object",
@@ -141,91 +322,227 @@
     "artifactDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "mediaType"],
+      "required": [
+        "path",
+        "mediaType"
+      ],
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "mediaType": { "type": "string", "minLength": 1 },
-        "assetCodec": { "$ref": "#/$defs/assetCodec" },
-        "contentEncoding": { "enum": ["identity", "zstd"] },
-        "byteLength": { "type": "integer", "minimum": 0 },
-        "integrity": { "$ref": "#/$defs/integrity" }
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assetCodec": {
+          "$ref": "#/$defs/assetCodec"
+        },
+        "contentEncoding": {
+          "enum": [
+            "identity",
+            "zstd"
+          ]
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "integrity": {
+          "$ref": "#/$defs/integrity"
+        }
       }
     },
     "assetCodec": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "profile": { "type": "string", "minLength": 1 },
-        "version": { "type": "string", "minLength": 1 }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "integrity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["algorithm", "digest"],
+      "required": [
+        "algorithm",
+        "digest"
+      ],
       "properties": {
-        "algorithm": { "const": "sha256" },
-        "digest": { "type": "string", "minLength": 1 }
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "version"],
+      "required": [
+        "provider",
+        "version"
+      ],
       "properties": {
-        "provider": { "type": "string", "minLength": 1 },
-        "version": { "type": "string", "minLength": 1 },
-        "source": { "type": "string", "minLength": 1 }
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "revision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["digest", "observedAt", "rootId"],
+      "required": [
+        "digest",
+        "observedAt",
+        "rootId"
+      ],
       "properties": {
-        "digest": { "type": "string", "minLength": 1 },
-        "observedAt": { "type": "number" },
-        "rootId": { "type": "string", "minLength": 1 }
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "number"
+        },
+        "rootId": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "diagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "severity"],
+      "required": [
+        "code",
+        "severity"
+      ],
       "properties": {
-        "code": { "type": "string", "minLength": 1 },
-        "severity": { "type": "string", "enum": ["info", "warning", "blocking"] },
-        "message": { "type": "string" },
-        "subject": { "$ref": "#/$defs/subject" },
-        "expected": { "type": "string", "minLength": 1 },
-        "actual": { "type": "string" },
-        "hint": { "type": "string", "minLength": 1 },
-        "authority": { "type": "string", "enum": ["producer", "pack", "catalog"] },
-        "evidence": { "type": "array", "items": { "type": "object" } },
-        "recoveryIntents": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "blocking"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/subject"
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actual": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority": {
+          "type": "string",
+          "enum": [
+            "producer",
+            "pack",
+            "catalog"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "recoveryIntents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "subject": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "id"],
+      "required": [
+        "type",
+        "id"
+      ],
       "properties": {
-        "type": { "type": "string", "enum": ["asset", "package", "resource"] },
-        "id": { "type": "string", "minLength": 1 }
+        "type": {
+          "type": "string",
+          "enum": [
+            "asset",
+            "package",
+            "resource"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "relation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["from", "to", "type", "provenance"],
+      "required": [
+        "from",
+        "to",
+        "type",
+        "provenance"
+      ],
       "properties": {
-        "from": { "$ref": "#/$defs/subject" },
-        "to": { "$ref": "#/$defs/subject" },
-        "type": { "type": "string", "minLength": 1 },
-        "policy": { "type": "object" },
-        "provenance": { "$ref": "#/$defs/provenance" }
+        "from": {
+          "$ref": "#/$defs/subject"
+        },
+        "to": {
+          "$ref": "#/$defs/subject"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy": {
+          "type": "object"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        }
       }
     }
   }

@@ -3,16 +3,13 @@ import { resolve } from 'node:path';
 import { rhi } from '@forgeax/engine-rhi-null';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  createRenderFeatureHost,
-  getRenderFeaturePlanExecutionProjection,
-  runRenderFeatureFrame,
-} from '../features/host';
+import { createRenderFeatureHost, getRenderFeaturePlanExecutionProjection } from '../features/host';
 import { createBuiltinMorphFeature, MORPH_COMPUTE_WGSL } from '../features/morph/morph-feature';
 import {
   createRenderFeatureGpuWorkOwner,
   encodeRenderFeatureGpuComputePass,
 } from '../features/prepared-gpu-work';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 describe('Morph RenderFeature GPU work', () => {
   it('exposes morph work through the declarative plan owner', () => {
@@ -20,7 +17,7 @@ describe('Morph RenderFeature GPU work', () => {
       resolve(import.meta.dirname, '../features/morph/morph-feature.ts'),
       'utf8',
     );
-    expect(source).toContain('RenderFeaturePlan');
+    expect(source).toContain('RenderFeatureWorkPlan');
     expect(source).not.toMatch(/GPUCommandEncoder|queue\.submit|encoder\.finish/);
   });
 
@@ -49,7 +46,7 @@ describe('Morph RenderFeature GPU work', () => {
     const host = createRenderFeatureHost([feature]);
     expect(host.ok).toBe(true);
     if (!host.ok) return;
-    const frame = runRenderFeatureFrame(host.value, {
+    const frame = runSingleViewFeatureFrame(host.value, {
       worlds: [],
       owner: 0,
       frameNumber: 1,

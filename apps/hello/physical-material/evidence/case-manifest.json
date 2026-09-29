@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "caseCount": 16,
+  "roiLayout": "phase-local-4x2",
+  "caseInput": "case-input.json",
+  "referenceArtifact": {
+    "path": "reference-linear-hdr.json",
+    "artifactId": "physical-material-reference-v5",
+    "source": "analytic-raster-reference",
+    "revision": "physical-material-reference-r5",
+    "configHash": "a82390e5ae97e8bcbe459d7e434f263db52a769014dfb31f93d6d797080d39f1"
+  },
+  "cases": [
+    { "caseId": "direct-rigid-factor-r", "lighting": "direct", "geometry": "rigid", "semantic": "factor-r", "authoredSlot": "clearcoatTexture", "channel": "R" },
+    { "caseId": "direct-rigid-roughness-g", "lighting": "direct", "geometry": "rigid", "semantic": "roughness-g", "authoredSlot": "clearcoatRoughnessTexture", "channel": "G" },
+    { "caseId": "direct-rigid-normal-rg", "lighting": "direct", "geometry": "rigid", "semantic": "normal-rg", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "direct-rigid-coat-normal-isolation", "lighting": "direct", "geometry": "rigid", "semantic": "coat-normal-isolation", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "direct-skinned-factor-r", "lighting": "direct", "geometry": "skinned", "semantic": "factor-r", "authoredSlot": "clearcoatTexture", "channel": "R" },
+    { "caseId": "direct-skinned-roughness-g", "lighting": "direct", "geometry": "skinned", "semantic": "roughness-g", "authoredSlot": "clearcoatRoughnessTexture", "channel": "G" },
+    { "caseId": "direct-skinned-normal-rg", "lighting": "direct", "geometry": "skinned", "semantic": "normal-rg", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "direct-skinned-coat-normal-isolation", "lighting": "direct", "geometry": "skinned", "semantic": "coat-normal-isolation", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "ibl-rigid-factor-r", "lighting": "ibl", "geometry": "rigid", "semantic": "factor-r", "authoredSlot": "clearcoatTexture", "channel": "R" },
+    { "caseId": "ibl-rigid-roughness-g", "lighting": "ibl", "geometry": "rigid", "semantic": "roughness-g", "authoredSlot": "clearcoatRoughnessTexture", "channel": "G" },
+    { "caseId": "ibl-rigid-normal-rg", "lighting": "ibl", "geometry": "rigid", "semantic": "normal-rg", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "ibl-rigid-coat-normal-isolation", "lighting": "ibl", "geometry": "rigid", "semantic": "coat-normal-isolation", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "ibl-skinned-factor-r", "lighting": "ibl", "geometry": "skinned", "semantic": "factor-r", "authoredSlot": "clearcoatTexture", "channel": "R", "sourceRoute": "KHR_materials_clearcoat-ir-materialasset-cook-pack-load" },
+    { "caseId": "ibl-skinned-roughness-g", "lighting": "ibl", "geometry": "skinned", "semantic": "roughness-g", "authoredSlot": "clearcoatRoughnessTexture", "channel": "G" },
+    { "caseId": "ibl-skinned-normal-rg", "lighting": "ibl", "geometry": "skinned", "semantic": "normal-rg", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" },
+    { "caseId": "ibl-skinned-coat-normal-isolation", "lighting": "ibl", "geometry": "skinned", "semantic": "coat-normal-isolation", "authoredSlot": "clearcoatNormalTexture", "channel": "RG" }
+  ],
+  "pairedSentinels": ["factor-zero-base-parity", "default-custom-surface-physical-parity", "additive-coat-falsifier"]
+}

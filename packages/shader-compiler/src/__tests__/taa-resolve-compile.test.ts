@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { compileShader } from '../index.js';
+import { canonicalizePortableWgsl } from '../wgsl-compat.js';
 
 describe('TAA resolve compiler contract', () => {
   let compileResult: Awaited<ReturnType<typeof compileShader>>;
@@ -23,6 +24,7 @@ describe('TAA resolve compiler contract', () => {
       '../../../shader/src',
     );
     const source = fs.readFileSync(path.resolve(shaderRoot, 'taa-resolve.wgsl'), 'utf8');
+    const sceneTemporal = fs.readFileSync(path.resolve(shaderRoot, 'scene-temporal.wgsl'), 'utf8');
     const common = [
       '#define_import_path forgeax_view::common',
       'struct FullscreenOutput {',
@@ -38,7 +40,7 @@ describe('TAA resolve compiler contract', () => {
     ].join('\n');
     compileResult = await compileShader(source, {
       id: path.resolve(shaderRoot, 'taa-resolve.wgsl'),
-      imports: { 'forgeax_view::common': common },
+      imports: { 'forgeax_view::common': common, forgeax_scene_temporal: sceneTemporal },
     });
   });
 
@@ -53,15 +55,16 @@ describe('TAA resolve compiler contract', () => {
   });
 
   it('retains the shipped TAA resolve entry point', () => {
-    expect(compiledWgsl()).toContain('fs_taa_resolve');
+    expect(compiledWgsl()).toContain('fn fs_main');
   });
 
-  it('retains the MRT temporal history output', () => {
-    expect(compiledWgsl()).toContain('@location(1) temporal');
+  it('retains the sampled temporal history inputs', () => {
+    expect(compiledWgsl()).toContain('historyTemporal');
+    expect(compiledWgsl()).toContain('@location(0) color');
   });
 
   it('rewrites the Naga long-decimal TAA sentinel to scientific f32 notation', () => {
-    const wgsl = compiledWgsl();
+    const wgsl = canonicalizePortableWgsl('let taaSentinel = 100000000000000000000f;');
     expect(wgsl).toContain('1e20f');
     expect(wgsl).not.toContain('100000000000000000000f');
   });

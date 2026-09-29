@@ -15,7 +15,7 @@ import { chromium } from 'playwright';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..', '..');
-const fixture = resolve(root, 'templates/game-default/assets/base-material.pack.json');
+const fixture = resolve(root, 'apps/game-capability-lab/assets/base-material.pack.json');
 const artifactDir = resolve(process.env.FORGEAX_CATALOG_REFRESH_DIR ?? resolve(root, '.forgeax-debug/catalog-refresh'));
 const marker = /("baseColor"\s*:\s*\[\s*)0\.6/;
 mkdirSync(artifactDir, { recursive: true });
@@ -65,7 +65,7 @@ try {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
     ],

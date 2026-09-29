@@ -24,7 +24,14 @@ import {
   TileLayer,
   Tilemap,
 } from '@forgeax/engine-render/authoring';
-import { ChildOf, Children, MorphWeights, Name, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  Children,
+  GlobalTransform,
+  MorphWeights,
+  Name,
+  Transform,
+} from '@forgeax/engine-scene';
 
 const RUNTIME_COMPONENTS: readonly Component[] = [
   Camera,
@@ -51,6 +58,7 @@ const RUNTIME_COMPONENTS: readonly Component[] = [
   TileLayer,
   Tilemap,
   Transform,
+  GlobalTransform,
   VideoPlayer,
   Visibility,
 ];

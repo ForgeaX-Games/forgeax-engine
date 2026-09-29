@@ -1,7 +1,7 @@
 // @forgeax/engine-assets-runtime — scene-handle-fields: shared reflection helper for
 // SceneAsset handle-field extraction (plan-strategy D-4 / requirements B-5).
 //
-// `_resolveSceneGuids` (instantiate) and `buildSceneChildContext` (breadcrumb)
+// `buildSceneChildContext` (breadcrumb)
 // consume this helper so the "identify shared<...> / array<shared<...>> schema
 // fields + read GUID string" logic has exactly one authoritative location
 // (Derive, Don't Duplicate).
@@ -12,22 +12,20 @@
 // Both consumers prefer the structured `envelope.refs` edges (D-3) when an
 // envelope is catalogued for the scene, and fall back to this entity-component
 // walk only when no envelope (or no per-entity edge detail) is available:
-//  - `_resolveSceneGuids`: envelope-less scenes (e.g. unit tests that build a
-//    SceneAsset directly without cataloguing it; no `sceneGuidKey`).
 //  - `buildSceneChildContext`: prod GUID-only refs[] edges whose `sourceField`
 //    was stripped at the serialization boundary (w7 D-10), plus direct
 //    `catalog()` scene registration with no refs. The walk recovers the
-//    (entityLocalId, componentName, fieldName, arrayIndex) triple the bare
+//    (entityKey, componentName, fieldName, arrayIndex) triple the bare
 //    edge no longer carries.
 
 import type { Component } from '@forgeax/engine-ecs';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
-import type { MountOverride } from '@forgeax/engine-types';
+import type { MountOverride } from '@forgeax/engine-scene';
 
 /**
  * A single handle-field reference extracted from a SceneAsset entity.
  *
- * `entityLocalId` is the `node.localId`; `componentName` and `fieldName`
+ * `entityKey` is the stable keyed SceneAsset identity; `componentName` and `fieldName`
  * identify the schema field whose `fieldType` starts with `shared\<` or
  * `array\<shared\<`. `guidString` is the raw GUID string value from the
  * entity's component data (NOT a parsed `AssetGuid` — callers parse or
@@ -37,7 +35,7 @@ import type { MountOverride } from '@forgeax/engine-types';
  * `array<handle<T>>` fields it is the 0-based index into the array.
  */
 export interface SceneHandleFieldEntry {
-  readonly entityLocalId: number;
+  readonly entityKey: string;
   readonly componentName: string;
   readonly fieldName: string;
   readonly guidString: string;
@@ -46,14 +44,10 @@ export interface SceneHandleFieldEntry {
 }
 
 /**
- * Shape of a single entity passed to {@link extractSceneEntityHandleGuids}.
- *
- * Compatible with both `SceneEntity` (from `@forgeax/engine-types`, where
- * `components` is `Partial<ComponentValuesMap>`) and test-side plain objects.
+ * Shape of one keyed entity passed to {@link extractSceneEntityHandleGuids}.
  */
 interface SceneEntityLike {
-  readonly localId: number;
-  readonly components: Record<string, Record<string, unknown>>;
+  readonly components: Partial<Record<string, Record<string, unknown>>>;
 }
 
 /**
@@ -67,17 +61,16 @@ interface SceneEntityLike {
  * Values that are already numbers (resolved Handles) or non-strings are
  * skipped (they are not GUID refs).
  *
- * @internal Shared by {@link AssetRegistry._resolveSceneGuids} and
- * `buildSceneChildContext` as the entity-walk fallback used when the structured
+ * @internal Shared by `buildSceneChildContext` as the entity-walk fallback used when the structured
  * `envelope.refs` edges are unavailable or carry no per-entity detail.
  */
 export function extractSceneEntityHandleGuids(
   components: ReadonlyMap<string, Component>,
-  entities: ReadonlyArray<SceneEntityLike>,
+  entities: Readonly<Record<string, SceneEntityLike>>,
 ): SceneHandleFieldEntry[] {
   const entries: SceneHandleFieldEntry[] = [];
 
-  for (const node of entities) {
+  for (const [entityKey, node] of Object.entries(entities)) {
     const rawComponents: Record<string, Record<string, unknown>> = node.components as Record<
       string,
       Record<string, unknown>
@@ -96,7 +89,7 @@ export function extractSceneEntityHandleGuids(
           rawFields[fieldName],
           (guidString, arrayIndex) => {
             entries.push({
-              entityLocalId: node.localId,
+              entityKey,
               componentName: compName,
               fieldName,
               guidString,

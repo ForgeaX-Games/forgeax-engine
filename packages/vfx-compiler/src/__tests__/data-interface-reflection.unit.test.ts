@@ -9,24 +9,33 @@ describe('VFX Data Interface reflection', () => {
         #import forgeax_vfx::data::camera
         #import forgeax_vfx::data::noise
       `,
-      imports: {
-        'game::impact': '#import forgeax_vfx::data::channel',
-      },
     });
     expect(result).toMatchObject({
       ok: true,
       value: {
         dataInterfaces: [
-          { token: 'vfx:camera', kind: 'camera', binding: 8, bindingType: 'uniform' },
+          { token: 'vfx:camera', kind: 'camera', binding: 12, bindingType: 'uniform' },
           {
             token: 'vfx:scene-depth',
             kind: 'scene-depth',
-            binding: 9,
+            binding: 13,
             bindingType: 'sampled-depth',
           },
-          { token: 'vfx:noise', kind: 'noise', binding: 10, bindingType: 'sampled-float' },
-          { token: 'vfx:channel', kind: 'channel', binding: 11, bindingType: 'storage-read' },
+          { token: 'vfx:noise', kind: 'noise', binding: 14, bindingType: 'sampled-float' },
         ],
+      },
+    });
+  });
+
+  it('rejects the retired vfx:channel token while preserving event channels', () => {
+    const result = reflectVfxLayout({
+      root: '#import forgeax_vfx::data::channel',
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'vfx-reflection-unknown-data-interface',
+        detail: { path: 'root:forgeax_vfx::data::channel' },
       },
     });
   });

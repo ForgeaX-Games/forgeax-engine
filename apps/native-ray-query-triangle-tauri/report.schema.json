@@ -25,7 +25,7 @@
     "schemaVersion": { "const": 2 },
     "verdict": { "enum": ["ok", "unsupported", "failed"] },
     "mode": { "const": "packaged-tauri-smoke" },
-    "wgpuVersion": { "const": "30.0.0" },
+    "wgpuVersion": { "const": "30.0.1" },
     "tauriVersion": { "type": "string", "minLength": 1 },
     "rustVersion": { "type": "string", "minLength": 1 },
     "executable": { "type": "string", "minLength": 1 },

@@ -57,7 +57,10 @@ function repairDuplicateKey(
 describe('AI recovery from canonical catalog fields', () => {
   it('keeps every non-current lifecycle on a safe recovery path', () => {
     const schema = JSON.parse(
-      readFileSync(new URL('../../../../asset-authority.schema.json', import.meta.url), 'utf8'),
+      readFileSync(
+        new URL('../../../../schemas/asset-authority.schema.json', import.meta.url),
+        'utf8',
+      ),
     ) as {
       'x-forgeax-audit': {
         aiOperations: string[];

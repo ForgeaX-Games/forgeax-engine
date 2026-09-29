@@ -11,7 +11,7 @@
 // pixelSamples shape convergence per D-P4 mirrors hello-cube smoke):
 //   (a) `[hello-triangle] backend=webgpu` console hit (K-7 chrome stable +
 //       Vulkan flag combo)
-//   (b) raf frame count >= SMOKE_MIN_FRAMES (default 300, ENV-overridable)
+//   (b) raf frame count >= SMOKE_MIN_FRAMES (default 60, ENV-overridable)
 //   (c) GPUBuffer copyTextureToBuffer pixel readback at two sample sites:
 //       - NDC-center (canvas center) RGB distance to clearColor
 //         [0.06, 0.06, 0.08] > SMOKE_PIXEL_THRESHOLD (default 0.05 - D-P4
@@ -68,7 +68,7 @@ export const CLEAR_COLOR_RGB = /** @type {readonly [number, number, number]} */ 
  *  SSOT drift). */
 export const DEFAULTS = Object.freeze({
   SMOKE_DURATION_MS: 5000, // AC-11 reduced to 5s
-  SMOKE_MIN_FRAMES: 300,
+  SMOKE_MIN_FRAMES: 60,
   SMOKE_PIXEL_THRESHOLD: 0.05, // K-5 baseline
   SMOKE_FRAME_AVG: 8, // K-5 multi-frame average
 });

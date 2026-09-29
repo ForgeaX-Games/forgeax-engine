@@ -18,11 +18,6 @@
       "category": "2D Rendering",
       "status": "implemented"
     },
-    "assets": {
-      "roots": [
-        "./assets"
-      ]
-    },
     "smokeInvocation": "pnpm --filter @forgeax/hello-sprite smoke",
     "_comment": "smokeInvocation = self-contained SSOT (mirrors hello-tonemap / hello-cube). hello-sprite exercises the sprite material pipeline end-to-end (HANDLE_QUAD + SpriteMaterialAsset + Layer/SortKey components + transparent-sort + sprite.wgsl + alpha-blend pipeline) across 2 scenes (mode=0 horizontal-z + mode=1 JRPG Y-sort) crossed with 2 tonemap paths (none + reinhard-extended). 4 reference PNGs gate AC-13 (D-5 wood-container reuse via local assets/ copy when the forgeax-engine-assets submodule is not initialised; commit copies are 1.4 KB).",
     "metrics": {
@@ -65,7 +60,7 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

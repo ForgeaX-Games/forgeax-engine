@@ -12,6 +12,7 @@ import {
 } from '../recorder';
 import { assembleTape } from '../recorder/assemble';
 import { openReplay, type ReplayBackend } from '../replay/session';
+import { runQuerySetReplayFixture } from './query-set-replay-fixture';
 
 interface DawnPack {
   readonly rhi: RhiInstance;
@@ -102,6 +103,7 @@ async function makeRecording(pack: DawnPack): Promise<{
   const encoderResult = device.createCommandEncoder({});
   expect(encoderResult.ok).toBe(true);
   if (!encoderResult.ok) throw new Error(encoderResult.error.hint);
+  encoderResult.value.pushDebugGroup('frame');
   const pass = encoderResult.value.beginRenderPass({
     colorAttachments: [
       {
@@ -113,8 +115,13 @@ async function makeRecording(pack: DawnPack): Promise<{
     ],
   } as never);
   pass.setPipeline(pipeline.value);
+  pass.pushDebugGroup('outer');
+  pass.pushDebugGroup('inner');
   pass.draw(3, 1, 0, 0);
+  pass.popDebugGroup();
+  pass.popDebugGroup();
   pass.end();
+  encoderResult.value.popDebugGroup();
   const command = encoderResult.value.finish();
   expect(command.ok).toBe(true);
   if (!command.ok) throw new Error(command.error.hint);
@@ -126,7 +133,7 @@ async function makeRecording(pack: DawnPack): Promise<{
 }
 
 describe.skipIf(SKIP_DAWN)('RHI debug v7 fresh-device evidence', () => {
-  it('records, encodes, strictly decodes, and replays pixels on a fresh Dawn device', async () => {
+  it('records, encodes, strictly decodes, and replays pixels through nested debug groups on a fresh Dawn device', async () => {
     const pack = await loadDawn();
     const recording = await makeRecording(pack);
     const baseline = await readbackTexturePixels(
@@ -174,5 +181,65 @@ describe.skipIf(SKIP_DAWN)('RHI debug v7 fresh-device evidence', () => {
     expect(inspection.value.attachment?.provenance.resourceId).toBeDefined();
     expect(normalizedPixelDelta(baseline, replayPixels)).toBeLessThanOrEqual(0.01);
     expect((await session.value.dispose()).ok).toBe(true);
+  }, 60_000);
+
+  it('captures and replays an occlusion QuerySet with an eight-byte readback', async () => {
+    const pack = await loadDawn();
+    const recorder = wrap(pack.rhi);
+    const recordingShaderModule = wrapCreateShaderModule(pack.createShaderModule, recorder);
+    const adapter = await recorder.requestAdapter();
+    expect(adapter.ok).toBe(true);
+    if (!adapter.ok) throw new Error(`QuerySet Dawn adapter failed: ${adapter.error.code}`);
+    const deviceResult = await adapter.value.requestDevice();
+    expect(deviceResult.ok).toBe(true);
+    if (!deviceResult.ok)
+      throw new Error(`QuerySet Dawn device failed: ${deviceResult.error.code}`);
+    const armed = recorder.arm(1);
+    expect(armed.ok).toBe(true);
+    if (!armed.ok) throw new Error(armed.error.hint);
+    const evidence = await runQuerySetReplayFixture({
+      runner: 'dawn',
+      device: deviceResult.value,
+      createShaderModule: recordingShaderModule,
+      replayCreateShaderModule: pack.createShaderModule,
+      finishCapture: async () => {
+        recorder.onFrameEnd();
+        const assembled = assembleTape(recorder);
+        if (!assembled.ok) throw new Error(assembled.error.hint);
+        return assembled.value;
+      },
+      createFreshDevice: async () => {
+        const freshAdapter = await pack.rhi.requestAdapter();
+        if (!freshAdapter.ok) throw new Error(freshAdapter.error.hint);
+        const freshDevice = await freshAdapter.value.requestDevice();
+        if (!freshDevice.ok) throw new Error(freshDevice.error.hint);
+        return freshDevice.value;
+      },
+    });
+    expect(evidence, JSON.stringify(evidence.errorReceipts)).toMatchObject({
+      status: 'available',
+      tapeFormatVersion: 7,
+      resolveDestinationOffset: 256,
+      originalQueryValues: expect.arrayContaining([expect.any(String), '0']),
+      originalResultHalfWords: [15360, 0, 0, 15360, 0, 0, 0, 15360],
+      freshQueryValues: ['1', '0'],
+      errorReceipts: [],
+      deviceLost: null,
+    });
+    expect(evidence.originalQueryValues[0]).not.toBe('0');
+    expect(evidence.originalColorBytes.some((byte) => byte > 0)).toBe(true);
+    expect(evidence.eventKinds).toEqual(
+      expect.arrayContaining([
+        'createQuerySet',
+        'beginRenderPass',
+        'beginOcclusionQuery',
+        'endOcclusionQuery',
+        'resolveQuerySet',
+        'submit',
+        'destroyQuerySet',
+      ]),
+    );
+    expect(evidence.querySetHandleId).toBeDefined();
+    expect(evidence.resolveDestinationHandleId).toBeDefined();
   }, 60_000);
 });

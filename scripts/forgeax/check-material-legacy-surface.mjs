@@ -46,14 +46,20 @@ const ENGINE_REGISTRY_PATHS = [
   'packages/render/',
   'packages/shader/',
   'packages/vite-plugin-shader/',
+  'packages/assets-runtime/',
 ];
 
 export const CORE_SURFACE_PATHS = [
   'packages/types',
   'packages/render',
   'packages/shader',
-  'packages/vite-plugin-shader',
+  'packages/shader-compiler',
   'packages/pack',
+  'packages/vite-plugin-pack',
+  'packages/vite-plugin-shader',
+  'packages/assets-runtime',
+  'packages/runtime',
+  'templates/game-3d',
   'scripts',
 ];
 
@@ -125,6 +131,10 @@ if (import.meta.main) {
   const report = scanMaterialLegacySurface(rootArg ?? process.cwd(), {
     ...(process.argv.includes('--core') ? { paths: CORE_SURFACE_PATHS } : {}),
     ...(process.argv.includes('--core') ? { allowInternalRegistry: true } : {}),
+    // Core census covers the production consumer surface. Test fixtures keep
+    // their explicit legacy registry setup so they can continue to exercise
+    // the compatibility boundary without being mistaken for authoring code.
+    ...(process.argv.includes('--core') ? { consumerOnly: true } : {}),
   });
   console.log(JSON.stringify(report, null, 2));
   if (!report.ok) process.exitCode = 1;

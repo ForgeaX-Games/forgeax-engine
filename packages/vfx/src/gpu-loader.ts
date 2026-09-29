@@ -13,15 +13,16 @@ import { err, ok } from '@forgeax/engine-types';
 import {
   VFX_GPU_PROGRAM_ARTIFACT_KEY,
   VFX_GPU_PROGRAM_FORMAT,
-  type VfxGpuEffectAsset,
-  type VfxGpuEmitterProgram,
+  type VfxGpuEffectAssetAny,
+  type VfxGpuEmitterProgramV3,
 } from './gpu-program.js';
 
 export interface VfxGpuAssetError {
   readonly code:
-    | 'vfx-asset-v2-invalid'
-    | 'vfx-asset-v2-program-missing'
-    | 'vfx-asset-v2-fingerprint-mismatch';
+    | 'vfx-asset-version-unsupported'
+    | 'vfx-asset-v3-invalid'
+    | 'vfx-asset-v3-program-missing'
+    | 'vfx-asset-v3-fingerprint-mismatch';
   readonly expected: string;
   readonly hint: string;
   readonly detail: { readonly guid: string; readonly path: string };
@@ -70,20 +71,26 @@ async function fingerprint(bytes: Uint8Array): Promise<string> {
 
 function validReflectionLayout(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!record(value) || value.version !== 1) return false;
+  if (!record(value) || value.version !== 3) return false;
   if (!record(value.parameters) || !Array.isArray(value.parameters.fields)) return false;
   if (!record(value.custom) || !Array.isArray(value.custom.fields)) return false;
+  if (value.version === 3) {
+    if (!record(value.core) || value.core.name !== 'VfxParticle' || value.core.stride !== 112) {
+      return false;
+    }
+    if (!record(value.customLayout) || value.customLayout.name !== 'VfxCustom') return false;
+  }
   return typeof value.fingerprint === 'string' && value.fingerprint.startsWith('sha256:');
 }
 
-function stableLayouts(emitters: readonly VfxGpuEmitterProgram[]): boolean {
+function stableLayouts(emitters: readonly VfxGpuEmitterProgramV3[]): boolean {
   const fingerprints = emitters
     .map((emitter) => emitter.reflection.layout?.fingerprint)
     .filter((fingerprint): fingerprint is string => fingerprint !== undefined);
   return fingerprints.every((fingerprint) => fingerprint === fingerprints[0]);
 }
 
-function validEmitter(value: unknown): value is VfxGpuEmitterProgram {
+function validEmitter(value: unknown): boolean {
   const reflection = record(value) && record(value.reflection) ? value.reflection : undefined;
   const layout = reflection !== undefined ? reflection.layout : undefined;
   return (
@@ -107,7 +114,13 @@ function validEmitter(value: unknown): value is VfxGpuEmitterProgram {
     value.reflection.entryPoints.includes('forgeax_vfx_mesh_main') &&
     value.reflection.entryPoints.includes('forgeax_vfx_ribbon_main') &&
     value.reflection.entryPoints.includes('forgeax_vfx_trail_main') &&
-    value.reflection.entryPoints.includes('forgeax_vfx_beam_main')
+    value.reflection.entryPoints.includes('forgeax_vfx_beam_main') &&
+    layout !== undefined &&
+    record(layout) &&
+    Array.isArray(reflection?.bindings) &&
+    Array.isArray(reflection?.dataInterfaces) &&
+    Array.isArray(reflection?.renderers) &&
+    Array.isArray(reflection?.resources)
   );
 }
 
@@ -116,26 +129,39 @@ export const vfxGpuEffectPackLoader = {
   async load(
     input: PackLoaderInput,
     _context: LoadContext,
-  ): Promise<Result<VfxGpuEffectAsset, VfxGpuAssetError>> {
+  ): Promise<Result<VfxGpuEffectAssetAny, VfxGpuAssetError>> {
+    const schemaVersion = input.payload.schemaVersion;
+    if (schemaVersion !== 3) {
+      return failure(
+        'vfx-asset-version-unsupported',
+        input.guid,
+        'schemaVersion',
+        'schemaVersion 3 / forgeax-vfx-program-4',
+        'cold-cook the older source and publish a program format 4 payload; older versions are not executable',
+      );
+    }
+    const invalidCode = 'vfx-asset-v3-invalid' as const;
+    const missingCode = 'vfx-asset-v3-program-missing' as const;
+    const fingerprintCode = 'vfx-asset-v3-fingerprint-mismatch' as const;
+    const expectedFormat = VFX_GPU_PROGRAM_FORMAT;
     if (
       input.payload.kind !== 'particle-effect' ||
-      input.payload.schemaVersion !== 2 ||
       !Array.isArray(input.payload.emitters) ||
       typeof input.payload.programFingerprint !== 'string' ||
       !record(input.payload.program)
     ) {
       return failure(
-        'vfx-asset-v2-invalid',
+        invalidCode,
         input.guid,
         'payload',
-        'a schemaVersion 2 particle payload with its complete program and fingerprint',
-        'migrate behavior to WGSL and recook; the runtime does not interpret v1',
+        'a schemaVersion 3 particle payload with its complete cooked program and fingerprint',
+        'cold-cook the source with the current VFX compiler and retry the load',
       );
     }
     const artifact = input.artifacts[VFX_GPU_PROGRAM_ARTIFACT_KEY];
     if (artifact === undefined) {
       return failure(
-        'vfx-asset-v2-program-missing',
+        missingCode,
         input.guid,
         VFX_GPU_PROGRAM_ARTIFACT_KEY,
         'the asset-local cooked VFX program',
@@ -147,7 +173,7 @@ export const vfxGpuEffectPackLoader = {
       decoded = JSON.parse(new TextDecoder().decode(artifact.bytes));
     } catch {
       return failure(
-        'vfx-asset-v2-invalid',
+        invalidCode,
         input.guid,
         VFX_GPU_PROGRAM_ARTIFACT_KEY,
         'canonical JSON program bytes',
@@ -156,27 +182,27 @@ export const vfxGpuEffectPackLoader = {
     }
     if (
       !record(decoded) ||
-      decoded.format !== VFX_GPU_PROGRAM_FORMAT ||
+      decoded.format !== expectedFormat ||
       !Array.isArray(decoded.emitters) ||
-      !decoded.emitters.every(validEmitter) ||
-      !stableLayouts(decoded.emitters as VfxGpuEmitterProgram[])
+      !decoded.emitters.every((emitter) => validEmitter(emitter)) ||
+      !stableLayouts(decoded.emitters as VfxGpuEmitterProgramV3[])
     ) {
       return failure(
-        'vfx-asset-v2-invalid',
+        invalidCode,
         input.guid,
         VFX_GPU_PROGRAM_ARTIFACT_KEY,
-        `a ${VFX_GPU_PROGRAM_FORMAT} managed GPU program`,
+        `a ${expectedFormat} managed GPU program`,
         'recook with the current VFX compiler ABI',
       );
     }
-    const decodedEmitters = decoded.emitters as VfxGpuEmitterProgram[];
+    const decodedEmitters = decoded.emitters as VfxGpuEmitterProgramV3[];
     if (
-      input.payload.program.format !== VFX_GPU_PROGRAM_FORMAT ||
+      input.payload.program.format !== expectedFormat ||
       input.payload.program.fingerprint !== input.payload.programFingerprint ||
       !Array.isArray(input.payload.program.emitters)
     ) {
       return failure(
-        'vfx-asset-v2-invalid',
+        invalidCode,
         input.guid,
         'payload.program',
         'the complete canonical program matching payload.programFingerprint',
@@ -186,7 +212,7 @@ export const vfxGpuEffectPackLoader = {
     const actualFingerprint = await fingerprint(artifact.bytes);
     if (actualFingerprint !== input.payload.programFingerprint) {
       return failure(
-        'vfx-asset-v2-fingerprint-mismatch',
+        fingerprintCode,
         input.guid,
         'payload.programFingerprint',
         'payload and program artifact fingerprints to match',
@@ -209,7 +235,7 @@ export const vfxGpuEffectPackLoader = {
       )
     ) {
       return failure(
-        'vfx-asset-v2-invalid',
+        invalidCode,
         input.guid,
         'payload.emitters',
         'payload emitter identities and capacities to match the program',
@@ -219,26 +245,26 @@ export const vfxGpuEffectPackLoader = {
     return ok(
       Object.freeze({
         guid: input.guid,
-        kind: 'particle-effect',
-        schemaVersion: 2,
+        kind: 'particle-effect' as const,
+        schemaVersion: 3,
         programFingerprint: actualFingerprint,
         emitters: Object.freeze(emitters as { id: string; capacity: number }[]),
         program: Object.freeze({
-          format: VFX_GPU_PROGRAM_FORMAT,
+          format: expectedFormat,
           fingerprint: actualFingerprint,
           emitters: Object.freeze(decodedEmitters),
         }),
-      }),
+      }) as VfxGpuEffectAssetAny,
     );
   },
 };
 
 /** VFX owner decoder contribution for the core registry's typed map. */
 export const vfxGpuEffectContribution: AssetDecoderContribution<
-  VfxGpuEffectAsset,
+  VfxGpuEffectAssetAny,
   'particle-effect'
 > = {
-  kind: { kind: 'particle-effect' } as AssetKind<VfxGpuEffectAsset, 'particle-effect'>,
+  kind: { kind: 'particle-effect' } as AssetKind<VfxGpuEffectAssetAny, 'particle-effect'>,
   consumer: 'VfxGpuRuntime',
   decoder: {
     async decode({ envelope, artifacts }) {
@@ -277,7 +303,7 @@ export const vfxGpuEffectContribution: AssetDecoderContribution<
 export async function loadVfxGpuEffect(
   registry: LegacyAssetRegistry | RuntimeAssetRegistry,
   guid: string,
-): Promise<Result<VfxGpuEffectAsset, unknown>> {
+): Promise<Result<VfxGpuEffectAssetAny, unknown>> {
   if ('load' in registry) {
     return registry.load(guid, vfxGpuEffectContribution.kind);
   }
@@ -287,5 +313,5 @@ export async function loadVfxGpuEffect(
   } catch (error) {
     return err(error);
   }
-  return registry.loadByGuid<VfxGpuEffectAsset>(parsed);
+  return registry.loadByGuid<VfxGpuEffectAssetAny>(parsed);
 }

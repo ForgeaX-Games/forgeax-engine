@@ -1,0 +1,64 @@
+{
+  "schema": "forgeax.render-scene-benchmark.v1",
+  "label": "main-cpu-1",
+  "sourceRoot": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-unified-baseline",
+  "sourceHead": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+  "sourceStatus": {
+    "trackedDirty": false,
+    "entries": []
+  },
+  "workload": {
+    "worlds": 2,
+    "ordinaryEntitiesPerWorld": 256,
+    "mixedFields": ["Instances", "GlobalTransform", "MaterialAsset", "Visibility", "ChildOf"],
+    "instanceCounts": [3, 0, 1, 2]
+  },
+  "timing": {
+    "warmupCount": 8,
+    "sampleCount": 31,
+    "medianMs": 4.404667000000018,
+    "p95Ms": 8.189707999999996,
+    "minMs": 3.9515829999999994,
+    "maxMs": 14.556042000000048,
+    "samplesMs": [
+      4.237792000000013, 3.9515829999999994, 4.145791999999972, 5.8870000000000005,
+      4.299583999999982, 5.687708000000043, 4.29445800000002, 4.117999999999995, 4.5025830000000155,
+      4.189666000000045, 6.356042000000002, 4.727708000000007, 4.545208000000002, 4.662000000000035,
+      4.145083999999997, 4.435207999999989, 4.140041999999994, 6.682542000000012, 4.277249999999981,
+      4.058916000000011, 4.8337080000000014, 5.462916000000007, 8.189707999999996,
+      4.356416999999965, 4.470416999999998, 3.9926659999999856, 4.0518749999999955,
+      4.608874999999955, 4.404667000000018, 14.556042000000048, 4.120542
+    ],
+    "oracleChecks": 31,
+    "oracleTimed": false
+  },
+  "touched": {
+    "median": 0,
+    "p95": 0,
+    "samples": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ]
+  },
+  "scene": {
+    "fullRebuilds": 40,
+    "projectionRecords": 517,
+    "deltaFrames": 0,
+    "noChangeFrames": 0,
+    "transformUpdates": 0
+  },
+  "gpu": {
+    "probe": "disabled",
+    "status": "inactive",
+    "uploadCallsPerSample": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    "uploadBytesPerSample": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    "uploadCalls": 0,
+    "uploadBytes": 0,
+    "inspection": {
+      "status": "inactive"
+    }
+  }
+}

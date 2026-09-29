@@ -3,7 +3,7 @@ import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErr
 import assert from 'node:assert/strict';
 import { AnimatedBy, AnimationTargetId, animationPlugin } from '@forgeax/engine-animation';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
-import { scenePlugin, Transform } from '@forgeax/engine-scene';
+import { scenePlugin, GlobalTransform, Transform } from '@forgeax/engine-scene';
 import {
   buildAnimatedTransformWorld,
   replayAnimatedTransform,
@@ -52,9 +52,11 @@ advance(world, 0.25);
 const directPlanet = world.get(direct.planet, Transform).unwrap();
 const directOrbit = world.get(direct.orbitController, Transform).unwrap();
 const directSatellite = world.get(direct.satellite, Transform).unwrap();
+const directSatelliteWorld = world.get(direct.satellite, GlobalTransform).unwrap();
 const graphPlanet = world.get(graph.planet, Transform).unwrap();
 const graphOrbit = world.get(graph.orbitController, Transform).unwrap();
 const graphSatellite = world.get(graph.satellite, Transform).unwrap();
+const graphSatelliteWorld = world.get(graph.satellite, GlobalTransform).unwrap();
 
 near(directPlanet.pos[1], 1, 'direct Planet translation');
 near(graphPlanet.pos[1], 1, 'graph Planet translation');
@@ -62,8 +64,8 @@ near(directOrbit.quat[2], Math.sin(Math.PI / 8), 'direct OrbitController rotatio
 near(graphOrbit.quat[2], Math.sin(Math.PI / 8), 'graph OrbitController rotation');
 near(directSatellite.scale[0], 1.25, 'direct Satellite scale');
 near(graphSatellite.scale[0], 1.25, 'graph Satellite scale');
-near(directSatellite.world[12], -4 + Math.SQRT2, 'direct propagated world x');
-near(graphSatellite.world[12], 4 + Math.SQRT2, 'graph propagated world x');
+near(directSatelliteWorld.world[12], -4 + Math.SQRT2, 'direct propagated world x');
+near(graphSatelliteWorld.world[12], 4 + Math.SQRT2, 'graph propagated world x');
 
 setAnimatedTransformPaused(world, demo, 'direct', true);
 advance(world, 0.25);

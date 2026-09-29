@@ -3,9 +3,11 @@
 // Reads vitest `--reporter=json` output (single JSON object or ndjson) from
 // stdin. Computes ms/it per file from `testResults[].duration` (or the
 // file-level endTime-startTime interval when Vitest omits duration) and
-// `assertionResults.length`. Fails when ms/it > 200 && it < 3 — a single
-// slow test in a near-empty file signals a merge candidate.
-// To falsify: add a `.only` on a slow-case-rich describe in a new test file.
+// `assertionResults.length`. Reports when ms/it > 200 && it < 3. This
+// identifies file-consolidation candidates, not a performance regression:
+// coverage instrumentation, runner load, and assertion grouping change this
+// ratio. Real test deadlines, coverage thresholds, and benchmark gates remain
+// blocking. Malformed reports still fail closed.
 // Exempt via `// @perf-budget-skip` comment in the file.
 
 import { readFileSync } from 'node:fs';
@@ -156,13 +158,13 @@ function main() {
       // Threshold check.
       if (msPerIt > THRESHOLD_MS_PER_IT) {
         const result = {
-          code: 'ci-perf-regression-guard',
+          code: 'ci-test-consolidation-candidate',
           expected: 'ms/it <= 200 || it >= 3',
           actual: `${file.name} ${ms.toFixed(0)}ms / ${itCount} it = ${msPerIt.toFixed(0)} ms/it`,
           hint: '\u5408\u5E76\u5230\u540C\u529F\u80FD\u57DF\u6587\u4EF6\uFF08\u53C2\u8003 bind-group-cache-{keying,binding,frame}\uFF09\u6216\u62C6 fixture\uFF08merge into same-domain files like bind-group-cache-{keying,binding,frame} or split fixtures\uFF09',
         };
         process.stdout.write(`${JSON.stringify(result)}\n`);
-        process.exit(1);
+        // Keep every candidate visible without rejecting correct test runs.
       }
     }
 

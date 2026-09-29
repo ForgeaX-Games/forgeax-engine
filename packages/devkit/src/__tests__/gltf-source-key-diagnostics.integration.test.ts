@@ -10,7 +10,7 @@ async function projectFixture(meshes: readonly Record<string, unknown>[]): Promi
   const bufferUri = `data:application/octet-stream;base64,${Buffer.from(positions.buffer).toString('base64')}`;
   await writeFile(
     resolve(root, 'forge.json'),
-    `${JSON.stringify({ id: 'game', name: 'Game', schemaVersion: '1.0.0', entry: 'main.ts', plugins: [{ id: 'gameplay', name: './main.ts' }] })}\n`,
+    `${JSON.stringify({ id: 'game', name: 'Game', schemaVersion: '3.0.0', roots: {} })}\n`,
   );
   await writeFile(resolve(root, 'package.json'), '{"name":"game"}\n');
   await writeFile(resolve(root, 'main.ts'), 'export async function bootstrap() {}\n');

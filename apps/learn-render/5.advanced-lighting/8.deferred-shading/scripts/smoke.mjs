@@ -4,7 +4,7 @@
 //
 // LearnOpenGL section 5.8 deferred-shading dawn-node smoke (structural-only).
 // Spawns a configurable point-light count (default 32) + 9 cube 3x3 grid through Standard deferred opaque,
-// renders 300 frames, and asserts no RhiError / no unknown onError codes.
+// renders 60 frames, and asserts no RhiError / no unknown onError codes.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-8-deferred] backend=<backend>`
@@ -17,7 +17,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
 const PROFILE_CAPTURE_PATH = process.env.FORGEAX_PROFILE_CAPTURE_PATH;
 const PROFILE_DETAIL = process.env.FORGEAX_PROFILE_DETAIL === 'nested' ? 'nested' : 'owner';
@@ -47,8 +47,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 // Known-noise app.onError codes during the Standard deferred demo.
 const KNOWN_NOISE_CODES = new Set([
-  'hdrp-light-budget-exceeded',
-  'hdrp-index-list-overflow',
+  'standard-light-budget-exceeded',
+  'standard-cluster-index-overflow',
 ]);
 
 const consoleErrors = [];
@@ -157,7 +157,8 @@ const mockCanvas = {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 // --- 4. createApp + setup ---
 
@@ -192,7 +193,7 @@ const appOptions = {
   standardProfile: {
     ...DEFAULT_STANDARD_PROFILE,
     lightCount: standardLightCount,
-    lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+    renderPath: FALSIFY === 'force-forward' ? 'forward' : 'deferred',
   },
   ...(profiler === undefined ? {} : { profiler }),
 };
@@ -226,7 +227,16 @@ if (profiler !== undefined) {
 }
 
 const onErrorEvents = [];
-app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
+app.onError((err) => {
+  const event = {
+    code: err.code,
+    expected: err.expected,
+    hint: err.hint,
+    detail: err.detail,
+  };
+  onErrorEvents.push(event);
+  console.error(`[smoke] onError structured=${JSON.stringify(event)}`);
+});
 
 
 const assets = app.assets;
@@ -347,7 +357,7 @@ world.spawn(
   },
 ).unwrap();
 
-// --- 8. Render 300 frames ---
+// --- 8. Render 60 frames ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;

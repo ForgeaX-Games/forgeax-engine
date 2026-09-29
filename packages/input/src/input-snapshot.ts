@@ -349,12 +349,14 @@ export interface InputSnapshot {
 export interface InputBackend {
   /**
    * Produce one frame's worth of input data and reset the per-frame
-   * accumulators (movement delta + up-edge set). Held-key state and
-   * held-button state survive across calls.
+   * accumulators (movement delta + edge sets). Held-key state and
+   * held-button state survive across calls. Browser producers latch edge
+   * transitions when events arrive, so a down+up sequence between two scans
+   * remains observable instead of being lost to the held-state projection.
    *
    * Contract notes:
    * - `downKeys` is the held-key set as of the call (held across frames)
-   * - `upKeys` is the up-edge set since the previous sample (cleared
+   * - `upKeys` is the release-edge set since the previous sample (cleared
    *   after the call so the edge appears in exactly one frame)
    * - `buttons` is the held-button slot tuple `[b0, b1, b2]`
    * - `movementX` / `movementY` are the accumulated PointerLock delta
@@ -374,6 +376,12 @@ export interface InputBackend {
    */
   setPointerLockAllowed?(allowed: boolean): void;
   /**
+   * Gate physical/synthetic acquisition for a host lifecycle boundary. A
+   * closed gate clears producer state and makes subsequent samples empty until
+   * the gate is reopened; it is independent of pointer-lock policy.
+   */
+  setInputAllowed?(allowed: boolean): void;
+  /**
    * Atomically discard acquired state without detaching listeners. A host calls
    * this when it revokes a control lease so held keys/buttons, contacts, frame
    * edges, deltas and pointer lock cannot bleed into a later consumer. Optional
@@ -392,7 +400,15 @@ export interface InputBackendSample {
   readonly downCodes?: ReadonlySet<string>;
   /** One-frame physical code release edges, when the producer has them. */
   readonly upCodes?: ReadonlySet<string>;
+  /** Logical key press edges latched since the previous frame-start scan. */
+  readonly pressedKeys?: ReadonlySet<string>;
+  /** Physical code press edges latched since the previous frame-start scan. */
+  readonly pressedCodes?: ReadonlySet<string>;
   readonly buttons: readonly [boolean, boolean, boolean];
+  /** Mouse button press edges latched since the previous frame-start scan. */
+  readonly pressedButtons?: readonly [boolean, boolean, boolean];
+  /** Mouse button release edges latched since the previous frame-start scan. */
+  readonly releasedButtons?: readonly [boolean, boolean, boolean];
   readonly movementX: number;
   readonly movementY: number;
   /** Latest canvas-pixel mouse position; absent for non-pointer backends. */
@@ -530,18 +546,20 @@ export function snapshotFromSample(
   // a derived view of the producer's state at one instant.
   const heldKeys = new Set<string>(sample.downKeys);
   const upEdges = new Set<string>(sample.upKeys);
-  const justPressedKeys = new Set<string>();
-  for (const key of heldKeys) {
-    if (previousSnapshot === undefined || !previousSnapshot.keyboard.down(key)) {
-      justPressedKeys.add(key);
+  // Do not capture previousSnapshot in a callback: V8 can share that
+  // context with the returned readers and retain the entire frame history.
+  const justPressedKeys = new Set<string>(sample.pressedKeys);
+  if (sample.pressedKeys === undefined) {
+    for (const key of heldKeys) {
+      if (!previousSnapshot?.keyboard.down(key)) justPressedKeys.add(key);
     }
   }
   const heldCodes = new Set<string>(sample.downCodes ?? []);
   const upCodeEdges = new Set<string>(sample.upCodes ?? []);
-  const justPressedCodes = new Set<string>();
-  for (const code of heldCodes) {
-    if (previousSnapshot === undefined || !previousSnapshot.keyboard.downCode(code)) {
-      justPressedCodes.add(code);
+  const justPressedCodes = new Set<string>(sample.pressedCodes);
+  if (sample.pressedCodes === undefined) {
+    for (const code of heldCodes) {
+      if (!previousSnapshot?.keyboard.downCode(code)) justPressedCodes.add(code);
     }
   }
   const buttons: readonly [boolean, boolean, boolean] = [
@@ -549,16 +567,22 @@ export function snapshotFromSample(
     sample.buttons[1],
     sample.buttons[2],
   ];
-  const justPressedButtons: readonly [boolean, boolean, boolean] = [
-    buttons[0] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(0)),
-    buttons[1] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(1)),
-    buttons[2] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(2)),
-  ];
-  const justReleasedButtons: readonly [boolean, boolean, boolean] = [
-    sample.focusReset !== true && previousSnapshot?.mouse.button(0) === true && !buttons[0],
-    sample.focusReset !== true && previousSnapshot?.mouse.button(1) === true && !buttons[1],
-    sample.focusReset !== true && previousSnapshot?.mouse.button(2) === true && !buttons[2],
-  ];
+  const justPressedButtons: readonly [boolean, boolean, boolean] =
+    sample.pressedButtons === undefined
+      ? [
+          buttons[0] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(0)),
+          buttons[1] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(1)),
+          buttons[2] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(2)),
+        ]
+      : [sample.pressedButtons[0], sample.pressedButtons[1], sample.pressedButtons[2]];
+  const justReleasedButtons: readonly [boolean, boolean, boolean] =
+    sample.releasedButtons === undefined
+      ? [
+          sample.focusReset !== true && previousSnapshot?.mouse.button(0) === true && !buttons[0],
+          sample.focusReset !== true && previousSnapshot?.mouse.button(1) === true && !buttons[1],
+          sample.focusReset !== true && previousSnapshot?.mouse.button(2) === true && !buttons[2],
+        ]
+      : [sample.releasedButtons[0], sample.releasedButtons[1], sample.releasedButtons[2]];
   const movementDelta = Object.freeze({ x: sample.movementX, y: sample.movementY });
   const mousePosition =
     sample.mouseX === undefined || sample.mouseY === undefined

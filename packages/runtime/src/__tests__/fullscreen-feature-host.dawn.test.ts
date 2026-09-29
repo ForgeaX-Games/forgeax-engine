@@ -28,13 +28,17 @@ describe('fullscreen feature host contract', () => {
     expect(host.value.features).toHaveLength(1);
     const [registered] = host.value.features;
     expect(registered).toBeDefined();
-    const planned = runRenderFeatureFrame(host.value, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 1,
-      caps: {} as unknown as RhiCaps,
-      targets: [],
-    });
+    const planned = runRenderFeatureFrame(host.value, [
+      {
+        identity: 'main',
+        render: true,
+        worlds: [],
+        owner: 0,
+        frameNumber: 1,
+        caps: {} as unknown as RhiCaps,
+        targets: [],
+      },
+    ]).frame;
     expect(planned.plans[0]?.plan.resources[0]).toMatchObject({
       kind: 'fullscreen-program',
       name: 'fullscreen.test--fullscreen-feature',
@@ -58,15 +62,19 @@ describe('fullscreen feature host contract', () => {
     const host = createRenderFeatureHost([feature]);
     expect(host.ok).toBe(true);
     if (!host.ok) return;
-    const planned = runRenderFeatureFrame(host.value, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 1,
-      caps: {} as unknown as RhiCaps,
-      targets: [
-        createRenderFeatureTarget({ kind: 'scene-color', format: 'rgba16float', sampleCount: 1 }),
-      ],
-    });
+    const planned = runRenderFeatureFrame(host.value, [
+      {
+        identity: 'main',
+        render: true,
+        worlds: [],
+        owner: 0,
+        frameNumber: 1,
+        caps: {} as unknown as RhiCaps,
+        targets: [
+          createRenderFeatureTarget({ kind: 'scene-color', format: 'rgba16float', sampleCount: 1 }),
+        ],
+      },
+    ]).frame;
 
     expect(planned.errors).toEqual([]);
     expect(planned.plans).toHaveLength(1);

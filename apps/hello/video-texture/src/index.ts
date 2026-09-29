@@ -1,7 +1,7 @@
 // apps/hello/video-texture — world-space video texture demo
 // (feat-20260623-world-space-video-asset M5 / w20).
 //
-// Host side: implements a VideoElementProvider that owns <video> DOM
+// Host side: implements a VideoSourceProvider that owns <video> DOM
 // lifecycle (create / set src / autoplay / mute / dispose), registers it
 // as a World Resource so the engine's per-frame record stage can sample
 // frames each draw (plan-strategy D-1).
@@ -20,7 +20,7 @@
 //
 // Decision anchors:
 //   - requirements AC-07 (browser end-to-end visible)
-//   - plan-strategy D-1 (host VideoElementProvider), D-8 (test clip reuse)
+//   - plan-strategy D-1 (host VideoSourceProvider), D-8 (test clip reuse)
 //   - charter P4 (AI-user code isomorphic to static textures)
 
 import { World } from '@forgeax/engine-ecs';
@@ -28,8 +28,8 @@ import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { VideoAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { VideoPlayer, VIDEO_ELEMENT_PROVIDER_KEY } from '@forgeax/engine-graphics-extras';
-import type { VideoElementProvider } from '@forgeax/engine-graphics-extras';
+import { VideoPlayer, VIDEO_SOURCE_PROVIDER_KEY } from '@forgeax/engine-graphics-extras';
+import type { VideoSourceProvider } from '@forgeax/engine-graphics-extras';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
@@ -44,6 +44,8 @@ const MATERIAL_GUID_STRING = 'b2b3d000-2222-4bbb-9eee-bb2222223333';
 const STATIC_MATERIAL_GUID_STRING = 'c3b3d000-3333-4ccc-9eee-cc3333334444';
 
 type VideoTextureRecoveryControls = {
+  pauseFrames(): Promise<void>;
+  resumeFrames(): void;
   removeProvider(): void;
   restoreProvider(): void;
   cleanup(): void;
@@ -67,18 +69,18 @@ type VideoTextureRecoveryControls = {
   };
 };
 
-// --- host: VideoElementProvider implementation ------------------------------
+// --- host: VideoSourceProvider implementation ------------------------------
 
 /**
- * Simple host-side VideoElementProvider: creates one <video> element per
+ * Simple host-side VideoSourceProvider: creates one <video> element per
  * entity, caches it, and returns the element on each tick.
  *
- * The engine calls getElement every frame for each VideoPlayer entity; the
+ * The engine calls getSource every frame for each VideoPlayer entity; the
  * host owns the <video> DOM lifecycle (creating, setting src, autoplay,
  * mute, dispose) single-sidedly. The engine NEVER constructs a video
  * element or sets `.src` (requirements constraint).
  */
-type DemoVideoProvider = VideoElementProvider & {
+type DemoVideoProvider = VideoSourceProvider & {
   elementCount(): number;
   firstElementAttributeUrl(): string | undefined;
 };
@@ -110,7 +112,7 @@ function createDemoVideoProvider(url: string): DemoVideoProvider {
   }
 
   return {
-    getElement(entity, _clipHandle): HTMLVideoElement | undefined {
+    getSource(entity, _clipHandle): HTMLVideoElement | undefined {
       return ensureElement(entity, url);
     },
     elementCount() {
@@ -254,7 +256,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-    // Register the host VideoElementProvider as a World Resource. The single
+    // Register the host VideoSourceProvider as a World Resource. The single
     // per-frame video upload path (the record stage's videoTextureView) reads
     // this resource directly during renderer.draw — there is no separate ECS
     // "video player system" to register (the upload + AC-10 failure signal both
@@ -269,9 +271,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     let demoProvider: DemoVideoProvider | undefined;
     if (!falsify) {
       demoProvider = createDemoVideoProvider(videoAsset.url);
-      world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, demoProvider);
+      world.insertResource(VIDEO_SOURCE_PROVIDER_KEY, demoProvider);
     } else {
-      console.warn('[video-texture] FALSIFY mode: VideoElementProvider NOT registered');
+      console.warn('[video-texture] FALSIFY mode: VideoSourceProvider NOT registered');
     }
 
     // Spawn camera at (0, 0, 5) looking down -Z. Use the `perspective` factory:
@@ -339,6 +341,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (!attachment.ok) throw attachment.error;
 
     let running = true;
+    let framesPaused = false;
+    let lastCompletion = Promise.resolve();
+    let completedFrames = 0;
     if (recoveryMode && !falsify && demoProvider !== undefined) {
       const stable = {
         world,
@@ -355,11 +360,18 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         __forgeaxVideoTextureRecovery?: VideoTextureRecoveryControls;
       };
       recoveryGlobal.__forgeaxVideoTextureRecovery = {
+        async pauseFrames() {
+          framesPaused = true;
+          await lastCompletion;
+        },
+        resumeFrames() {
+          framesPaused = false;
+        },
         removeProvider() {
-          world.removeResource(VIDEO_ELEMENT_PROVIDER_KEY);
+          world.removeResource(VIDEO_SOURCE_PROVIDER_KEY);
         },
         restoreProvider() {
-          world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, demoProvider);
+          world.insertResource(VIDEO_SOURCE_PROVIDER_KEY, demoProvider);
         },
         cleanup() {
           running = false;
@@ -368,8 +380,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         inspect() {
           return {
             providerPresent:
-              world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY) &&
-              world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY) === stable.provider,
+              world.hasResource(VIDEO_SOURCE_PROVIDER_KEY) &&
+              world.getResource<VideoSourceProvider>(VIDEO_SOURCE_PROVIDER_KEY) === stable.provider,
             sameWorld: world === stable.world,
             sameRenderer: renderer === stable.renderer,
             sameHost: renderer === stable.renderer,
@@ -400,6 +412,10 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Render loop.
     const frame = (): void => {
       if (!running) return;
+      if (framesPaused) {
+        requestAnimationFrame(frame);
+        return;
+      }
       world.update().unwrap();
       const r = renderer.draw({
         leases: [attachment.value],
@@ -408,6 +424,15 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       });
       if (!r.ok) {
         console.error('[video-texture] draw error:', r.error.code, r.error.hint);
+      } else {
+        lastCompletion = r.value.completed.then((completed) => {
+          if (!running) return;
+          if (!completed.ok) {
+            console.error('[video-texture] completion error:', completed.error.code);
+            return;
+          }
+          target.dataset.forgeaxCompletedFrames = String(++completedFrames);
+        });
       }
       requestAnimationFrame(frame);
     };

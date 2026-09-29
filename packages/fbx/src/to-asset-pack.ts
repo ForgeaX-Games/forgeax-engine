@@ -7,16 +7,18 @@
 // The import-runner then validates produced == declared and rejects mismatches.
 
 import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
-import { packMeshBinV4 } from '@forgeax/engine-import/mesh-bin';
+import { packMeshBin } from '@forgeax/engine-import/mesh-bin';
 import { box3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   AnimationClipPod,
+  AssetGuid as AssetGuidType,
   AssetRef,
   ImportedAsset,
   MaterialAsset,
   MaterialPod,
   MeshAsset,
+  MeshLodLevel,
   MeshMaterialSlot,
   MeshMaterialSlotTopologyEntry,
   MeshPod,
@@ -32,7 +34,11 @@ import {
   ImportError,
   reconcileMeshMaterialSlotTopology,
   resolveMeshMaterialSlotDefaultGuid,
+  standardMaterialParameters,
+  standardSurfaceParameters,
 } from '@forgeax/engine-types';
+import type { FbxLodGroupPod } from './lod/parse-lod-group.js';
+import { projectFbxLodMeta } from './lod/project-meta.js';
 import { buildFbxNodePaths } from './parse-scene.js';
 
 type SubAsset = {
@@ -62,6 +68,7 @@ export function buildMeshAsset(
     readonly previousMaterialSlots?: readonly MeshMaterialSlotTopologyEntry[];
     readonly materialSlotDefaultOverrides?: Readonly<Record<string, string | null>>;
     readonly meshSourceKey?: string;
+    readonly lods?: readonly MeshLodLevel[];
   } = {},
 ): ImportedAsset {
   const vc = pod.vertices.length / 3;
@@ -235,6 +242,7 @@ export function buildMeshAsset(
       materialSlot: materialSlotFor(sm.materialIndex),
     })),
     materialSlots,
+    ...(materialContext.lods === undefined ? {} : { lods: materialContext.lods }),
   };
 
   const reconciled = reconcileMeshMaterialSlotTopology(
@@ -310,6 +318,13 @@ export function buildMeshAsset(
       });
     }
   }
+  for (const [lodIndex, level] of (mesh.lods ?? []).entries()) {
+    const lodGuid = AssetGuid.format(level.mesh);
+    if (!seenRefs.has(lodGuid.toLowerCase())) {
+      seenRefs.add(lodGuid.toLowerCase());
+      refs.push({ guid: lodGuid, sourceField: { fieldName: 'lods', arrayIndex: lodIndex } });
+    }
+  }
 
   return {
     guid,
@@ -320,9 +335,9 @@ export function buildMeshAsset(
     artifacts: {
       body: {
         mediaType: 'application/x-forgeax-mesh',
-        assetCodec: { name: 'mesh-binary', version: '4' },
+        assetCodec: { name: 'mesh-binary', version: '5' },
         bytes: (() => {
-          const packed = packMeshBinV4(
+          const packed = packMeshBin(
             wireMesh as never,
             materialContext.meshSourceKey ?? 'fbx://mesh',
             refs.map((ref) => ref.guid),
@@ -330,7 +345,7 @@ export function buildMeshAsset(
           if (!packed.ok) {
             throw new ImportError({
               code: 'import-internal-error',
-              expected: 'mesh-bin v4 producer to accept the canonical FBX mesh projection',
+              expected: 'mesh-bin v5 producer to accept the canonical FBX mesh projection',
               hint: 're-cook the FBX source with its Meta sidecar after fixing the mesh payload',
               detail: { reason: `${packed.error.code}: ${packed.error.actual}` },
             });
@@ -342,33 +357,59 @@ export function buildMeshAsset(
   };
 }
 
-function buildMaterialAsset(pod: MaterialPod, guid: string, skinned = false): ImportedAsset {
+function buildMaterialAsset(
+  pod: MaterialPod,
+  guid: string,
+  skinned = false,
+  standardMaterialGuid?: string,
+): ImportedAsset {
   // A material consumed by a skinned mesh must select the pbr-skin shader so the
   // runtime PSO chain (LayoutKind 'pbr-skin' + 18-float vertex layout + joint
   // palette) is exercised; the render-system fail-fasts otherwise (mirror of
   // gltfImporter's `skinned` routing).
-  const mat: MaterialAsset = {
-    kind: 'material',
-    colorSpace: 'linear',
-    passes: [
-      {
-        name: 'Forward',
-        program: { module: skinned ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr' },
-        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-      },
-    ],
-    values: {
-      baseColor: pod.baseColorFactor as readonly [number, number, number, number],
-      metallic: pod.metallicFactor,
-      roughness: pod.roughnessFactor,
-    },
+  const values = {
+    baseColor: pod.baseColorFactor as readonly [number, number, number, number],
+    metallic: pod.metallicFactor,
+    roughness: pod.roughnessFactor,
   };
+  // A Meta-declared Standard root is an inheritance edge, not a second
+  // material contract. Parent-bearing children publish only their authored
+  // values and parent GUID; the MaterialTable resolver supplies the root
+  // passes, parameters, and surface module. Leaf FBX materials keep the
+  // historical standalone pass for sources without a canonical root.
+  const mat: MaterialAsset =
+    standardMaterialGuid === undefined
+      ? {
+          kind: 'material',
+          colorSpace: 'linear',
+          parameters: standardSurfaceParameters(
+            standardMaterialParameters(new Set(Object.keys(values))),
+          ),
+          passes: [
+            {
+              name: 'Forward',
+              program: {
+                module: skinned ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr',
+              },
+              renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+            },
+          ],
+          values,
+        }
+      : {
+          kind: 'material',
+          parent: standardMaterialGuid as unknown as AssetGuidType,
+          values,
+        };
   return {
     guid,
     kind: 'material',
     ...(pod.name !== undefined ? { name: pod.name } : {}),
     payload: mat,
-    refs: [],
+    refs:
+      standardMaterialGuid === undefined
+        ? []
+        : [{ guid: standardMaterialGuid, sourceField: { fieldName: 'parent' } }],
     artifacts: {},
   };
 }
@@ -415,7 +456,7 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
     if (ctx.animationTargetIds.has(targetId)) targetIdByEntity.set(index, targetId);
   }
 
-  const entities = pod.entities.map((e, idx) => {
+  const legacyEntities = pod.entities.map((e, idx) => {
     const components: Record<string, Record<string, unknown>> = {
       Transform: {
         pos: [e.transform.translation[0], e.transform.translation[1], e.transform.translation[2]],
@@ -459,8 +500,19 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
       }
     }
 
-    return { localId: idx as never, components };
+    return { index: idx, components };
   });
+
+  const entities: Record<string, { readonly components: Record<string, Record<string, unknown>> }> =
+    {};
+  for (const entity of legacyEntities) {
+    const components = { ...entity.components };
+    const childOf = components.ChildOf;
+    if (childOf !== undefined && typeof childOf.parent === 'number') {
+      components.ChildOf = { ...childOf, parent: `node-${childOf.parent}` };
+    }
+    entities[`node-${entity.index}`] = { components };
+  }
 
   const scene: SceneAsset = {
     kind: 'scene',
@@ -502,7 +554,10 @@ export function toAssetPack(params: {
   readonly skin: SkinPod;
   readonly animationClips: readonly AnimationClipPod[];
   readonly subAssets: readonly SubAsset[];
+  /** Meta-owned canonical Standard root for imported material inheritance. */
+  readonly standardMaterialGuid?: string;
   readonly sourceOverrides?: SourceOverrideMap;
+  readonly lodGroups?: readonly FbxLodGroupPod[];
 }): readonly ImportedAsset[] {
   const assets: ImportedAsset[] = [];
   const guidOf = makeGuidResolver(params.subAssets);
@@ -522,10 +577,74 @@ export function toAssetPack(params: {
     if (materialName !== undefined) materialNameByIndex.set(materialIndex, materialName);
   }
 
-  // The skin deforms the (single) first mesh; its per-vertex influences promote
-  // both the mesh (18-float skinned layout) and its material (pbr-skin shader).
+  // The skin deforms the (single) first mesh. Only material slots actually used
+  // by that mesh are promoted to the pbr-skin shader; other FBX meshes may share
+  // the document material table but remain rigid and must keep Standard PBR.
   const hasSkin = params.skin.vertexCount > 0;
   const skinnedMeshSourceIndex = hasSkin ? (params.meshes[0]?.sourceIndex ?? null) : null;
+  const skinnedMaterialIndices = new Set<number>();
+  if (skinnedMeshSourceIndex !== null) {
+    const skinnedMesh = params.meshes.find((mesh) => mesh.sourceIndex === skinnedMeshSourceIndex);
+    for (const submesh of skinnedMesh?.submeshes ?? []) {
+      if (submesh.materialIndex !== null) skinnedMaterialIndices.add(submesh.materialIndex);
+    }
+  }
+
+  const lodsByRootMesh = new Map<number, readonly MeshLodLevel[]>();
+  for (const group of params.lodGroups ?? []) {
+    const [rootMeshIndex, ...lowerMeshIndices] = group.childMeshIndices;
+    if (rootMeshIndex === undefined || lowerMeshIndices.length === 0) continue;
+    const rootDeclaration = params.subAssets.find(
+      (entry) => entry.kind === 'mesh' && entry.sourceIndex === rootMeshIndex,
+    );
+    if (rootDeclaration?.sourceKey === undefined) continue;
+    const levels = lowerMeshIndices.flatMap((sourceIndex) => {
+      const declaration = params.subAssets.find(
+        (entry) => entry.kind === 'mesh' && entry.sourceIndex === sourceIndex,
+      );
+      if (declaration?.guid === undefined || declaration.sourceKey === undefined) return [];
+      return [{ sourceKey: declaration.sourceKey, guid: declaration.guid }];
+    });
+    if (levels.length !== lowerMeshIndices.length) continue;
+    const previousRaw = params.sourceOverrides?.[rootDeclaration.sourceKey]?.lods;
+    const previous = Array.isArray(previousRaw)
+      ? previousRaw.flatMap((entry) => {
+          if (entry === null || typeof entry !== 'object') return [];
+          const value = entry as Record<string, unknown>;
+          return typeof value.sourceKey === 'string' && typeof value.meshGuid === 'string'
+            ? [
+                {
+                  sourceKey: value.sourceKey,
+                  guid: value.meshGuid,
+                  ...(typeof value.screenCoverage === 'number'
+                    ? { screenCoverage: value.screenCoverage }
+                    : {}),
+                },
+              ]
+            : [];
+        })
+      : undefined;
+    const projected = projectFbxLodMeta({
+      rootSourceKey: rootDeclaration.sourceKey,
+      levels,
+      ...(previous === undefined ? {} : { previous }),
+    });
+    if (!projected.ok) {
+      throw new ImportError({
+        code: 'mesh-lod-contract-invalid',
+        expected: 'FBX LODGroup child meshes to form a valid decreasing coverage sequence',
+        hint: IMPORT_ERROR_HINTS['mesh-lod-contract-invalid'],
+        detail: { reason: projected.error.reason },
+      });
+    }
+    const parsed = projected.value.lods.flatMap((level) => {
+      const guid = AssetGuid.parse(level.guid);
+      return guid.ok && Number.isFinite(level.screenCoverage)
+        ? [{ mesh: guid.value, screenCoverage: level.screenCoverage }]
+        : [];
+    });
+    lodsByRootMesh.set(rootMeshIndex, parsed);
+  }
 
   for (const mesh of params.meshes) {
     const meshDeclaration = params.subAssets.find(
@@ -560,6 +679,7 @@ export function toAssetPack(params: {
           )
         : undefined;
     const inf = mesh.sourceIndex === skinnedMeshSourceIndex ? params.skin.influences : undefined;
+    const meshLods = lodsByRootMesh.get(mesh.sourceIndex);
     assets.push(
       buildMeshAsset(mesh, guid, inf, {
         guidByIndex: materialGuidByIndex,
@@ -570,6 +690,7 @@ export function toAssetPack(params: {
         ...(meshDeclaration?.sourceKey === undefined
           ? {}
           : { meshSourceKey: meshDeclaration.sourceKey }),
+        ...(meshLods === undefined ? {} : { lods: meshLods }),
       }),
     );
   }
@@ -578,8 +699,10 @@ export function toAssetPack(params: {
     const mat = params.materials[i];
     if (!mat) continue;
     const guid = guidOf('material', i);
-    // Single-mesh fixtures: any material is consumed by the skinned mesh.
-    if (guid !== undefined) assets.push(buildMaterialAsset(mat, guid, hasSkin));
+    const materialIsSkinned = skinnedMaterialIndices.has(i);
+    if (guid !== undefined) {
+      assets.push(buildMaterialAsset(mat, guid, materialIsSkinned, params.standardMaterialGuid));
+    }
   }
 
   for (const tex of params.textures) {
@@ -629,6 +752,7 @@ export function toAssetPack(params: {
   // SkeletonAsset.jointCount === Skin.joints.length).
   const skeletonGuid = guidOf('skeleton', 0);
   if (params.skeleton.jointCount > 0 && skeletonGuid !== undefined) {
+    const { bounds, shadowCapsules } = params.skeleton;
     assets.push({
       guid: skeletonGuid,
       kind: 'skeleton',
@@ -636,6 +760,8 @@ export function toAssetPack(params: {
         kind: 'skeleton',
         inverseBindMatrices: params.skeleton.inverseBindMatrices,
         jointCount: params.skeleton.jointCount,
+        ...(bounds === undefined ? {} : { bounds }),
+        ...(shadowCapsules === undefined ? {} : { shadowCapsules }),
       } as never,
       refs: [],
       artifacts: {},

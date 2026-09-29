@@ -83,12 +83,6 @@ function toBytes(bytes: Uint8Array | readonly number[] | undefined, field: strin
 
 function validateIdentity(input: CreatePipelineEvidenceInput): void {
   if (input.invocationId.length === 0) fail('invocationId is required');
-  if (input.pipelineId === 'forgeax::urp' && input.runtimeId !== 'browser') {
-    fail('forgeax::urp evidence must come from browser');
-  }
-  if (input.pipelineId === 'forgeax::hdrp' && input.runtimeId !== 'dawn') {
-    fail('forgeax::hdrp evidence must come from Dawn');
-  }
   if (input.backendId.length === 0 || input.provenance.adapterId.length === 0) fail('producer provenance is incomplete');
   if (!Number.isInteger(input.frameId) || input.frameId < 0) fail('frameId is invalid');
   if (!input.copySrc || input.lifetime !== 'active') fail('the observation lease is not a live COPY_SRC attachment');

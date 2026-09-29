@@ -129,8 +129,8 @@ export function inspectVfxSubject(input: {
       },
     );
   }
-  if (input.asset.schemaVersion !== 2) {
-    return subjectFailure('resource-preview-subject-invalid', 'a schema-v2 ParticleEffectAsset', {
+  if (input.asset.schemaVersion !== 3) {
+    return subjectFailure('resource-preview-subject-invalid', 'a schema-v3 ParticleEffectAsset', {
       phase: 'subject',
       guid: input.guid,
       field: 'schemaVersion',
@@ -138,10 +138,10 @@ export function inspectVfxSubject(input: {
   }
   const program = input.asset.program;
   const programFingerprint = requiredString(input.asset.programFingerprint);
-  if (!isRecord(program) || program.format !== 'forgeax-vfx-program-2') {
+  if (!isRecord(program) || program.format !== 'forgeax-vfx-program-4') {
     return subjectFailure(
       'resource-preview-subject-invalid',
-      'a cooked forgeax-vfx-program-2 payload',
+      'a cooked forgeax-vfx-program-4 payload',
       {
         phase: 'subject',
         guid: input.guid,

@@ -26,6 +26,24 @@ function readSourceFor(bytes: Uint8Array): ImportContext['readSource'] {
 }
 
 describe('image importer required output topology', () => {
+  it('reserves .cube sources for the ordinary texture producer topology', async () => {
+    const registry = imageRegistry();
+    const result = await runImport(
+      imageMeta('grading.cube', [
+        { guid: PNG_GUID, sourceIndex: 0, sourceKey: 'grading/lut', kind: 'texture' },
+      ]),
+      registry,
+      { readSource: readSourceFor(new TextEncoder().encode(cubeFixture(16))) },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok || 'skipped' in result.value) return;
+    expect(result.value.product.assets[0]).toMatchObject({
+      guid: PNG_GUID,
+      kind: 'texture',
+      payload: { kind: 'texture', shape: { viewDimension: '3d' } },
+    });
+  });
+
   it.each([
     { source: 'texture.png', label: 'PNG' },
     { source: 'texture.jpeg', label: 'JPEG' },
@@ -172,10 +190,10 @@ describe('image importer required output topology', () => {
       sourceIndex: 0,
       payload: {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm-srgb',
         colorSpace: 'srgb',
+        mips: { kind: 'none' },
       },
       artifacts: {
         body: {
@@ -207,3 +225,12 @@ describe('image importer required output topology', () => {
     );
   });
 });
+
+function cubeFixture(size: number): string {
+  return [
+    `LUT_3D_SIZE ${size}`,
+    'DOMAIN_MIN 0 0 0',
+    'DOMAIN_MAX 1 1 1',
+    ...Array.from({ length: size ** 3 }, () => '0 0 0'),
+  ].join('\n');
+}

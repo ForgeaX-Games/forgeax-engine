@@ -1,12 +1,64 @@
+import type { RenderResourceScope } from '../publication/resource-scope';
 // @forgeax/engine-runtime - RenderSystem record stage: frame-snapshot.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
-import type { World } from '@forgeax/engine-ecs';
+import type { RenderReadVersion } from '@forgeax/engine-ecs/projection';
 import { vec3 } from '@forgeax/engine-math';
-import type { ResolvedColorTargetDescriptor } from '@forgeax/engine-render-graph';
-import type { Texture } from '@forgeax/engine-rhi';
+import type {
+  CompiledRenderGraphInfo,
+  ResolvedColorTargetDescriptor,
+} from '@forgeax/engine-render-graph';
+import type {
+  BindGroup,
+  BindGroupLayout,
+  Buffer,
+  RhiDevice,
+  Texture,
+  TextureView,
+} from '@forgeax/engine-rhi';
+import type { MaterialShaderArtifact } from '@forgeax/engine-shader';
+import type { BarrelDistortionMapping } from '../barrel-distortion';
 import type { ClusterBinScratch } from '../cluster-binner';
+import type { DirectionalShadowQuality } from '../components/directional-shadow-filter';
+import type { EnvironmentGeneration } from '../environment/generation';
+import type { EnvironmentLifecycle } from '../environment/lifecycle';
+import type { DepthOfFieldParams } from '../features/depth-of-field/depth-of-field-params';
 import type { GpuBuffer } from '../gpu-resource';
+import type { MotionBlurExecutionReceipt } from '../inspection-types';
+import type { InstanceProjectionStore } from '../instances';
+import type { IblBindingInspection } from '../mesh-material-bindings';
+import type { StandardLightingInspection } from '../pipeline/standard-lighting/inspection';
+import type { AutoExposureGpuResources } from '../pipeline/standard-output/auto-exposure/gpu';
+import type { AutoExposureState } from '../pipeline/standard-output/auto-exposure/state';
+import type { StandardLutGpuResources } from '../pipeline/standard-output/lut-gpu';
+import type { StandardLutCandidate, StandardLutState } from '../pipeline/standard-output/lut-state';
+import type { PointShadowInspection } from '../point-shadow-inspection';
+import type { SsrSpatialAdmission } from '../ssr/admission';
+import type { SsrHistoryCandidate, SsrHistoryOwner } from '../ssr/history';
+import type { TemporalGpuState } from '../temporal/gpu';
+import type { TemporalView } from '../temporal/view';
+
+export type TemporalCommitOutcome =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'off'; readonly view: TemporalView }
+  | { readonly kind: 'taa'; readonly view: TemporalView };
+
+/** CPU transaction metadata staged beside the renderer-owned GPU candidate. */
+export interface PendingAutoExposureState {
+  readonly state: AutoExposureState;
+  readonly generation: number;
+  readonly deviceEpoch: number;
+  readonly frameId: number;
+}
+
+/** CPU POD staged beside the renderer-owned LUT resources until submit. */
+export interface PendingStandardLutState {
+  readonly state: StandardLutState;
+  readonly candidate?: StandardLutCandidate;
+  readonly remove: boolean;
+  readonly targetGeneration: number;
+  readonly deviceEpoch: number;
+}
 
 /**
  * feat-20260708-composited-multi-world-rendering M1 / D-1 / D-9:
@@ -32,6 +84,24 @@ export function worldEntityKey(worldId: number, entityKey: number): number {
 }
 
 /**
+ * Cache identity for a renderer-owned instance collection.
+ *
+ * A collection can be rebound from one entity to another while retaining the
+ * same count, revision, and extraction archetype. The collection id is the
+ * owner identity in that case; the entity cache key is only the compatibility
+ * fallback for legacy snapshots that predate the collection field.
+ */
+export function instanceCollectionCacheKey(
+  worldId: number,
+  instance: { readonly cacheKey: number; readonly collectionId?: number },
+): number {
+  // Keep collection entries in a disjoint numeric namespace from the shared
+  // legacy sprite/fold cache. Fold keys occupy -1..-(2^32), while ordinary
+  // world/entity keys are non-negative; this range starts below both.
+  return -(0x1_0000_0000 + worldEntityKey(worldId, instance.collectionId ?? instance.cacheKey));
+}
+
+/**
  * Cross-frame cache entry for a material bind group whose source material and
  * all resolved GPU resources are stable. The material snapshot identity is
  * the extract-layer invalidation token; the builder only stores entries after
@@ -44,17 +114,17 @@ export interface MaterialBgAssemblyCacheEntry {
   readonly materialBgl: BindGroupLayout;
   /** Buffer identity changes when the shared material capacity grows. */
   readonly materialBuffer: Buffer;
+  readonly sceneMaterialBuffer?: Buffer;
   readonly skylightResources: SkylightBindGroupResources;
   readonly bindGroup: BindGroup;
 }
 
 import type { CompiledRenderGraph } from '@forgeax/engine-render-graph';
-import type { BindGroup, BindGroupLayout, Buffer, TextureView } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, RenderPipelineAsset } from '@forgeax/engine-types';
 import type { MeshGpuHandles } from '../device/gpu-residency';
 import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
-import type { CameraSnapshot } from '../render-contract';
+import type { CameraSnapshot, VolumetricFogFrameContext } from '../render-contract';
 import type { RenderPipeline as RenderPipelineDef, RenderPipelineFrame } from '../render-pipeline';
 import type {
   DispatchEntry,
@@ -63,7 +133,29 @@ import type {
   RenderableSnapshot,
   SpotLightSnapshot,
 } from '../render-system-extract';
+import type { ProbeBlendRecord } from '../scene/probe-blend-record';
+import type { PersistentShadowCasterProjection } from '../scene/render-scene';
 import type { ShadowAtlas } from '../shadow-atlas';
+import type {
+  TemporalFrame,
+  TemporalFrameInput,
+  TemporalFrameTransaction,
+} from '../temporal/frame';
+import type { VolumetricFogInspection } from '../volume/inspection';
+import type { VolumeTemporalSignature } from '../volume/temporal';
+import type { ShadowRasterLedger } from './shadow-raster-ledger';
+
+/** Retained probe record bytes carried with one extracted render frame. */
+export interface ProbeBlendFrameSnapshot {
+  readonly records: readonly ProbeBlendRecord[];
+  readonly recordByteLength: 160;
+}
+
+/** Renderer-owned GPU cache entry for one object's 160B probe record. */
+export interface ProbeBlendBufferCacheEntry {
+  readonly generation: number;
+  readonly bytes: Uint8Array;
+}
 
 /**
  * feat-20260608-create-app-param-surface-trim / M1 / D-8 (q8 user lock):
@@ -84,6 +176,179 @@ export interface FrameObservationSource {
   readonly backendId: string;
 }
 
+/** Internal test/diagnostic view of one compiled graph color target. */
+export interface CurrentGraphTarget {
+  readonly name: string;
+  readonly texture: Texture;
+  /** Stable opaque identity for this RHI handle during the renderer lifetime. */
+  readonly textureIdentity: number;
+  readonly descriptor: ResolvedColorTargetDescriptor;
+  readonly frameId: number;
+  /** Monotonic identity of the compiled graph that owns this texture. */
+  readonly graphGeneration: number;
+}
+
+const textureIdentities = new WeakMap<object, number>();
+let nextTextureIdentity = 1;
+
+const opaqueResourceIdentities = new WeakMap<object, number>();
+let nextOpaqueResourceIdentity = 1;
+
+/** Stable detached identity for a renderer-owned opaque resource handle. */
+export function getOpaqueResourceIdentity(resource: object): number {
+  const existing = opaqueResourceIdentities.get(resource);
+  if (existing !== undefined) return existing;
+  const identity = nextOpaqueResourceIdentity++;
+  opaqueResourceIdentities.set(resource, identity);
+  return identity;
+}
+
+/**
+ * Project an opaque RHI texture handle to a stable diagnostic identity.
+ * RHI handles intentionally expose no serializable fields; object identity is
+ * the only valid comparison boundary for a copy-time capture.
+ */
+export function getTextureIdentity(texture: Texture): number {
+  const object = texture as object;
+  const existing = textureIdentities.get(object);
+  if (existing !== undefined) return existing;
+  const identity = nextTextureIdentity++;
+  textureIdentities.set(object, identity);
+  return identity;
+}
+
+export type GraphTargetCaptureReadbackValidation =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code:
+        | 'capture-readback-length'
+        | 'capture-readback-untouched-sentinel'
+        | 'capture-readback-empty'
+        | 'capture-readback-non-finite';
+    };
+
+/** Validate a mapped rgba16float capture before a consumer decodes its values. */
+export function validateGraphTargetCaptureReadback(input: {
+  readonly bytes: Uint8Array;
+  readonly expectedByteLength: number;
+  readonly sentinel?: Uint8Array;
+  readonly allowZero?: boolean;
+}): GraphTargetCaptureReadbackValidation {
+  const { bytes, expectedByteLength, sentinel, allowZero = false } = input;
+  if (bytes.byteLength !== expectedByteLength)
+    return { ok: false, code: 'capture-readback-length' };
+  if (sentinel?.every((value, index) => bytes[index] === value)) {
+    return { ok: false, code: 'capture-readback-untouched-sentinel' };
+  }
+  if (!allowZero && bytes.every((value) => value === 0)) {
+    return { ok: false, code: 'capture-readback-empty' };
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let index = 0;
+  // Inspect both half-float exponents per word. DataView also preserves
+  // little-endian capture semantics for unaligned slices and host byte orders.
+  for (; index + 3 < bytes.byteLength; index += 4) {
+    const word = view.getUint32(index, true);
+    if ((word & 0x7c00) === 0x7c00 || (word & 0x7c000000) === 0x7c000000)
+      return { ok: false, code: 'capture-readback-non-finite' };
+  }
+  if (index + 1 < bytes.byteLength && (view.getUint16(index, true) & 0x7c00) === 0x7c00)
+    return { ok: false, code: 'capture-readback-non-finite' };
+  return { ok: true };
+}
+
+/**
+ * Receipt delivered after a selected pass-replay raster pass has encoded.
+ * The depth view and target handles are the frame-resolved objects used by
+ * the graph; the numeric texture identity is derived by getTextureIdentity.
+ */
+export interface GraphTargetPassReplayReceipt {
+  readonly passName: string;
+  readonly executionIndex: number;
+  readonly resolvedDepthStencilAttachmentView: TextureView;
+  readonly graphGeneration: number;
+  readonly targetName: string;
+  readonly targetView: TextureView;
+  readonly targetTexture: Texture;
+  readonly targetTextureIdentity: number;
+}
+
+export type GraphTargetPassReplayCallback = (receipt: GraphTargetPassReplayReceipt) => void;
+
+/** Receipt delivered once after a complete selected prefix reaches its boundary pass. */
+export interface GraphTargetPassReplayPrefixReceipt extends GraphTargetPassReplayReceipt {
+  /** The compiled-order prefix that was replayed. */
+  readonly replayPassNames: readonly string[];
+  /** The unique depth-bearing raster pass used as the observation anchor. */
+  readonly depthAttachmentPassName: string;
+  /** The final pass in the selected prefix. */
+  readonly observeAfterPassName: string;
+  readonly depthAttachmentExecutionIndex: number;
+}
+
+export type GraphTargetPassReplayPrefixCallback = (
+  receipt: GraphTargetPassReplayPrefixReceipt,
+) => void;
+
+/** Internal readback request consumed by the record encoder in the same submit. */
+export type GraphTargetCaptureRequest =
+  | {
+      /** The default preserves the original target-copy request shape. */
+      readonly kind?: 'target-copy';
+      readonly name: string;
+      /** Optional one-shot pass selection for internal graph-target diagnostics. */
+      readonly replayPassNames?: readonly string[];
+      readonly buffer: Buffer;
+      readonly bytesPerRow: number;
+      readonly width: number;
+      readonly height: number;
+      /** Descriptor contract checked against the resolved target at copy time. */
+      readonly expected: {
+        readonly format: ResolvedColorTargetDescriptor['format'];
+        readonly width: number;
+        readonly height: number;
+        readonly usage: number;
+        /** Optional caller binding; when present it is checked at copy time. */
+        readonly identity?: {
+          readonly graphGeneration: number;
+          readonly frameId: number;
+          readonly textureIdentity: number;
+        };
+      };
+    }
+  | {
+      /** Execute selected compiled passes without requesting a target copy. */
+      readonly kind: 'pass-replay';
+      readonly replayPassNames: readonly string[];
+      /** Optional graph target used to validate the selected pass attachment. */
+      readonly targetName?: string;
+      /** Optional callback invoked after each selected pass encodes. */
+      readonly onPassEncoded?: GraphTargetPassReplayCallback;
+      /** Optional one-shot callback invoked after the selected prefix boundary encodes. */
+      readonly depthAttachmentPassName?: string;
+      readonly observeAfterPassName?: string;
+      readonly onPrefixEncoded?: GraphTargetPassReplayPrefixCallback;
+    };
+
+/** Renderer-private readback request for the Standard fallback MRT. */
+export interface ReflectionFallbackReadbackRequest {
+  readonly name: string;
+  readonly buffer: Buffer;
+  readonly bytesPerRow: number;
+  readonly width: number;
+  readonly height: number;
+  readonly expected: {
+    readonly format: ResolvedColorTargetDescriptor['format'];
+    readonly width: number;
+    readonly height: number;
+    readonly usage: number;
+    readonly graphGeneration: number;
+    readonly frameId: number;
+    readonly textureIdentity: number;
+  };
+  encoded: boolean;
+}
 /**
  * Build a synthetic CameraSnapshot the record stage uses when the world
  * carries no Camera entity. Identity-shaped projection / view inputs
@@ -122,23 +387,10 @@ export function makeZeroCameraFallbackSnapshot(): CameraSnapshot {
     bloom: 'off',
     bloomThreshold: 1.0,
     bloomIntensity: 1.0,
-    bloomBlurRadius: 4.0,
+    bloomSoftKnee: 0.5,
+    bloomScatter: 0.7,
     clearColor: ZERO_CAMERA_CLEAR_FALLBACK,
   };
-}
-
-// feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t2
-// (D-7): host-clamp the merged DirectionalLight's pcfKernelSize to the nearest
-// valid odd kernel in {1,3,5} before it reaches the View UBO float [128].
-// lighting-directional.wgsl runs a constant-trip-count loop to MAX_PCF_HALF=2
-// (merged 5.3-production-shadow-demos AC-14 variant-free pattern) and clips each
-// iteration to half = (pcfKernelSize-1)/2, so the supported kernel set is
-// {1,3,5} (cap 5). undefined (no shadow fields) defaults to 3.
-export function clampPcfKernelSize(value: number | undefined): number {
-  if (value === undefined) return 3;
-  if (value <= 1) return 1;
-  if (value <= 3) return 3;
-  return 5;
 }
 
 /**
@@ -147,8 +399,9 @@ export function clampPcfKernelSize(value: number | undefined): number {
  * Owned by the `createRenderSystem` closure; advanced once per
  * `recordFrame` invocation. The `instanceBuffers` map holds the per-entity
  * GPU storage buffers for Instances-bearing entities (cache key = the
- * packed Entity u32 surfaced via `InstancesSnapshot.cacheKey`); entries
- * are recreated when the `archVersion` bumps or `byteLength` changes.
+ * renderer-owned collection id, with the packed Entity u32 retained only for
+ * legacy snapshots); entries are recreated when the `archVersion` bumps or
+ * `byteLength` changes.
  *
  * feat-20260518-pbr-direct-lighting-mvp M3 / w14 (AC-17 a): the
  * `warnedZeroLightStandard` flag latches the first-frame warning that
@@ -160,45 +413,221 @@ export function clampPcfKernelSize(value: number | undefined): number {
  */
 export interface RenderFrameState {
   frameNumber: number;
+  /** Renderer-lifetime render-bundle segment reuse tally across scene passes. */
+  renderBundleCounters?: import('./render-bundle-cache').RenderBundleCounters;
+  dynamicResolution?: import('../pipeline/dynamic-resolution').DynamicResolutionController;
+  rayDiffuse?: import('../raytracing/renderer-diffuse').RendererRayDiffuse | undefined;
+  /** Actual Surface commands staged for the renderer-owned submission fence. */
+  surfaceSubmissionObservation:
+    | import('../surface/submission-observation').SurfaceSubmissionCandidate
+    | undefined;
+  /** Exact producer artifacts accepted by the last submitted GPU frame. */
+  recoveryMaterialArtifacts?: ReadonlyMap<string, MaterialShaderArtifact> | undefined;
+  /** Exact ShadowCaster artifacts accepted by the last submitted GPU frame. */
+  recoveryShadowMaterialArtifacts?: ReadonlyMap<string, MaterialShaderArtifact> | undefined;
+  /** Last successful Motion Blur compute execution; failed submits retain the prior receipt. */
+  motionBlurExecution?: MotionBlurExecutionReceipt;
+  /** Final-submit Standard IBL binding-chain receipt for this frame. */
+  iblBindingInspection?: IblBindingInspection;
+  /** Demand for the frame-local Standard fallback MRT. */
+  reflectionFallbackDemand?: boolean;
+  /** Whether the active camera explicitly requested SSR this frame. */
+  ssrRequested?: boolean | undefined;
+  /** Current renderer-owned SSR spatial admission projection. */
+  ssrSpatialAdmission?: SsrSpatialAdmission | undefined;
+  /** Persistent SSR history owner; candidate is promoted only after submit. */
+  ssrHistoryOwner?: SsrHistoryOwner | undefined;
+  ssrHistoryCandidate?: SsrHistoryCandidate | undefined;
+  /** Reused CPU parameter payload for the SSR temporal resolve. */
+  ssrTemporalParamsPayload?: Uint8Array | undefined;
+  /** Last camera identity used by the SSR history reset seam. */
+  ssrLastCameraEntity?: number | undefined;
+  ssrLastHistoryVersion?: number | undefined;
+  /** Monotonic compiled-graph identity used by diagnostic readbacks. */
+  graphGeneration: number;
+  /** Number of successfully submitted TAA frames; failed attempts do not advance it. */
+  successfulTemporalFrameIndex?: number;
+  /** The renderer-owned accepted-submit temporal fact consumed by consumers. */
+  temporalFrame?: TemporalFrame | undefined;
+  /** The sole transaction that advances temporal history after queue.submit. */
+  readonly temporalFrameTransaction: TemporalFrameTransaction;
+  /** Staged input is consumed only by the graph submit owner. */
+  temporalFrameInput: TemporalFrameInput | undefined;
   /** Optional graph resource lookup used by low-level record helpers and tests. */
-  readonly perFrameGraph?: {
+  perFrameGraph?: {
     readonly getColorTargetDescriptor: (key: string) => ResolvedColorTargetDescriptor | undefined;
     readonly getColorTargetView: (key: string) => TextureView | undefined;
     readonly getColorTargetTexture: (key: string) => Texture | undefined;
+    readonly graphGeneration: number;
   } | null;
+  graphTargetCapture?: GraphTargetCaptureRequest | undefined;
+  /** One-frame producer-owned copy target for fallback MRT readback. */
+  reflectionFallbackReadback?: ReflectionFallbackReadbackRequest | undefined;
   /** Last successfully rendered static directional shadow atlas token. */
   directionalShadowCache: DirectionalShadowCache | null;
+  /** Last successfully submitted camera post-process mode. */
+  lastSuccessfulBloom: 'off' | 'on';
+  /** Bloom record receipts staged by this frame; cleared on abort. */
+  bloomFrameReceipts?: BloomFrameReceipts | undefined;
   /** Set by a directional shadow pass when this frame refreshed the atlas. */
   directionalShadowCacheRecorded: boolean;
+  /** Shadow view hit/miss decisions and draw counts of the staged and last submitted frame. */
+  readonly shadowRaster: ShadowRasterLedger;
   /** The sole compiled owner for compute, copy, feature, and raster work. */
   compiledFrameGraph: CompiledRenderGraph<RenderPipelineFrame> | null;
   compiledFrameGraphTopologyKey: string | null;
+  /** Monotonic generation of successfully promoted compiled graphs. */
+  compiledFrameGraphGeneration: number;
+  /** One candidate owns all graph facts until the frame submits or rolls back. */
+  compiledFrameGraphCandidate?:
+    | {
+        readonly graph: CompiledRenderGraph<RenderPipelineFrame>;
+        readonly previous: {
+          readonly graph: CompiledRenderGraph<RenderPipelineFrame> | null;
+          readonly key: string | null;
+          readonly perFrameGraph: RenderFrameState['perFrameGraph'];
+          readonly graphGeneration: number;
+          readonly compiledGeneration: number;
+          readonly lightingSignature: string;
+        };
+      }
+    | undefined;
+  /** DoF graph/params detached at the same successful-submit boundary. */
+  depthOfFieldAccepted?:
+    | {
+        readonly params: DepthOfFieldParams;
+        readonly graph: CompiledRenderGraphInfo;
+        readonly deviceGeneration: number;
+      }
+    | undefined;
+  /** A DoF candidate was present when the frame failed to submit. */
+  depthOfFieldLastSubmitFailed?: boolean | undefined;
+  /** Two renderer-owned parameter slots; only the pending slot is writable. */
+  volumetricFogParamsBuffers: [Buffer | null, Buffer | null];
+  /** Candidate parameter slot, promoted only after queue submission succeeds. */
+  volumetricFogParamsPendingSlot: 0 | 1 | null;
+  /** Parameter slot consumed by the last accepted volume frame. */
+  volumetricFogParamsAcceptedSlot: 0 | 1 | null;
+  /** CPU copy of the accepted parameter payload for degraded-frame staging. */
+  volumetricFogAcceptedParams: Float32Array | undefined;
+  /** CPU copy of the current candidate payload before submit. */
+  volumetricFogPendingParams: Float32Array | undefined;
+  /** Last candidate/accepted volume projection exposed through inspect(). */
+  volumetricFogInspection: VolumetricFogInspection;
+  /** Accepted volume POD/context retained while a later candidate degrades. */
+  volumetricFogAccepted: import('../render-system-extract').ExtractedVolumetricFog | undefined;
+  volumetricFogAcceptedContext: VolumetricFogFrameContext | undefined;
+  /** Accepted graph identity and ping-pong slot for temporal volume history. */
+  volumetricFogHistoryGraph: CompiledRenderGraph<RenderPipelineFrame> | null;
+  volumetricFogHistorySlot: 0 | 1 | null;
+  volumetricFogHistorySignature: VolumeTemporalSignature | null;
   readonly retiredCompiledFrameGraphs: Set<CompiledRenderGraph<RenderPipelineFrame>>;
   /** Physical outputs projected by typed graph passes for downstream observers. */
   currentFrameObservationSource: FrameObservationSource | undefined;
+  /** Completed-frame source for the producer-owned fallback MRT. */
+  reflectionFallbackObservationSource?: FrameObservationSource | undefined;
+  /** Completion fence for the producer-owned fallback row/readback promotion. */
+  reflectionFallbackCompletion?: Promise<void> | undefined;
+  /** Camera antialias mode for the last successfully submitted graph. */
+  lastSuccessfulCameraAntialias: CameraSnapshot['antialias'] | undefined;
+  /** Last accepted output-space barrel mapping, promoted with the picture. */
+  lastSuccessfulBarrelDistortion: BarrelDistortionMapping | undefined;
+  /** Whether the current frame graph was retained from an accepted LKG. */
+  barrelDistortionGraphResolution?: 'accepted' | 'retained';
+  /** Staged TAA GPU state is promoted only after queue.submit succeeds. */
+  temporalGpuState: TemporalGpuState | undefined;
+  /** Device-scoped auto-exposure buffers imported by the Standard graph. */
+  autoExposureGpuResources?: AutoExposureGpuResources | undefined;
+  /** Candidate auto-exposure buffers; promoted only after queue.submit succeeds. */
+  pendingAutoExposureGpuResources?: AutoExposureGpuResources | undefined;
+  /** Accepted auto-exposure inspection state; promoted only after submit. */
+  autoExposureState?: AutoExposureState | undefined;
+  /** Candidate auto-exposure inspection state; cleared on any failed frame. */
+  pendingAutoExposureState?: PendingAutoExposureState | undefined;
+  /** Prepared ordinary TextureAsset LUT candidate for the Standard graph. */
+  standardLutGpuResources?: StandardLutGpuResources | undefined;
+  /** Candidate LUT resources; promoted only after queue.submit succeeds. */
+  pendingStandardLutGpuResources?: StandardLutGpuResources | undefined;
+  /** Accepted LUT inspection state; promoted only after submit. */
+  standardLutState: StandardLutState;
+  /** Candidate LUT inspection state; cleared on any failed frame. */
+  pendingStandardLutState?: PendingStandardLutState | undefined;
+  /** Last successful TAA GPU state; candidate replacement stays staged until submit. */
+  activeTemporalGpuState: TemporalGpuState | undefined;
+  /** Submitted temporal generations retained until their queue fence resolves. */
+  readonly retiringTemporalGpuStates: Set<TemporalGpuState>;
+  /** The accepted graph currently owns CloudLayer ping-pong history. */
+  cloudHistoryActive?: boolean;
+  /** Candidate CloudLayer history ownership, promoted only after submit. */
+  pendingCloudHistoryActive?: boolean;
+  /** Last successful projection; candidate frames never overwrite it. */
+  lastSuccessfulTemporalView: TemporalView | undefined;
+  pendingTemporalCommit: TemporalCommitOutcome;
+  /** Staged environment generation is promoted only after queue.submit succeeds. */
+  environmentGeneration: EnvironmentGeneration | undefined;
+  environmentFrame?: import('../environment/frame').SelectedEnvironmentFrame | undefined;
+  pendingAtmospherePublish?: (() => void) | undefined;
+  readonly environmentLifecycle: EnvironmentLifecycle | undefined;
   currentDirectionalShadowView: TextureView | null;
   currentSpotShadowView: TextureView | null;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
+  /** Renderer-private World projection receiving record-stage residency facts. */
+  readonly instanceCollections?: InstanceProjectionStore;
+  /** Stable buffers for renderer-owned collections split by device cap. */
+  readonly instanceBufferChunks?: Map<string, InstanceBufferCacheEntry>;
+  /** Per-object ProbeBlendRecord buffers; upload is one atomic 160B write. */
+  readonly probeBlendBuffers: Map<number, ProbeBlendBufferCacheEntry>;
+  /** One renderer-owned record array; each object selects its 256B-aligned lane. */
+  probeBlendRecordBuffer?: GpuBuffer;
+  probeBlendRecordBufferCapacity: number;
+  /** Last producer revision fully uploaded to the current device buffer. */
+  probeBlendRecordProjection?: {
+    readonly projection: import('../scene/probe-blend').ProbeBlendBufferProjection;
+    readonly device: RhiDevice;
+    readonly buffer: GpuBuffer | undefined;
+  };
   /** Per-entity vertex buffers for the Standard CPU morph lane. */
   readonly morphBuffers?: Map<number, MorphBufferCacheEntry>;
   readonly hdrpClusterBinScratch: ClusterBinScratch;
   /** Reusable HDRP cluster output buffers; sized once and grown only if the grid/cap changes. */
   hdrpClusterGridScratch: Uint32Array | null;
   hdrpLightIndexListScratch: Uint32Array | null;
-  /** Compute bind group for the optional WebGPU HDRP membership producer. */
-  hdrpClusterMembershipBindGroup: BindGroup | null;
+  /** Device-owned membership binding; layout and device must match the active pipeline. */
+  hdrpClusterMembership: {
+    readonly device: RhiDevice;
+    readonly layout: BindGroupLayout;
+    readonly bindGroup: BindGroup;
+    /** Cluster buffer identity keeps this group aligned with grown bundles. */
+    readonly clusterGridBuffer: Buffer;
+  } | null;
+  /**
+   * Signature of the Standard lighting declaration accepted by the compiled
+   * graph. Payload uploads and membership bindings must match this signature;
+   * a failed candidate never changes it.
+   */
+  standardLightingGraphSignature: string;
+  /** Last prepared Standard transport facts projected for Renderer.inspect(). */
+  standardLightingInspection?: StandardLightingInspection | undefined;
+  /** Last submitted point-shadow atlas budget projection. */
+  pointShadowInspection?: PointShadowInspection | undefined;
+  /** Last submitted capsule-shadow admission projection. */
+  /** Capsule tile binning of the display view in the current frame. */
+  capsuleShadowSubmission?:
+    | import('../capsule-shadow/inspection').CapsuleShadowSubmission
+    | undefined;
+  capsuleShadowInspection?:
+    | import('../capsule-shadow/inspection').CapsuleShadowInspection
+    | undefined;
+  /** Last submitted display-view transparency resolution. */
+  transparencyInspection?: import('../oit/view').TransparencyInspection | undefined;
   transientInstanceBuffers: InstanceBufferCacheEntry[];
   warnedZeroLightStandard: boolean;
   /**
-   * feax-20260608-multi-light-warn-once M3: once-warn latch for multi-light
-   * overrun per bucket (directional N>1 / point N>4 / spot N>4). Fires at
-   * most once per RenderSystem lifetime per bucket so AI users see a single
-   * actionable console.warn without per-frame flooding (charter P3 explicit
-   * failure: warn-once preserves signal/noise floor).
+   * feat-20260608-multi-light-warn-once M3: once-warn latch for the
+   * single-directional authoring constraint. Standard local lights use the
+   * unified Cluster budget; there is no per-kind local-light cap.
    */
   warnedMultiLightDirectional: boolean;
-  warnedMultiLightPoint: boolean;
-  warnedMultiLightSpot: boolean;
   /**
    * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w19:
    * once-warn latches for >1 Skylight / >1 SkyboxBackground entity. Fire at most
@@ -303,14 +732,8 @@ export interface RenderFrameState {
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
   /** Cross-frame fast path for fully-resident, immutable material snapshots. */
   readonly materialBgAssemblyCache: Map<string, MaterialBgAssemblyCacheEntry>;
-  /**
-   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: singleton
-   * material bind group cache (D-6). Single flat Map<variant, BindGroup>
-   * for the one true singleton in production: shadow-material-singleton.
-   * shadow-instances-singleton is a test fixture fiction (research F3);
-   * no second singleton field is needed.
-   */
-  readonly singletonMaterialCache: Map<string, BindGroup>;
+  /** Opaque shadow fallback bindings follow physical resources across scene replacement. */
+  shadowMaterialBindGroups: WeakMap<object, unknown>;
   /**
    * Post-process bind group cache: nested WeakMap chain root shared by the
    * built-in bloom (bright / blur-H / blur-V / composite), FXAA, and HDRP SSAO
@@ -342,20 +765,13 @@ export interface RenderFrameState {
    */
   installedPipelineConfig: RenderPipelineAsset['config'];
   /**
-   * feat-20260608-cluster-lighting M2 / w10: HDRP active flag.
-   * True iff the currently installed RenderPipelineAsset has
-   * `pipelineId === 'forgeax::hdrp'`. URP-only code paths gate on
-   * `!isHdrpActive` so HDRP demos do not double-count light contributions.
-   */
-  isHdrpActive: boolean;
-  /**
    * feat-20260608-cluster-lighting M5 / w20 + M6 / w23 + M5 / w22:
-   * once-per-frame fire dedup set for HDRP per-frame fail-soft errors
-   * (`hdrp-light-budget-exceeded`, `hdrp-index-list-overflow`). Cleared
+   * once-per-frame fire dedup set for Standard per-frame fail-soft errors
+   * (`standard-light-budget-exceeded`, `standard-cluster-index-overflow`). Cleared
    * at the end of each frame so the next frame re-fires if the condition
    * persists. Set<string> keyed by RuntimeErrorCode literal.
    */
-  hdrpOncePerFrameFired: Set<string>;
+  standardOncePerFrameFired: Set<string>;
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-2 (plan-strategy §D-1).
    * Lazily-allocated cube_array shadow atlas owned by the RenderSystem
@@ -433,6 +849,16 @@ export interface BindGroupCounts {
 }
 
 /**
+ * Successful Bloom record operations staged for the current frame. These
+ * counters are promoted only after the shared renderer queue submission.
+ */
+export interface BloomFrameReceipts {
+  readonly uploadCount: number;
+  readonly bindGroupCount: number;
+  readonly encodeCount: number;
+}
+
+/**
  * A renderable resolved against the AssetRegistry for the current frame:
  * its source snapshot, the GPU mesh handles, the row index used to correlate
  * transparent-sort output back to this entry, and an optional per-material
@@ -442,8 +868,8 @@ export interface BindGroupCounts {
  */
 export interface ValidatedRenderable {
   readonly source: RenderableSnapshot;
-  /** World that owns the renderable's asset handles and material snapshots. */
-  readonly world?: World;
+  /** RenderResourceScope that owns the renderable's asset handles and material snapshots. */
+  readonly world?: RenderResourceScope;
   readonly mesh: MeshGpuHandles;
   readonly renderableIndex: number;
   readonly renderState: MaterialRenderState | undefined;
@@ -469,32 +895,36 @@ export interface ValidatedRenderable {
  * token beside the other RenderFrameState caches lets recordFrame skip a
  * static caster submission without teaching the public render-pipeline
  * contract about caching. Every source that can change caster depth is part
- * of the token: world mutation, asset catalogue, graph/target identity, CSM
- * matrices, and the GPU mesh-residency epoch.
+ * of the token: world mutation or persistent caster content, asset
+ * catalogue, graph/target identity, CSM matrices, and the GPU mesh-residency
+ * epoch.
  *
  * @internal
  */
 export interface DirectionalShadowCache {
-  readonly worlds: readonly World[];
+  readonly worlds: readonly RenderResourceScope[];
   readonly worldStateTokens: readonly DirectionalShadowWorldState[];
   readonly assetCatalogEpoch: number;
   readonly pipelineHandle: number;
   readonly graphTopologyKey: string | null;
   readonly shadowMapSize: number;
   readonly cascadeCount: number;
+  readonly directionalShadowQuality: DirectionalShadowQuality;
   readonly lightViewProj: readonly Float32Array[];
   readonly meshResidencyEpoch: number;
+  /** Persistent caster evidence; absent when the frame had no persistent scene. */
+  readonly casterContent: PersistentShadowCasterProjection['content'] | undefined;
 }
 
 /**
  * ECS state that can change the contents of a directional shadow map.
  *
  * The ECS-owned RenderReadLease is the only render-facing mutation boundary.
- * Its cursor is intentionally conservative: any published World change
- * invalidates the cached atlas, while render never reaches through World for
+ * Its version is intentionally conservative: any published RenderResourceScope change
+ * invalidates the cached atlas, while render never reaches through RenderResourceScope for
  * component-clock storage.
  */
 export interface DirectionalShadowWorldState {
   readonly worldIdentity: string;
-  readonly changeCursor: number;
+  readonly version: RenderReadVersion;
 }

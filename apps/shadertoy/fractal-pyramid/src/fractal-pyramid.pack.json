@@ -16,6 +16,13 @@
               "module": "shadertoy::fractal_pyramid",
               "vertexEntry": "vs_main",
               "fragmentEntry": "fs_main"
+            },
+            "renderState": {
+              "cullMode": "none",
+              "depthCompare": "always",
+              "depthWriteEnabled": false,
+              "tags": { "LightMode": "Forward" },
+              "queue": 2000
             }
           }
         ],

@@ -29,7 +29,9 @@
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@forgeax/engine-vfx-compiler": "workspace:*"
+  },
   "forgeax": {
     "metrics": {
       "bundle-size": {

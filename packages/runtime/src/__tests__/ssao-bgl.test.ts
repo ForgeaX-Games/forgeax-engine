@@ -39,6 +39,7 @@ import {
   getOrCreateSsaoFallbackTexture,
   packClusterUniform,
 } from '../../../render/src/hdrp-buffers';
+import { BYTES_PER_DIRECT_LIGHT_SLOT } from '../../../render/src/light-buffer-layout';
 import { createHdrpBindGroupLayoutDescriptor } from '../../../render/src/pipeline-spec';
 import type { RenderSystemRuntime } from '../../../render/src/render-system';
 
@@ -131,9 +132,9 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
 
 function fakeHdrpBuffers(): HdrpBuffers {
   return {
-    storageBuffer: true,
+    device: {} as HdrpBuffers['device'],
     lightDataBuffer: mockBuffer('hdrp-light-data'),
-    lightDataBytes: 16384,
+    lightDataBytes: 256 * BYTES_PER_DIRECT_LIGHT_SLOT,
     clusterGridBuffer: mockBuffer('hdrp-cluster-grid'),
     clusterGridBytes: 1024,
     lightIndexListBuffer: mockBuffer('hdrp-light-index-list'),
@@ -150,15 +151,9 @@ function fakeHdrpBuffers(): HdrpBuffers {
 }
 
 describe('HDRP GPU membership producer bind-group contract', () => {
-  it('preserves the 256-light storage count while keeping the 128-light uniform default', () => {
-    const uniformPayload = new Uint32Array(
-      packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 0, 256),
-    );
-    const storagePayload = new Uint32Array(
-      packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 0, 256, 256),
-    );
-    expect(uniformPayload[3]).toBe(128);
-    expect(storagePayload[3]).toBe(256);
+  it('preserves the full 256-light Standard count in the cluster UBO', () => {
+    const payload = new Uint32Array(packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 0, 256));
+    expect(payload[3]).toBe(256);
   });
 
   it('keeps enabled SSAO intensity in the zero-punctual-light uniform path', () => {
@@ -209,12 +204,12 @@ describe('HDRP GPU membership producer bind-group contract', () => {
 
 describe('w28 — HDRP unified BGL SSAO entries (binding 7/8)', () => {
   it('descriptor entries.length === 7 (5 cluster + 2 ssao)', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     expect(desc.entries?.length).toBe(7);
   });
 
   it('binding 7 is texture_2d<f32> with FRAGMENT visibility (ssaoBlurred)', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     const b7 = desc.entries?.find((e) => e.binding === 7);
     expect(b7).toBeDefined();
     expect(b7?.visibility).toBe(FRAGMENT_VISIBILITY);
@@ -223,7 +218,7 @@ describe('w28 — HDRP unified BGL SSAO entries (binding 7/8)', () => {
   });
 
   it('binding 8 is sampler with FRAGMENT visibility (ssaoSampler)', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     const b8 = desc.entries?.find((e) => e.binding === 8);
     expect(b8).toBeDefined();
     expect(b8?.visibility).toBe(FRAGMENT_VISIBILITY);
@@ -231,13 +226,13 @@ describe('w28 — HDRP unified BGL SSAO entries (binding 7/8)', () => {
   });
 
   it('binding 9 is absent (scope-amend-webgl2-ubo: intensity folded into binding 6)', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     const bindings = desc.entries?.map((e) => e.binding) ?? [];
     expect(bindings).not.toContain(9);
   });
 
   it('existing bindings 0/3/4/5/6 remain unchanged', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     const b0 = desc.entries?.find((e) => e.binding === 0);
     expect(b0?.buffer?.hasDynamicOffset).toBe(true);
     for (const b of [3, 4, 5, 6]) {
@@ -247,7 +242,7 @@ describe('w28 — HDRP unified BGL SSAO entries (binding 7/8)', () => {
   });
 
   it('all bindings exactly { 0, 3, 4, 5, 6, 7, 8 }', () => {
-    const desc = createHdrpBindGroupLayoutDescriptor(true);
+    const desc = createHdrpBindGroupLayoutDescriptor();
     const bindings = new Set(desc.entries?.map((e) => e.binding));
     expect(bindings).toEqual(new Set([0, 3, 4, 5, 6, 7, 8]));
   });

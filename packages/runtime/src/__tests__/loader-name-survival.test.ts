@@ -77,11 +77,10 @@ function makeSharedPack(): unknown {
 
 const TEX_METADATA = {
   kind: 'texture',
-  width: 1,
-  height: 1,
+  shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
   format: 'rgba8unorm',
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 
 // `includeNames=false` is the FALSIFY variant (entry.name stripped).

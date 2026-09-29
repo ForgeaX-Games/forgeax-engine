@@ -2,10 +2,10 @@
 
 // @forgeax/engine-shader - atmosphere-cubemap.wgsl
 //
-// The sole production caller of preetham_sky_radiance. Background and IBL
+// The sole production caller of daylight_sky_radiance. Background and IBL
 // consumers sample this generated cube; neither owns another evaluator.
 
-#import forgeax_environment::preetham::{preetham_sky_radiance}
+#import forgeax_environment::daylight::{daylight_sky_radiance}
 
 struct AtmosphereCubeParams {
   sunDirection: vec3<f32>,
@@ -18,7 +18,8 @@ struct AtmosphereCubeParams {
   mieDirectionalG: f32,
   sunAngularRadius: f32,
   sunDiscEnabled: f32,
-  _tailPad: vec2<f32>,
+  circumsolarStrength: f32,
+  circumsolarWidth: f32,
 };
 
 struct AtmosphereCubeVsIn {
@@ -58,7 +59,7 @@ fn atmosphere_cubemap_vs(input: AtmosphereCubeVsIn) -> AtmosphereCubeVsOut {
 
 @fragment
 fn atmosphere_cubemap_fs(input: AtmosphereCubeVsOut) -> @location(0) vec4<f32> {
-  let radiance = preetham_sky_radiance(
+  let radiance = daylight_sky_radiance(
     normalize(input.direction),
     atmosphere.sunDirection,
     atmosphere.sunColor,
@@ -67,6 +68,8 @@ fn atmosphere_cubemap_fs(input: AtmosphereCubeVsOut) -> @location(0) vec4<f32> {
     atmosphere.rayleigh,
     atmosphere.mieCoefficient,
     atmosphere.mieDirectionalG,
+    atmosphere.circumsolarStrength,
+    atmosphere.circumsolarWidth,
   );
   return vec4<f32>(radiance, 1.0);
 }

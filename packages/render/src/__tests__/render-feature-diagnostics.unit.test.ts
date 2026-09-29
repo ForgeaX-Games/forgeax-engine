@@ -2,8 +2,9 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = (compute: boolean): Readonly<RhiCaps> => ({ compute }) as unknown as RhiCaps;
 
@@ -12,7 +13,22 @@ function gatedFeature(): RenderFeature<{ readonly frame: number }> {
     identity: 'synthetic.gated',
     requiredCapabilities: ['compute'],
     extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-    plan: () => ok({ resources: [], passes: [] }),
+    plan: () =>
+      ok({
+        work: [
+          {
+            scope: { view: 'main' },
+            resources: [
+              {
+                kind: 'fullscreen-program' as const,
+                name: 'synthetic.gated.program',
+                source: 'synthetic',
+              },
+            ],
+            passes: [],
+          },
+        ],
+      }),
   };
 }
 
@@ -64,7 +80,7 @@ describe('render feature diagnostics and capability gate', () => {
       error: { code: 'render-feature-registration-conflict' },
     });
     expect(
-      runRenderFeatureFrame(host, {
+      runSingleViewFeatureFrame(host, {
         worlds: [],
         owner: 0,
         frameNumber: 1,
@@ -75,19 +91,22 @@ describe('render feature diagnostics and capability gate', () => {
 
   it('disables without a capability and re-enables only after recover re-evaluation', () => {
     const host = createRenderFeatureHost([gatedFeature()], caps(false)).unwrap();
-    const first = runRenderFeatureFrame(host, {
+    const first = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
       caps: caps(false),
     });
 
-    expect(first.stageEvents).toEqual([]);
+    expect(first.stageEvents).toEqual([
+      { featureIdentity: 'synthetic.gated', order: 0, stage: 'extract' },
+      { featureIdentity: 'synthetic.gated', order: 0, stage: 'plan' },
+    ]);
     expect(first.errors).toHaveLength(1);
     expect(first.errors[0]?.code).toBe('render-feature-capability-missing');
     expect(host.diagnostics()[0]?.status).toBe('disabled');
 
-    const stillDisabled = runRenderFeatureFrame(host, {
+    const stillDisabled = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 2,
@@ -98,7 +117,7 @@ describe('render feature diagnostics and capability gate', () => {
     expect(host.recover({ frameNumber: 3, caps: caps(true) })).toEqual(ok(undefined));
     expect(host.diagnostics()[0]?.status).toBe('active');
     expect(
-      runRenderFeatureFrame(host, {
+      runSingleViewFeatureFrame(host, {
         worlds: [],
         owner: 0,
         frameNumber: 3,
@@ -118,12 +137,12 @@ describe('render feature diagnostics and capability gate', () => {
             new RenderFeatureStageFailedError('synthetic.latest-error', 0, 'plan', 'next-frame'),
           );
         }
-        return ok({ resources: [], passes: [] });
+        return ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
       },
     };
     const host = createRenderFeatureHost([feature], caps(true)).unwrap();
 
-    runRenderFeatureFrame(host, {
+    runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
@@ -137,7 +156,7 @@ describe('render feature diagnostics and capability gate', () => {
     expect(Object.isFrozen(failed[0]?.latestError?.detail)).toBe(true);
 
     shouldFail = false;
-    runRenderFeatureFrame(host, {
+    runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 2,

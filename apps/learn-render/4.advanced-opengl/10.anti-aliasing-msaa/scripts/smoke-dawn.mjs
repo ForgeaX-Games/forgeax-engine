@@ -51,6 +51,9 @@ const TOTAL_PIXELS = WIDTH * HEIGHT;
 const DIFF_THRESHOLD = Math.floor(TOTAL_PIXELS * 0.001);
 
 const FALSIFY = process.env.FALSIFY ?? '';
+const requestedSmokeFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
+const SMOKE_MIN_FRAMES =
+  Number.isInteger(requestedSmokeFrames) && requestedSmokeFrames > 0 ? requestedSmokeFrames : 60;
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -315,6 +318,35 @@ const antialiasForPass2 =
   FALSIFY === 'msaa-noop' ? ANTIALIAS_NONE : ANTIALIAS_MSAA;
 const falsifyLabel = FALSIFY === 'msaa-noop' ? ' (FALSIFY=msaa-noop)' : '';
 
+let framesObserved = 0;
+
+async function renderPass(world, lease, label) {
+  for (let frame = 0; frame < SMOKE_MIN_FRAMES; frame += 1) {
+    world.update(1 / 60).unwrap();
+    const drawn = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawn.ok) {
+      console.error(`[smoke] FAIL - draw (${label}) frame=${frame} failed: ${drawn.error.code}`);
+      return false;
+    }
+    const completed = await drawn.value.completed;
+    if (!completed.ok) {
+      console.error(
+        `[smoke] FAIL - draw (${label}) frame=${frame} completion failed: ${completed.error.code}`,
+      );
+      return false;
+    }
+    // Count only a draw whose FrameReceipt completion succeeded. This is the
+    // observed work count used by the smoke gate, rather than a loop target.
+    framesObserved += 1;
+  }
+  await device.queue.onSubmittedWorkDone();
+  return true;
+}
+
 // Pass 1: ANTIALIAS_NONE baseline.
 const worldNone = new World();
 const worldAttachment1 = renderer.attach(worldNone);
@@ -322,22 +354,11 @@ if (!worldAttachment1.ok) throw worldAttachment1.error;
 const leaseNone = worldAttachment1.value;
 spawnScene(worldNone, ANTIALIAS_NONE);
 
-worldNone.update().unwrap();
-const drawNoneRes = renderer.draw({
-  leases: [leaseNone],
-  camera: { lease: leaseNone },
-  environment: { lease: leaseNone },
-});
-if (!drawNoneRes.ok) {
-  console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
+const noneRendered = await renderPass(worldNone, leaseNone, 'none');
+if (!noneRendered) {
+  console.log(`[smoke] frames observed=${framesObserved}`);
   process.exit(1);
 }
-const completedNone = await drawNoneRes.value.completed;
-if (!completedNone.ok) {
-  console.error(`[smoke] FAIL - draw (none) completion failed: ${completedNone.error.code}`);
-  process.exit(1);
-}
-await device.queue.onSubmittedWorkDone();
 const pixelsNone = await doReadPixels();
 
 // Pass 2: ANTIALIAS_MSAA (or ANTIALIAS_NONE under FALSIFY).
@@ -347,27 +368,22 @@ if (!worldAttachment2.ok) throw worldAttachment2.error;
 const leaseMsaa = worldAttachment2.value;
 spawnScene(worldMsaa, antialiasForPass2);
 
-worldMsaa.update().unwrap();
-const drawMsaaRes = renderer.draw({
-  leases: [leaseMsaa],
-  camera: { lease: leaseMsaa },
-  environment: { lease: leaseMsaa },
-});
-if (!drawMsaaRes.ok) {
-  console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) failed: ${drawMsaaRes.error.code}`);
+const msaaRendered = await renderPass(worldMsaa, leaseMsaa, `msaa${falsifyLabel}`);
+if (!msaaRendered) {
+  console.log(`[smoke] frames observed=${framesObserved}`);
   process.exit(1);
 }
-const completedMsaa = await drawMsaaRes.value.completed;
-if (!completedMsaa.ok) {
-  console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) completion failed: ${completedMsaa.error.code}`);
-  process.exit(1);
-}
-await device.queue.onSubmittedWorkDone();
 const pixelsMsaa = await doReadPixels();
 
 // --- 8. Verdict ------------------------------------------------------------
 
 const failures = [];
+
+if (framesObserved < SMOKE_MIN_FRAMES * 2) {
+  failures.push(
+    `(0) successful FrameReceipt completions=${framesObserved} < required ${SMOKE_MIN_FRAMES * 2}`,
+  );
+}
 
 // (a) Backend must be webgpu.
 if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
@@ -425,6 +441,8 @@ for (let i = 0; i < pixelsNone.length; i += 4) {
 }
 
 const diffPct = ((diffCount / TOTAL_PIXELS) * 100).toFixed(4);
+const framesObservedPerPass = Math.floor(framesObserved / 2);
+console.log(`[smoke] frames observed=${framesObservedPerPass}`);
 console.log(
   `[smoke] dualPassDiff=${JSON.stringify({
     diffCount,
@@ -487,7 +505,17 @@ if (failures.length > 0) {
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, RhiError count=${errors.length}, ` +
     `nonBlackNone=${nonBlackNone}, nonBlackMsaa=${nonBlackMsaa}, ` +
-    `dualPassDiff=${diffCount} > threshold=${DIFF_THRESHOLD} (${diffPct}%)`,
+    `dualPassDiff=${diffCount} > threshold=${DIFF_THRESHOLD} (${diffPct}%), frames=${framesObservedPerPass}`,
+);
+console.log(`[smoke] frames observed=${framesObservedPerPass}`);
+console.log(
+  `[forgeax-smoke-receipt] ${JSON.stringify({
+    schemaVersion: 1,
+    gateId: 'app-learn-render-4-advanced-opengl-10-anti-aliasing-msaa/smoke',
+    commandId: 'smoke',
+    framesObserved: framesObservedPerPass,
+    completed: true,
+  })}`,
 );
 
 device.destroy?.();

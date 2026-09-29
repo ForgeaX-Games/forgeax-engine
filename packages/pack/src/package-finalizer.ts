@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AssetCodec, AssetRelation, CookReceipt } from '@forgeax/engine-types';
+import type { AssetCodec, CookReceipt } from '@forgeax/engine-types';
 
 export interface PackageArtifactBody {
   readonly mediaType: string;
@@ -24,25 +24,6 @@ export interface PackageProduct {
   readonly sourceKey?: string;
 }
 
-/** Minimal authored Pack v1/v2 shape consumed by the file transport seam. */
-export interface AuthoredPackAssetInput {
-  readonly guid: string;
-  readonly kind: string;
-  readonly name?: string;
-  readonly execution?: 'direct' | 'cooked';
-  readonly sourceKey?: string;
-  readonly sourceIndex?: number;
-  readonly relations?: readonly AssetRelation[];
-  readonly payload: Record<string, unknown>;
-  readonly refs?: readonly string[];
-  readonly artifacts?: Readonly<Record<string, unknown>>;
-}
-
-export interface AuthoredPackInput {
-  readonly schemaVersion?: string;
-  readonly assets?: readonly AuthoredPackAssetInput[];
-}
-
 export interface PackageDocumentArtifact {
   readonly path: string;
   readonly mediaType: string;
@@ -64,69 +45,6 @@ export interface PackageDocument {
   readonly schemaVersion: '2.0.0';
   readonly kind: 'internal-text-package';
   readonly assets: readonly PackageDocumentAsset[];
-}
-
-function legacyMaterialPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  if (payload.kind !== 'material') return payload;
-
-  const { paramValues, passes, ...currentPayload } = payload;
-  return {
-    ...currentPayload,
-    ...(currentPayload.values === undefined && paramValues !== undefined
-      ? { values: paramValues }
-      : {}),
-    ...(Array.isArray(passes)
-      ? {
-          passes: passes.map((candidate) => {
-            if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate))
-              return candidate;
-            const pass = candidate as Record<string, unknown>;
-            const { shader, tags, queue, ...currentPass } = pass;
-            const legacyRenderState = {
-              ...(typeof currentPass.renderState === 'object' &&
-              currentPass.renderState !== null &&
-              !Array.isArray(currentPass.renderState)
-                ? (currentPass.renderState as Record<string, unknown>)
-                : {}),
-              ...(tags === undefined ? {} : { tags }),
-              ...(queue === undefined ? {} : { queue }),
-            };
-            return {
-              ...currentPass,
-              ...(currentPass.program === undefined && typeof shader === 'string'
-                ? { program: { module: shader } }
-                : {}),
-              ...(Object.keys(legacyRenderState).length === 0
-                ? {}
-                : { renderState: legacyRenderState }),
-            };
-          }),
-        }
-      : {}),
-  };
-}
-
-/** Upgrade the legacy authored Pack envelope at the Pack schema boundary. */
-export function upgradeLegacyAuthoredPack(pack: AuthoredPackInput): AuthoredPackInput {
-  if (pack.schemaVersion !== '1.0.0' || pack.assets === undefined) return pack;
-  return {
-    ...pack,
-    schemaVersion: '2.0.0',
-    assets: pack.assets.map((asset) => {
-      const fontRefs =
-        asset.kind === 'font'
-          ? [asset.payload.atlasGuid, asset.payload.samplerGuid].filter(
-              (guid): guid is string => typeof guid === 'string',
-            )
-          : [];
-      return {
-        ...asset,
-        payload: legacyMaterialPayload(asset.payload),
-        refs: asset.refs ?? fontRefs,
-        artifacts: asset.artifacts ?? {},
-      };
-    }),
-  };
 }
 
 export interface PackageFinalizePolicy {
@@ -242,6 +160,7 @@ function digest(assets: readonly PackageProductAsset[]): string {
 function packageDocument(
   assets: readonly PackageProductAsset[],
   artifactPath: (guid: string, localKey: string) => string,
+  digestBytes: (bytes: Uint8Array) => string,
 ): PackageDocument {
   return {
     schemaVersion: '2.0.0',
@@ -263,7 +182,7 @@ function packageDocument(
             byteLength: artifact.bytes.byteLength,
             integrity: {
               algorithm: 'sha256' as const,
-              digest: `sha256:${createHash('sha256').update(artifact.bytes).digest('hex')}`,
+              digest: `sha256:${digestBytes(artifact.bytes)}`,
             },
           },
         ]),
@@ -294,6 +213,14 @@ function transportArtifacts(
 export async function finalizePackageProduct(
   product: PackageProduct,
   policy: PackageFinalizePolicy,
+): Promise<PackageFinalizeResult> {
+  return finalizeProduct(product, policy, sha256);
+}
+
+async function finalizeProduct(
+  product: PackageProduct,
+  policy: PackageFinalizePolicy,
+  digestBytes: (bytes: Uint8Array) => string,
 ): Promise<PackageFinalizeResult> {
   if (product.sourceRevision.trim().length === 0) {
     return failure(
@@ -337,9 +264,9 @@ export async function finalizePackageProduct(
     }
   }
   const assets = [...product.assets].sort((left, right) => left.guid.localeCompare(right.guid));
-  const document = packageDocument(assets, policy.artifactPath);
-  const packageBytes = new TextEncoder().encode(JSON.stringify(sorted(document)));
+  const document = packageDocument(assets, policy.artifactPath, digestBytes);
   if (policy.sink !== undefined) {
+    const packageBytes = new TextEncoder().encode(JSON.stringify(sorted(document)));
     for (const asset of assets) {
       for (const [key, artifact] of Object.entries(asset.artifacts)) {
         const path = policy.artifactPath(asset.guid, key);
@@ -383,7 +310,18 @@ export async function finalizePackageTransportSource(
   input: PackageTransportSource,
   policy: PackageFinalizePolicy,
 ) {
-  const sourceRevision = packageTransportRevision(input);
+  // Revision and descriptor integrity describe the same input bytes. This scope
+  // ends with one finalization; subsequent calls must observe caller mutations.
+  const digests = new WeakMap<Uint8Array, string>();
+  const digestBytes = (bytes: Uint8Array): string => {
+    let value = digests.get(bytes);
+    if (value === undefined) {
+      value = sha256(bytes);
+      digests.set(bytes, value);
+    }
+    return value;
+  };
+  const sourceRevision = transportRevision(input, digestBytes);
   const product: PackageProduct = {
     assets: input.assets,
     receipts:
@@ -398,38 +336,47 @@ export async function finalizePackageTransportSource(
     sourceRevision,
     ...(input.sourceKey === undefined ? {} : { sourceKey: input.sourceKey }),
   };
-  const finalized = await finalizePackageProduct(product, policy);
+  const finalized = await finalizeProduct(product, policy, digestBytes);
   if (!finalized.ok) throw finalized.error;
   return {
     pack: finalized.value.pack,
     packageUrl: finalized.value.packageUrl,
     artifacts: transportArtifacts(product.assets, policy.artifactPath),
     digest: finalized.value.digest,
+    receipts: finalized.value.receipts,
     sourceRevision,
     semantic: JSON.stringify(sorted(finalized.value.pack)),
   };
 }
 
-function revisionStable(value: unknown): unknown {
+function sha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function revisionStable(value: unknown, digestBytes: (bytes: Uint8Array) => string): unknown {
   if (value instanceof Uint8Array) {
     return {
       byteLength: value.byteLength,
-      digest: createHash('sha256').update(value).digest('hex'),
+      digest: digestBytes(value),
     };
   }
-  if (Array.isArray(value)) return value.map(revisionStable);
+  if (Array.isArray(value)) return value.map((item) => revisionStable(item, digestBytes));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, revisionStable(item)]),
+        .map(([key, item]) => [key, revisionStable(item, digestBytes)]),
     );
   }
   return value;
 }
 
 export function packageTransportRevision(value: unknown): string {
+  return transportRevision(value, sha256);
+}
+
+function transportRevision(value: unknown, digestBytes: (bytes: Uint8Array) => string): string {
   return createHash('sha256')
-    .update(JSON.stringify(revisionStable(value)))
+    .update(JSON.stringify(revisionStable(value, digestBytes)))
     .digest('hex');
 }

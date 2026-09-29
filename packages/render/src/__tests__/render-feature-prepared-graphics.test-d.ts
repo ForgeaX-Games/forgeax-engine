@@ -1,6 +1,6 @@
 import { ok } from '@forgeax/engine-types';
-import type { RenderFeatureDrawDeclaration } from '../features/plan';
-import type { RenderFeature, RenderFeaturePlan, RenderFeatureResourceDeclaration } from '../index';
+import type { RenderFeatureDrawDeclaration, RenderFeatureWorkPlan } from '../features/plan';
+import type { RenderFeature, RenderFeatureResourceDeclaration } from '../index';
 
 interface Frame {
   readonly vertexCount: number;
@@ -11,7 +11,7 @@ const feature = {
   identity: 'prepared.graphics.positive',
   extract: () => ok<Frame>({ vertexCount: 6, indexCount: 6 }),
   plan(data, context) {
-    const target = context.targets.find((candidate) => candidate.kind === 'color');
+    const target = context.views[0]?.targets.find((candidate) => candidate.kind === 'color');
     const resources: readonly RenderFeatureResourceDeclaration[] = [
       {
         kind: 'graphics-program',
@@ -54,7 +54,7 @@ const feature = {
       indexData: { resource: 'quad-indices', format: 'uint16' },
       draw: { kind: 'draw-indexed', indexCount: data.indexCount, instanceCount: 1 },
     };
-    const plan: RenderFeaturePlan = {
+    const plan: RenderFeatureWorkPlan = {
       resources,
       passes: [
         {
@@ -67,7 +67,7 @@ const feature = {
         },
       ],
     };
-    return ok(plan);
+    return ok({ work: [{ scope: { view: 'main' }, ...plan }] });
   },
 } satisfies RenderFeature<Frame>;
 

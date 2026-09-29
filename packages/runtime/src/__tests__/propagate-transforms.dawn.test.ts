@@ -5,13 +5,12 @@
 // Environment: node + setupFiles ./vitest.setup-webgpu.ts injects
 //   globalThis.navigator.gpu (provided by dawn.node native binding).
 //
-// feat-20260601 M4: GlobalTransform is retired. propagateTransforms now writes
-// the resolved world mat4 into the `Transform.world` column (column-major 16
-// floats). Tests read that column via the ECS array view and assert the
-// translation column (m[12,13,14]).
+// The derived world mat4 lives in the paired `GlobalTransform.world` column
+// (column-major 16 floats). Tests read that column via the ECS array view and
+// assert the translation column (m[12,13,14]).
 //
 // Scope (w6 acceptanceCheck):
-//   (a) root-only entity: Transform.world translation = local translation
+//   (a) root-only entity: GlobalTransform.world translation = local translation
 //   (b) 2-level hierarchy: child.world = parent.world x child local
 //   (c) stale ChildOf ref: Result.err(RhiError({ code: 'hierarchy-broken' }))
 //   (d) N=3 deep chain: composition stacks correctly
@@ -24,8 +23,10 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { readRenderArrayView } from '@forgeax/engine-ecs/projection';
-import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { ChildOf, GlobalTransform, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { componentId } from '../../../ecs/src/component';
+import { worldInternal } from '../../../ecs/src/world-internal';
 import { TileLayer, Tilemap } from '../../../render/src/components';
 
 function identityTransformData() {
@@ -36,16 +37,17 @@ function identityTransformData() {
   };
 }
 
-// Read the resolved world mat4 (column-major 16 floats) from the Transform
-// world column array view. Translation lives in column 3 (m[12,13,14]).
+// Read the resolved world mat4 (column-major 16 floats) from the
+// GlobalTransform world column array view. Translation lives in column 3
+// (m[12,13,14]).
 function worldOf(world: World, entity: EntityHandle): Float32Array {
-  const view = readRenderArrayView(world, entity, Transform, 'world');
-  if (view === undefined) throw new Error('Transform.world view missing');
+  const view = readRenderArrayView(world, entity, GlobalTransform, 'world');
+  if (view === undefined) throw new Error('GlobalTransform.world view missing');
   return view as Float32Array;
 }
 
 describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (AC-04)', () => {
-  it('root entity: Transform.world translation = local translation (identity chain)', () => {
+  it('root entity: GlobalTransform.world translation = local translation (identity chain)', () => {
     const world = new World();
     const root = world
       .spawn({
@@ -153,7 +155,7 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
 
   // AC-07 (tweak-20260714-tilemap-layer-childed-render-entities M5): TileLayer
   // as an identity middle node must be transparent to propagateTransforms -- the
-  // layer's Transform.world (16 f32) must equal its Tilemap parent's world mat4
+  // layer's GlobalTransform.world (16 f32) must equal its Tilemap parent's world mat4
   // byte-for-byte. This proves M1's coAttach injection produces a genuinely
   // identity TRS (pos=[0,0,0], quat=[0,0,0,1], scale=[1,1,1]) and the compose
   // (parent.world x identity) is a no-op in mat4 form.
@@ -165,7 +167,7 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
   // asserted here because the M1 contract is precisely "identity default,
   // callers may override" -- the interesting invariant is transparency in the
   // default case.
-  it('AC-07: identity TileLayer middle node -> Transform.world byte-identical to Tilemap parent', () => {
+  it('AC-07: identity TileLayer middle node -> GlobalTransform.world byte-identical to Tilemap parent', () => {
     const world = new World();
     for (const component of [ChildOf, TileLayer, Tilemap, Transform]) {
       world.components.register(component).unwrap();
@@ -189,9 +191,8 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
         },
       )
       .unwrap();
-    // TileLayer carries an explicit identity Transform in the current ECS
-    // component vocabulary. This mirrors the demo spawn pattern in
-    // apps/hello/tilemap/** and keeps the hierarchy contract explicit.
+    // TileLayer carries an identity Transform; the generic Transform requirement
+    // materializes its GlobalTransform world column at the structural boundary.
     const layer = world
       .spawn(
         {
@@ -234,16 +235,35 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
       })
       .unwrap();
     world.despawn(ghost).unwrap();
+    const parent = world
+      .spawn({
+        component: Transform,
+        data: identityTransformData(),
+      })
+      .unwrap();
     const orphan = world
       .spawn(
         {
           component: Transform,
           data: identityTransformData(),
         },
-        { component: ChildOf, data: { parent: ghost } },
+        { component: ChildOf, data: { parent } },
       )
       .unwrap();
-    void orphan;
+
+    // Public relationship writes reject stale targets. Deliberately corrupt
+    // only the source column through the package-internal seam to preserve
+    // this diagnostic regression for malformed imported/editor state.
+    const archetype = world[worldInternal].getEntityArchetype(orphan);
+    const record = world[worldInternal].getRecords()[orphan & 0xffffff];
+    if (archetype === undefined || record === undefined) throw new Error('orphan row missing');
+    const tableRow = archetype.rows[record.archetypeRow];
+    if (tableRow === undefined) throw new Error('orphan table row missing');
+    const table = world[worldInternal].getGraph().tables[archetype.tableId];
+    const parentColumn = table?.storage.get(componentId(ChildOf))?.fields.get('parent');
+    if (parentColumn === undefined) throw new Error('ChildOf.parent column missing');
+    parentColumn.view[tableRow] = ghost as number;
+
     const r = propagateTransforms(world);
     expect(r.ok).toBe(false);
     if (r.ok) return;

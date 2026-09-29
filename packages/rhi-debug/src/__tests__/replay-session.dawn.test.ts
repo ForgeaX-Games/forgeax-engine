@@ -52,7 +52,7 @@ function bootstrap(
   return { handleId, kind, create, initialData };
 }
 
-function triangleTape(): Tape {
+function triangleTape(layout: 'explicit' | 'auto' = 'explicit'): Tape {
   const bootstrapResources: BootstrapResource[] = [
     bootstrap(
       'texture:rt',
@@ -105,7 +105,7 @@ function triangleTape(): Tape {
         fragment: { entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
         primitive: { topology: 'triangle-list' },
       },
-      layoutHandleId: 'pipeline-layout:empty',
+      layoutHandleId: layout === 'auto' ? 'layout:auto' : 'pipeline-layout:empty',
       vertexShaderModuleHandleId: 'shader:vertex',
       fragmentShaderModuleHandleId: 'shader:fragment',
     }),
@@ -153,10 +153,128 @@ function triangleTape(): Tape {
   };
 }
 
+function msaaTriangleTape(): Tape {
+  const tape = triangleTape();
+  const bootstrapResources = tape.bootstrap.map((resource) => {
+    if (resource.handleId === 'texture:rt') {
+      const desc = resource.create.desc as Record<string, unknown>;
+      return bootstrap('texture:msaa', 'texture', {
+        ...resource.create,
+        handleId: 'texture:msaa',
+        desc: { ...desc, sampleCount: 4, usage: 0x10 },
+      });
+    }
+    if (resource.handleId === 'texture-view:rt') {
+      return bootstrap('texture-view:msaa', 'texture-view', {
+        ...resource.create,
+        sourceHandleId: 'texture:msaa',
+        resultHandleId: 'texture-view:msaa',
+      });
+    }
+    if (resource.handleId === 'pipeline:triangle') {
+      const desc = resource.create.desc as Record<string, unknown>;
+      return bootstrap('pipeline:triangle', 'pipeline', {
+        ...resource.create,
+        desc: { ...desc, multisample: { count: 4 } },
+      });
+    }
+    return resource;
+  });
+  bootstrapResources.push(
+    bootstrap('texture:resolve', 'texture', {
+      kind: 'createTexture',
+      handleId: 'texture:resolve',
+      desc: {
+        size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+        format: 'rgba8unorm',
+        dimension: '2d',
+        mipLevelCount: 1,
+        sampleCount: 1,
+        usage: 0x11,
+      },
+    }),
+    bootstrap('texture-view:resolve', 'texture-view', {
+      kind: 'createTextureView',
+      sourceHandleId: 'texture:resolve',
+      resultHandleId: 'texture-view:resolve',
+      desc: {},
+    }),
+  );
+
+  const events = tape.events.map((event) => {
+    if (event.kind === 'beginRenderPass') {
+      return {
+        ...event,
+        desc: {
+          ...event.desc,
+          colorAttachments: [
+            {
+              view: null,
+              clearValue: { r: 0, g: 0, b: 0, a: 1 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            },
+          ],
+        },
+        colorAttachmentViewHandleIds: ['texture-view:msaa'],
+        colorAttachmentResolveTargetHandleIds: ['texture-view:resolve'],
+      };
+    }
+    return event;
+  }) as Tape['events'];
+
+  return {
+    ...tape,
+    header: { ...tape.header, blobCount: 0 },
+    bootstrap: bootstrapResources,
+    events,
+    blobs: [],
+  };
+}
+
 describe.skipIf(SKIP_DAWN)('ReplaySession Dawn contract', () => {
-  it('replays a triangle and returns attachment bytes through inspectWork', async () => {
+  it.each([
+    0x84, 0x184, 0x06,
+  ])('restores captured buffer bytes without COPY_DST (usage %i)', async (usage) => {
     const pack = await loadDawn();
-    const tape = triangleTape();
+    const expected = new Uint8Array([17, 31, 63, 127, 5, 9, 13, 21]);
+    const tape: Tape = {
+      header: { formatVersion: 7, rhiCaps: {}, eventCount: 0, blobCount: 1 },
+      bootstrap: [
+        bootstrap(
+          'buffer:seed',
+          'buffer',
+          {
+            kind: 'createBuffer',
+            handleId: 'buffer:seed',
+            desc: { size: expected.length, usage },
+          },
+          [{ hash: 'seed', byteOffset: 0, byteLength: expected.length }],
+        ),
+      ],
+      events: [],
+      blobs: [{ hash: 'seed', bytes: expected, compression: 'none' }],
+    };
+    const replay = (
+      await openReplay(tape, {
+        device: await freshDevice(pack),
+        createShaderModule: pack.createShaderModule,
+      })
+    ).unwrap();
+    try {
+      expect((await replay.readResource('buffer:seed')).unwrap().bytes).toEqual(expected);
+      expect(tape.bootstrap[0]?.create.desc).toEqual({ size: expected.length, usage });
+    } finally {
+      (await replay.dispose()).unwrap();
+    }
+  });
+
+  it.each([
+    'explicit',
+    'auto',
+  ] as const)('replays a triangle with %s layout and returns attachment bytes through inspectWork', async (layout) => {
+    const pack = await loadDawn();
+    const tape = triangleTape(layout);
     const first = await openReplay(tape, {
       device: await freshDevice(pack),
       createShaderModule: pack.createShaderModule,
@@ -175,6 +293,19 @@ describe.skipIf(SKIP_DAWN)('ReplaySession Dawn contract', () => {
     expect(baseline.value.attachment?.provenance.selectedWorkIndex).toBe(0);
     expect(baseline.value.attachment?.provenance.subresource).toBeNull();
 
+    const selected = await first.value.readResourceAtWork('texture-view:rt', 0);
+    expect(
+      selected.ok,
+      selected.ok ? undefined : `${selected.error.code}: ${JSON.stringify(selected.error.detail)}`,
+    ).toBe(true);
+    if (!selected.ok) throw new Error(selected.error.hint);
+    expect(selected.value.provenance.selectedWorkIndex).toBe(0);
+    expect(selected.value.bytes).toEqual(baseline.value.attachment?.bytes);
+    const bootstrap = await first.value.readResource('texture-view:rt');
+    if (!bootstrap.ok) throw new Error(bootstrap.error.hint);
+    expect(bootstrap.value.provenance.selectedWorkIndex).toBeUndefined();
+    expect(selected.value.bytes).not.toEqual(bootstrap.value.bytes);
+
     const second = await openReplay(tape, {
       device: await freshDevice(pack),
       createShaderModule: pack.createShaderModule,
@@ -187,6 +318,49 @@ describe.skipIf(SKIP_DAWN)('ReplaySession Dawn contract', () => {
     expect(replay.value.attachment?.bytes).toEqual(baseline.value.attachment?.bytes);
     expect((await first.value.dispose()).ok).toBe(true);
     expect((await second.value.dispose()).ok).toBe(true);
+  }, 60_000);
+
+  it('resolves an MSAA attachment for pixels and rejects direct MSAA readback', async () => {
+    const pack = await loadDawn();
+    const replayResult = await openReplay(msaaTriangleTape(), {
+      device: await freshDevice(pack),
+      createShaderModule: pack.createShaderModule,
+    });
+    expect(replayResult.ok).toBe(true);
+    if (!replayResult.ok) throw new Error(replayResult.error.hint);
+
+    try {
+      const first = await replayResult.value.inspectWork(0, ['pixels']);
+      expect(
+        first.ok,
+        first.ok ? undefined : `${first.error.code}: ${JSON.stringify(first.error.detail)}`,
+      ).toBe(true);
+      if (!first.ok) throw new Error(first.error.hint);
+      const attachment = first.value.attachment;
+      expect(attachment?.provenance.resourceId).toBe('texture-view:resolve');
+      expect(attachment?.provenance.selectedWorkIndex).toBe(0);
+      expect(attachment?.provenance.subresource).toBeNull();
+      const centerOffset = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4;
+      expect(attachment?.bytes.slice(centerOffset, centerOffset + 4)).toEqual(
+        new Uint8Array([255, 0, 0, 255]),
+      );
+
+      const repeated = await replayResult.value.inspectWork(0, ['pixels']);
+      expect(repeated.ok).toBe(true);
+      if (!repeated.ok) throw new Error(repeated.error.hint);
+      expect(repeated.value.attachment?.bytes).toEqual(attachment?.bytes);
+      expect(repeated.value.attachment?.provenance.resourceId).toBe('texture-view:resolve');
+      expect(repeated.value.attachment?.provenance.selectedWorkIndex).toBe(0);
+      expect(repeated.value.attachment?.provenance.subresource).toBeNull();
+
+      const directMsaa = await replayResult.value.readResource('texture:msaa');
+      expect(directMsaa.ok).toBe(false);
+      if (directMsaa.ok) throw new Error('MSAA texture readback unexpectedly succeeded');
+      expect(directMsaa.error.code).toBe('readback-unsupported');
+      expect(directMsaa.error.detail).toMatchObject({ resourceId: 'texture:msaa' });
+    } finally {
+      expect((await replayResult.value.dispose()).ok).toBe(true);
+    }
   }, 60_000);
 
   it('reports the first shader factory failure on a real Dawn device', async () => {

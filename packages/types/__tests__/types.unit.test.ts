@@ -39,6 +39,7 @@ import type {
   ImageMetadata,
   MaterialAsset,
   MeshAsset,
+  MeshLodLevel,
   PackIndexEntry,
   PrimitiveTopology,
   SamplerAsset,
@@ -308,7 +309,7 @@ describe('ASSET_ERROR_HINTS - plan-strategy §7.3 locked literals', () => {
 
   it('asset-format-unsupported hint matches plan-strategy §7.3 verbatim', () => {
     expect(ASSET_ERROR_HINTS['asset-format-unsupported']).toBe(
-      'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax-engine-remote-gltf import <gltf-or-glb>)',
+      'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax asset import <gltf-or-glb> --root <project>)',
     );
   });
 
@@ -1357,13 +1358,13 @@ describe('@forgeax/engine-types/inspector-client - defaultConnect (feat-20260517
 // ParamSchemaEntry type shape.
 //
 // Assertions (post feat-20260613 fix-issue-4 V1-Set deletion):
-// - MATERIAL_PARAM_TYPES is a 14-member readonly tuple — the single SSOT
+// - MATERIAL_PARAM_TYPES is a 16-member readonly tuple — the single SSOT
 //   for paramSchema entry types (no V1/V2 dual-path).
 // - Each member is a valid WGSL scalar/vector/sampler/texture type literal.
 // - ParamSchemaEntry[] is usable as a type alias over the discriminated
 //   union (Numeric / TextureBinding / StorageBinding families).
 //
-// Anchors: requirements section 3.4 (now 14 entries, post-D-7 expansion);
+// Anchors: requirements section 3.4 (now 16 entries, post-D-7 expansion);
 //          plan-strategy D-7 paramSchema type set v2.
 
 
@@ -1384,9 +1385,9 @@ const EXPECTED_TYPES: ReadonlySet<string> = new Set([
   'storage_buffer',
 ]);
 
-describe('MATERIAL_PARAM_TYPES - 14-tuple SSOT (post fix-issue-4)', () => {
-  it('has exactly 14 members', () => {
-    expect(MATERIAL_PARAM_TYPES.length).toBe(14);
+describe('MATERIAL_PARAM_TYPES - 16-tuple SSOT (post fix-issue-4)', () => {
+  it('has exactly 16 members', () => {
+    expect(MATERIAL_PARAM_TYPES.length).toBe(16);
   });
 
   it('contains all 14 expected WGSL-compatible type literals', () => {
@@ -2297,4 +2298,15 @@ function exhaustiveSwitchFromCode(code: PhysicsErrorCode): string {
       return 'controller requires kinematic body';
   }
 }
+
+describe('MeshAsset LOD contract', () => {
+  it('exposes root-owned ordered LOD levels and bounded hysteresis', () => {
+    const level = null as unknown as MeshLodLevel;
+    expectTypeOf<MeshLodLevel['mesh']>().toEqualTypeOf<import('../src/index').AssetGuid>();
+    expectTypeOf<MeshLodLevel['screenCoverage']>().toEqualTypeOf<number>();
+    expectTypeOf<MeshAsset['lods']>().toEqualTypeOf<readonly MeshLodLevel[] | undefined>();
+    expectTypeOf<MeshAsset['lodHysteresis']>().toEqualTypeOf<number | undefined>();
+    expect(level).toBeNull();
+  });
+});
 }

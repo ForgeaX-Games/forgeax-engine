@@ -39,12 +39,29 @@ export {
   createFullscreenRenderFeature,
   type FullscreenRenderFeatureOptions,
 } from '@forgeax/engine-render/authoring';
+export type {
+  AssetDecoderContribution,
+  AssetRuntimeAssembly,
+  AssetRuntimeAssemblyError,
+  AssetRuntimeAssemblyOptions,
+} from './assets-runtime-assembly';
 export {
+  assembleAssetRuntime,
+  createAssetRuntimeAssembly,
+  createDefaultAssetCatalogSource,
+  DEFAULT_ASSET_CATALOG_URL,
+} from './assets-runtime-assembly';
+export {
+  type BrowserFrameCompleted,
   type BrowserFrameSubmitted,
+  FORGEAX_FRAME_COMPLETED_DATASET,
+  FORGEAX_FRAME_COMPLETED_EVENT,
   FORGEAX_FRAME_SUBMITTED_DATASET,
   FORGEAX_FRAME_SUBMITTED_EVENT,
+  publishBrowserFrameCompleted,
   publishBrowserFrameSubmitted,
   resetBrowserFrameSubmitted,
+  subscribeBrowserFrameSubmitted,
 } from './browser-frame-signal';
 export { createApp, measureCanvasDrawingBuffer, syncCanvasDrawingBuffer } from './create-app';
 export type {
@@ -55,7 +72,7 @@ export type {
   AppDetailExecutionKernelFailed,
   AppDetailExecutionRebuildFailed,
   AppDetailExecutionStaleWorld,
-  AppDetailExecutionTierUnavailable,
+  AppDetailExecutionWorkerUnavailable,
   AppDetailPluginActivationFailed,
   AppDetailSystemUpdateFailed,
   AppErrorCode,
@@ -79,30 +96,33 @@ export type {
   ExecutionControl,
   ExecutionEngineHealth,
   ExecutionFault,
+  ExecutionFrameInspection,
   ExecutionMeasurement,
   ExecutionOptions,
   ExecutionReport,
-  ExecutionRequestedTier,
   ExecutionSelection,
-  ExecutionSelectionReason,
-  ExecutionTier,
+  ExecutionWorker,
+  ExecutionWorkerDecision,
+  ExecutionWorkerPolicy,
+  ExecutionWorkersOptions,
   ExecutionWorldHealth,
   KernelDispatchReason,
   PreparedExecutionBootstrap,
 } from './execution';
 export {
+  activateExecutionRoot,
+  createExecutionFrameInspection,
   createExecutionReport,
   EXECUTION_CAPABILITY_NAMES,
   EXECUTION_REPORT_SCHEMA_VERSION,
-  EXECUTION_REQUESTED_TIERS,
-  EXECUTION_TIERS,
+  EXECUTION_WORKERS,
   executionBootstrapHostPlugin,
   isExecutionReport,
   loadBootstrapEntry,
   missingExecutionCapabilities,
   prepareBootstrapEntry,
   probeExecutionCapabilities,
-  selectExecutionTier,
+  selectExecutionWorkers,
   unavailableExecutionCapabilities,
   validateExecutionBootstrapData,
 } from './execution';
@@ -116,14 +136,67 @@ export type {
   GameReadDef,
 } from './game-context';
 export { gameHostPlugin } from './game-context';
+export { type AppObservation, createAppObservation } from './observation';
 export { inputPlugin } from './plugin-factories';
-export type { RenderFeatureHost } from './renderer-plugin';
+export type {
+  PointShadowCapability,
+  PointShadowCapabilityRequirement,
+  PointShadowRecipeErrorCode,
+  PointShadowRecipeErrorDetail,
+  RenderFeatureHost,
+} from './renderer-plugin';
 export {
+  admitPointShadowBudget,
   ownedRendererPlugin,
+  POINT_SHADOW_PLUGIN_ID,
+  PointShadowRecipeError,
+  pointShadowPlugin,
   rendererPlugin,
   renderFeatureHostPlugin,
   renderFeaturePlugin,
 } from './renderer-plugin';
+export type {
+  EngineWorkspaceAsset,
+  EngineWorkspaceAssetBinding,
+  EngineWorkspaceAssetInput,
+  EngineWorkspaceCameraInput,
+  EngineWorkspaceCameraResult,
+  EngineWorkspacePlay,
+  EngineWorkspacePresentation,
+  EngineWorkspacePreview,
+  EngineWorkspaceProject,
+  EngineWorkspaceProjectHandle,
+  EngineWorkspaceProjectSession,
+  EngineWorkspaceProjectSessionFactory,
+  EngineWorkspaceProvider,
+  EngineWorkspaceResourcePreviewOwner,
+  EngineWorkspaceRuntime,
+  EngineWorkspaceRuntimePackInput,
+  EngineWorkspaceTarget,
+} from './workspace';
+export {
+  captureEngineWorkspaceAssetBinding,
+  createEngineWorkspaceAppPreview,
+  createEngineWorkspaceAppTarget,
+  createEngineWorkspaceProvider,
+  createEngineWorkspaceRuntime,
+  ENGINE_WORKSPACE_API_VERSION,
+  ENGINE_WORKSPACE_COMMAND_TOPIC,
+  ENGINE_WORKSPACE_PLUGIN_ID,
+  ENGINE_WORKSPACE_PREVIEWABLE_KINDS,
+  ENGINE_WORKSPACE_SERVICE,
+  type EngineWorkspaceAppTargetOptions,
+  EngineWorkspaceError,
+  engineWorkspacePlugin,
+  engineWorkspaceResultService,
+  loadEngineWorkspaceMaterialSlots,
+  projectEngineWorkspaceAssets,
+} from './workspace';
+export type { EngineWorkspaceRuntimePackRequest } from './workspace-runtime-pack';
+export {
+  type EngineWorkspaceTargetTools,
+  engineWorkspaceTargetToolsPlugin,
+} from './workspace-target-tools';
 
 import {
   isLoadGameError,
@@ -143,6 +216,11 @@ export type {
   LoadGameErrorDetailFor,
 } from './load-game-errors';
 export {
+  assembleRuntimePacks,
+  type RuntimePackAssembly,
+  type RuntimePackOptions,
+} from './runtime-packs.js';
+export {
   createToolPreviewHost,
   replayToolPreviewCapture,
   type ToolPreviewCaptureResult,
@@ -153,6 +231,7 @@ export {
   type ToolPreviewResourceKind,
   type ToolPreviewResourceRequest,
   type ToolPreviewRunResult,
+  toolPreviewSubjectDrawn,
 } from './tool-preview/bootstrap';
 export {
   createToolPreviewEvidence,
@@ -187,4 +266,15 @@ export type {
   ExecutionApp,
 } from './types';
 export { APP_PHASE_CATALOG } from './types';
+export {
+  type EngineWorkspaceBrowserOptions,
+  engineWorkspaceBrowserPlugin,
+  engineWorkspaceInputPlugin,
+} from './workspace-browser';
+export {
+  createEngineWorkspaceTools,
+  ENGINE_WORKSPACE_STATE_TOPIC,
+  ENGINE_WORKSPACE_TOOL_SOURCE,
+  snapshotEngineWorkspace,
+} from './workspace-tools';
 export { isLoadGameError, LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError };

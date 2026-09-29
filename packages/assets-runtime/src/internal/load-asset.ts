@@ -6,19 +6,26 @@ import type {
   AssetDecoderLease,
   AssetKind,
   AssetLoadError,
+  AssetPublicationTuple,
   BuiltinAssetKind,
   BuiltinAssetPayload,
+  PluginAssetDefinition,
   Result,
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
+import { defineAssetKind } from '../asset-kind.js';
 import type { CatalogSource } from '../catalog-source.js';
+import { pluginAssetDecoder } from '../loaders/plugin.js';
 import { ArtifactCache } from './artifact-cache.js';
 import { AssetGraph, type AssetGraphSnapshot } from './asset-graph.js';
 import { CatalogSession, type CatalogSessionOptions } from './catalog-session.js';
 import { DecoderRegistry } from './decoder-registry.js';
 import { freezeRuntimePayload } from './immutable-payload.js';
 import { PackReader } from './pack-reader.js';
+import { bytesOf, readPackage } from './package-read.js';
+import { validatePublicationReferences } from './publication-references.js';
 import { validateRuntimeRow } from './validate-runtime-row.js';
+import { assetLoadCancelled, waitForAsset } from './wait-for-asset.js';
 
 export interface AssetRegistryOptions extends CatalogSessionOptions {
   readonly catalog: CatalogSource;
@@ -35,6 +42,7 @@ export type AssetRegistrySnapshot = AssetGraphSnapshot;
 export type AssetRegistrySnapshotCounters = AssetRegistrySnapshot['counters'];
 
 export interface AssetRegistry {
+  readPluginDefinition(guid: string): Promise<Result<PluginAssetDefinition, AssetLoadError>>;
   installDecoder<P, K extends string>(
     kind: AssetKind<P, K>,
     decoder: AssetDecoder<P>,
@@ -124,13 +132,23 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
   const decoders = new DecoderRegistry(
     options.scopeId === undefined ? {} : { scopeId: options.scopeId },
   );
-  const graph = new AssetGraph<{ readonly value: unknown; readonly refs: readonly string[] }>({
+  decoders.install(defineAssetKind('plugin'), pluginAssetDecoder);
+  const graph = new AssetGraph<{
+    readonly value: unknown;
+    readonly refs: readonly string[];
+    readonly publication: AssetPublicationTuple;
+    readonly references: 'eager' | 'deferred';
+  }>({
     ...(options.maxConcurrentReads === undefined
       ? {}
       : { maxConcurrentReads: options.maxConcurrentReads }),
     read: async (guid, signal) => {
       const row = session.current(guid);
       if (row === undefined) return err(missing(guid));
+      const fetcher =
+        options.catalog.openPackage?.(row.packageUrl) ??
+        options.fetcher ??
+        globalThis.fetch.bind(globalThis);
       const validated = validateRuntimeRow(row);
       if (!validated.ok) return validated;
       const publication = validated.value.publication;
@@ -140,7 +158,7 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
         digest: publication.digest,
         outputSetDigest: publication.outputSetDigest,
       };
-      const pack = await reader.read(row.packageUrl, tuple, signal);
+      const pack = await reader.read(row.packageUrl, tuple, signal, fetcher);
       if (!pack.ok) return pack;
       const envelope = pack.value.assets.find(
         (asset) => asset.guid.toLowerCase() === guid.toLowerCase(),
@@ -154,14 +172,9 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
           const key = `${tuple.scopeId}:${tuple.generation}:${tuple.outputSetDigest}:${integrity.digest}`;
           return cache.read(key, async () => {
             const url = resolveArtifactUrl(row.packageUrl, descriptor.path);
-            let response: Response;
-            try {
-              response = await (options.fetcher ?? globalThis.fetch)(url, { signal });
-            } catch {
-              return err(artifactError(guid, descriptor.path));
-            }
-            if (!response.ok) return err(artifactError(guid, descriptor.path));
-            const bytes = new Uint8Array(await response.arrayBuffer());
+            const read = await readPackage(fetcher, url, bytesOf, { signal });
+            if (!read.ok) return err(artifactError(guid, descriptor.path));
+            const bytes = read.value;
             if (descriptor.byteLength === undefined || bytes.byteLength !== descriptor.byteLength) {
               return err(artifactError(guid, descriptor.path));
             }
@@ -176,7 +189,19 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
       const input: AssetDecoderInput<unknown> = { envelope, artifacts, signal };
       const decoded = await decoders.loadByKind(envelope.kind, input);
       if (!decoded.ok) return decoded;
-      return ok({ value: freezeRuntimePayload(decoded.value), refs: envelope.refs });
+      return ok({
+        value: freezeRuntimePayload(decoded.value),
+        refs: [
+          ...new Set([
+            ...envelope.refs,
+            ...publication.externalEvidence
+              .filter((edge) => edge.usage !== 'content')
+              .map((edge) => edge.guid),
+          ]),
+        ],
+        publication: tuple,
+        references: decoders.referencePolicy(envelope.kind),
+      });
     },
   });
 
@@ -190,6 +215,21 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
   });
 
   const registry: AssetRegistry = {
+    readPluginDefinition: async (guid) => {
+      const loaded = await registry.load(guid, 'plugin');
+      if (!loaded.ok) return loaded;
+      const snapshot = await graph.load(guid);
+      if (!snapshot.ok) return snapshot;
+      const checked = checkCurrent(guid, snapshot.value.publication);
+      if (!checked.ok) return checked;
+      const asset = snapshot.value.value as Asset;
+      if (asset.kind !== 'plugin') return err(mismatch(guid, 'plugin', asset.kind));
+      return ok({
+        guid,
+        asset,
+        evidence: { kind: 'publication', publication: snapshot.value.publication },
+      });
+    },
     installDecoder: (kind, decoder) => decoders.install(kind, decoder),
     load: (async (
       guid: string,
@@ -197,31 +237,76 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
       loadOptions: AssetLoadOptions = {},
     ): Promise<Result<unknown, AssetLoadError>> => {
       if (!ASSET_GUID_PATTERN.test(guid)) return err(invalidGuid(guid));
-      const expectedKind = typeof kind === 'string' ? kind : kind.kind;
-      const started = await session.start();
-      if (!started.ok) return err(started.error);
-      if (session.snapshot().stale) {
-        const reconciled = await session.reconcile();
-        if (!reconciled.ok) return err(reconciled.error);
-        const discontinuity = session.discontinuity();
-        if (discontinuity !== undefined) return err(discontinuity);
-      }
-      const row = session.current(guid);
-      if (row === undefined) return err(missing(guid));
-      if (row.kind !== expectedKind) return err(mismatch(guid, expectedKind, row.kind));
-      const result = await graph.load(guid, loadOptions.signal);
-      return result.ok ? ok(result.value.value) : result;
+      if (loadOptions.signal?.aborted) return err(assetLoadCancelled(guid));
+      const request = (async () => {
+        const expectedKind = typeof kind === 'string' ? kind : kind.kind;
+        const started = await session.start();
+        if (!started.ok) return err(started.error);
+        if (session.snapshot().stale) {
+          const reconciled = await session.reconcile();
+          if (!reconciled.ok) return err(reconciled.error);
+          const discontinuity = session.discontinuity();
+          if (discontinuity !== undefined) return err(discontinuity);
+        }
+        const row = session.current(guid);
+        if (row === undefined) return err(missing(guid));
+        if (row.kind !== expectedKind) return err(mismatch(guid, expectedKind, row.kind));
+        const before = validatePublicationReferences(guid, row, (guid) => session.current(guid));
+        if (!before.ok) {
+          graph.invalidate(guid);
+          return before;
+        }
+        const result = await graph.load(guid, loadOptions.signal);
+        if (!result.ok) return result;
+        const current = checkCurrent(guid, result.value.publication);
+        if (!current.ok) return current;
+        const after = validatePublicationReferences(guid, row, (guid) => session.current(guid));
+        if (!after.ok) {
+          graph.invalidate(guid);
+          return after;
+        }
+        return result.ok ? ok(result.value.value) : result;
+      })();
+      return loadOptions.signal === undefined
+        ? request
+        : waitForAsset(request, loadOptions.signal, guid);
     }) as AssetRegistry['load'],
     snapshot: () => graph.snapshot(),
     subscribe: (listener) => graph.subscribe(listener),
     dispose: () => {
       graph.dispose();
+      reader.dispose();
       unsubscribeCatalog();
       decoders.dispose();
       cache.clear();
       session.dispose();
     },
   };
+  function checkCurrent(
+    guid: string,
+    expected: AssetPublicationTuple,
+  ): Result<void, AssetLoadError> {
+    const row = session.current(guid);
+    const actual = row?.publication;
+    if (
+      session.snapshot().stale ||
+      expected.scopeId !== session.snapshot().scopeId ||
+      actual?.generation !== expected.generation ||
+      actual.digest !== expected.digest ||
+      actual.outputSetDigest !== expected.outputSetDigest
+    ) {
+      graph.invalidate(guid);
+      return err({
+        code: 'asset-superseded',
+        expected: 'the same root publication until its read completes',
+        hint: 'load the current Catalog publication',
+        detail: { guid, generation: expected.generation },
+      });
+    }
+    const references = validatePublicationReferences(guid, row, (guid) => session.current(guid));
+    if (!references.ok) graph.invalidate(guid);
+    return references;
+  }
   const resolver: AssetRegistryResolver = {
     get epoch() {
       return graph.snapshot().epoch;

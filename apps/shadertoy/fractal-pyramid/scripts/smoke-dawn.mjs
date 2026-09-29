@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 // shadertoy/fractal-pyramid headless smoke.
 //
 // Acceptance gate: the ported raymarcher must (a) run on the WebGPU backend,
@@ -12,7 +13,7 @@
 //   3. createRenderer with the built shader manifest; read the composed wgsl
 //      for shadertoy::fractal-pyramid out of the manifest.
 //   4. installMaterialArtifact + spawn fullscreen quad + camera.
-//   5. For t in {0.0, 0.6, 1.3} seconds: mutate values.iTime, draw N
+//   5. For t in {0.0, 0.6, 1.3} seconds: update RuntimeMaterialValue for iTime, draw N
 //      frames, copyTextureToBuffer + map, average the whole frame. Assert the
 //      mean brightness is non-trivial and that frames differ across t.
 //
@@ -26,6 +27,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
 
 const SMOKE_FRAMES_PER_T = Number.parseInt(process.env.SMOKE_FRAMES_PER_T ?? '8', 10);
 const MEAN_BRIGHTNESS_MIN = Number.parseFloat(process.env.MEAN_BRIGHTNESS_MIN ?? '0.002');
@@ -144,7 +146,7 @@ if (!existsSync(MANIFEST_PATH)) {
   process.exit(1);
 }
 const manifestRaw = readFileSync(MANIFEST_PATH, 'utf8');
-const manifestParsed = JSON.parse(manifestRaw);
+const manifestParsed = await readShaderManifestPublication(JSON.parse(manifestRaw));
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
@@ -223,7 +225,7 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     {
       name: 'Forward',
       program: { module: 'shadertoy::fractal_pyramid' },
-      renderState: { cullMode: 'none', tags: { LightMode: 'Forward' }, queue: 2000 },
+      renderState: { cullMode: 'none', depthCompare: 'always', depthWriteEnabled: false, tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
   parameters: [
@@ -232,6 +234,8 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
   ],
   values,
 });
+
+const timeValue = world.spawn({ component: RuntimeMaterialValue, data: { asset: materialHandle, parameter: 'iTime', value: [0] } }).unwrap();
 
 const planeRes = createPlaneGeometry(1, 1);
 if (!planeRes.ok) {
@@ -280,7 +284,7 @@ const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
 
 async function captureFrameAtT(t) {
-  values.iTime = t;
+  world.set(timeValue, RuntimeMaterialValue, { value: [t] }).unwrap();
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
     if (!FALSIFY_NO_DRAW) {
       world.update().unwrap();

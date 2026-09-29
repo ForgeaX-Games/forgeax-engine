@@ -29,7 +29,7 @@ export function mountUi(asset: UiAsset, options: MountOptions): UiResult<UiInsta
   shadow.append(style);
   const content = document.createElement('div');
   content.innerHTML = asset.html;
-  content.style.pointerEvents = 'auto';
+  content.style.pointerEvents = 'none';
   shadow.append(content);
   const controller = new AbortController();
   const onClick = (event: Event) => {

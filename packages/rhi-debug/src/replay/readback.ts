@@ -100,7 +100,7 @@ function resolveTextureViewSubresource(
   source: ResourceTableEntry,
   requested: ReplayReadbackRequest | undefined,
 ): Result<ReplayReadbackRequest | undefined, RhiDebugError> {
-  if (requested === undefined || isBufferRange(requested)) return ok(requested);
+  if (isBufferRange(requested)) return ok(requested);
   const sourceDescriptor = recordField(source.descriptor, 'desc');
   const sourceSize = textureSize(sourceDescriptor?.size);
   const sourceMipCount = numberField(sourceDescriptor, 'mipLevelCount') ?? 1;
@@ -112,8 +112,8 @@ function resolveTextureViewSubresource(
   const arrayLayerCount =
     numberField(viewDescriptor, 'arrayLayerCount') ??
     sourceSize.depthOrArrayLayers - baseArrayLayer;
-  const localMipLevel = requested.mipLevel ?? 0;
-  const localArrayLayer = requested.arrayLayer ?? 0;
+  const localMipLevel = requested?.mipLevel ?? 0;
+  const localArrayLayer = requested?.arrayLayer ?? 0;
   if (
     !validIndex(baseMipLevel, sourceMipCount + 1) ||
     !validIndex(baseArrayLayer, sourceSize.depthOrArrayLayers + 1) ||
@@ -128,6 +128,11 @@ function resolveTextureViewSubresource(
     ...requested,
     mipLevel: baseMipLevel + localMipLevel,
     arrayLayer: baseArrayLayer + localArrayLayer,
+    aspect:
+      requested?.aspect ??
+      (viewDescriptor?.aspect === 'depth-only' || viewDescriptor?.aspect === 'stencil-only'
+        ? viewDescriptor.aspect
+        : 'all'),
   });
 }
 
@@ -168,6 +173,13 @@ async function readTexture(
   const format = stringField(descriptor, 'format');
   const dimension = stringField(descriptor, 'dimension') ?? '2d';
   if (format === undefined) return readbackFailure(`texture ${resourceId} has no recorded format`);
+  if ((numberField(descriptor, 'sampleCount') ?? 1) > 1) {
+    return readbackUnsupported(
+      resourceId,
+      format,
+      'multisampled textures require a single-sample resolve target before readback',
+    );
+  }
   const plan = getTextureReadbackPlan({ format, dimension });
   if (!plan.supported) {
     return err(

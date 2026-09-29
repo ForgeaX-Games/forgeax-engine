@@ -22,21 +22,37 @@ const fixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
 const wasm = JSON.parse(readFileSync(WASM_PROVENANCE_PATH, 'utf8'));
 const cooker = createMaterialPackCooker([resolve(APP_ROOT, 'src')]);
 const publications = [];
-for (const asset of fixture.assets ?? []) {
-  const cooked = asset.payload?.cooked;
-  if (asset.kind !== 'material' || cooked === undefined) continue;
-  const authored = {
-    kind: 'material',
-    passes: cooked.resolved.passes.map((pass) => ({
-      ...pass,
-      program: { ...pass.program, moduleSlots: undefined },
-    })),
-    parameters: cooked.resolved.parameters,
-    values: cooked.resolved.values,
+const materialRows = (fixture.assets ?? []).filter(
+  (asset) => asset?.kind === 'material' && asset.payload?.kind === 'material',
+);
+const authoredMaterial = (payload) => {
+  const { kind, parent, colorSpace, passes, parameters, values } = payload;
+  if (parent !== undefined) {
+    assert(typeof parent === 'string', 'derived material parent must be a GUID');
+    return { kind, parent, values };
+  }
+  return {
+    kind,
+    ...(colorSpace === undefined ? {} : { colorSpace }),
+    passes,
+    parameters,
+    values,
   };
+};
+const authoredTable = Object.fromEntries(
+  materialRows.map((asset) => {
+    assert(typeof asset.guid === 'string', 'material row GUID is required');
+    return [asset.guid, authoredMaterial(asset.payload)];
+  }),
+);
+for (const asset of materialRows) {
+  const guid = asset.guid;
+  const authored = authoredTable[guid];
+  assert(authored !== undefined, `material source is missing for ${guid}`);
   const draft = await cooker.cook({
-    guid: cooked.guid,
+    guid,
     source: authored,
+    table: authoredTable,
     sourcePath: FIXTURE_PATH,
     sourceKey: '../src/pulse-material.wgsl',
     refs: [],
@@ -44,12 +60,11 @@ for (const asset of fixture.assets ?? []) {
     wasm,
   });
   const record = draft.payload.cooked;
-  assert(record !== undefined, `pack producer did not publish ${cooked.guid}`);
-  asset.payload.passes = authored.passes;
-  asset.payload.cooked = record;
+  assert(record !== undefined, `pack producer did not publish ${guid}`);
+  asset.payload = { ...authored, cooked: record };
   publications.push({
     guid: record.guid,
-    artifactDigest: record.artifact.digest,
+    artifactDigest: record.artifactDigest,
     cookIdentity: record.receipt.identity.cookIdentity,
   });
 }

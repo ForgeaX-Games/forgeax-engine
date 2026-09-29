@@ -64,7 +64,7 @@ try {
     const payload = await response.json();
     const rows = Array.isArray(payload) ? payload : payload.entries;
     return Array.isArray(rows)
-      ? rows.filter((row) => row.guid === '019e9c00-0000-7000-8000-000000000010' || row.guid === '019e9c00-0000-7000-8000-000000000020')
+      ? rows.filter((row) => row.guid === 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || row.guid === 'e696463c-b254-5efb-95df-5a44ebe3b508')
       : [];
   }, MODE);
   if (catalog.length !== 2 || catalog.some((row) => row.kind !== 'particle-effect' || typeof row.packageUrl !== 'string')) {
@@ -73,7 +73,7 @@ try {
 
   const before = await readSnapshot();
   const baseline = before?.value?.vfxHit;
-  if (!before?.ok || baseline?.mode !== 'hit' || baseline?.guid !== '019e9c00-0000-7000-8000-000000000010' || baseline?.emitterCount !== 2 || baseline?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu')) {
+  if (!before?.ok || baseline?.mode !== 'hit' || baseline?.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || baseline?.emitterCount !== 2 || baseline?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu')) {
     throw new Error(`VFX baseline failed: ${JSON.stringify(before)}`);
   }
 
@@ -82,7 +82,7 @@ try {
   const afterCharge = await readSnapshot();
   const charge = afterCharge?.value?.vfxHit;
   const chargeKinds = charge?.batchKinds ?? [];
-  if (!chargeAction?.ok || !afterCharge?.ok || charge?.mode !== 'charge' || charge?.guid !== '019e9c00-0000-7000-8000-000000000020' || charge?.playing !== true || charge?.seed !== 1 || charge?.triggers !== 1 || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
+  if (!chargeAction?.ok || !afterCharge?.ok || charge?.mode !== 'charge' || charge?.guid !== 'e696463c-b254-5efb-95df-5a44ebe3b508' || charge?.playing !== true || charge?.seed !== 1 || charge?.triggers !== 1 || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
     throw new Error(`VFX charge failed: ${JSON.stringify({ chargeAction, afterCharge })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'charge-active.png') });
@@ -91,7 +91,7 @@ try {
   await page.waitForTimeout(250);
   const afterHit = await readSnapshot();
   const hit = afterHit?.value?.vfxHit;
-  if (!hitAction?.ok || !afterHit?.ok || hit?.mode !== 'hit' || hit?.guid !== '019e9c00-0000-7000-8000-000000000010' || hit?.seed !== 2 || hit?.triggers !== 2 || hit?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || hit?.errorCode !== null) {
+  if (!hitAction?.ok || !afterHit?.ok || hit?.mode !== 'hit' || hit?.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || hit?.seed !== 2 || hit?.triggers !== 2 || hit?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || hit?.errorCode !== null) {
     throw new Error(`VFX charge-to-hit switch failed: ${JSON.stringify({ hitAction, afterHit })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'hit-active.png') });
@@ -100,7 +100,7 @@ try {
   await page.waitForTimeout(250);
   const afterReset = await readSnapshot();
   const reset = afterReset?.value?.vfxHit;
-  if (!resetAction?.ok || !afterReset?.ok || reset?.mode !== 'hit' || reset?.guid !== '019e9c00-0000-7000-8000-000000000010' || reset?.playing !== false || reset?.seed !== 0 || reset?.triggers !== 0 || reset?.alive !== 0) {
+  if (!resetAction?.ok || !afterReset?.ok || reset?.mode !== 'hit' || reset?.guid !== 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || reset?.playing !== false || reset?.seed !== 0 || reset?.triggers !== 0 || reset?.alive !== 0) {
     throw new Error(`VFX reset failed: ${JSON.stringify({ resetAction, afterReset })}`);
   }
 

@@ -2,76 +2,47 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const SHADER_FILES = [
+// Built-in programs that can be drawn with a blend state. Each one fogs itself
+// at its own depth through the View copy selected by its blend composition.
+const TRANSLUCENT_WRITERS = [
   'default-standard-pbr.wgsl',
   'default-standard-pbr-skin.wgsl',
   'unlit.wgsl',
   'sprite.wgsl',
   'sprite-lit.wgsl',
   'msdf-text.wgsl',
-  'skybox.wgsl',
+  'points-lines.wgsl',
 ] as const;
+// The opaque fog pass owns these: the sky stays unfogged background and
+// deferred lighting is fogged in place after it resolves.
+const OPAQUE_ONLY = ['skybox.wgsl', 'standard-deferred-lighting.wgsl'] as const;
 
 const shaderSource = (file: string): string =>
   readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
 
-const count = (source: string, pattern: RegExp): number => source.match(pattern)?.length ?? 0;
-
-function producerContract(source: string): boolean {
-  return (
-    /#import\s+forgeax_view::common::\{[^}]*\bFogRay\b[^}]*\}/.test(source) &&
-    /#import\s+forgeax_view::fog::\{[^}]*\bapply_fog\b[^}]*\}/.test(source) &&
-    count(source, /\bapply_fog\s*\(/g) === 1 &&
-    count(source, /\bFogRay\s*\(/g) >= 1 &&
-    (source.includes('view.fog') || source.includes('viewParams.fog'))
-  );
-}
-
-function body(source: string, entry: string, nextEntry: string): string {
-  const start = source.indexOf(entry);
-  const end = nextEntry === '' ? -1 : source.indexOf(nextEntry, start + entry.length);
-  return source.slice(start, end === -1 ? source.length : end);
-}
-
-describe('built-in Fog producer matrix', () => {
-  it('requires one shared Fog module call and a real FogRay for every built-in output', () => {
-    for (const file of SHADER_FILES) {
+describe('Built-in fog producer matrix', () => {
+  it('fogs every blended built-in writer at its own depth', () => {
+    for (const file of TRANSLUCENT_WRITERS) {
       const source = shaderSource(file);
-      expect(producerContract(source), file).toBe(true);
+      expect(source, file).toContain('#import forgeax_view::fog::{translucent_fog}');
+      expect(source.match(/translucent_fog\(view,/g)?.length ?? 0, file).toBeGreaterThan(0);
     }
   });
 
-  it('keeps deferred G-buffer and temporal/reactive outputs free of Fog', () => {
-    const pbr = shaderSource('default-standard-pbr.wgsl');
-    const gbuffer = body(pbr, 'fn fs_gbuffer', 'struct TemporalVsOut');
-    const temporal = body(pbr, 'fn fs_temporal', '');
-
-    expect(gbuffer).not.toContain('applySceneFog(');
-    expect(gbuffer).not.toContain('apply_fog(');
-    expect(temporal).not.toContain('applySceneFog(');
-    expect(temporal).not.toContain('apply_fog(');
+  it('leaves opaque-only programs to the opaque fog pass', () => {
+    for (const file of OPAQUE_ONLY) {
+      expect(shaderSource(file), file).not.toContain('forgeax_view::fog');
+    }
+    expect(shaderSource('analytic-fog.wgsl')).toContain('view_fog(fog_view,');
+    expect(shaderSource('analytic-fog.wgsl')).toContain('if depth <= 0.0 { discard; }');
   });
 
-  it('turns deletion, duplication, and non-scene output coverage into red verdicts', () => {
-    const source = shaderSource('default-standard-pbr.wgsl');
-    expect(producerContract(source)).toBe(true);
-
-    const deleted = source.replace(/#import\s+forgeax_view::fog::\{[^\n]+\}\n?/, '');
-    expect(producerContract(deleted)).toBe(false);
-
-    const duplicated = `${source}\n${source.match(/\bapply_fog\s*\([\s\S]*?\);/)?.[0] ?? ''}`;
-    expect(producerContract(duplicated)).toBe(false);
-
-    const gbufferStart = source.indexOf('fn fs_gbuffer');
-    const gbufferFogged = `${source.slice(0, gbufferStart)}${source
-      .slice(gbufferStart)
-      .replace(
-        'let baseUv =',
-        'let _falsify = applySceneFog(vec3<f32>(1.0), 1.0, vec3<f32>(0.0));\n  let baseUv =',
-      )}`;
-    expect(gbufferFogged).not.toBe(source);
-    expect(body(gbufferFogged, 'fn fs_gbuffer', 'struct TemporalVsOut')).toContain(
-      'applySceneFog(',
-    );
+  it('keeps one fog evaluation without private per-shader fog entry points', () => {
+    const sources = [...TRANSLUCENT_WRITERS, ...OPAQUE_ONLY].map(shaderSource).join('\n');
+    expect(sources.match(/apply_fog|applySceneFog|FogRay|fn view_fog/g)).toBeNull();
+    const composite = shaderSource('volume/volume-composite.wgsl');
+    expect(shaderSource('volume/volume-integrate.wgsl')).toContain('fn hg');
+    expect(shaderSource('volume/volume-integrate.wgsl')).toContain('local_scatter');
+    expect(composite).toContain('composite_resolved_volume');
   });
 });

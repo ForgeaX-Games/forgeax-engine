@@ -13,6 +13,7 @@ const expectedCodes = [
   'fullscreen-input-not-found',
   'ssao-radius-non-positive',
   'ssao-bias-negative',
+  'ssao-parameter-invalid',
   'params-size-mismatch',
   'params-update-size-mismatch',
 ] as const satisfies readonly PostProcessErrorCode[];
@@ -38,9 +39,9 @@ const evidence = [
       detail: { id: 'pkg::missing' },
     }),
     expected: 'typed fullscreen plan references a registered post-process id',
-    hint: "no post-process is registered for id 'pkg::missing'. Register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.",
+    hint: "no post-process is registered for id 'pkg::missing'. For Engine-owned effects, rebuild the shader manifest with that Engine entry enabled. For custom effects, register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.",
     message:
-      "post-process: post-process-not-found (no post-process is registered for id 'pkg::missing'. Register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.)",
+      "post-process: post-process-not-found (no post-process is registered for id 'pkg::missing'. For Engine-owned effects, rebuild the shader manifest with that Engine entry enabled. For custom effects, register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.)",
   },
   {
     code: 'fullscreen-input-not-found',
@@ -100,9 +101,9 @@ const evidence = [
 ];
 
 describe('PostProcessError policy ownership', () => {
-  it('preserves the exact seven-code vocabulary owned by this policy', () => {
-    expect(expectedCodes).toHaveLength(7);
-    expect(new Set(expectedCodes).size).toBe(7);
+  it('preserves the closed parameter-validation vocabulary owned by this policy', () => {
+    expect(expectedCodes).toHaveLength(8);
+    expect(new Set(expectedCodes).size).toBe(8);
     expectTypeOf<PostProcessErrorCode>().toEqualTypeOf<ExpectedCodeUnion>();
     expectTypeOf<ExpectedCodeUnion>().toEqualTypeOf<PostProcessErrorCode>();
     const acceptsCode = (code: PostProcessErrorCode): PostProcessErrorCode => code;

@@ -1,21 +1,42 @@
 # @forgeax/engine-rhi
 
-> Pure-interface RHI; zero impl. spec-aligned with `@webgpu/types`; wgpu-superset op-set capability-gated; 14 opaque handles; math-free.
+> Pure-interface RHI; zero impl. spec-aligned with `@webgpu/types`; wgpu-superset op-set capability-gated; opaque handles; math-free.
 
 ## Charter propositions (顶部命题 / AI users read AGENTS.md §RHI first)
 
 | Proposition | This package's contract |
 |:--|:--|
-| 1 渐进披露 | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` reaches 14 opaque handles + 7 main interfaces + 9 descriptors + 23 `RhiErrorCode` members in one read. Top-level table of contents below precedes detail. |
-| 2 业界实践 | 5 descriptors = `Pick<GPUXxxDescriptor, ...>` byte-aligned with `@webgpu/types`; mirrors typescript-eslint / `@microsoft/api-extractor` selection patterns (S-2 ts-morph). |
+| 1 渐进披露 | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` reaches opaque handles + 7 main interfaces + descriptor projections + 23 `RhiErrorCode` members in one read. Top-level table of contents below precedes detail. |
+| 2 业界实践 | Descriptor projections use `Pick<GPUXxxDescriptor, ...>` byte-aligned with `@webgpu/types`; mirrors typescript-eslint / `@microsoft/api-extractor` selection patterns (S-2 ts-morph). |
 | 3 机读 union > 散文 | `RhiErrorCode` is a closed string-literal union (23 members); AI users `switch (err.code)` is TypeScript-exhaustive with no `default` fallback. Tables below are machine-readable, not paragraphs. |
-| 4 显式失败 | Every method returns `Result<T, RhiError>`. Errors carry `.code` + `.expected` + `.hint` (and optional `.detail` for compile-failed). 3 placeholder methods (executeBundles / beginOcclusionQuery / endOcclusionQuery) return structured `'rhi-not-available'` until `feat-future-rhi-resource-creation` lands. |
-| 5 一致抽象 | 14 opaque handles use brand-only `Id<T>`; the shim never renames fields; `caps.X = false` is the same signal shape as a value field. Single hatch: `_internal_getRawDevice` (D-S1; no other escape). |
+| 4 显式失败 | Every method returns `Result<T, RhiError>`. Errors carry `.code` + `.expected` + `.hint` (and optional `.detail` for compile-failed). QuerySet creation, occlusion begin/end, resolve, and timestamp writes are implemented or capability-gated; render bundles expose typed creation, immutable finish and repeated execution. |
+| 5 一致抽象 | opaque handles use brand-only `Id<T>`; the shim never renames fields; `caps.X = false` is the same signal shape as a value field. Single hatch: `_internal_getRawDevice` (D-S1; no other escape). |
 | 6 (candidate) mock vs real-GPU | dawn.node integration tests trigger the 4 D-S3 error codes against a real GPU adapter (`packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts`); mock-only coverage is monitored as a silent-pass blind spot (plan-strategy R-7). |
 
 > AI users: read [AGENTS.md §RHI / WebGPU](../../AGENTS.md) first; the铁律 (spec-alignment / capability-gated / opaque handle / math-free) is the SSOT and supersedes any divergence in this README.
 
-## 14 opaque handles (no prefix)
+## Query capability matrix
+
+The query surface is split by the fact that can actually gate it: occlusion
+queries are ordinary WebGPU operations and do not need a new capability bit;
+timestamp queries require the existing `caps.timestampQuery` gate and a
+positive `timestampPeriodNanoseconds`. Every row below has an interface,
+implementation, and test owner; the browser-specific query artifact is not
+silently promoted from a Dawn or mock result.
+
+| Operation | Gate / constructibility | WebGPU shim and evidence | RhiNull boundary |
+|:--|:--|:--|:--|
+| `createQuerySet` / `destroyQuerySet` | `type: 'occlusion'` has no optional-cap gate; `count <= 4096`; `type: 'timestamp'` requires `caps.timestampQuery` | [`RhiDevice`](./src/index.ts#L1433), [`device.ts`](../rhi-webgpu/src/device.ts#L1837), [Dawn create tests](../rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts#L381) | [`createQuerySet`](../rhi-null/src/device.ts#L211) rejects timestamp sets with `feature-not-enabled`; occlusion produces a structural handle |
+| Pass `occlusionQuerySet` + `beginOcclusionQuery` / `endOcclusionQuery` | Query set supplied in [`RenderPassDescriptor`](./src/index.ts#L794); index/range and non-nesting state are validated | Stateful forwarding and validation in [`device.ts`](../rhi-webgpu/src/device.ts#L542); [Dawn state/round-trip tests](../rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts#L619) | Pass methods return structural `ok`; this is not GPU visibility evidence |
+| `resolveQuerySet` | Destination offset is 256-byte aligned, destination has `QUERY_RESOLVE`, and query range fits the set | Validation/forwarding in [`device.ts`](../rhi-webgpu/src/device.ts#L966); [Dawn validation and round-trip tests](../rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts#L820) | Returns structural `ok` and never creates timing evidence |
+| Timestamp QuerySet + pass `timestampWrites` | Required feature requested; `caps.timestampQuery === true` and period is positive | Mapping in [`device.ts`](../rhi-webgpu/src/device.ts#L745); [Dawn admission/readback test](../rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts#L1233) | `timestampQuery=false`, timestamp creation is refused; no synthetic ticks |
+| Pass descriptor `timestampWrites` | Capability-positive devices attach timestamp pairs to real render/compute pass boundaries; unavailable periods remain fail-closed | [`RenderPassDescriptor`](./src/index.ts#L794), [`device.ts`](../rhi-webgpu/src/device.ts#L745); [Dawn admission/readback tests](../rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts#L1233) | `timestampQuery=false`, timestamp creation is refused; no ticks are fabricated |
+| `createRenderBundleEncoder` / `finish` / `executeBundles` | Core WebGPU operation; typed `RenderBundle` handles from the issuing device | Native WebGPU and WASM implementations; [Browser/Dawn regression](../runtime/src/__tests__/render-bundle.fixture.ts) | Repeated draws and resource ownership/lifetime checks; no pixels |
+
+> [!IMPORTANT]
+> `RhiNull` is structural evidence only. Its bundle/occlusion/resolve bookkeeping is not GPU pixel or timing evidence. Read the source and the linked backend evidence before choosing a recovery path.
+
+## opaque handles (no prefix)
 
 | Handle | Purpose |
 |:--|:--|
@@ -33,22 +54,29 @@
 | `Fence` | Sync barrier (GPU<->CPU) |
 | `CommandEncoder` | Command recorder (single-shot) |
 | `CommandBuffer` | Command buffer (submit to Queue) |
+| `RenderBundle` | Immutable drawing commands, reusable on the issuing device |
 
 ## 7 main interfaces (Rhi-prefixed) — operation verb mixins
 
 | Interface | Methods (mixin grouping) |
 |:--|:--|
-| `RhiDevice` | resource create: `createBuffer` / `createTexture` / `createSampler` / `createBindGroupLayout` / `createPipelineLayout` / `createBindGroup` / `createRenderPipeline` / `createComputePipeline` / `createCommandEncoder`; resource destroy: `destroyBuffer(buf): Result<void, RhiError>` / `destroyTexture(tex): Result<void, RhiError>` (feat-20260612); readonly: `caps` / `features` / `limits` / `queue` / `lost` |
+| `RhiDevice` | resource create: `createBuffer` / `createTexture` / `createSampler` / `createBindGroupLayout` / `createPipelineLayout` / `createBindGroup` / `createRenderPipeline` / `createComputePipeline` / `createQuerySet` / `createCommandEncoder` / `createRenderBundleEncoder`; resource destroy: `destroyBuffer(buf): Result<void, RhiError>` / `destroyQuerySet(querySet): Result<void, RhiError>` / `destroyTexture(tex): Result<void, RhiError>`; readonly: `caps` / `features` / `limits` / `queue` / `lost` |
 | `RhiQueue` | submit: `submit(commandBuffers)`; copy: `writeBuffer(buffer, offset, data, dataOffset?, size?)` (real-path forwarding to `GPUQueue` w/ bounds guard, D-S3 #4) |
-| `RhiCommandEncoder` | pass open: `beginRenderPass` / `beginComputePass`; copy: `copyBufferToBuffer` (3-arg + 5-arg overloads) / `copyBufferToTexture` / `copyTextureToBuffer` / `copyTextureToTexture`; misc: `clearBuffer` / `resolveQuerySet` (placeholder) / `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `finish() -> Result<CommandBuffer, RhiError>` |
-| `RhiRenderPassEncoder` | bind: `setPipeline` / `setBindGroup` / `setVertexBuffer` / `setIndexBuffer`; draw: `draw` / `drawIndexed` / `drawIndirect` / `drawIndexedIndirect`; state: `setViewport` / `setScissorRect` / `setBlendConstant` / `setStencilReference`; debug: `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `end()`; placeholders: `executeBundles` / `beginOcclusionQuery` / `endOcclusionQuery` (return `'rhi-not-available'` until `feat-future-rhi-resource-creation`) |
+| `RhiCommandEncoder` | pass open: `beginRenderPass` / `beginComputePass`; copy: `copyBufferToBuffer` (3-arg + 5-arg overloads) / `copyBufferToTexture` / `copyTextureToBuffer` / `copyTextureToTexture`; query: `resolveQuerySet` (validated forwarding); misc: `clearBuffer` / `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `finish() -> Result<CommandBuffer, RhiError>`; plus the ForgeaX compound `encodeEmptyComputePass(desc)` |
+| `RhiRenderPassEncoder` | bind: `setPipeline` / `setBindGroup` / `setVertexBuffer` / `setIndexBuffer`; draw: `draw` / `drawIndexed` / `drawIndirect` / `drawIndexedIndirect`; state: `setViewport` / `setScissorRect` / `setBlendConstant` / `setStencilReference`; query: `beginOcclusionQuery` / `endOcclusionQuery` (stateful forwarding); debug: `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `end()`; `executeBundles` executes compatible typed bundles and clears pipeline/binding/vertex/index state |
 | `RhiComputePassEncoder` | `setPipeline` / `setBindGroup` / direct `dispatchWorkgroups` / buffer-driven `dispatchWorkgroupsIndirect` / `end` |
 | `RhiRenderPipelineOps` | render-pipeline cache + dispatch helpers (op-set scoped to render path) |
 | `RhiComputePipelineOps` | compute-pipeline cache + dispatch helpers (op-set scoped to compute path) |
 
-> 14 opaque handles are no-prefix; 7 main interfaces are `Rhi`-prefixed. AI users grep `Rhi` to enumerate the operation verb set; grep handle name (e.g. `Buffer`) to enumerate handle uses. The two namespaces never overlap (charter proposition 5).
+> opaque handles are no-prefix; 7 main interfaces are `Rhi`-prefixed. AI users grep `Rhi` to enumerate the operation verb set; grep handle name (e.g. `Buffer`) to enumerate handle uses. The two namespaces never overlap (charter proposition 5).
 
-## 9 descriptors (`Pick<GPUXxxDescriptor, ...>` + `ExplicitUndefined<>`)
+`encodeEmptyComputePass(desc)` is an engine compound recording operation: it
+records `beginComputePass(desc)` and immediately ends that pass. It is not a
+native `GPUCommandEncoder` method and must not be described as direct copy
+timestamp writing; timestamp-enabled callers still use two real compute-pass
+markers when they need an encoder-level copy envelope.
+
+## Descriptor projections (`Pick<GPUXxxDescriptor, ...>` + `ExplicitUndefined<>`)
 
 | Descriptor | spec source |
 |:--|:--|
@@ -58,13 +86,14 @@
 | `BindGroupLayoutDescriptor` | `Pick<GPUBindGroupLayoutDescriptor, 'label' \| 'entries'>` |
 | `RenderPipelineDescriptor` | `Pick<GPURenderPipelineDescriptor, 'label' \| 'layout' \| 'vertex' \| 'primitive' \| 'depthStencil' \| 'multisample' \| 'fragment'>` |
 | `CommandEncoderDescriptor` | `Pick<GPUCommandEncoderDescriptor, 'label'>` (D-S5) |
+| `QuerySetDescriptor` | `Pick<GPUQuerySetDescriptor, 'label' \| 'type' \| 'count'>` (query resource creation) |
 | `RenderPassDescriptor` | `Pick<GPURenderPassDescriptor, 'label' \| 'colorAttachments' \| 'depthStencilAttachment' \| 'occlusionQuerySet' \| 'timestampWrites' \| 'maxDrawCount'>` (D-S5; `view` field tightened to `Texture`) |
 | `RenderPassColorAttachment` | spec-aligned color attachment slot (`view` = `Texture`, `resolveTarget` = `Texture` when present, `clearValue` / `loadOp` / `storeOp`) |
 | `RenderPassDepthStencilAttachment` | spec-aligned depth-stencil slot (`view` = `Texture`, `depthClearValue` / `depthLoadOp` / `depthStoreOp` / `depthReadOnly`, similar for stencil) |
 
 ### ExplicitUndefined<> 桥接
 
-The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` mapped type that converts every `?: T` optional field into `?: T | undefined`. This is the **shape bridge** between `@webgpu/types` (W3C spec form) and the forgeax RHI surface.
+The descriptor projections above are wrapped by an internal `ExplicitUndefined<T>` mapped type that converts every `?: T` optional field into `?: T | undefined`. This is the **shape bridge** between `@webgpu/types` (W3C spec form) and the forgeax RHI surface.
 
 | Concern | spec form (`@webgpu/types`) | forgeax form (this package) |
 |:--|:--|:--|
@@ -92,7 +121,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 | `'feature-not-enabled'` | calling a method that requires a feature not in `device.features` | W3C 5.6 GPUDevice.features |
 | `'limit-exceeded'` <!-- limit-exceeded detail shape evolving in feat-20260513-instanced-mesh --> | input exceeds `device.limits.<name>` | W3C 5.7 GPUSupportedLimits |
 | `'shader-compile-failed'` | WGSL / SPIR-V compile error; `.detail.compilerMessages` carries `GPUCompilationMessage[]` | W3C 7.2 GPUShaderModule.getCompilationInfo |
-| `'rhi-not-available'` | placeholder for unimplemented entry points (e.g. future `RhiDevice.destroy` / `executeBundles` / `beginOcclusionQuery` / `endOcclusionQuery`); also reserved as `device.lost reason='destroyed'` / real-adapter null sub-classification (R1 fallback / R10). AI users read `.code === 'rhi-not-available'` to detect "not implemented in this closure" and follow `.expected` / `.hint`. | placeholder marker (charter proposition 4) |
+| `'rhi-not-available'` | public entry point whose required handle/owner is not constructible in this closure (for example a foreign backend handle); also reserved as `device.lost reason='destroyed'` / real-adapter null sub-classification (R1 fallback / R10). AI users read `.code === 'rhi-not-available'` to detect "not available in this closure" and follow `.expected` / `.hint`. | placeholder marker (charter proposition 4) |
 | `'webgpu-runtime-error'` | silent-skip fan-out from `webgpu-backend.ts` / `createRenderer.ts` (verify-gpu-smoke-gate K-9) | engine-internal fault root |
 | `'command-encoder-finished'` | `encoder.finish()` after a prior `finish()`; second `finish()` returns this code (void-recording APIs throw the structured error) | W3C 22 GPUCommandEncoder lifecycle |
 | `'render-pass-not-ended'` | second `beginRenderPass` while a previous pass is unfinished, or `encoder.finish()` while a pass has not been `end()`-ed | W3C 22.7 Render pass |
@@ -100,7 +129,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 | `'queue-write-buffer-out-of-bounds'` | `writeBuffer(buf, offset, data)` offset alignment or bounds violation; `.hint` carries concrete `got X` / `got Y` / `got Z` numbers | W3C 23.2 writeBuffer |
 | `'render-system-no-camera'` | RenderSystem found 0 entity matching `(Transform + Camera)`; the frame is skipped (no GPU commands recorded). Distinct from `'rhi-not-available'` because the RHI surface itself is functional — it is the ECS world that lacks a Camera entity (engine-internal phase, feat-20260509-ecs-render-bridge-mvp D-S7) | engine-internal RenderSystem |
 | `'render-system-multi-camera'` | RenderSystem found N>1 entities matching `(Transform + Camera)`; the first archetype iteration hit is rendered, subsequent Cameras are ignored (D-S7) | engine-internal RenderSystem |
-| `'render-system-multi-light'` | RenderSystem found N>1 entities with `DirectionalLight` or N>4 with `PointLight` / `SpotLight`; `'render-system-multi-light'` covers DirectionalLight N>1 + PointLight/SpotLight N>4 first-slice-cap exceedance; 0-light + standard renders black (physically correct). `.detail = { type: 'directional' \| 'point' \| 'spot', got: number }` discriminates the offending bucket | engine-internal RenderSystem |
+| `'render-system-multi-light'` | RenderSystem found N>1 `DirectionalLight` entities; PointLight / SpotLight / RectArea lights are admitted through the shared Cluster corpus. 0-light + standard renders black (physically correct). `.detail = { type: 'directional', got: number }` identifies the offending bucket | engine-internal RenderSystem |
 | `'asset-not-registered'` | A `MeshFilter.assetHandle` is not in `engine.assets` (`AssetRegistry.get(handle)` returned undefined); the single entity is skipped (other entities continue rendering — charter proposition 9 graceful degradation). `.detail = { assetHandle: number }` carries the offending handle | engine-internal RenderSystem |
 | `'device-lost'` | `GPUDevice.lost` Promise resolved (spec 22.1 device lost flow); driver crash / power saver / extension swap. `.expected` / `.hint` template guides callers to `renderer.onError(cb)` + page reload (feat-20260511-asset-system-v1 D-P4 + R-02 §2.1) | W3C 22.1 device lost |
 | `'oom'` | `GPUOutOfMemoryError` subtype — buffer / texture allocation exceeded available GPU memory. `.hint` suggests `.destroy()` prior resources / split work across submissions / check `device.limits.maxBufferSize` | W3C 22.2 GPUOutOfMemoryError |
@@ -118,17 +147,18 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 
 | Field | Type | Semantics |
 |:--|:--|:--|
-| `RhiCaps` | `readonly { compute / timestampQuery / timestampPeriodNanoseconds / indirectDrawing / textureCompressionBc / textureCompressionEtc2 / textureCompressionAstc / multiDrawIndirect / pushConstants / textureBindingArray / samplerAliasing / firstInstanceIndirect / storageBuffer / storageTexture }` | Hardware feature probe (proposition 5: `caps.X = false` is the same signal shape as a value field, no exception) |
+| `RhiCaps` | Readonly hardware-probe record declared in [`src/index.ts`](./src/index.ts#L859); includes backend identity, boolean features, probe-derived format capabilities, and numeric `maxColorAttachments` | Hardware feature/limit probe (proposition 5: a false capability is data, never an exception) |
 | `RhiFeatures` | `readonly Set<GPUFeatureName>` | Enabled feature set (a subset of capabilities) |
 | `RhiLimits` | `readonly GPUSupportedLimits` | Numeric limits (`maxBindGroups`, `maxBufferSize`, etc.) |
 
-### Capabilities — 13-field `RhiCaps` index
+### Capabilities — source-backed `RhiCaps` index
 
 > [!NOTE]
-> **ROLE: RhiCaps detail SSOT (M1-T7 / AC-02)**. Field set + ordering kept byte-for-byte aligned with [`packages/rhi/src/index.ts`](./src/index.ts) `RhiCaps` interface (L795-935). AGENTS.md §RHI form rules carries the pointer entry (`Capabilities — see packages/rhi/README.md §Capabilities for the 13-field index`); this section is the deep index. Cross-link is intentional and asymmetric — manifest vs detail (架构原则 #1 双源 ROLE 区分).
+> **ROLE: RhiCaps projection**. The executable field roster is [`RhiCaps`](./src/index.ts#L859); this table mirrors its current fields without making a hand-maintained field count part of the contract. Query capability is documented separately below because occlusion is an operation surface, not a copied capability flag.
 
 | Field | Type | Trigger / probe site | WebGPU (`navigator.gpu`) | wgpu wasm (webgl backend) | wgpu native |
 |:--|:--|:--|:--|:--|:--|
+| `backendKind` | `'webgpu' \| 'wgpu-native' \| 'wgpu-webgl2' \| 'null'` | Concrete backend identity | `'webgpu'` | `'wgpu-webgl2'` | `'wgpu-native'` |
 | `compute` | `boolean` | compute pipelines supported (W3C 13.2 GPUComputePipeline) | `true` (spec-mandated) | `false` (no compute) | `true` |
 | `timestampQuery` | `boolean` | `device.features.has('timestamp-query')` (W3C 21 query sets) | gated; off by default | `false` | gated |
 | `timestampPeriodNanoseconds` | `number | null` | Backend-owned timestamp unit; positive only when timestamp queries are supported | `1` when enabled, otherwise `null` | `null` | backend-owned |
@@ -143,22 +173,97 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 | `firstInstanceIndirect` | `boolean` | `device.features.has('indirect-first-instance')` (W3C 22.4 drawIndirect) | gated; off by default | `false` | gated |
 | `storageBuffer` | `boolean` | `device.limits.maxStorageBuffersPerShaderStage > 0` | `true` on real adapters | `false` (no storage binding) | `true` |
 | `storageTexture` | `boolean` | `device.limits.maxStorageTexturesPerShaderStage > 0` | `true` on real adapters | `false` (no storage texture binding) | `true` |
+| `rgba16floatRenderable` | `boolean` | Device-level `rgba16float` + `RENDER_ATTACHMENT` probe | probe result | probe result | probe result |
+| `rg11b10ufloatRenderable` | `boolean` | `rg11b10ufloat-renderable` feature plus device-level render-attachment probe | feature/device dependent | feature/device dependent | feature/device dependent |
+| `float32Filterable` | `boolean` | `float32-filterable` feature plus filtering sampler/bind-group-layout probe | feature/device dependent | feature/device dependent | feature/device dependent |
+| `maxColorAttachments` | `number` | `device.limits.maxColorAttachments` | adapter limit (fallback `4`) | raw limit (fallback `4`) | backend limit |
 
-AI users gate optional fast paths via `caps.X` instead of try / catch (`caps.X = false` is an explicit signal, never an exception — charter proposition 4). The 4 `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect` / `pushConstants` / `textureBindingArray`) plus the JSDoc-`@note` annotated fields are sourced from the `RhiCaps` interface JSDoc — `LSP hover` over any cap surfaces the per-field rationale.
+AI users gate optional fast paths via `caps.X` instead of try / catch (`caps.X = false` is an explicit signal, never an exception — charter proposition 4). The 3 `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect` / `pushConstants` / `textureBindingArray`) plus the JSDoc-`@note` annotated fields are sourced from the `RhiCaps` interface JSDoc — `LSP hover` over any cap surfaces the per-field rationale.
 
 Render membership timing consumes only this capability seam. It requests the
 timestamp feature for explicit GPU timing, uses the existing opaque timestamp
 operations, and refuses when the boolean or the positive period is absent.
 
-## Placeholder methods (3) — return `'rhi-not-available'`
+Generic GPU pass timing is not an RHI API. RHI exposes only capability data and
+opaque timestamp primitives; Render owns admission, pass identity, receipt
+binding, parsing, retention, four-status facts, and recovery. RHI must not
+return a Render status, a pass catalog, a benchmark verdict, or synthetic ticks.
+`RhiNull` and unsupported backends therefore prove refusal/zero behavior only;
+they are not accepted GPU timing evidence. Use the Render entry point and its
+bounded validator for accepted facts.
 
-| Method | Owning future closure |
+## r32float-mip-sampled-storage receipt
+
+> [!WARNING]
+> `probeTextureFormatCapability()` is a narrow RHI probe, not an SSR policy
+> switch. A `structural-only` or `unavailable` result cannot be promoted to
+> pixel admission, and no backend-kind check, CPU/WebGL2 compute substitute,
+> or hidden copy chain can satisfy this contract.
+
+The probe returns one detached receipt bound to the current `deviceGeneration`.
+Its stage evidence must cover the complete path below; a single missing stage
+maps to the closed `rhi-texture-format-capability-unavailable` error.
+
+| Stage | Evidence required |
 |:--|:--|
-| `RhiRenderPassEncoder.executeBundles(bundles)` | `feat-future-rhi-resource-creation` (RhiRenderBundle support) |
-| `RhiRenderPassEncoder.beginOcclusionQuery(queryIndex)` | `feat-future-rhi-resource-creation` (RhiQuerySet support) |
-| `RhiRenderPassEncoder.endOcclusionQuery()` | `feat-future-rhi-resource-creation` (RhiQuerySet support) |
+| `texture-create` | `r32float`, mip count, and sampled/storage/copy usage accepted |
+| `mip-view` | every required mip view is constructible |
+| `sampled-storage-bind-group` | unfilterable sampled binding and storage binding agree |
+| `pipeline-bind` | the real pipeline accepts both bindings |
+| `finish` | command encoding finishes without validation error |
+| `submit` | the command buffer reaches the queue |
+| `completion` | the submitted work completes on this device generation |
+| `readback` | map/readback succeeds and carries the same generation receipt |
 
-> The shim's real path returns `Result.err({ code: 'rhi-not-available', expected, hint: 'see feat-future-rhi-resource-creation' })`. AI users grep `'rhi-not-available'` to enumerate placeholders; the承接 closure renames each to its real `code` (minor add-only per evolution contract).
+```mermaid
+sequenceDiagram
+  participant D as RhiDevice
+  participant G as GPU device
+  D->>G: create texture + mip views
+  D->>G: bind sampled/storage resources
+  D->>G: encode pipeline and finish
+  D->>G: submit and await completion
+  D->>G: read back probe result
+  G-->>D: detached stage receipt + deviceGeneration
+```
+
+Consumers should switch on the closed error code, then read `expected`,
+`hint`, and narrowed `detail.stage`/`detail.deviceGeneration`. The per-device
+cache may reuse one Promise within a generation; device replacement invalidates
+the old physical verdict and permits one fresh probe for the new generation.
+
+### AI-readable format evidence
+
+Use the detached receipt as the only public evidence projection. Its `status`,
+`profile`, `deviceGeneration`, and ordered `stages` answer whether the complete
+texture-create through readback path ran. When unavailable, branch on the closed
+`rhi-texture-format-capability-unavailable` error and inspect `expected`, `hint`,
+and `detail.stage`; route recovery to the device owner and retry once for the new
+generation. `structural-only` is an evidence level, not a pixel admission.
+
+The SSR consumer reads this receipt but does not own the probe, a cache, or a
+second report. Backend kind, CPU/WebGL2 compute, RhiNull pixels, hidden copies,
+and live GPU handles are not valid substitutes.
+
+## Render bundles
+
+`device.createRenderBundleEncoder(descriptor)` returns a `Result<RhiRenderBundleEncoder, RhiError>`.
+Its shared `RhiRenderCommands` surface records pipeline, bindings, vertex/index buffers,
+direct/indirect draws and debug scopes. `finish(descriptor?)` consumes the encoder and returns
+an immutable `RenderBundle`. `pass.executeBundles(iterable)` executes it repeatedly; an empty
+iterable still clears pipeline, bind-group and vertex/index state. Viewport, scissor, blend
+constant and stencil reference belong to the pass and are not recorded in bundles.
+
+| Change | Caller obligation |
+|:--|:--|
+| Buffer contents updated through the same handle | Reuse the bundle; commands read current data |
+| Pipeline, bind group, buffer handle, dynamic offset, draw arguments or ordering changes | Record a new bundle |
+| Color/depth format, sample count or read-only attachment compatibility changes | Record a compatible bundle |
+| Device replacement or resource destruction | Drop cached bundles; rebuild from live resources |
+
+Bundle handles have no explicit destroy operation, matching WebGPU. Dropping a cache releases
+its references; submitted GPU work retains the native resources it needs. Render owns scene
+cache admission and retirement; RHI does not infer World or asset revisions.
 
 ## Evolution contract
 
@@ -193,7 +298,7 @@ if (!dr.ok) {
     case 'queue-write-buffer-out-of-bounds': /* realign offset, re-check buffer.size */ break;
     case 'render-system-no-camera':   /* world.spawn(Transform + Camera) before draw([world], { cameraOwner: 0, resourceOwner: 0 }) */ break;
     case 'render-system-multi-camera':/* deduplicate Camera entities or wait for feat-future-multi-viewport */ break;
-    case 'render-system-multi-light': /* deduplicate DirectionalLight or wait for feat-future-pbr-multi-light */ break;
+    case 'render-system-multi-light': /* keep one DirectionalLight; local lights use Cluster */ break;
     case 'asset-not-registered':      /* use HANDLE_CUBE / HANDLE_TRIANGLE imports; or feat-future-asset-system custom register */ break;
     case 'device-lost':               /* renderer.onError fan-out + page reload; driver / OS-side recovery */ break;
     case 'oom':                       /* release prior buffers/textures via .destroy(); shrink descriptor; check device.limits.maxBufferSize */ break;

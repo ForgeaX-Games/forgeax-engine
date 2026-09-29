@@ -1,8 +1,11 @@
 import {
   type CookedMaterialRecord,
   createMaterialArtifactDigest,
+  type MaterialCookProgramContext,
+  materialLayerPlanIdentity,
   validateCookedMaterialRecord,
 } from '@forgeax/engine-pack';
+import type { MaterialProgramAddress } from '@forgeax/engine-types';
 
 export interface MaterialLoadRequest {
   readonly guid: string;
@@ -19,7 +22,7 @@ export interface MaterialReady {
   readonly sourceClosure: readonly string[];
   readonly parameterContract: NonNullable<CookedMaterialRecord['parameterContract']>;
   readonly record: CookedMaterialRecord;
-  readonly artifact: CookedMaterialRecord['artifact'];
+  readonly programs: CookedMaterialRecord['programs'];
 }
 
 export interface MaterialPublication {
@@ -30,10 +33,9 @@ export interface MaterialPublication {
     readonly expected: string;
     readonly actual?: string;
   };
-  readonly artifact?: {
-    readonly bytes: Uint8Array;
-    readonly digest?: string;
-  };
+  readonly artifacts?: Readonly<
+    Record<string, { readonly bytes: Uint8Array; readonly digest?: string }>
+  >;
 }
 
 export type MaterialLoadErrorCode =
@@ -48,6 +50,10 @@ export interface MaterialLoadErrorDetail {
   readonly specializationKey: string;
   readonly publicationGeneration?: number;
   readonly field?: string;
+  readonly pass?: string;
+  readonly context?: MaterialCookProgramContext;
+  readonly address?: MaterialProgramAddress;
+  readonly matches?: number;
   readonly missing?: readonly string[];
   readonly expected?: string;
   readonly actual?: string;
@@ -108,7 +114,7 @@ function missingCook(request: MaterialLoadRequest): MaterialLoadError {
 function recordError(
   request: MaterialLoadRequest,
   field: string,
-  expected = 'a complete material-cook/3 publication record',
+  expected = 'a complete material-cook/4 publication record',
 ): MaterialLoadError {
   return materialError(
     request,
@@ -186,13 +192,17 @@ function completeTupleField(record: CookedMaterialRecord): string | undefined {
     receipt.derivedInterface?.layoutIdentity !== receipt.identity.layoutIdentity
   )
     return 'receipt.identity.layoutIdentity';
+  let expectedLayerPlanIdentity: string | undefined;
+  try {
+    expectedLayerPlanIdentity = materialLayerPlanIdentity(record);
+  } catch {
+    return 'resolved.layerPlanIdentity';
+  }
   if (
-    typeof record.artifact.mediaType !== 'string' ||
-    record.artifact.mediaType.length === 0 ||
-    typeof record.artifact.path !== 'string' ||
-    record.artifact.path.length === 0
+    expectedLayerPlanIdentity !== undefined &&
+    receipt.derivedInterface.layerPlanIdentity !== expectedLayerPlanIdentity
   )
-    return 'artifact';
+    return 'receipt.derivedInterface.layerPlanIdentity';
   return undefined;
 }
 
@@ -246,39 +256,54 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
       if (materialGuid.toLowerCase() !== request.guid.toLowerCase())
         return recordError(request, 'materialGuid');
       if (recordSpecializationKey !== request.specializationKey) return missingCook(request);
-      if (publication.artifact === undefined) {
-        return materialError(
-          request,
-          'asset-artifact-missing',
-          `published artifact for material ${request.guid}`,
-          'publish the immutable material artifact before loading the specialization',
-          { publicationGeneration },
-          true,
-        );
-      }
-      const artifactBytes = immutableBytes(publication.artifact.bytes);
-      const actualDigest = createMaterialArtifactDigest(artifactBytes);
-      if (
-        actualDigest !== artifactDigest ||
-        (publication.artifact.digest !== undefined && publication.artifact.digest !== actualDigest)
-      ) {
-        return materialError(
-          request,
-          'asset-artifact-integrity-mismatch',
-          `artifact digest ${artifactDigest}`,
-          'restore the published artifact bytes or re-publish the matching material record',
-          {
-            publicationGeneration,
-            expected: artifactDigest,
-            actual: actualDigest,
-          },
-        );
-      }
-      if (!sameBytes(record.artifact.bytes, artifactBytes)) {
-        return recordError(
-          request,
-          'artifact.bytes',
-          'record artifact bytes to match the published artifact bytes',
+      const programs: CookedMaterialRecord['programs'][number][] = [];
+      for (const program of record.programs) {
+        const artifact = program.artifact;
+        const published = publication.artifacts?.[artifact.path];
+        if (published === undefined)
+          return materialError(
+            request,
+            'asset-artifact-missing',
+            `published artifact ${artifact.path}`,
+            'publish every program artifact before loading the material',
+            { publicationGeneration, field: artifact.path },
+            true,
+          );
+        const bytes = immutableBytes(published.bytes);
+        const actualDigest = createMaterialArtifactDigest(bytes);
+        if (
+          actualDigest !== artifact.digest ||
+          (published.digest !== undefined && published.digest !== actualDigest)
+        ) {
+          return materialError(
+            request,
+            'asset-artifact-integrity-mismatch',
+            `artifact digest ${artifact.digest}`,
+            'restore the complete published generation or re-cook the material',
+            {
+              publicationGeneration,
+              field: artifact.path,
+              expected: artifact.digest,
+              actual: actualDigest,
+            },
+          );
+        }
+        if (!sameBytes(artifact.bytes, bytes))
+          return recordError(
+            request,
+            `programs.${program.specializationKey}.artifact.bytes`,
+            'record bytes to match the published program artifact',
+          );
+        programs.push(
+          Object.freeze({
+            ...program,
+            selections: Object.freeze(
+              program.selections.map((selection) =>
+                Object.freeze({ ...selection, context: Object.freeze({ ...selection.context }) }),
+              ),
+            ),
+            artifact: Object.freeze({ ...artifact, bytes }),
+          }),
         );
       }
       const refs = [
@@ -315,11 +340,8 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
         artifactDigest,
         sourceClosure: Object.freeze([...sourceClosure]),
         parameterContract: immutableParameterContract(parameterContract),
-        record,
-        artifact: Object.freeze({
-          ...record.artifact,
-          bytes: artifactBytes,
-        }),
+        record: { ...record, programs: Object.freeze(programs) },
+        programs: Object.freeze(programs),
       };
     },
   };

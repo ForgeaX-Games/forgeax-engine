@@ -4,6 +4,7 @@ import { World } from '../world';
 
 const ENTITY_COUNT = 2_000;
 const ROUNDS = 3;
+const SCALE_CHARACTERIZATION_COUNTS = [10_000, 100_000] as const;
 
 const TrendValue = defineComponent('StorageTrendValue', { value: 'f32' });
 const TrendSelected = defineComponent('StorageTrendSelected', {}, { storage: 'sparse' });
@@ -20,6 +21,24 @@ function minimumDuration(run: () => number): { duration: number; sum: number } {
 }
 
 describe('table, sparse, span, and change-distribution trends', () => {
+  it('characterizes fixed-size dense traversal without treating it as a performance verdict', () => {
+    const observations = SCALE_CHARACTERIZATION_COUNTS.map((entityCount) => {
+      const values = new Float32Array(entityCount);
+      for (let index = 0; index < entityCount; index++) values[index] = index + 1;
+      const start = performance.now();
+      let sum = 0;
+      for (const value of values) sum += value;
+      return { entityCount, elapsedMs: performance.now() - start, sum };
+    });
+
+    expect(observations.map(({ sum }) => sum)).toEqual(
+      SCALE_CHARACTERIZATION_COUNTS.map((entityCount) => (entityCount * (entityCount + 1)) / 2),
+    );
+
+    // biome-ignore lint/suspicious/noConsole: characterization output is evidence, not a gate
+    console.info(`[scale characterization] ${JSON.stringify(observations)}`);
+  });
+
   it('reports equivalent table-row, sparse-row, and dense-span traversal', () => {
     const world = new World();
     for (let index = 0; index < ENTITY_COUNT; index++) {

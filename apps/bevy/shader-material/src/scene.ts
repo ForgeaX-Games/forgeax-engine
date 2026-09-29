@@ -35,12 +35,14 @@ export function makeTexturePixels(): Uint8Array {
 export function makeTextureAsset(pixels: Uint8Array): TextureAsset {
   return {
     kind: 'texture',
-    width: TEXTURE_SIZE,
-    height: TEXTURE_SIZE,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE },
+    },
     format: 'rgba8unorm-srgb',
     data: pixels,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 

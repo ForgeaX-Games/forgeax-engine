@@ -126,6 +126,9 @@ function preCreateWebGL2ContextForWgpuGLBackend(canvas: HTMLCanvasElement | Offs
   try {
     (canvas as HTMLCanvasElement).getContext('webgl2', {
       alpha: true,
+      // wgpu owns the single-sample surface resolve; avoid WebGL's default
+      // multisampled drawing buffer, which makes that blit invalid in WebKit.
+      antialias: false,
       premultipliedAlpha: true,
       preserveDrawingBuffer: false,
       powerPreference: 'default',
@@ -364,18 +367,12 @@ export function acquireCanvasContext(
  * structural slot once the bindings land (R-06 5 pattern + wasm-bindgen
  * `js_name` rename).
  */
-export async function createShaderModule(
+function createRawShaderModule(
   device: RhiDevice,
   desc: { label?: string | undefined; code: string },
-): Promise<Result<ShaderModule, RhiError>> {
-  // Walk the forgeax RhiWgpuDeviceImpl wrapper to the raw GPUDevice. The
-  // wrapper keeps `raw` private; a public-facing structural probe via the
-  // shim-internal name `_internal_raw` is added so the engine facade picks
-  // this path up without touching the forgeax RhiDevice interface (charter
-  // proposition 5 consistent abstraction — the forgeax RhiDevice contract
-  // stays single-source; the shim adds an opaque internal field for
-  // intra-package reverse lookup, equivalent to rhi-webgpu's
-  // _internal_getRawDevice WeakMap path).
+): Result<ShaderModule, RhiError> {
+  // Walk the forgeax RhiWgpuDeviceImpl wrapper to the raw device. The wrapper
+  // keeps `raw` private; this shim-internal field avoids widening RhiDevice.
   const rawDevice = (
     device as unknown as {
       _internal_raw?: { createShaderModule?(desc: GPUShaderModuleDescriptor): unknown };
@@ -393,11 +390,12 @@ export async function createShaderModule(
   }
   const mirrored: { label?: string; code: string } = { code: desc.code };
   if ('label' in desc && desc.label !== undefined) mirrored.label = desc.label;
-  let handle: unknown;
   try {
-    handle = candidateRawCSM.call(rawDevice, mirrored as GPUShaderModuleDescriptor);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    return ok(
+      candidateRawCSM.call(rawDevice, mirrored as GPUShaderModuleDescriptor) as ShaderModule,
+    );
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
     return err(
       new RhiError({
         code: 'shader-compile-failed',
@@ -407,12 +405,34 @@ export async function createShaderModule(
       }),
     );
   }
+}
+
+export async function createShaderModule(
+  device: RhiDevice,
+  desc: { label?: string | undefined; code: string },
+): Promise<Result<ShaderModule, RhiError>> {
+  const result = createRawShaderModule(device, desc);
+  if (!result.ok) return result;
   // The spec resolves shader compile errors asynchronously via
   // module.getCompilationInfo(); the rhi-webgpu shim mirrors this. The
   // M2 baseline returns the handle as-is and lets dawn / wgpu validation
   // surface errors through subsequent pipeline build; this matches the
   // wgpu wasm path's structural contract (R-06 + plan-strategy section 4.5).
-  return ok(handle as ShaderModule);
+  return result;
+}
+
+/**
+ * Internal render-path shader creation. The wgpu wrapper reaches the raw
+ * device synchronously, just like the browser WebGPU adapter. Build-time
+ * cooking already validates published WGSL, so the render path can create
+ * the module handle without waiting for compilation diagnostics; pipeline
+ * creation remains the runtime validation point.
+ */
+export function createShaderModuleImmediate(
+  device: RhiDevice,
+  desc: { label?: string | undefined; code: string },
+): Result<ShaderModule, RhiError> {
+  return createRawShaderModule(device, desc);
 }
 
 /**
@@ -434,6 +454,7 @@ export const rhi: RhiInstance & {
     canvas: HTMLCanvasElement | OffscreenCanvas,
   ) => Result<RhiCanvasContext, RhiError>;
   createShaderModule: typeof createShaderModule;
+  createShaderModuleImmediate: typeof createShaderModuleImmediate;
 } = {
   requestAdapter,
   // The singleton internally binds the cached wasm instance (from the last
@@ -455,6 +476,7 @@ export const rhi: RhiInstance & {
     return acquireCanvasContext(instance, canvas);
   },
   createShaderModule,
+  createShaderModuleImmediate,
 };
 
 // Re-export public types from @forgeax/engine-rhi for single-import discoverability

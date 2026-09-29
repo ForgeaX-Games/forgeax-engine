@@ -1,7 +1,7 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
-#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, view, meshes, sampleMaterialTexture}
-#import forgeax_view::fog::{apply_fog}
+#import forgeax_view::common::{View, Mesh, view, meshes, sampleMaterialTexture}
+#import forgeax_view::fog::{translucent_fog}
 
 // @forgeax/engine-shader - msdf-text.wgsl
 // (feat-20260531-world-space-msdf-text-rendering M5 / w20).
@@ -146,25 +146,9 @@ fn screen_px_range(uv : vec2<f32>) -> f32 {
   return max(0.5 * dot(unit_range, screen_tex_size), 1.0);
 }
 
-fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
-  var origin = viewParams.cameraPos;
-  var direction = normalize(worldPos - origin);
-  var rayDistance = length(worldPos - origin);
-  if (viewParams.temporalProjection.z >= 0.5) {
-    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
-    let nearPoint = nearH.xyz / nearH.w;
-    let farPoint = farH.xyz / farH.w;
-    direction = normalize(farPoint - nearPoint);
-    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
-    rayDistance = max(dot(worldPos - origin, direction), 0.0);
-  }
-  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
-}
-
 // fs_main_hdr: outputs linear premultiplied alpha for the rgba16float
 // offscreen target (D-7 / R-7). The tonemap fullscreen pass handles sRGB
-// encoding; writing hdrColor lets the bloom bright-pass catch the text.
+// encoding; writing hdrColor lets Bloom extraction catch the text.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
   let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw).rgb;
@@ -176,8 +160,7 @@ fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
   let alpha = clamp(dist + 0.5, 0.0, 1.0) * material.tintColor.a;
   // Premultiplied output: rgb already multiplied by alpha for srcFactor=ONE /
   // dstFactor=ONE_MINUS_SRC_ALPHA (wiki section 6 SSOT).
-  let fogged = applySceneFog(view, material.tintColor.rgb, alpha, in.worldPos);
-  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  return vec4<f32>(translucent_fog(view, in.worldPos, material.tintColor.rgb * alpha, alpha), alpha);
 }
 
 // linear_to_srgb: per-channel IEC 61966-2-1 transfer function for the LDR
@@ -197,12 +180,11 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let sd = median(msd.r, msd.g, msd.b);
   let dist = (sd - 0.5) * screen_px_range(in.uv);
   let alpha = clamp(dist + 0.5, 0.0, 1.0) * material.tintColor.a;
-  let fogged = applySceneFog(view, material.tintColor.rgb, alpha, in.worldPos);
-  let premult = fogged.rgb * fogged.a;
+  let premult = translucent_fog(view, in.worldPos, material.tintColor.rgb * alpha, alpha);
   return vec4<f32>(
     linear_to_srgb(premult.r),
     linear_to_srgb(premult.g),
     linear_to_srgb(premult.b),
-    fogged.a,
+    alpha,
   );
 }

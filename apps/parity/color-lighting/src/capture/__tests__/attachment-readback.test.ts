@@ -12,7 +12,7 @@ const linearHdr: ObservationCapture = {
   size: { width: 1, height: 1 },
   rawHash: 'linear-hash',
   frameId: 12,
-  pipelineId: 'forgeax::urp',
+  pipelineId: 'forgeax::standard',
   backendId: 'webgpu',
 };
 
@@ -24,7 +24,7 @@ const finalDisplay: ObservationCapture = {
   size: { width: 1, height: 1 },
   rawHash: 'display-hash',
   frameId: 12,
-  pipelineId: 'forgeax::urp',
+  pipelineId: 'forgeax::standard',
   backendId: 'webgpu',
 };
 

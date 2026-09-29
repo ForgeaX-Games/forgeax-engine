@@ -571,3 +571,38 @@ describe('w8: AC-05 new events (6 total)', () => {
     expect(ev.passHandleId).toBeDefined();
   });
 });
+
+describe('writeTexture blob capture', () => {
+  it('records exactly the uploaded subarray of a packed mip chain', async () => {
+    const { debugInst, proxyDevice } = await buildMockAndArm();
+    const tex = proxyDevice.createTexture({
+      size: { width: 2, height: 2 },
+      format: 'rgba8unorm',
+      usage: 2,
+      mipLevelCount: 2,
+    }).value;
+    const packed = new Uint8Array(20);
+    packed.fill(1, 0, 16);
+    packed.fill(9, 16, 20);
+    proxyDevice.queue.writeTexture(
+      { texture: tex, mipLevel: 0 },
+      packed.subarray(0, 16),
+      { offset: 0, bytesPerRow: 8, rowsPerImage: 2 },
+      { width: 2, height: 2 },
+    );
+    proxyDevice.queue.writeTexture(
+      { texture: tex, mipLevel: 1 },
+      packed.subarray(16, 20),
+      { offset: 0, bytesPerRow: 4, rowsPerImage: 1 },
+      { width: 1, height: 1 },
+    );
+    debugInst.onFrameEnd();
+    const tape = debugInst.getTape() as any;
+    const writes = findEventsOfKind(tape.events, 'writeTexture') as any[];
+    expect(writes).toHaveLength(2);
+    const pool = debugInst.getBlobPool();
+    const bytesOf = (hash: string) => [...new Uint8Array(pool.get(hash)!)];
+    expect(bytesOf(writes[0].dataHash)).toEqual(new Array(16).fill(1));
+    expect(bytesOf(writes[1].dataHash)).toEqual([9, 9, 9, 9]);
+  });
+});

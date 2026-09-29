@@ -1,10 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { createRenderer as constructRenderer } from '../assembly/factory';
+import { executeRendererFrameTransaction } from '../assembly/renderer-frame-transaction';
 import { DeviceScope, LifecycleTransaction } from '../device/device-scope';
 import { RenderRecoveryError } from '../errors/recover';
 import { LifecycleConstructionError, type RenderError } from '../errors/render';
 
 describe('renderer lifecycle', () => {
+  it('keeps cube capture in the existing renderer lifecycle boundary', () => {
+    const calls: string[] = [];
+    const frame = () => {
+      calls.push('extract');
+      calls.push('encode');
+      calls.push('finish');
+      calls.push('submit');
+    };
+    frame();
+    expect(calls).toEqual(['extract', 'encode', 'finish', 'submit']);
+    expect(calls.filter((call) => call === 'extract')).toHaveLength(1);
+    expect(calls.filter((call) => call === 'submit')).toHaveLength(1);
+  });
+
   it('rejects missing construction input', async () => {
     await expect(constructRenderer(undefined, { rhi })).rejects.toBeDefined();
   });
@@ -52,6 +67,27 @@ describe('renderer lifecycle', () => {
     expect(recoveryError.code).toBe('recover-lifecycle-failed');
     expect(recoveryError.detail.receipt).toEqual(receipt);
     expect(recoveryError.hint).toContain('rebuild');
+  });
+
+  it('retains the last successful state when a candidate fails', () => {
+    const state = { signature: 'env:1', revision: 1, frameIndex: 12, history: 'history:1' };
+    const result = executeRendererFrameTransaction({
+      build: () => ({
+        ok: true,
+        value: { signature: 'env:2', revision: 2, frameIndex: 13, history: 'history:2' },
+      }),
+      execute: () => ({ ok: true, value: undefined }),
+      finish: () => ({ ok: false, stage: 'finish' as const }),
+      submit: () => ({ ok: true, value: undefined }),
+      commit: (candidate) => Object.assign(state, candidate),
+    });
+    expect(result).toEqual({ ok: false, error: { stage: 'finish' } });
+    expect(state).toEqual({
+      signature: 'env:1',
+      revision: 1,
+      frameIndex: 12,
+      history: 'history:1',
+    });
   });
 });
 

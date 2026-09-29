@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createExecutionReport, unavailableExecutionCapabilities } from '../execution';
 import { createLocalExecutionControl } from '../execution/control';
+import { workerSelection } from './execution-fixtures';
 
 describe('execution rebuild contract', () => {
   it('keeps low-level local assembly explicit when no bootstrap exists', async () => {
     const control = createLocalExecutionControl(
-      createExecutionReport('main-serial', unavailableExecutionCapabilities('local')),
+      createExecutionReport(
+        unavailableExecutionCapabilities('local'),
+        workerSelection({ engine: false }),
+      ),
     );
     const before = control.report();
     const result = await control.rebuild();
@@ -22,7 +26,10 @@ describe('execution rebuild contract', () => {
       retryable: true,
     };
     const control = createLocalExecutionControl(
-      createExecutionReport('main-serial', unavailableExecutionCapabilities('local')),
+      createExecutionReport(
+        unavailableExecutionCapabilities('local'),
+        workerSelection({ engine: false }),
+      ),
       { world: () => world },
     );
 

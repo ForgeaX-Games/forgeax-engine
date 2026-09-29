@@ -17,11 +17,11 @@ import { fillComponentDefaults, StaleEntityError } from '@forgeax/engine-ecs/pro
 import type {
   Handle,
   LocalEntityId,
-  MountOverride,
   PackErrorCode,
   PackErrorDetail,
   SceneAsset,
-  SceneInstanceMount,
+  SceneEntityAddress,
+  SceneEntityRef,
 } from '@forgeax/engine-types';
 import {
   err,
@@ -32,44 +32,54 @@ import {
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { ComponentNotDefinedError } from '../errors';
+import { resolveSceneEntity, sceneEntityAddressKey } from './binding.js';
+import {
+  type CompiledSceneAsset,
+  type CompiledSceneEntity,
+  compileKeyedSceneAsset,
+} from './keyed.js';
+import type { MountOverride, SceneInstanceMount } from './runtime-types.js';
+import { retainSceneSourceReferences } from './source-references.js';
+import {
+  isPrimitiveScalarFieldType,
+  mountOverrideStateKey,
+  primitiveJsType,
+  type SceneInstanceStatePayload,
+  sceneWorldState,
+} from './state.js';
+
+export type { SceneInstanceStatePayload } from './state.js';
 
 const entityIndex = (entity: EntityHandle): number => (entity as number) & 0x00ffffff;
 const entityGeneration = (entity: EntityHandle): number => ((entity as number) >>> 24) & 0xff;
 
 /**
- * C-R2 (feat-20260622-s5 / studio-issues): one structured, non-fatal record of
- * a SceneAsset payload field that did NOT match the target component's schema.
- *
- * Scene data is loader-fed and may carry a stale / deprecated / typo'd field
- * (an editor renames a field, an old `.pack.json` lags). `worldInstantiateScene`
- * does NOT blank the whole scene over one such field (#478 lesson: a
- * prod-silent strip re-introduced an invisible-entity class) and does NOT abort
- * fatally. Instead it skips the unknown key (no write, no input mutation) and
- * surfaces this record on the success value's `diagnostics[]` — observable in
- * production (NOT NODE_ENV-gated), consumed by property access (no string parse):
+ * Legacy diagnostic shape retained on the scene-instantiation result for
+ * non-blocking runtime observations. SceneAsset schema violations are
+ * rejected by the keyed compiler before this result is produced; no authored
+ * unknown-field record is emitted by the current path.
  *
  *   const r = worldInstantiateScene(world, handle);
  *   if (r.ok) for (const d of r.value.diagnostics)
- *     console.warn(`unknown field ${d.component}.${d.field} on localId ${d.localId}`);
+ *     console.warn('scene diagnostic', d);
  *
- * Direct `world.spawn` / `world.addComponent` / `Commands.spawn` stay fail-fast
- * with `SpawnDataUnknownFieldError` — those are explicit API calls where a typo
- * is a programming error, not loader-fed data.
+ * Direct `world.spawn` / `world.addComponent` / `Commands.spawn` remain
+ * fail-fast with `SpawnDataUnknownFieldError`.
  */
 export type SceneInstantiateDiagnostic = {
-  /** Component name (schema key) the unknown field appeared under. */
+  /** Component name associated with the observation. */
   readonly component: string;
-  /** The offending field name not declared in the component schema. */
+  /** Field associated with the observation. */
   readonly field: string;
-  /** LocalEntityId (within its owning SceneAsset) of the carrying entity. */
+  /** LocalEntityId within the owning SceneAsset, when applicable. */
   readonly localId: number;
 };
 
 /**
  * Success value of `worldInstantiateScene`. `root` is the synthetic scene-root
- * EntityHandle (carries `SceneInstance`); `diagnostics` is the (possibly empty)
- * list of non-fatal unknown-field records aggregated across this scene and every
- * recursively mounted sub-scene (C-R2). Empty array = no diagnostics.
+ * EntityHandle (carries `SceneInstance`); `diagnostics` contains only
+ * non-blocking runtime observations. Schema-invalid authored fields fail before
+ * an entity is created.
  */
 export type SceneInstantiateOk = {
   readonly root: EntityHandle;
@@ -126,30 +136,54 @@ export interface SceneMembersSpawn {
     readonly mount: SceneInstanceMount;
     readonly root: EntityHandle;
     readonly mapping: Uint32Array;
+    readonly key?: string;
   }[];
   /** `entities.length + mounts + Σ memberCount`, captured at instantiate-time. */
   readonly totalSlots: number;
+}
+
+/**
+ * Populate the instance binding projection from the private numeric mapping.
+ * The authored key remains the only lookup identity: nested instance paths are
+ * represented as the same string/tuple key accepted by `SceneEntityRef`, while
+ * the numeric mapping stays local to the Scene owner.
+ */
+function collectSceneEntityBindings(
+  world: World,
+  root: EntityHandle,
+  prefix: readonly string[],
+  bindings: Map<string, EntityHandle>,
+  visited = new Set<number>(),
+): void {
+  const rootRaw = root as unknown as number;
+  if (visited.has(rootRaw)) return;
+  visited.add(rootRaw);
+  const state = worldResolveSceneInstanceStatePayload(world, root);
+  if (!state.ok) return;
+  const sceneInstance = world.components.resolve('SceneInstance');
+  if (sceneInstance === undefined) return;
+  const component = world.get(root, sceneInstance);
+  if (!component.ok) return;
+  const mapping = (component.value as unknown as { mapping: ArrayLike<number> }).mapping;
+  for (const [slot, key] of state.value.keyByLocalId) {
+    const raw = mapping[slot];
+    if (raw === undefined || raw === ENTITY_NULL_RAW) continue;
+    const address: SceneEntityAddress =
+      prefix.length === 0 ? key : ([...prefix, key] as unknown as [string, ...string[]]);
+    bindings.set(sceneEntityAddressKey(address), raw as unknown as EntityHandle);
+  }
+  for (const childRoot of state.value.mountRoots) {
+    const childState = worldResolveSceneInstanceStatePayload(world, childRoot);
+    const childKey = childState.ok ? childState.value.instanceKey : undefined;
+    if (childKey === undefined) continue;
+    collectSceneEntityBindings(world, childRoot, [...prefix, childKey], bindings, visited);
+  }
 }
 
 export type SceneAssetResolver = (
   source: number | string,
   parentHandle: Handle<'SceneAsset', 'shared'>,
 ) => Result<Handle<'SceneAsset', 'shared'>, unknown>;
-
-interface SceneWorldState {
-  resolver: SceneAssetResolver | null;
-  readonly statePayloads: Map<number, unknown>;
-}
-
-const sceneWorldStates = new WeakMap<World, SceneWorldState>();
-
-function sceneWorldState(world: World): SceneWorldState {
-  const current = sceneWorldStates.get(world);
-  if (current !== undefined) return current;
-  const created = { resolver: null, statePayloads: new Map<number, unknown>() };
-  sceneWorldStates.set(world, created);
-  return created;
-}
 
 /** @internal */
 export function worldSetSceneAssetResolver(world: World, resolver: SceneAssetResolver): void {
@@ -158,7 +192,7 @@ export function worldSetSceneAssetResolver(world: World, resolver: SceneAssetRes
 
 /** @internal */
 export function worldGetSceneAssetResolver(world: World): SceneAssetResolver | null {
-  return sceneWorldState(world).resolver;
+  return sceneWorldState(world).resolver as SceneAssetResolver | null;
 }
 
 /**
@@ -177,8 +211,8 @@ export function worldGetSceneAssetResolver(world: World): SceneAssetResolver | n
  *   const r = worldInstantiateScene(world, handle);
  *   if (!r.ok) return r;
  *   const { root, diagnostics } = r.value;
- *   for (const d of diagnostics) // C-R2: unknown-field records, non-fatal
- *     console.warn(`unknown field ${d.component}.${d.field} on localId ${d.localId}`);
+ *   for (const d of diagnostics) // non-blocking runtime observations
+ *     console.warn('scene diagnostic', d);
  *   const inst = world.get(root, SceneInstance).value;
  *   const member = inst.mapping[0]; // first member entity
  */
@@ -186,13 +220,21 @@ export function worldInstantiateScene(
   world: World,
   handle: Handle<'SceneAsset', 'shared'>,
   parent?: EntityHandle,
+  sceneSourceKey?: string,
 ): Result<SceneInstantiateOk, EcsError> {
   const stack = new Set<number>();
-  // C-R2: collect non-fatal unknown-field diagnostics across this scene and
-  // every recursively mounted sub-scene. The internal recursion writes into
-  // this accumulator; only the public entry packages it onto the success value.
+  // Keep the existing result shape for non-blocking runtime observations. The
+  // keyed compiler rejects schema-invalid authoring data before spawning.
   const diagnostics: SceneInstantiateDiagnostic[] = [];
-  const r = worldInstantiateSceneRec(world, handle, parent, stack, diagnostics);
+  const r = worldInstantiateSceneRec(
+    world,
+    handle,
+    parent,
+    stack,
+    diagnostics,
+    undefined,
+    sceneSourceKey,
+  );
   if (!r.ok) return r;
   return ok({ root: r.value, diagnostics });
 }
@@ -268,6 +310,8 @@ export function worldInstantiateSceneRec(
   parent: EntityHandle | undefined,
   stack: Set<number>,
   diagnostics: SceneInstantiateDiagnostic[],
+  instanceKey?: string,
+  sceneSourceKey?: string,
 ): Result<EntityHandle, EcsError> {
   const handleKey = unwrapHandle(handle);
   if (stack.has(handleKey)) {
@@ -291,7 +335,16 @@ export function worldInstantiateSceneRec(
   const asset = resolved.value;
   stack.add(handleKey);
   try {
-    return worldInstantiateSceneAsset(world, handle, asset, parent, stack, diagnostics);
+    return worldInstantiateSceneAsset(
+      world,
+      handle,
+      asset,
+      parent,
+      stack,
+      diagnostics,
+      instanceKey,
+      sceneSourceKey,
+    );
   } finally {
     stack.delete(handleKey);
   }
@@ -324,9 +377,10 @@ export function worldResolveSceneAsset(
 export function worldSpawnSceneMembers(
   world: World,
   handle: Handle<'SceneAsset', 'shared'>,
-  asset: SceneAsset,
+  asset: CompiledSceneAsset,
   stack: Set<number>,
   diagnostics: SceneInstantiateDiagnostic[],
+  mountKeys?: ReadonlyMap<number, string>,
 ): Result<SceneMembersSpawn, EcsError> {
   const sceneInstanceToken = world.components.resolve('SceneInstance');
   if (sceneInstanceToken === undefined) {
@@ -464,10 +518,16 @@ export function worldSpawnSceneMembers(
     const childHandle = childHandleRes.value;
 
     // Recursively instantiate the child. Its synthetic root attaches as a
-    // child of the mount entity. The child writes its own unknown-field
-    // diagnostics into the SAME accumulator, so they bubble to the top-level
-    // instantiateScene result (C-R2 recursive aggregation).
-    const childRes = worldInstantiateSceneRec(world, childHandle, mountEntity, stack, diagnostics);
+    // child of the mount entity; runtime observations share the same result
+    // accumulator and bubble to the top-level instance.
+    const childRes = worldInstantiateSceneRec(
+      world,
+      childHandle,
+      mountEntity,
+      stack,
+      diagnostics,
+      mountKeys?.get(mountLid),
+    );
     if (!childRes.ok) return childRes;
 
     // R2/B-2: cross-check mount.memberCount === child.totalSlots BEFORE
@@ -477,7 +537,12 @@ export function worldSpawnSceneMembers(
     const childInstRes = world.get(childRes.value, sceneInstanceToken);
     if (!childInstRes.ok) return childInstRes;
     const childMapping = (childInstRes.value as unknown as { mapping: Uint32Array }).mapping;
-    mountInstances.push({ mount, root: childRes.value, mapping: childMapping });
+    mountInstances.push({
+      mount,
+      root: childRes.value,
+      mapping: childMapping,
+      ...(mountKeys?.get(mountLid) === undefined ? {} : { key: mountKeys.get(mountLid) }),
+    });
     if (childMapping.length !== mount.memberCount) {
       return err({
         code: 'pack-mount-count-mismatch' as PackErrorCode,
@@ -609,6 +674,8 @@ export function worldInstantiateSceneAsset(
   parent: EntityHandle | undefined,
   stack: Set<number>,
   diagnostics: SceneInstantiateDiagnostic[],
+  instanceKey?: string,
+  sceneSourceKey?: string,
 ): Result<EntityHandle, EcsError> {
   const sceneInstanceToken = world.components.resolve('SceneInstance');
   if (sceneInstanceToken === undefined) {
@@ -616,18 +683,40 @@ export function worldInstantiateSceneAsset(
   }
   const childOfToken = world.components.resolve('ChildOf');
 
-  const membersRes = worldSpawnSceneMembers(world, handle, asset, stack, diagnostics);
-  if (!membersRes.ok) return membersRes;
+  const compiled = compileKeyedSceneAsset(world, handle, asset, {
+    resolveSource: (source, parentHandle) => worldResolveMountSource(world, source, parentHandle),
+    resolveAsset: (childHandle) => worldResolveSceneAsset(world, childHandle),
+    stack,
+  });
+  if (!compiled.ok) return err(compiled.error as EcsError);
+  const compiledAsset = compiled.value.asset;
+  // Validate and acquire source references before any child or member can spawn.
+  const sourceReferences = retainSceneSourceReferences(world, asset);
+  if (!sourceReferences.ok) return sourceReferences;
+  const releaseSourceReferences = sourceReferences.value;
+  const membersRes = worldSpawnSceneMembers(
+    world,
+    handle,
+    compiledAsset,
+    stack,
+    diagnostics,
+    compiled.value.mountKeyByLocalId,
+  );
+  if (!membersRes.ok) {
+    releaseSourceReferences();
+    return membersRes;
+  }
   const { mapping, entityToLocalId, rootEntities, mountEntitiesNeedingRootParent, totalSlots } =
     membersRes.value;
   const { mountInstances } = membersRes.value;
-  const ownMounts = asset.mounts ?? [];
+  const ownMounts = compiledAsset.mounts ?? [];
 
   // 3. Spawn the synthetic root entity carrying SceneInstance.
   //    First alloc the state ref so the SceneInstance.state column has a
   //    live u32; then attach SceneInstance to a fresh entity.
   let stateRef: Handle<'SceneInstanceState', 'unique'>;
   stateRef = world.allocUniqueRef('SceneInstanceState', null, () => {
+    releaseSourceReferences();
     sceneWorldState(world).statePayloads.delete(Number(stateRef));
   });
   // Spawn the root with SceneInstance component, mapping snapshot, and
@@ -641,8 +730,8 @@ export function worldInstantiateSceneAsset(
   const mappingPlain: number[] = Array.from(mapping);
   // The synthetic root is the ChildOf parent of every owned root entity
   // (step 5 below) and may itself become a ChildOf parent of a caller-
-  // supplied `parent` chain. propagateTransforms walks ChildOf parents
-  // through the Transform liveMap and treats a parent missing Transform
+  // supplied `parent` chain. propagateTransforms expands the ECS-maintained
+  // Children lists parent-first and treats a parent missing Transform
   // as `hierarchy-broken`, so the synthetic root must carry Transform
   // (identity TRS via layer-2 defaults) when Transform is defined.
   const rootComponents: ComponentData[] = [
@@ -666,6 +755,7 @@ export function worldInstantiateSceneAsset(
     ...rootComponents,
   );
   if (!rootSpawn.ok) {
+    releaseSourceReferences();
     return rootSpawn;
   }
   const rootEntity = rootSpawn.value;
@@ -692,7 +782,11 @@ export function worldInstantiateSceneAsset(
       const memberEntityRaw = mapping[lid as unknown as number];
       if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
         const memberEntity = memberEntityRaw as unknown as EntityHandle;
-        const applyRes = worldApplyMountOverride(world, memberEntity, ov);
+        const applyRes = worldApplyMountOverride(
+          world,
+          memberEntity,
+          worldRemapMountOverride(world, ov, mapping),
+        );
         if (!applyRes.ok) {
           return applyRes as Result<EntityHandle, EcsError>;
         }
@@ -701,8 +795,13 @@ export function worldInstantiateSceneAsset(
   }
 
   const detached = new Set<LocalEntityId>();
+  const bindings = new Map<string, EntityHandle>();
   const state: Record<string, unknown> = {
     source: handle,
+    ...(sceneSourceKey === undefined ? {} : { sceneSourceKey }),
+    keyByLocalId: new Map(compiled.value.keyByLocalId),
+    ...(instanceKey === undefined ? {} : { instanceKey }),
+    bindings,
     entityToLocalId,
     detachedLocalIds: detached,
     // Convert overrides Map<LocalEntityId, Map<string, MountOverride>>
@@ -717,6 +816,10 @@ export function worldInstantiateSceneAsset(
   // re-use the slot we allocated above by writing directly into the
   // payloads map via a `_setUniqueRefPayload` shim.
   worldSetUniqueRefPayload(world, stateRef, state);
+  // Populate direct and nested keyed addresses only after this root state is
+  // visible. Child SceneInstance states were published by the recursive spawn
+  // above, so the same walk can project the complete address closure.
+  collectSceneEntityBindings(world, rootEntity, [], bindings);
 
   // 5. Wire ChildOf for every owned root entity (no ChildOf at layer-1)
   //    to the synthetic root.
@@ -777,78 +880,97 @@ export function worldInstantiateSceneAssetFlat(
   stack: Set<number>,
   diagnostics: SceneInstantiateDiagnostic[],
 ): Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError> {
-  const membersRes = worldSpawnSceneMembers(world, handle, asset, stack, diagnostics);
-  if (!membersRes.ok) return membersRes;
-  const { rootEntities, mountEntitiesNeedingRootParent, mountEntities, mountInstances } =
-    membersRes.value;
-  const childOfToken = world.components.resolve('ChildOf');
+  const compiled = compileKeyedSceneAsset(world, handle, asset, {
+    resolveSource: (source, parentHandle) => worldResolveMountSource(world, source, parentHandle),
+    resolveAsset: (childHandle) => worldResolveSceneAsset(world, childHandle),
+    stack,
+  });
+  if (!compiled.ok) return err(compiled.error as EcsError);
+  // Flat roots have no persistent source owner, but authored overrides must be
+  // validated before any nested instance spawns and stay live during application.
+  const sourceReferences = retainSceneSourceReferences(world, asset);
+  if (!sourceReferences.ok) return sourceReferences;
+  try {
+    const membersRes = worldSpawnSceneMembers(
+      world,
+      handle,
+      compiled.value.asset,
+      stack,
+      diagnostics,
+      compiled.value.mountKeyByLocalId,
+    );
+    if (!membersRes.ok) return membersRes;
+    const { rootEntities, mountEntitiesNeedingRootParent, mountEntities, mountInstances } =
+      membersRes.value;
+    const childOfToken = world.components.resolve('ChildOf');
 
-  // Apply parent mount overrides to the live columns and record them on the
-  // nested child anchor. Flat mode has no outer SceneInstance state; without
-  // this hand-authored mounts[].overrides affect the live value but disappear
-  // from the child state, so Gateway re-open cannot discover or revert them.
-  for (const { mount, root, mapping: childMapping } of mountInstances) {
-    const childStateRes = worldGetSceneInstanceState(world, root);
-    if (!childStateRes.ok) return childStateRes;
-    for (const ov of mount.overrides ?? []) {
-      const childLocalId =
-        (ov.localId as unknown as number) - (mount.memberFirst as unknown as number);
-      const memberEntityRaw = childMapping[childLocalId];
-      if (memberEntityRaw === undefined || memberEntityRaw === ENTITY_NULL_RAW) continue;
-      const memberEntity = memberEntityRaw as unknown as EntityHandle;
-      const applyRes = worldApplyMountOverride(world, memberEntity, ov);
-      if (!applyRes.ok) {
-        return applyRes as Result<
-          { roots: EntityHandle[]; mountEntities: EntityHandle[] },
-          EcsError
-        >;
+    // Apply parent mount overrides to the live columns and record them on the
+    // nested child anchor. Flat mode has no outer SceneInstance state; without
+    // this hand-authored mounts[].overrides affect the live value but disappear
+    // from the child state, so Gateway re-open cannot discover or revert them.
+    for (const { mount, root, mapping: childMapping } of mountInstances) {
+      const childStateRes = worldGetSceneInstanceState(world, root);
+      if (!childStateRes.ok) return childStateRes;
+      for (const ov of mount.overrides ?? []) {
+        const childLocalId =
+          (ov.localId as unknown as number) - (mount.memberFirst as unknown as number);
+        const memberEntityRaw = childMapping[childLocalId];
+        if (memberEntityRaw === undefined || memberEntityRaw === ENTITY_NULL_RAW) continue;
+        const memberEntity = memberEntityRaw as unknown as EntityHandle;
+        const applyRes = worldApplyMountOverride(
+          world,
+          memberEntity,
+          worldRemapMountOverride(world, ov, childMapping),
+        );
+        if (!applyRes.ok) {
+          return applyRes as Result<
+            { roots: EntityHandle[]; mountEntities: EntityHandle[] },
+            EcsError
+          >;
+        }
+        let fieldMap = childStateRes.value.overrides.get(childLocalId as LocalEntityId);
+        if (fieldMap === undefined) {
+          fieldMap = new Map();
+          childStateRes.value.overrides.set(childLocalId as LocalEntityId, fieldMap);
+        }
+        fieldMap.set(mountOverrideStateKey(ov), {
+          comp: ov.comp,
+          ...(ov.field === undefined ? {} : { field: ov.field }),
+          value: ov.value,
+        });
       }
-      let fieldMap = childStateRes.value.overrides.get(childLocalId as LocalEntityId);
-      if (fieldMap === undefined) {
-        fieldMap = new Map();
-        childStateRes.value.overrides.set(childLocalId as LocalEntityId, fieldMap);
-      }
-      fieldMap.set(mountOverrideStateKey(ov), {
-        comp: ov.comp,
-        ...(ov.field === undefined ? {} : { field: ov.field }),
-        value: ov.value,
-      });
     }
-  }
 
-  // Default-parented mount carriers (`mount.parent === undefined`) would, in
-  // anchor mode, attach to the synthetic root. Flat mode has none, so they
-  // stay top-level. `_spawnMountEntity` may have left a placeholder
-  // `ChildOf {parent: ENTITY_NULL_RAW}` (rare: mount with no components AND
-  // Transform unregistered) — strip it so the carrier is a genuine root.
-  if (childOfToken !== undefined) {
-    for (const mountE of mountEntitiesNeedingRootParent) {
-      const co = world.get(mountE, childOfToken);
-      if (co.ok && (co.value as { parent: number }).parent === ENTITY_NULL_RAW) {
-        world.removeComponent(mountE, childOfToken);
+    // Default-parented mount carriers (`mount.parent === undefined`) would, in
+    // anchor mode, attach to the synthetic root. Flat mode has none, so they
+    // stay top-level. `_spawnMountEntity` may have left a placeholder
+    // `ChildOf {parent: ENTITY_NULL_RAW}` (rare: mount with no components AND
+    // Transform unregistered) — strip it so the carrier is a genuine root.
+    if (childOfToken !== undefined) {
+      for (const mountE of mountEntitiesNeedingRootParent) {
+        const co = world.get(mountE, childOfToken);
+        if (co.ok && (co.value as { parent: number }).parent === ENTITY_NULL_RAW) {
+          world.removeComponent(mountE, childOfToken);
+        }
       }
     }
-  }
 
-  return ok({ roots: [...rootEntities, ...mountEntitiesNeedingRootParent], mountEntities });
+    return ok({ roots: [...rootEntities, ...mountEntitiesNeedingRootParent], mountEntities });
+  } finally {
+    sourceReferences.value();
+  }
 }
 /** @internal Build ComponentData[] for one SceneEntity, remapping localIds.
  *
- * C-R2 (feat-20260622-s5 M6): unknown fields on a SceneAsset payload are NOT
- * fatal. Unlike `world.spawn` (an explicit API call where a typo is a
- * programming error -> `SpawnDataUnknownFieldError`), scene data is loader-fed
- * and may carry a stale / deprecated / typo'd field. The remap below builds a
- * fresh `remappedRaw` and simply SKIPS keys absent from the schema (no input
- * mutation — the source `raw` is never deleted-from), recording each skipped
- * key as a non-fatal `SceneInstantiateDiagnostic` into the passed accumulator.
- * All known fields still write through, so one bad field cannot blank the
- * entity or the scene (C-AC-02/03/04).
+ * SceneAsset payloads use the same schema contract as explicit ECS writes.
+ * Unknown fields fail before the first entity is spawned, with the component
+ * schema's structured error. The source object is never mutated.
  */
 export function worldBuildSceneEntityComponentDatas(
   world: World,
-  node: import('@forgeax/engine-types').SceneEntity,
+  node: CompiledSceneEntity,
   mapping: Uint32Array,
-  diagnostics: SceneInstantiateDiagnostic[],
+  _diagnostics: SceneInstantiateDiagnostic[],
 ): Result<ComponentData[], EcsError> {
   const out: ComponentData[] = [];
   const nodeLocalId = node.localId as unknown as number;
@@ -862,13 +984,21 @@ export function worldBuildSceneEntityComponentDatas(
     const remappedRaw: Record<string, unknown> = {};
     for (const fieldName of Object.keys(raw)) {
       const fieldType = schema[fieldName];
-      // C-R2: unknown key -> skip (do not copy into remappedRaw, do not
-      // mutate the source `raw`) and record a structured diagnostic. The
-      // downstream `spawn` only sees schema-valid keys, so its own
-      // validateComponentDataKeys gate stays green.
+      // Do not mutate the source `raw`. SceneAsset compilation normally catches
+      // this earlier; this guard keeps the private numeric projection fail-fast
+      // for callers that provide a precompiled asset.
       if (fieldType === undefined) {
-        diagnostics.push({ component: compName, field: fieldName, localId: nodeLocalId });
-        continue;
+        return err({
+          code: 'spawn-data-unknown-field',
+          expected: `field name in {${Object.keys(schema).sort().join(', ')}}`,
+          hint: `unknown field '${fieldName}' on component '${compName}' at scene localId ${nodeLocalId}`,
+          detail: {
+            component: compName,
+            field: fieldName,
+            entity: nodeLocalId,
+            knownFields: Object.keys(schema).sort(),
+          },
+        } as unknown as EcsError);
       }
       const value = (raw as Record<string, unknown>)[fieldName];
       const kind = classifyEntityField(token, fieldName);
@@ -890,6 +1020,46 @@ export function worldBuildSceneEntityComponentDatas(
   }
   return ok(out);
 }
+
+/**
+ * Resolve the private local-slot values produced by keyed SceneAsset
+ * compilation before an instance override is written to a live ECS row.
+ * Override references are authored in the declaring parent namespace, while
+ * `worldApplyMountOverride` deliberately accepts ordinary live component data.
+ */
+function worldRemapMountOverride(
+  world: World,
+  override: MountOverride,
+  mapping: Uint32Array,
+): MountOverride {
+  const token = world.components.resolve(override.comp);
+  if (token === undefined) return override;
+  const remapField = (field: string, value: unknown): unknown => {
+    const kind = classifyEntityField(token as Component, field);
+    if (kind === null) return value;
+    const toLive = (slot: number): number => {
+      if (slot < 0 || slot >= mapping.length) return ENTITY_NULL_RAW;
+      return mapping[slot] ?? ENTITY_NULL_RAW;
+    };
+    return remapEntityFieldValue(value, kind, toLive);
+  };
+  if (override.field !== undefined) {
+    return { ...override, value: remapField(override.field, override.value) };
+  }
+  if (
+    typeof override.value !== 'object' ||
+    override.value === null ||
+    Array.isArray(override.value)
+  ) {
+    return override;
+  }
+  const value: Record<string, unknown> = {};
+  for (const [field, fieldValue] of Object.entries(override.value as Record<string, unknown>)) {
+    value[field] = remapField(field, fieldValue);
+  }
+  return { ...override, value };
+}
+
 /**
  * @internal feat-20260713 M2 / w8: apply one MountOverride to a live member
  * entity column. The `field?` shape is the add-or-patch discriminant:
@@ -1033,7 +1203,7 @@ export function worldValidateMountOverrides(
  * chain `cube -> innerSyntheticRoot -> mountEntity -> outerSyntheticRoot`,
  * so it MUST carry Transform whenever Transform is registered (mirrors
  * the D-V-0 synthetic-root invariant). Otherwise propagateTransforms
- * walking the chain hits a Transform-less parent and emits per-frame
+ * expanding the chain hits a Transform-less parent and emits per-frame
  * `RhiError(hierarchy-broken)` (verify R1 root cause of the
  * hello-scene-nesting demo black frames).
  */
@@ -1043,13 +1213,13 @@ export function worldSpawnMountEntity(
   mapping: Uint32Array,
   diagnostics: SceneInstantiateDiagnostic[],
 ): Result<EntityHandle, EcsError> {
-  const fakeNode: import('@forgeax/engine-types').SceneEntity = {
+  const fakeNode: CompiledSceneEntity = {
     localId: mount.localId,
     components: mount.components ?? {},
   };
   const cdRes = worldBuildSceneEntityComponentDatas(world, fakeNode, mapping, diagnostics);
   if (!cdRes.ok) return cdRes;
-  // R2/B-1: ensure Transform is attached so propagateTransforms can walk
+  // R2/B-1: ensure Transform is attached so propagateTransforms can expand
   // through this entity. Layer-2 defaults supply identity TRS; the
   // mount.components overlay (when present and including Transform) takes
   // precedence and is already in cdRes.value.
@@ -1178,6 +1348,25 @@ export function worldGetSceneInstanceState(
   root: EntityHandle,
 ): Result<SceneInstanceStatePayload, EcsError> {
   return worldResolveSceneInstanceStatePayload(world, root);
+}
+
+/** Resolve a generated SceneEntityRef against one concrete SceneInstance. */
+export function worldResolveSceneEntity(
+  world: World,
+  root: EntityHandle,
+  ref: SceneEntityRef,
+): Result<EntityHandle, EcsError> {
+  const state = worldResolveSceneInstanceStatePayload(world, root);
+  if (!state.ok) return state;
+  // Anonymous POD scenes remain addressable with an explicit empty source key.
+  // Never let the caller supply the identity used for the comparison: that
+  // would make an anonymous instance accept a fabricated persistent ref.
+  const resolved = resolveSceneEntity(ref, {
+    sceneSourceKey: state.value.sceneSourceKey ?? '',
+    bindings: state.value.bindings,
+  });
+  if (!resolved.ok) return err(resolved.error as unknown as EcsError);
+  return ok(resolved.value as EntityHandle);
 }
 /**
  * Despawn a SceneInstance root + all its members. `opts.keepDetached`
@@ -1397,9 +1586,8 @@ export function worldRemoveSceneOverride<S extends ComponentSchema>(
   // Look up the source SceneAsset layer-1 value.
   const assetRes = worldResolveSceneAsset(world, state.source);
   if (!assetRes.ok) return assetRes;
-  const node = assetRes.value.entities.find(
-    (n) => (n.localId as unknown as number) === (lid as unknown as number),
-  );
+  const key = state.keyByLocalId.get(lid as unknown as number);
+  const node = key === undefined ? undefined : assetRes.value.entities[key];
   const layer1 = node?.components[component.name] as Record<string, unknown> | undefined;
   if (layer1 !== undefined && field in layer1) {
     const r = world.set(member, component, { [field]: layer1[field] } as Partial<InputShapeOf<S>>);
@@ -1452,36 +1640,13 @@ export function worldGetSceneAssetForInstance(
   return ok(stateRes.value.source);
 }
 
-// SceneInstanceStatePayload — internal echo of the runtime
-// `SceneInstanceState` interface for ECS-side consumption (engine-ecs cannot
-// value-import engine-runtime by AC-29; structural shape only).
-// ────────────────────────────────────────────────────────────────────────────
-
-/** @internal Structural payload behind `SceneInstance.state` ref column. */
-export interface SceneInstanceStatePayload {
-  readonly source: Handle<'SceneAsset', 'shared'>;
-  readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
-  readonly detachedLocalIds: Set<LocalEntityId>;
-  readonly overrides: Map<
-    LocalEntityId,
-    Map<string, { readonly comp: string; readonly field?: string; readonly value: unknown }>
-  >;
-  readonly rootEntities: EntityHandle[];
-  /** Synthetic roots of recursively mounted SceneAssets owned by this instance. */
-  readonly mountRoots: EntityHandle[];
-  readonly totalSlots: number;
-  readonly mountTimeOverrides: readonly MountOverride[];
-}
-
 /**
  * Topological sort over the implicit ChildOf graph (parents before children).
  * Cycle-free input always covers all n nodes; cyclic input emits whatever was
  * reachable from indegree-0 (the fallback caller handles cycle reporting via
  * `pack-cyclic-reference` at the upstream scanner / runtime path).
  */
-function sceneTopoSort(
-  nodes: readonly import('@forgeax/engine-types').SceneEntity[],
-): readonly number[] {
+function sceneTopoSort(nodes: readonly CompiledSceneEntity[]): readonly number[] {
   const n = nodes.length;
   const childrenOf: number[][] = Array.from({ length: n }, () => []);
   const indeg = new Uint32Array(n);
@@ -1522,43 +1687,4 @@ function sceneTopoSort(
     if (!order.includes(i) && nodes[i] !== undefined) order.push(i);
   }
   return order;
-}
-
-/**
- * @internal feat-20260713 M2 / w8: SceneInstanceState map key for a
- * MountOverride. Field-patch form keys by `comp:field` (one entry per patched
- * field); component-add form keys by `comp` (one entry per added component). The
- * two key shapes cannot collide because a field-patch always carries a `:field`
- * suffix. Later array entries for the same key overwrite earlier ones, matching
- * the array-order apply semantics.
- */
-function mountOverrideStateKey(ov: MountOverride): string {
-  return ov.field !== undefined ? `${ov.comp}:${ov.field}` : ov.comp;
-}
-
-/** Schema field types that are JS primitives (typeof checkable). */
-function isPrimitiveScalarFieldType(fieldType: string): boolean {
-  if (
-    fieldType === 'f32' ||
-    fieldType === 'f64' ||
-    fieldType === 'u32' ||
-    fieldType === 'i32' ||
-    fieldType === 'u8' ||
-    fieldType === 'i8' ||
-    fieldType === 'u16' ||
-    fieldType === 'i16' ||
-    fieldType === 'bool' ||
-    fieldType === 'string'
-  ) {
-    return true;
-  }
-  if (fieldType.startsWith('enum<')) return true;
-  return false;
-}
-
-/** Map a primitive scalar field type to the runtime `typeof` it should narrow to. */
-function primitiveJsType(fieldType: string): string {
-  if (fieldType === 'bool') return 'boolean';
-  if (fieldType === 'string') return 'string';
-  return 'number';
 }

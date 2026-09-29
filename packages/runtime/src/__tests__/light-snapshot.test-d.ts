@@ -21,11 +21,18 @@
 // covers any .test-d.ts file in any package).
 
 import { expectTypeOf, test } from 'vitest';
+import type { DirectionalShadowQuality } from '../../../render/src/components/directional-shadow-filter';
+import type { LightValidationError } from '../../../render/src/components/light-helpers';
+import type {
+  DirectLightSlotKind,
+  DirectLightSnapshot,
+} from '../../../render/src/light-buffer-layout';
 import type {
   DirectionalLightSnapshot,
   ExtractedLights,
   LightSnapshot,
   PointLightSnapshot,
+  RectAreaDirectLightSnapshot,
   SpotLightSnapshot,
 } from '../../../render/src/render-system-extract';
 
@@ -44,6 +51,8 @@ function consumeSnapshot(s: LightSnapshot): number {
       return s.invRangeSquared;
     case 'spot':
       return s.cosInner + s.cosOuter;
+    case 'rect-area':
+      return s.halfWidth + s.halfHeight;
     default:
       return assertNever(s);
   }
@@ -51,7 +60,7 @@ function consumeSnapshot(s: LightSnapshot): number {
 
 test('LightSnapshot is a discriminated union on kind', () => {
   expectTypeOf<LightSnapshot>().toEqualTypeOf<
-    DirectionalLightSnapshot | PointLightSnapshot | SpotLightSnapshot
+    DirectionalLightSnapshot | PointLightSnapshot | SpotLightSnapshot | RectAreaDirectLightSnapshot
   >();
   // Smoke that the consumer compiles (run-time noop; compile-time exhaustive).
   void consumeSnapshot;
@@ -81,4 +90,29 @@ test('ExtractedLights three-bucket shape', () => {
   expectTypeOf<ExtractedLights['directionalCount']>().toEqualTypeOf<number>();
   expectTypeOf<ExtractedLights['point']>().toEqualTypeOf<readonly PointLightSnapshot[]>();
   expectTypeOf<ExtractedLights['spot']>().toEqualTypeOf<readonly SpotLightSnapshot[]>();
+  expectTypeOf<ExtractedLights['rect']>().toEqualTypeOf<readonly RectAreaDirectLightSnapshot[]>();
+});
+
+function consumeDirectLight(snapshot: DirectLightSnapshot): number {
+  switch (snapshot.kind) {
+    case 'point':
+      return snapshot.invRangeSquared;
+    case 'spot':
+      return snapshot.cosInner + snapshot.cosOuter;
+    case 'rect-area':
+      return snapshot.halfWidth + snapshot.halfHeight;
+    default:
+      return assertNever(snapshot);
+  }
+}
+
+test('DirectLightSlot kind is closed and includes only finite direct lights', () => {
+  expectTypeOf<DirectLightSlotKind>().toEqualTypeOf<'point' | 'spot' | 'rect-area'>();
+  void consumeDirectLight;
+  expectTypeOf<ExtractedLights['directionalShadowQuality']>().toEqualTypeOf<
+    DirectionalShadowQuality | undefined
+  >();
+  expectTypeOf<ExtractedLights['directionalShadowError']>().toEqualTypeOf<
+    LightValidationError | undefined
+  >();
 });

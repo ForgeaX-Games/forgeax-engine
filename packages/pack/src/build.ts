@@ -25,6 +25,13 @@ export type {
 export type { ArtifactPathContext } from './artifact-path.js';
 export { validateArtifactPath } from './artifact-path.js';
 export {
+  type AuthorPackClosure,
+  type AuthorPackFile,
+  assertAuthorPackUnchanged,
+  authorFileDigest,
+  collectAuthorPackClosure,
+} from './author-closure.js';
+export {
   buildCatalogProjection,
   type CatalogAuthority,
   type CatalogBuildError,
@@ -33,6 +40,7 @@ export {
   type CatalogBuildResult,
   type CatalogImporterPolicy,
   type CatalogProducerVisibility,
+  catalogSourcePathFor,
   metaPathForGuid,
 } from './catalog-builder.js';
 export { calculateCatalogDelta } from './catalog-delta.js';
@@ -50,13 +58,16 @@ export {
   projectRuntimeCatalogRow,
   type RuntimeCatalogRowInput,
 } from './catalog-projection.js';
-export { type LoadAssetConfigResult, loadAssetConfig } from './config.js';
 export {
   type CookedMaterialRecord,
   collectMaterialCookRefs,
   createMaterialArtifactDigest,
   type MaterialCookArtifact,
   type MaterialCookIdentityExpectation,
+  type MaterialCookProgram,
+  type MaterialCookProgramContext,
+  type MaterialCookRasterContext,
+  type MaterialCookRayContext,
   type MaterialCookReceipt,
   type MaterialCookRecordError,
   type MaterialCookRefs,
@@ -68,19 +79,42 @@ export {
 } from './evidence/material-cook.js';
 export { buildOfflineAssetEvidence, packageVerification } from './evidence/offline-evidence.js';
 export {
+  AssetGuid,
+  isValidAssetGuidString,
+  isValidPackSourceKey,
+  PACK_SOURCE_KEY_RE,
+  PackageId,
+} from './guid.js';
+export { projectAssetRefs, projectSceneEntityRefs } from './inventory/binding.js';
+export {
+  type AuthorInventory,
+  type AuthorInventoryRow,
+  type InventoryError,
+  type InventoryErrorCode,
+  validateAuthorInventory,
+} from './inventory/declaration.js';
+export { inventoryDigest, syncAuthorInventory } from './inventory/sync.js';
+export {
   decodeMeshBinHeader,
+  decodeMeshBinMorphs,
   MESH_BIN_DIGEST_BYTES,
-  MESH_BIN_HEADER_V4_BYTES,
+  MESH_BIN_HEADER_BYTES,
+  MESH_BIN_MORPH_CHANNELS,
   MESH_BIN_PROJECTION_VERSION,
   MESH_BIN_VERSION,
   type MeshBinContractError,
+  type MeshBinHeader,
   type MeshBinHeaderResult,
-  type MeshBinHeaderV4,
   writeMeshBinHeader,
 } from './mesh-bin-contract.js';
+export * from './pack-authoring.js';
 export {
-  type AuthoredPackAssetInput,
-  type AuthoredPackInput,
+  createFileSystemPackAuthoringGateway,
+  createFileSystemPackAuthoringPort,
+  type FileSystemPackAuthoringOptions,
+  type PackAuthoringMaterializedAsset,
+} from './pack-authoring-node.js';
+export {
   type FinalizedPackageProduct,
   finalizePackageProduct,
   finalizePackageTransportSource,
@@ -91,23 +125,29 @@ export {
   type PackageProduct,
   type PackageProductAsset,
   packageTransportRevision,
-  upgradeLegacyAuthoredPack,
 } from './package-finalizer.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 export { resolveAssetSource } from './resolve-asset-source.js';
 export { parsePackV2, validateMeta, validatePack, validatePackV2 } from './runtime.js';
 export {
+  bindRuntimePackScope,
   createRuntimePackPublication,
   type RuntimePackAssetInput,
   type RuntimePackEnvelope,
   type RuntimePackInput,
   type RuntimePackPublication,
   type RuntimePackPublicationInput,
+  stripRuntimePackLifecycle,
 } from './runtime-publication.js';
 export {
   type InventoryDeclaration,
+  type LegacyPackInventoryDocument,
+  type PackInventoryAsset,
+  type PackInventoryDocument,
+  type PackSourceInventoryDocument,
   type ScanInventory,
   type ScanOptions,
+  type ScanSourceDeclaration,
   type ScriptablePackInventoryDeclaration,
   type ScriptablePackScanOptions,
   STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
@@ -116,24 +156,10 @@ export {
 export {
   type AssetReader,
   isScriptablePackAssetKind,
-  projectScriptablePackMeta,
   projectScriptablePackSceneComponents,
   SCRIPTABLE_PACK_ASSET_KINDS,
-  SCRIPTABLE_PACK_CAPABILITY_MANIFEST,
-  type ScriptablePackAssetDeclaration,
-  type ScriptablePackAssetDeclarations,
-  type ScriptablePackAssetFor,
   type ScriptablePackAssetKind,
-  type ScriptablePackDefinition,
-  type ScriptablePackError,
-  type ScriptablePackExternalAssets,
-  type ScriptablePackMetaJson,
-  type ScriptablePackOutputs,
-  type ScriptablePackPublicationEnvelope,
   type ScriptablePackReadError,
-  type ScriptablePackSceneComponent,
-  type ScriptablePackSceneComponentInput,
   type ScriptablePackSourceClosureEntry,
-  validateScriptablePackDefinition,
 } from './scriptable-pack.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';

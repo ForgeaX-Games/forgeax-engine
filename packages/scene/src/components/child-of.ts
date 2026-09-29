@@ -7,6 +7,8 @@
 // u32 against the live record on read; `world.get(child, ChildOf)` returns
 // the raw encoded Entity and consumers check liveness themselves (via
 // `world.get(parent, Entity)` — returns `err(stale-entity)` for despawned handles).
+// Public source writes validate target liveness before committing; only
+// controlled internal fixtures can create a stale source for diagnostics.
 //
 // feat-20260531-ecs-relationship-abstraction-bidirectional-sync M4 / t20:
 // ChildOf is declared as the holder side of a Bevy-style bidirectional
@@ -30,30 +32,30 @@
 //     the D-1 default from false to true). When linkedSpawn is set to true,
 //     world.despawn(parent) recursively despawns the entire subtree.
 //
-//     The prior default (linkedSpawn: false) meant despawning the parent only
-//     pruned the Children entry, leaving the child entity alive. That behavior
-//     is still available by passing linkedSpawn: false explicitly.
+//     `ChildOf` uses linkedSpawn: true, so despawning a parent recursively
+//     despawns its linked subtree. A generic relationship may opt out with
+//     linkedSpawn: false, but that is not this scene hierarchy's lifecycle.
 //
-// Child despawn auto-detaches from the parent's Children list: the
+// Child despawn auto-detaches from its parent's Children list: the
 // relationship `onRemove` hook fires on `world.despawn(child)` and prunes the
 // child from the parent's `Children.entities` (a write-path hook). Despawning
-// the PARENT does not auto-clean the child's ChildOf: the child's `parent`
-// column keeps the stale encoded Entity. The ECS does not bottom out dangling
-// references on read; the consumer is responsible for cleanup
-// (`world.removeComponent(child, ChildOf)` / `world.get(parent, Entity)` liveness check).
+// the parent follows ChildOf's linkedSpawn cascade and retires the linked
+// subtree. A stale ChildOf source is consequently only an explicitly malformed
+// internal fixture (or a generic non-linked relationship); the consumer repairs
+// it with `world.removeComponent(child, ChildOf)` after the structured error.
 //
-// propagateTransforms system (./systems/propagate-transforms.ts) consumes
-// this component by reading the archetype Uint32Array column directly
-// (query-backed hierarchy access). When a parent has been despawned
+// propagateTransforms system (./systems/propagate-transforms.ts) consumes the
+// ECS-maintained Children buffer for parent-first traversal and reads this
+// source column only to validate the mirrored edge. When a parent has been despawned
 // but the child's stale ChildOf is left in place, the live-map lookup surfaces
-// `RhiError({ code: 'hierarchy-broken' })` - a deliberate per-frame fail-fast
+// `SceneError({ code: 'hierarchy-broken' })` - a deliberate per-frame fail-fast
 // (the consumer is expected to despawn the subtree or remove the stale
 // ChildOf), kept as the explicit-failure surface (charter proposition 4).
 //
 // charter mapping: proposition 2 (industry analogy: Bevy ChildOf is the
 // post-0.15 rename of Parent for the same shape as glTF node parent index
 // + Three.js Object3D.parent) + proposition 4 (explicit failure: dangling
-// parent surfaces structured RhiError) + proposition 5
+// parent surfaces structured SceneError) + proposition 5
 // (consistent abstraction: the schema-vocab 'entity' keyword is the SSOT
 // for entity-typed columns across the engine).
 
@@ -63,25 +65,34 @@ export { ChildOf } from './children';
  * Hierarchy back-reference: pointer from child entity to its parent.
  *
  * Store the parent `Entity` handle (returned by `world.spawn(...).unwrap()`)
- * in the `parent` field; `propagateTransforms` reads it each frame to
- * compose the child's derived `Transform.world` mat4 (child.world =
- * parent.world x child local). Despawning a child auto-detaches it from the
- * parent's Children list (relationship `onRemove` hook). Despawning the
- * parent does not auto-clean the child's ChildOf; the consumer removes the
- * stale ChildOf (`world.removeComponent`) or checks `world.get(parent, Entity)` for liveness.
+ * in the `parent` field; `propagateTransforms` follows the ECS-maintained
+ * `Children` list each frame to compose the child's derived
+ * `GlobalTransform.world` mat4 (child.world = parent.world x child local).
+ * `Transform` declares `GlobalTransform` as a
+ * generic ECS requirement, so normal spawn/add/command paths materialize the
+ * pair without scene-specific repair. Propagation still fails closed when an
+ * owner explicitly removes one half. Despawning a child auto-detaches it from
+ * its parent's Children list; despawning the parent follows ChildOf's
+ * linkedSpawn cascade, while a malformed internal fixture can still leave a
+ * stale source for Scene diagnostics.
  *
- * Because ChildOf declares a `relationship` mirror, the engine keeps the
- * parent's `Children.entities` reverse list consistent automatically: adding
- * ChildOf appends the child to the parent's Children, removing it (or
- * reparenting via the `exclusive` arm) prunes the stale entry. AI users no
- * longer hand-maintain both sides (the prior OOS-10 contract is retired).
+ * Because ChildOf declares a `relationship` mirror and a structural
+ * `Transform` requirement, the engine keeps the parent's `Children.entities`
+ * reverse list consistent automatically and materializes the local/world pair
+ * when the child did not author one: adding ChildOf appends the child to the
+ * parent's Children, removing it (or reparenting via the `exclusive` arm)
+ * prunes the stale entry. AI users no longer hand-maintain both sides (the
+ * prior OOS-10 contract is retired).
  * Reparenting is a plain re-add: `world.addComponent(child, { component:
  * ChildOf, data: { parent: newParent } })` on an entity that already carries
- * ChildOf auto-reparents (exclusive arm), or use `world.reparent(child,
- * newParent)`.
+ * ChildOf auto-reparents (exclusive arm). The generic convenience method has
+ * the same owner path and requires the relationship component plus its data:
+ * `world.reparent(child, newParent, ChildOf, { parent: newParent })`.
  *
  * @example Spawn a child entity referencing an already-spawned root:
- *   const root = world.spawn({ component: Transform, data: {...} }).unwrap();
+ *   const root = world.spawn(
+ *     { component: Transform, data: {...} },
+ *   ).unwrap();
  *   const child = world.spawn(
  *     { component: Transform, data: {...} },
  *     { component: ChildOf, data: { parent: root } },

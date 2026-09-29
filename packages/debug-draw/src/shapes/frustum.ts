@@ -133,8 +133,8 @@ export function frustumVertices(viewProj: Mat4): [number, number, number][] | nu
       at(m, 8) * (at(m, 1) * at(m, 6) - at(m, 5) * at(m, 2))) *
     invDet;
 
-  // 8 NDC corners: x,y in {-1,1}, z in [0,1] (WebGPU NDC, matches mat4.perspective).
-  // Near plane = z=0, far plane = z=1.
+  // 8 WebGPU NDC corners: x,y in {-1,1}, z in [0,1].
+  // Connecting both Z planes supports forward and Reverse-Z projections.
   const ndc: [number, number, number, number][] = [
     [-1, -1, 0, 1],
     [1, -1, 0, 1],

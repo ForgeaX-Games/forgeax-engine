@@ -1,4 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
+import { decodeTape } from '@forgeax/engine-rhi-debug';
 
 const LINEAGE_LIMIT = 64;
 const IDENTITY_FIELDS = [
@@ -224,6 +227,29 @@ function loadManifest(manifestPath) {
   }
 }
 
+function loadTape(manifestPath, artifact, side) {
+  if (isObject(artifact?.tape)) return artifact.tape;
+  if (typeof artifact?.tapePath !== 'string' || artifact.tapePath.length === 0) {
+    return undefined;
+  }
+  const tapePath = resolve(dirname(manifestPath), artifact.tapePath);
+  let bytes;
+  try {
+    bytes = new Uint8Array(readFileSync(tapePath));
+  } catch (error) {
+    throw new Error(`failed to read ${side} capture tape '${tapePath}': ${error.message}`);
+  }
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (artifact.tapeDigest !== digest) {
+    throw new Error(
+      `failed to verify ${side} capture tape digest: expected ${artifact.tapeDigest}, computed ${digest}`,
+    );
+  }
+  const decoded = decodeTape(bytes);
+  if (!decoded.ok) throw new Error(`failed to decode ${side} capture tape: ${decoded.error.code}`);
+  return decoded.value;
+}
+
 export function compareCapturePair(manifestPath) {
   const manifest = loadManifest(manifestPath);
   const baseline = manifest?.baseline;
@@ -250,13 +276,16 @@ export function compareCapturePair(manifestPath) {
   ) {
     return invalid('finalColorRgb8', `expected ${expectedBytes} bytes per artifact`);
   }
+  const baselineTape = loadTape(manifestPath, baseline, 'baseline');
+  const comparisonTape = loadTape(manifestPath, comparison, 'comparison');
+  if (!baselineTape || !comparisonTape) return invalid('tapePath', 'both capture tapes are required');
   const baselineEvents = [
-    ...(baseline.tape?.bootstrap ?? []).map((resource) => resource.create),
-    ...(baseline.tape?.events ?? []),
+    ...baselineTape.bootstrap.map((resource) => resource.create),
+    ...baselineTape.events,
   ];
   const comparisonEvents = [
-    ...(comparison.tape?.bootstrap ?? []).map((resource) => resource.create),
-    ...(comparison.tape?.events ?? []),
+    ...comparisonTape.bootstrap.map((resource) => resource.create),
+    ...comparisonTape.events,
   ];
   const events = eventResource(baselineEvents, comparisonEvents);
   const pixels = rawComparison(baselineBytes, comparisonBytes, shape);

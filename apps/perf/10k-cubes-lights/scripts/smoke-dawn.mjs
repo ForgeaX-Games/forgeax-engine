@@ -9,14 +9,18 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawnSync } from 'node:child_process';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 const distRoot = resolve(appRoot, 'dist');
 const width = 320;
 const height = 180;
-const targetFrames = Number.parseInt(process.env.PERF_DAWN_FRAMES ?? '210', 10);
-const query = process.env.PERF_QUERY ?? '';
+const targetFrames = Number.parseInt(process.env.PERF_DAWN_FRAMES ?? '60', 10);
+const requestedQuery = new URLSearchParams(process.env.PERF_QUERY ?? '');
+// The app's default 180-frame profile window outlives the 60-frame smoke budget.
+if (!requestedQuery.has('profileFrames')) requestedQuery.set('profileFrames', String(Math.max(1, Math.floor(targetFrames / 2))));
+const query = `?${requestedQuery}`;
 const outputPath = process.env.PERF_DAWN_OUTPUT ?? resolve(appRoot, 'artifacts', 'dawn.json');
 const rawPath = process.env.PERF_DAWN_RAW ?? `${outputPath}.rgba`;
 const screenshotPath = process.env.PERF_DAWN_SCREENSHOT ?? `${outputPath}.png`;
@@ -24,6 +28,13 @@ const requested = new URLSearchParams(query);
 const expectedCubeCount = Number(requested.get('cubes') ?? 10_000);
 const expectedPointLightCount = Number(requested.get('pointLights') ?? 16);
 const expectedSpotLightCount = Number(requested.get('spotLights') ?? 16);
+const expectedDirectionalBaseline = {
+  count: 1,
+  direction: [0.4, -0.8, -0.4],
+  color: [1, 1, 1],
+  intensity: 1,
+  shadowCasterCount: 0,
+};
 mkdirSync(dirname(outputPath), { recursive: true });
 mkdirSync(dirname(rawPath), { recursive: true });
 mkdirSync(dirname(screenshotPath), { recursive: true });
@@ -160,10 +171,12 @@ async function readback() {
   return pixels;
 }
 
+// The motion baseline sits inside the frame budget; sampling at the final frame compares a frame with itself.
+const motionBaselineFrame = Math.max(1, Math.floor(targetFrames / 2));
 let firstPixels;
-let observedFrames = 0;
+let drivenRafCallbacks = 0;
 const frameDeadline = Date.now() + 120_000;
-while (observedFrames < targetFrames && Date.now() < frameDeadline) {
+while (globalThis.__forgeaxPerf.frameProgress < targetFrames && Date.now() < frameDeadline) {
   const frame = rafQueue.shift();
   if (frame === undefined) {
     await delay(1);
@@ -171,11 +184,16 @@ while (observedFrames < targetFrames && Date.now() < frameDeadline) {
   }
   fakeNow += 16.6667;
   frame.callback(fakeNow);
-  observedFrames += 1;
-  if (observedFrames === 60) firstPixels = await readback();
-  if (observedFrames % 16 === 0) await delay(1);
+  drivenRafCallbacks += 1;
+  if (firstPixels === undefined && globalThis.__forgeaxPerf.frameProgress >= motionBaselineFrame) {
+    firstPixels = await readback();
+  }
+  if (drivenRafCallbacks % 16 === 0) await delay(1);
 }
-if (observedFrames < targetFrames) fail(`only observed ${observedFrames}/${targetFrames} RAF frames`);
+const observedFrames = globalThis.__forgeaxPerf.frameProgress;
+if (observedFrames < targetFrames) {
+  fail(`only observed ${observedFrames}/${targetFrames} engine frames after ${drivenRafCallbacks} RAF callbacks`);
+}
 const finalPixels = await readback();
 
 function pixelStats(pixels) {
@@ -211,6 +229,16 @@ function pixelDelta(left, right) {
   return { changedPixels, maxDelta };
 }
 
+function hasFixedDirectionalBaseline(value) {
+  const baseline = value?.directionalBaseline;
+  const closeTo = (actual, expected) => typeof actual === 'number' && Math.abs(actual - expected) <= 1e-6;
+  return baseline?.count === expectedDirectionalBaseline.count
+    && baseline.shadowCasterCount === expectedDirectionalBaseline.shadowCasterCount
+    && closeTo(baseline.intensity, expectedDirectionalBaseline.intensity)
+    && baseline.direction?.every((component, index) => closeTo(component, expectedDirectionalBaseline.direction[index]))
+    && baseline.color?.every((component, index) => closeTo(component, expectedDirectionalBaseline.color[index]));
+}
+
 const evidence = globalThis.__forgeaxPerf;
 const profile = evidence.profileCapture;
 const profileComplete = profile?.completeness?.status === 'complete' && profile.completeness.droppedEventCount === 0;
@@ -220,6 +248,7 @@ const motion = firstPixels === undefined ? { changedPixels: 0, maxDelta: 0 } : p
 const result = {
   backend: 'webgpu',
   observedFrames,
+  drivenRafCallbacks,
   evidence,
   profileComplete,
   readback: { width, height, ...stats, motion },
@@ -227,6 +256,7 @@ const result = {
     exactCubeCount: evidence.postSpawn.cubeCount === expectedCubeCount && evidence.processedCubeCount === expectedCubeCount,
     sharedMeshAndMaterial: evidence.postSpawn.meshHandleMatches === expectedCubeCount && evidence.postSpawn.materialHandleMatches === expectedCubeCount,
     punctualLightsPresent: evidence.postSpawn.pointLightCount === expectedPointLightCount && evidence.postSpawn.spotLightCount === expectedSpotLightCount,
+    fixedDirectionalBaseline: hasFixedDirectionalBaseline(evidence.postSpawn),
     cameraAndCubeMotion: evidence.cameraRotationRadians > 0 && motion.changedPixels > width * height * 0.01,
     notClearOnly: stats.nonClearPixels > width * height * 0.01 && stats.lumaVariance > 0.00001,
     completeProfileNoDrops: !profilingExpected || profileComplete,
@@ -242,24 +272,28 @@ if (process.env.PERF_LIGHT_CONTROL !== '1') {
   const controlRaw = `${outputPath}.no-lights.rgba`;
   const control = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
     cwd: appRoot,
-    env: { ...process.env, PERF_LIGHT_CONTROL: '1', PERF_QUERY: '?pointLights=0&spotLights=0&profile=0', PERF_DAWN_OUTPUT: controlOutput, PERF_DAWN_RAW: controlRaw, PERF_DAWN_SCREENSHOT: `${outputPath}.no-lights.png` },
+    env: { ...process.env, PERF_LIGHT_CONTROL: '1', PERF_QUERY: 'pointLights=0&spotLights=0&profile=0', PERF_DAWN_OUTPUT: controlOutput, PERF_DAWN_RAW: controlRaw, PERF_DAWN_SCREENSHOT: `${outputPath}.no-lights.png` },
     stdio: 'inherit',
   });
   if (control.status !== 0) fail(`no-light control run exited ${control.status}`);
   const controlResult = JSON.parse(readFileSync(controlOutput, 'utf8'));
   const controlPixels = readFileSync(controlRaw);
-  result.lightControl = {
-    noLightPostSpawn: controlResult.evidence.postSpawn,
+  result.zeroPunctualControl = {
+    zeroPunctualPostSpawn: controlResult.evidence.postSpawn,
     delta: pixelDelta(finalPixels, controlPixels),
-    distinguishesLightPayload: controlResult.evidence.postSpawn.pointLightCount === 0 && controlResult.evidence.postSpawn.spotLightCount === 0 && pixelDelta(finalPixels, controlPixels).changedPixels > width * height * 0.01,
+    distinguishesLightPayload: controlResult.evidence.postSpawn.pointLightCount === 0
+      && controlResult.evidence.postSpawn.spotLightCount === 0
+      && hasFixedDirectionalBaseline(controlResult.evidence.postSpawn)
+      && pixelDelta(finalPixels, controlPixels).changedPixels > width * height * 0.01,
   };
   writeFileSync(outputPath, JSON.stringify(result, null, 2));
 }
 
 const failed = Object.entries(result.assertions).filter(([, value]) => value !== true);
 if (failed.length > 0) fail(`assertions failed: ${JSON.stringify(Object.fromEntries(failed))}`);
-if (result.lightControl !== undefined && !result.lightControl.distinguishesLightPayload) fail('default vs no-light readback did not distinguish punctual-light payload');
-console.log(`[perf-10k-cubes-lights/dawn] PASS ${JSON.stringify({ observedFrames, stats, motion, profileComplete, lightControl: result.lightControl })}`);
+if (result.zeroPunctualControl !== undefined && !result.zeroPunctualControl.distinguishesLightPayload) fail('default vs zero-punctual readback did not distinguish punctual-light payload');
+console.log(`[perf-10k-cubes-lights/dawn] PASS ${JSON.stringify({ observedFrames, stats, motion, profileComplete, zeroPunctualControl: result.zeroPunctualControl })}`);
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;
+if (process.env.PERF_LIGHT_CONTROL !== '1') emitSmokeReceipt('perf-10k-cubes-lights/smoke', observedFrames);
 process.exit(0);

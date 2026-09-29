@@ -1,74 +1,53 @@
-// @forgeax/engine-assets-runtime -- AssetRegistry.instantiate / instantiateFlat
-// coverage (fix issue #709). Drives the scene-instantiate collaboration module
-// (instantiate.ts) end-to-end through a real World + the two-tier handle
-// resolver. The assertions check the structured Result surface (charter P3:
-// instantiate never throws for an expected failure) rather than a specific
-// spawn outcome, so the coverage does not couple to the full ECS scene-spawn
-// prerequisites (node env, no GPU).
+// @forgeax/engine-assets-runtime -- keyed SceneAsset instantiate coverage.
 
 import { defineComponent, World } from '@forgeax/engine-ecs';
+import {
+  ChildOf,
+  Children,
+  worldDespawnScene,
+  worldRemoveSceneOverride,
+  worldResolveSceneInstanceStatePayload,
+  worldSetSceneOverride,
+} from '@forgeax/engine-scene';
 import type { Asset, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
+import type { PostSpawnHook } from '../registry/instantiate';
 import { resolveAssetHandle } from '../resolve-asset-handle';
-import { parseScenePayload } from '../scene-payload';
+import { defined } from './assert-defined.js';
 
 const T709Tag = defineComponent('T709Tag', { value: 'f32' });
 const T709MaterialCarrier = defineComponent('T709MaterialCarrier', {
   materials: 'array<shared<MaterialAsset>>',
 });
-const MeshFilterComponent = defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
-const MeshRendererComponent = defineComponent('MeshRenderer', {
-  materials: 'array<shared<MaterialAsset>>',
-});
-const Transform = defineComponent('Transform', {
-  posX: 'f32',
-  posY: 'f32',
-  posZ: 'f32',
-});
-const ChildOf = defineComponent('ChildOf', { parent: 'entity' });
 const SceneInstance = defineComponent('SceneInstance', {
   source: 'shared<SceneAsset>',
   mapping: 'array<entity>',
   state: 'unique<SceneInstanceState>',
 });
 
-const SCENE_COMPONENTS = [
-  T709Tag,
-  T709MaterialCarrier,
-  MeshFilterComponent,
-  MeshRendererComponent,
-  Transform,
-  ChildOf,
-  SceneInstance,
-] as const;
-
 const MATERIAL_GUID = '11111111-1111-4111-8111-111111111111';
-const CHILD_A_GUID = '22222222-2222-4222-8222-222222222222';
-const CHILD_B_GUID = '33333333-3333-4333-8333-333333333333';
-const PARENT_GUID = '44444444-4444-4444-8444-444444444444';
-const MIGRATION_MESH_GUID = '55555555-5555-4555-8555-555555555555';
-const MIGRATION_MATERIAL_A_GUID = '66666666-6666-4666-8666-666666666666';
-const MIGRATION_MATERIAL_B_GUID = '77777777-7777-4777-8777-777777777777';
-const MIGRATION_SCENE_GUID = '88888888-8888-4888-8888-888888888888';
-const MIGRATION_MATERIAL_C_GUID = '99999999-9999-4999-8999-999999999999';
-const MIGRATION_CHILD_SCENE_GUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const MIGRATION_ALT_MESH_GUID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const MIGRATION_GRANDCHILD_SCENE_GUID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const CHILD_GUID = '22222222-2222-4222-8222-222222222222';
+const PARENT_GUID = '33333333-3333-4333-8333-333333333333';
 
-function makeRegistry(): AssetRegistry {
-  return new AssetRegistry({
-    getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
-    findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
-    getPipeline: vi.fn().mockReturnValue(undefined),
-    installMaterialArtifact: vi.fn(),
-    inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
-  } as unknown as import('@forgeax/engine-shader').ShaderRegistry);
+function makeRegistry(postSpawnHook?: PostSpawnHook): AssetRegistry {
+  return new AssetRegistry(
+    {
+      getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
+      findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
+      getPipeline: vi.fn().mockReturnValue(undefined),
+      installMaterialArtifact: vi.fn(),
+      inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
+    } as unknown as import('@forgeax/engine-shader').ShaderRegistry,
+    undefined,
+    undefined,
+    postSpawnHook,
+  );
 }
 
 function makeWorld(): World {
   const world = new World();
-  for (const component of SCENE_COMPONENTS) {
+  for (const component of [T709Tag, T709MaterialCarrier, SceneInstance]) {
     world.components.register(component).unwrap();
   }
   return world;
@@ -77,608 +56,314 @@ function makeWorld(): World {
 function twoEntityScene(): SceneAsset {
   return {
     kind: 'scene',
-    entities: [
-      { localId: 0 as never, components: { T709Tag: { value: 1 } } },
-      { localId: 1 as never, components: { T709Tag: { value: 2 } } },
-    ],
-    mounts: [],
-  } as unknown as SceneAsset;
+    entities: {
+      first: { components: { T709Tag: { value: 1 } } },
+      second: { components: { T709Tag: { value: 2 } } },
+    },
+  };
 }
 
-function isResult(v: unknown): v is { ok: boolean } {
-  return typeof v === 'object' && v !== null && typeof (v as { ok?: unknown }).ok === 'boolean';
+function material(): Asset {
+  return {
+    kind: 'material',
+    passes: [
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' } },
+      },
+    ],
+    values: {},
+  } as unknown as Asset;
 }
 
 describe('AssetRegistry.instantiate', () => {
-  it('resolves a catalogued scene handle and returns a structured Result', () => {
+  it.each([
+    'anchor',
+    'flat',
+  ] as const)('rejects a stale authored %s instance override before spawning its child', (mode) => {
     const reg = makeRegistry();
     const world = makeWorld();
-    const scene = twoEntityScene();
+    world.components.register(ChildOf).unwrap();
+    world.components.register(Children).unwrap();
+    const stale = world.allocSharedRef('MaterialAsset', material());
+    world.sharedRefs.release(stale).unwrap();
+    reg
+      .catalog(CHILD_GUID, {
+        kind: 'scene',
+        entities: { child: { components: { T709Tag: { value: 1 } } } },
+      })
+      .unwrap();
+    const handle = world.allocSharedRef('SceneAsset', {
+      kind: 'scene',
+      entities: {
+        nested: {
+          components: {},
+          instance: {
+            source: CHILD_GUID,
+            overrides: [
+              { target: ['child'], components: { T709MaterialCarrier: { materials: [stale] } } },
+            ],
+          },
+        },
+      },
+    } as SceneAsset);
+    const baseline = world.inspect().entityCount;
+    expect(
+      mode === 'anchor' ? reg.instantiate(handle, world) : reg.instantiateFlat(handle, world),
+    ).toMatchObject({ ok: false, error: { code: 'shared-ref-stale' } });
+    expect(world.inspect().entityCount).toBe(baseline);
+    expect(world.sharedRefs._liveCount()).toBe(1);
+    world.sharedRefs.release(handle).unwrap();
+  });
+  it.each([
+    'anchor',
+    'flat',
+  ] as const)('applies authored %s array overrides that add a component without leaking grants', (mode) => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    world.components.register(ChildOf).unwrap();
+    world.components.register(Children).unwrap();
+    reg.catalog(MATERIAL_GUID, material()).unwrap();
+    reg
+      .catalog(CHILD_GUID, {
+        kind: 'scene',
+        entities: { child: { components: { T709Tag: { value: 7 } } } },
+      })
+      .unwrap();
+    const handle = world.allocSharedRef('SceneAsset', {
+      kind: 'scene',
+      entities: {
+        nested: {
+          components: {},
+          instance: {
+            source: CHILD_GUID,
+            overrides: [
+              {
+                target: ['child'],
+                components: { T709MaterialCarrier: { materials: [MATERIAL_GUID] } },
+              },
+            ],
+          },
+        },
+      },
+    } as SceneAsset);
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const roots =
+        mode === 'anchor'
+          ? [reg.instantiate(handle, world).unwrap()]
+          : reg.instantiateFlat(handle, world).unwrap();
+      const members = roots.flatMap((root) => [root, ...world.iterDescendants(root)]);
+      const member = defined(
+        members.find((entity) => world.hasComponent(entity, T709MaterialCarrier)),
+      );
+      expect(world.get(member, T709Tag).unwrap().value).toBe(7);
+      const refs = world.get(member, T709MaterialCarrier).unwrap().materials;
+      expect(refs.length).toBe(1);
+      expect(world.sharedRefs.resolve(refs[0] as never).ok).toBe(true);
+      for (const root of roots) worldDespawnScene(world, root).unwrap();
+      expect(world.sharedRefs._liveCount()).toBe(1);
+      expect(world.inspect().entityCount).toBe(0);
+    }
+    world.sharedRefs.release(handle).unwrap();
+    expect(world.sharedRefs._liveCount()).toBe(0);
+  });
+  it.each([
+    'anchor',
+    'flat',
+  ] as const)('releases each %s acquisition when GUID aliases share one payload handle', (mode) => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    const payload = material();
+    reg.catalog(MATERIAL_GUID, payload).unwrap();
+    reg.catalog(CHILD_GUID, payload).unwrap();
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        box: { components: { T709MaterialCarrier: { materials: [MATERIAL_GUID, CHILD_GUID] } } },
+      },
+    };
     const handle = world.allocSharedRef('SceneAsset', scene);
-    const res = reg.instantiate(handle, world);
-    expect(isResult(res)).toBe(true);
-    if (res.ok) expect(typeof res.value).toBe('number');
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const roots =
+        mode === 'anchor'
+          ? [reg.instantiate(handle, world).unwrap()]
+          : reg.instantiateFlat(handle, world).unwrap();
+      const sibling =
+        mode === 'anchor'
+          ? [reg.instantiate(handle, world).unwrap()]
+          : reg.instantiateFlat(handle, world).unwrap();
+      const first = reg._resolveSceneGuids(scene, world).unwrap();
+      const fields = first.entities.box?.components.T709MaterialCarrier as { materials: number[] };
+      expect(fields.materials[0]).toBe(fields.materials[1]);
+      // Direct resolver calls also own one temporary grant for each GUID acquisition.
+      for (const ref of fields.materials) world.sharedRefs.release(ref as never).unwrap();
+      for (const root of roots) worldDespawnScene(world, root).unwrap();
+      expect(world.sharedRefs.resolve(fields.materials[0] as never).ok).toBe(true);
+      for (const root of sibling) worldDespawnScene(world, root).unwrap();
+      expect(world.sharedRefs._liveCount()).toBe(1);
+    }
+    world.sharedRefs.release(handle).unwrap();
+    expect(world.sharedRefs._liveCount()).toBe(0);
   });
-
-  it('returns an error Result when the handle does not resolve to a scene', () => {
-    const reg = makeRegistry();
+  it.each([
+    'anchor',
+    'flat',
+  ] as const)('keeps nested %s source references available for override removal and releases them on failure/close', (mode) => {
+    let failing = false;
+    const reg = makeRegistry(() =>
+      failing ? { ok: false, error: new Error('injected preparation failure') } : { ok: true },
+    );
     const world = makeWorld();
-    const handle = world.allocSharedRef('SceneAsset', { kind: 'material' } as unknown as Asset);
-    const res = reg.instantiate(handle as never, world);
-    expect(res.ok).toBe(false);
+    world.components.register(ChildOf).unwrap();
+    world.components.register(Children).unwrap();
+    reg.catalog(MATERIAL_GUID, material()).unwrap();
+    reg
+      .catalog(CHILD_GUID, {
+        kind: 'scene',
+        entities: {
+          child: { components: { T709MaterialCarrier: { materials: [MATERIAL_GUID] } } },
+        },
+      })
+      .unwrap();
+    const handle = world.allocSharedRef('SceneAsset', {
+      kind: 'scene',
+      entities: { nested: { components: {}, instance: { source: CHILD_GUID } } },
+    } as SceneAsset);
+    const roots =
+      mode === 'anchor'
+        ? [reg.instantiate(handle, world).unwrap()]
+        : reg.instantiateFlat(handle, world).unwrap();
+    const root = defined(roots[0]);
+    const nested =
+      mode === 'anchor'
+        ? defined(worldResolveSceneInstanceStatePayload(world, root).unwrap().mountRoots[0])
+        : defined(
+            [root, ...world.iterDescendants(root)].find((entity) =>
+              world.hasComponent(entity, SceneInstance),
+            ),
+          );
+    const state = worldResolveSceneInstanceStatePayload(world, nested).unwrap();
+    const member = defined(
+      [...state.entityToLocalId.keys()].find((entity) =>
+        world.hasComponent(entity, T709MaterialCarrier),
+      ),
+    );
+    const original = world.get(member, T709MaterialCarrier).unwrap().materials[0];
+    worldSetSceneOverride(world, nested, member, T709MaterialCarrier, 'materials', []).unwrap();
+    expect(world.sharedRefs.resolve(original as never).ok).toBe(true);
+    worldRemoveSceneOverride(world, nested, member, T709MaterialCarrier, 'materials').unwrap();
+    expect(world.get(member, T709MaterialCarrier).unwrap().materials[0]).toBe(original);
+    for (const root of roots) worldDespawnScene(world, root).unwrap();
+    expect(world.sharedRefs._liveCount()).toBe(1);
+    failing = true;
+    expect(
+      mode === 'anchor' ? reg.instantiate(handle, world).ok : reg.instantiateFlat(handle, world).ok,
+    ).toBe(false);
+    expect(world.sharedRefs._liveCount()).toBe(1);
+    world.sharedRefs.release(handle).unwrap();
+    expect(world.sharedRefs._liveCount()).toBe(0);
   });
-});
-
-describe('AssetRegistry.instantiateFlat', () => {
-  it('drives the flat scene-materialise path to a structured Result', () => {
+  it('materialises keyed entities and returns a synthetic root', () => {
     const reg = makeRegistry();
     const world = makeWorld();
     const handle = world.allocSharedRef('SceneAsset', twoEntityScene());
-    const res = reg.instantiateFlat(handle, world);
-    expect(isResult(res)).toBe(true);
-    if (res.ok) expect(Array.isArray(res.value)).toBe(true);
+    const result = reg.instantiate(handle, world);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(typeof result.value).toBe('number');
+  });
+
+  it('materialises keyed entities flat for authoring', () => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    const handle = world.allocSharedRef('SceneAsset', twoEntityScene());
+    const result = reg.instantiateFlat(handle, world);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.length).toBe(2);
+  });
+
+  it('releases temporary scene grants across repeated flat playback', () => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    const handle = world.allocSharedRef('SceneAsset', twoEntityScene());
+    const baseline = world.sharedRefs._liveCount();
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const entities = reg.instantiateFlat(handle, world).unwrap();
+      for (const entity of entities) world.despawn(entity).unwrap();
+      expect(world.sharedRefs._liveCount()).toBe(baseline);
+    }
+    expect(world.sharedRefs.resolve(handle).ok).toBe(true);
   });
 });
 
-describe('scene graph GUID handle ownership', () => {
-  it('mints one handle per GUID across sibling mount recursion', () => {
+describe('keyed SceneAsset GUID production', () => {
+  it('resolves shared fields without changing entity keys', () => {
     const reg = makeRegistry();
     const world = makeWorld();
-    const material = {
-      kind: 'material',
-      passes: [
-        {
-          name: 'Forward',
-          program: { module: 'forgeax::default-unlit' },
-          renderState: { tags: { LightMode: 'Forward' } },
-        },
-      ],
-      values: {},
-    } as unknown as Asset;
-    const child = (value: number): SceneAsset => ({
-      kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
-          components: {
-            T709Tag: { value },
-            T709MaterialCarrier: { materials: [MATERIAL_GUID] },
-          },
-        },
-      ],
-    });
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        { localId: 0 as never, source: CHILD_A_GUID, memberFirst: 1 as never, memberCount: 1 },
-        { localId: 2 as never, source: CHILD_B_GUID, memberFirst: 3 as never, memberCount: 1 },
-        { localId: 4 as never, source: CHILD_A_GUID, memberFirst: 5 as never, memberCount: 1 },
-      ],
-    };
-    reg.catalog(MATERIAL_GUID, material);
-    reg.catalog(CHILD_A_GUID, child(1));
-    reg.catalog(CHILD_B_GUID, child(2));
-    reg.catalog(PARENT_GUID, parent);
-
-    const resolved = reg._resolveSceneGuids(parent, world, PARENT_GUID);
-
-    expect(resolved).toMatchObject({ ok: true });
-    if (!resolved.ok) return;
-    const childHandles = resolved.value.mounts?.map((mount) => mount.source) ?? [];
-    expect(childHandles).toHaveLength(3);
-    expect(childHandles[2]).toBe(childHandles[0]);
-    const resolvedChildren = childHandles.map((handle) =>
-      resolveAssetHandle<SceneAsset>(world, handle as never).unwrap(),
-    );
-    const materialHandles = resolvedChildren.map(
-      (scene) =>
-        (
-          scene.entities[0]?.components as Record<
-            string,
-            { readonly materials?: readonly number[] }
-          >
-        ).T709MaterialCarrier?.materials?.[0],
-    );
-    expect(materialHandles[0]).toBeGreaterThanOrEqual(1024);
-    expect(materialHandles[1]).toBe(materialHandles[0]);
-    expect(materialHandles[2]).toBe(materialHandles[0]);
-  });
-
-  it('reuses a catalogued payload handle across separate scene resolutions', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    const material = {
-      kind: 'material',
-      passes: [
-        {
-          name: 'Forward',
-          program: { module: 'forgeax::default-unlit' },
-          renderState: { tags: { LightMode: 'Forward' } },
-        },
-      ],
-      values: {},
-    } as unknown as Asset;
+    expect(reg.catalog(MATERIAL_GUID, material()).ok).toBe(true);
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
-          components: {
-            T709MaterialCarrier: { materials: [MATERIAL_GUID] },
-          },
+      entities: {
+        player: {
+          components: { T709MaterialCarrier: { materials: [MATERIAL_GUID] } },
         },
-      ],
+      },
     };
-    expect(reg.catalog(MATERIAL_GUID, material).ok).toBe(true);
 
-    const first = reg._resolveSceneGuids(scene, world);
-    const second = reg._resolveSceneGuids(scene, world);
+    const result = reg._resolveSceneGuids(scene, world);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(Object.keys(result.value.entities)).toEqual(['player']);
+    const values = result.value.entities.player?.components.T709MaterialCarrier as {
+      materials: number[];
+    };
+    expect(values.materials).toHaveLength(1);
+    expect(values.materials[0]).toBeGreaterThanOrEqual(1024);
+    expect(resolveAssetHandle<Asset>(world, values.materials[0] as never).unwrap()).toBe(
+      reg.assetCatalog.get(MATERIAL_GUID)?.payload,
+    );
+  });
 
-    if (!first.ok) throw first.error;
-    if (!second.ok) throw second.error;
-    expect(first).toMatchObject({ ok: true });
-    expect(second).toMatchObject({ ok: true });
-    const handleOf = (resolved: SceneAsset): number | undefined =>
-      (
-        resolved.entities[0]?.components as Record<
-          string,
-          { readonly materials?: readonly number[] }
-        >
-      ).T709MaterialCarrier?.materials?.[0];
-    expect(handleOf(second.value)).toBe(handleOf(first.value));
+  it('resolves nested keyed instances and rejects recursive identity', () => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    const child: SceneAsset = { kind: 'scene', entities: { root: { components: {} } } };
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        room: {
+          components: {},
+          instance: { source: CHILD_GUID, overrides: [{ target: ['root'], components: {} }] },
+        },
+      },
+    };
+    expect(reg.catalog(CHILD_GUID, child).ok).toBe(true);
+    const resolved = reg._resolveSceneGuids(parent, world, PARENT_GUID);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.entities.room?.instance?.source).toBe(CHILD_GUID);
     expect(world.sharedRefs._liveCount()).toBe(1);
+
+    expect(reg.catalog(PARENT_GUID, parent).ok).toBe(true);
+    const cycle = reg._resolveSceneGuids(
+      { kind: 'scene', entities: { loop: { components: {}, instance: { source: PARENT_GUID } } } },
+      world,
+      PARENT_GUID,
+    );
+    expect(cycle).toMatchObject({ ok: false, error: { code: 'asset-parse-failed' } });
   });
-});
 
-describe('serialized v2 scene material override migration', () => {
-  function registerMigrationAssets(reg: AssetRegistry): void {
-    const material = {
-      kind: 'material',
-      passes: [
-        {
-          name: 'Forward',
-          program: { module: 'forgeax::default-unlit' },
-          renderState: { tags: { LightMode: 'Forward' } },
-        },
-      ],
-      values: {},
-    } as unknown as Asset;
-    expect(reg.catalog(MIGRATION_MATERIAL_A_GUID, material).ok).toBe(true);
-    expect(reg.catalog(MIGRATION_MATERIAL_B_GUID, { ...material } as Asset).ok).toBe(true);
-    expect(reg.catalog(MIGRATION_MATERIAL_C_GUID, material).ok).toBe(true);
-    const meshResult = reg.catalog(MIGRATION_MESH_GUID, {
-      kind: 'mesh',
-      vertices: new Float32Array(12),
-      indices: new Uint16Array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
-      attributes: {},
-      submeshes: [
-        {
-          indexOffset: 0,
-          indexCount: 3,
-          vertexCount: 1,
-          topology: 'triangle-list',
-          materialSlot: 1,
-        },
-        {
-          indexOffset: 3,
-          indexCount: 3,
-          vertexCount: 1,
-          topology: 'triangle-list',
-          materialSlot: 0,
-        },
-        {
-          indexOffset: 6,
-          indexCount: 3,
-          vertexCount: 1,
-          topology: 'triangle-list',
-          materialSlot: 1,
-        },
-      ],
-      materialSlots: [
-        { slotName: 'Body', sourceKey: 'material:body' },
-        { slotName: 'Accent', sourceKey: 'material:accent' },
-      ],
-    } as unknown as Asset);
-    expect(meshResult.ok).toBe(true);
-    const baseMesh = reg.assetCatalog.get(MIGRATION_MESH_GUID)?.payload;
-    if (baseMesh?.kind !== 'mesh') throw new Error('migration mesh missing');
-    expect(
-      reg.catalog(MIGRATION_ALT_MESH_GUID, {
-        ...baseMesh,
-        submeshes: baseMesh.submeshes.map((section, index) => ({
-          ...section,
-          materialSlot: index === 1 ? 1 : 0,
-        })),
-      }).ok,
-    ).toBe(true);
-  }
-
-  function parseSerialized(
-    materialRefIndices: readonly number[],
-    prefix?: readonly number[],
-  ): SceneAsset {
-    const parsed = parseScenePayload(
-      {
-        entities: [
-          ...(prefix === undefined
-            ? []
-            : [
-                {
-                  localId: 16,
-                  components: {
-                    MeshFilter: { assetHandle: 0 },
-                    MeshRenderer: { materials: prefix },
-                  },
-                },
-              ]),
-          {
-            localId: 17,
-            components: {
-              MeshFilter: { assetHandle: 0 },
-              MeshRenderer: { materials: materialRefIndices },
-            },
-          },
-        ],
+  it('reports the keyed entity when a shared GUID cannot be resolved', () => {
+    const reg = makeRegistry();
+    const world = makeWorld();
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        missingMesh: { components: { T709MaterialCarrier: { materials: [MATERIAL_GUID] } } },
       },
-      [
-        MIGRATION_MESH_GUID,
-        MIGRATION_MATERIAL_A_GUID,
-        MIGRATION_MATERIAL_B_GUID,
-        MIGRATION_MATERIAL_C_GUID,
-      ],
-    );
-    if (parsed === undefined || !('kind' in parsed))
-      throw new Error('serialized scene fixture did not parse');
-    return parsed;
-  }
-
-  function mountChildScene(): SceneAsset {
-    return {
-      kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
-          components: {
-            MeshFilter: { assetHandle: MIGRATION_MESH_GUID as never },
-            MeshRenderer: { materials: [] },
-          },
-        },
-      ],
     };
-  }
-
-  it('collapses equal per-section overrides in the resolved scene saved by the Editor', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const scene = parseSerialized([1, 2, 1]);
-    reg.catalog(MIGRATION_SCENE_GUID, scene, [
-      {
-        guid: MIGRATION_MESH_GUID,
-        sceneEntityId: 17,
-        sourceField: { componentName: 'MeshFilter', fieldName: 'assetHandle' },
-      },
-      {
-        guid: MIGRATION_MATERIAL_A_GUID,
-        sceneEntityId: 17,
-        sourceField: { componentName: 'MeshRenderer', fieldName: 'materials', arrayIndex: 0 },
-      },
-      {
-        guid: MIGRATION_MATERIAL_B_GUID,
-        sceneEntityId: 17,
-        sourceField: { componentName: 'MeshRenderer', fieldName: 'materials', arrayIndex: 1 },
-      },
-      {
-        guid: MIGRATION_MATERIAL_A_GUID,
-        sceneEntityId: 17,
-        sourceField: { componentName: 'MeshRenderer', fieldName: 'materials', arrayIndex: 2 },
-      },
-    ]);
-
-    const result = reg._resolveSceneGuids(scene, world, MIGRATION_SCENE_GUID);
-    if (!result.ok) throw result.error;
-    const materials = (result.value.entities[0]?.components.MeshRenderer as { materials: number[] })
-      .materials;
-    expect(materials).toHaveLength(2);
-    expect(resolveAssetHandle<Asset>(world, materials[0] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_B_GUID)?.payload,
-    );
-    expect(resolveAssetHandle<Asset>(world, materials[1] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_A_GUID)?.payload,
-    );
-  });
-
-  it('fails before rewriting the serialized scene when section overrides conflict', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const scene = parseSerialized([1, 2, 3], [1, 2, 1]);
-    const before = JSON.stringify(scene);
-    reg.catalog(MIGRATION_SCENE_GUID, scene);
-    const liveBefore = world.sharedRefs._liveCount();
-
-    const result = reg._resolveSceneGuids(scene, world, MIGRATION_SCENE_GUID);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.detail).toMatchObject({
-        code: 'mesh-material-slot-override-conflict',
-        meshGuid: MIGRATION_MESH_GUID,
-        sceneGuid: MIGRATION_SCENE_GUID,
-        entityId: 17,
-        materialSlot: 1,
-        submeshIndices: [0, 2],
-        overrideGuids: [MIGRATION_MATERIAL_A_GUID, MIGRATION_MATERIAL_C_GUID],
-      });
-    }
-    expect(JSON.stringify(scene)).toBe(before);
-    expect(world.sharedRefs._liveCount()).toBe(liveBefore);
-  });
-
-  it('preflights nested mount conflicts before parent references touch the World', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const child = parseSerialized([1, 2, 3]);
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
-          components: { T709MaterialCarrier: { materials: [MIGRATION_MATERIAL_B_GUID] } },
-        },
-      ],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 2 as never,
-          memberCount: 1,
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, child);
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-    const liveBefore = world.sharedRefs._liveCount();
-
-    const result = reg._resolveSceneGuids(parent, world, MIGRATION_SCENE_GUID);
-    expect(result.ok).toBe(false);
-    expect(world.sharedRefs._liveCount()).toBe(liveBefore);
-  });
-
-  it('migrates PATCH mount materials using the mounted member mesh', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const child = mountChildScene();
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 1,
-          overrides: [
-            {
-              localId: 1 as never,
-              comp: 'MeshRenderer',
-              field: 'materials',
-              value: [
-                MIGRATION_MATERIAL_A_GUID,
-                MIGRATION_MATERIAL_B_GUID,
-                MIGRATION_MATERIAL_A_GUID,
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, child);
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-
-    const result = reg._resolveSceneGuids(parent, world, MIGRATION_SCENE_GUID);
-    if (!result.ok) throw result.error;
-    const materials = result.value.mounts?.[0]?.overrides?.[0]?.value as number[];
-    expect(materials).toHaveLength(2);
-    expect(resolveAssetHandle<Asset>(world, materials[0] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_B_GUID)?.payload,
-    );
-    expect(resolveAssetHandle<Asset>(world, materials[1] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_A_GUID)?.payload,
-    );
-  });
-
-  it('applies an earlier MeshFilter override before migrating UPSERT mount materials', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const child = mountChildScene();
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 1,
-          overrides: [
-            {
-              localId: 1 as never,
-              comp: 'MeshFilter',
-              field: 'assetHandle',
-              value: MIGRATION_ALT_MESH_GUID,
-            },
-            {
-              localId: 1 as never,
-              comp: 'MeshRenderer',
-              value: {
-                materials: [
-                  MIGRATION_MATERIAL_A_GUID,
-                  MIGRATION_MATERIAL_B_GUID,
-                  MIGRATION_MATERIAL_A_GUID,
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, child);
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-
-    const result = reg._resolveSceneGuids(parent, world, MIGRATION_SCENE_GUID);
-    if (!result.ok) throw result.error;
-    const value = result.value.mounts?.[0]?.overrides?.[1]?.value as { materials: number[] };
-    expect(value.materials).toHaveLength(2);
-    expect(resolveAssetHandle<Asset>(world, value.materials[0] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_A_GUID)?.payload,
-    );
-    expect(resolveAssetHandle<Asset>(world, value.materials[1] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_B_GUID)?.payload,
-    );
-  });
-
-  it('rejects conflicting mount materials before any World mutation', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const child = mountChildScene();
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 1,
-          overrides: [
-            {
-              localId: 1 as never,
-              comp: 'MeshRenderer',
-              field: 'materials',
-              value: [
-                MIGRATION_MATERIAL_A_GUID,
-                MIGRATION_MATERIAL_B_GUID,
-                MIGRATION_MATERIAL_C_GUID,
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, child);
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-    const liveBefore = world.sharedRefs._liveCount();
-
-    const result = reg._resolveSceneGuids(parent, world, MIGRATION_SCENE_GUID);
-    expect(result.ok).toBe(false);
-    expect(world.sharedRefs._liveCount()).toBe(liveBefore);
-  });
-
-  it('migrates an override that targets a nested mount member slot', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const grandchild = mountChildScene();
-    const child: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_GRANDCHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 1,
-        },
-      ],
-    };
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 2,
-          overrides: [
-            {
-              localId: 2 as never,
-              comp: 'MeshRenderer',
-              field: 'materials',
-              value: [
-                MIGRATION_MATERIAL_A_GUID,
-                MIGRATION_MATERIAL_B_GUID,
-                MIGRATION_MATERIAL_A_GUID,
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_GRANDCHILD_SCENE_GUID, grandchild);
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, child);
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-
-    const result = reg._resolveSceneGuids(parent, world, MIGRATION_SCENE_GUID);
-    if (!result.ok) throw result.error;
-    const materials = result.value.mounts?.[0]?.overrides?.[0]?.value as number[];
-    expect(materials).toHaveLength(2);
-    expect(resolveAssetHandle<Asset>(world, materials[0] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_B_GUID)?.payload,
-    );
-  });
-
-  it('migrates material arrays authored on the mount entity itself', () => {
-    const reg = makeRegistry();
-    const world = makeWorld();
-    registerMigrationAssets(reg);
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [],
-      mounts: [
-        {
-          localId: 0 as never,
-          source: MIGRATION_CHILD_SCENE_GUID,
-          memberFirst: 1 as never,
-          memberCount: 1,
-          components: {
-            MeshFilter: { assetHandle: MIGRATION_MESH_GUID as never },
-            MeshRenderer: {
-              materials: [
-                MIGRATION_MATERIAL_A_GUID,
-                MIGRATION_MATERIAL_B_GUID,
-                MIGRATION_MATERIAL_A_GUID,
-              ] as never,
-            },
-          },
-        },
-      ],
-    };
-    reg.catalog(MIGRATION_CHILD_SCENE_GUID, mountChildScene());
-    reg.catalog(MIGRATION_SCENE_GUID, parent);
-
-    const parentHandle = world.allocSharedRef('SceneAsset', parent);
-    const result = reg.instantiateFlat(parentHandle, world);
-    if (!result.ok) throw result.error;
-    const carrier = result.value.find((entity) => world.get(entity, MeshFilterComponent).ok);
-    expect(carrier).toBeDefined();
-    if (carrier === undefined) return;
-    const meshHandle = world.get(carrier, MeshFilterComponent).unwrap().assetHandle;
-    const materials = world.get(carrier, MeshRendererComponent).unwrap().materials;
-    expect(resolveAssetHandle<Asset>(world, meshHandle as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MESH_GUID)?.payload,
-    );
-    expect(materials).toHaveLength(2);
-    expect(resolveAssetHandle<Asset>(world, materials[0] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_B_GUID)?.payload,
-    );
-    expect(resolveAssetHandle<Asset>(world, materials[1] as never).unwrap()).toBe(
-      reg.assetCatalog.get(MIGRATION_MATERIAL_A_GUID)?.payload,
-    );
+    const result = reg._resolveSceneGuids(scene, world);
+    expect(result).toMatchObject({ ok: false, error: { code: 'asset-not-found' } });
+    if (!result.ok) expect(result.error.hint).toContain('missingMesh');
   });
 });

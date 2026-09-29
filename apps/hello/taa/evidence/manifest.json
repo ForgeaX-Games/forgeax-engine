@@ -1,0 +1,26 @@
+{
+  "carrier": "apps/hello/taa",
+  "source": "apps/hello/taa/src/main.ts",
+  "featureId": "feat-20260827-auto-exposure-hdr-color-grading",
+  "schema": "apps/hello/taa/evidence/schema.json",
+  "provenance": {
+    "design": "auto-exposure-hdr-color-grading",
+    "implementation": "packages/render/src/pipeline/standard-output",
+    "manifestOwner": "apps/hello/taa"
+  },
+  "build": "vite build",
+  "requiredBackends": ["browser-webgpu", "dawn-node", "rhi-null"],
+  "frames": 300,
+  "scenarios": ["manual", "auto", "white-balance", "lut", "taa", "bloom", "resize", "failure", "recovery"],
+  "visualTargets": ["exposure-adaptation-card", "white-balance-card", "lut-output-card"],
+  "stages": ["linear-HDR", "linear-LDR", "final-sRGB"],
+  "exactHeadJoin": {
+    "sourceRevision": "runtime-exact-head",
+    "requiredArtifactIdentity": ["source", "build", "backend", "runner", "resolution", "stage", "rawHash"],
+    "requiredReports": ["featureEvidence", "threeR184CommonStage", "qualifiedGpuTiming", "assetAuthority"],
+    "missingEvidenceStatus": "blocked",
+    "historicalEvidenceIsCurrent": false
+  },
+  "unavailableIsNotPass": true,
+  "nullPolicy": "structural-only"
+}

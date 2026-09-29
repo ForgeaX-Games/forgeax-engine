@@ -19,7 +19,7 @@ const boundsFeature = {
     const count: number = data.visibleCount;
     void count;
     void context;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [{ scope: 'frame', resources: [], passes: [] }] });
   },
 } satisfies RenderFeature<BoundsFrame>;
 
@@ -32,7 +32,7 @@ const overlayFeature = {
     const layer: 'overlay' = data.layer;
     void layer;
     void context;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [{ scope: 'frame', resources: [], passes: [] }] });
   },
 } satisfies RenderFeature<OverlayFrame>;
 

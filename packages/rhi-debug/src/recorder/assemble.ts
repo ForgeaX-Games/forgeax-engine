@@ -1,8 +1,6 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
-import { encodeTape } from '../protocol/codec';
+import { digestBytes, encodeTape } from '../protocol/codec';
 import type { BootstrapResource, Tape as V7Tape } from '../protocol/types';
 import type { DebugRhiInstance } from '../recorder';
 import type { HandleId, Tape as LegacyTape, RhiCallEvent } from '../types';
@@ -31,7 +29,7 @@ export function assembleTape(recorder: DebugRhiInstance): Result<EncodedTape, Rh
   if (!encoded.ok) return err(encoded.error);
   return ok({
     bytes: encoded.value,
-    digest: `sha256:${bytesToHex(sha256(encoded.value))}`,
+    digest: digestBytes(encoded.value),
     tape,
   });
 }
@@ -161,7 +159,11 @@ function createdHandleId(event: RhiCallEvent): HandleId | undefined {
   if (event.kind === 'beginRenderPass' || event.kind === 'beginComputePass') {
     return event.passHandleId;
   }
-  if (event.kind.startsWith('create') && 'handleId' in event) return event.handleId;
+  if (
+    (event.kind.startsWith('create') || event.kind === 'getBindGroupLayout') &&
+    'handleId' in event
+  )
+    return event.handleId;
   return undefined;
 }
 
@@ -171,6 +173,8 @@ function resourceKind(event: RhiCallEvent): BootstrapResource['kind'] | undefine
       return 'buffer';
     case 'createTexture':
       return 'texture';
+    case 'createQuerySet':
+      return 'query-set';
     case 'createTextureView':
       return 'texture-view';
     case 'createSampler':
@@ -182,6 +186,7 @@ function resourceKind(event: RhiCallEvent): BootstrapResource['kind'] | undefine
       return 'pipeline';
     case 'createBindGroup':
     case 'createBindGroupLayout':
+    case 'getBindGroupLayout':
     case 'createPipelineLayout':
       return 'binding';
     case 'createCommandEncoder':

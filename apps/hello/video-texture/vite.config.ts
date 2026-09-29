@@ -13,7 +13,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // shader.loadManifest. Single-entry build (index.html) keeps parity with
 // hello-room / hello-cube.
 //
-// The cutscene.webm is host-side DOM (the demo's VideoElementProvider creates
+// The cutscene.webm is host-side DOM (the demo's VideoSourceProvider creates
 // a <video src="/cutscene.webm">), NOT an engine pack asset. The engine repo
 // tracks zero binaries (CI grep:no-binary-assets), so the webm lives in the
 // forgeax-engine-assets submodule (demo-assets/hello-video-cutscene/, shared

@@ -39,6 +39,7 @@ import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
   exposeLearnRenderTestApp,
+  markLearnRenderTestBootstrapStage,
   trackLearnRenderTestBootstrap,
 } from '../../../../shared/src/learn-render-test-lifecycle';
 import {
@@ -340,11 +341,13 @@ const bootstrapPromise = bootstrap(canvas);
 trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  markLearnRenderTestBootstrapStage(target, 'hdr.createApp');
   const appRes = await createApp(
     target,
     { features: [hdrFeature] },
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
+  markLearnRenderTestBootstrapStage(target, 'hdr.createApp.complete');
   if (!appRes.ok) {
     console.error('[learn-render 5.6 hdr] createApp failed:', appRes.error);
     return;
@@ -369,6 +372,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   configureRuntimeAssetCatalog(assets, runtimeBinding);
+  markLearnRenderTestBootstrapStage(target, 'hdr.assets.loadByGuid');
 
   // Wood texture for the tunnel walls + floor (inward-facing box interior;
   // see invertMesh below).
@@ -377,7 +381,41 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.6 hdr] wood GUID parse failed');
     return;
   }
-  const woodTexRes = await assets.loadByGuid<TextureAsset>(woodGuidRes.value);
+  const traceScope = globalThis as typeof globalThis & {
+    __forgeaxAssetLoadTrace?: (event: {
+      readonly phase: string;
+      readonly at: number;
+      readonly guid?: string;
+      readonly packageUrl?: string;
+      readonly artifactKey?: string;
+      readonly detail?: Readonly<Record<string, unknown>>;
+    }) => void;
+  };
+  const traceStartedAt = Date.now();
+  const traceSink = (event: {
+    readonly phase: string;
+    readonly at: number;
+    readonly guid?: string;
+    readonly packageUrl?: string;
+    readonly artifactKey?: string;
+    readonly detail?: Readonly<Record<string, unknown>>;
+  }): void => {
+    const elapsedMs = Date.now() - traceStartedAt;
+    console.info(
+      `[learn-render 5.6 hdr] asset-load-phase ${JSON.stringify({ ...event, elapsedMs })}`,
+    );
+    markLearnRenderTestBootstrapStage(target, `hdr.assets.${event.phase}`);
+  };
+  traceScope.__forgeaxAssetLoadTrace = traceSink;
+  let woodTexRes: Awaited<ReturnType<typeof assets.loadByGuid<TextureAsset>>>;
+  try {
+    woodTexRes = await assets.loadByGuid<TextureAsset>(woodGuidRes.value);
+  } finally {
+    if (traceScope.__forgeaxAssetLoadTrace === traceSink) {
+      delete traceScope.__forgeaxAssetLoadTrace;
+    }
+  }
+  markLearnRenderTestBootstrapStage(target, 'hdr.assets.loadByGuid.complete');
   if (!woodTexRes.ok) {
     console.error('[learn-render 5.6 hdr] wood loadByGuid failed:', woodTexRes.error.code);
     return;
@@ -573,7 +611,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   });
 
+  markLearnRenderTestBootstrapStage(target, 'hdr.app.start');
   const startRes = app.start();
+  markLearnRenderTestBootstrapStage(target, 'hdr.app.start.complete');
   if (!startRes.ok) {
     console.error('[learn-render 5.6 hdr] app.start failed:', startRes.error);
     return;
@@ -634,6 +674,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   installCaptureHook(app, world, target);
+  markLearnRenderTestBootstrapStage(target, 'hdr.bootstrap.complete');
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives

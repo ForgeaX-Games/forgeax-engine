@@ -1,5 +1,9 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import {
+  DEFAULT_MATERIAL_VARIANT_CONTEXT,
+  type MaterialVariantContext,
+} from './variant-context.js';
 
 export type MaterialDefineValue =
   | { readonly type: 'undefined' }
@@ -31,6 +35,7 @@ export interface MaterialSpecializationKeyInput {
   };
   readonly path?: string;
   readonly generation?: number;
+  readonly variantContext?: MaterialVariantContext;
 }
 
 export interface MaterialSpecializationKey {
@@ -85,6 +90,11 @@ function normalizePass(pass: MaterialSpecializationPassInput) {
 }
 
 function normalizeInput(input: MaterialSpecializationKeyInput) {
+  const variantContext =
+    input.variantContext === undefined ||
+    canonical(input.variantContext) === canonical(DEFAULT_MATERIAL_VARIANT_CONTEXT)
+      ? undefined
+      : input.variantContext;
   return {
     schema: 'forgeax.material.specialization.v1',
     contractHash: input.contractHash,
@@ -95,6 +105,7 @@ function normalizeInput(input: MaterialSpecializationKeyInput) {
       return leftLocation - rightLocation;
     }),
     versions: input.versions,
+    ...(variantContext === undefined ? {} : { variantContext }),
   };
 }
 

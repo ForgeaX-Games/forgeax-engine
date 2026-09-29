@@ -20,8 +20,7 @@ describe('dist closure', () => {
       root,
       id: 'game',
       name: 'Game',
-      entry: 'main.ts',
-      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+      roots: {},
       assetRoots: ['assets'],
       packageJson: {},
     };
@@ -47,8 +46,7 @@ describe('dist closure', () => {
       root,
       id: 'game',
       name: 'Game',
-      entry: 'main.ts',
-      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+      roots: {},
       assetRoots: ['assets'],
       packageJson: {},
     };
@@ -73,8 +71,7 @@ describe('dist closure', () => {
       root,
       id: 'game',
       name: 'Game',
-      entry: 'main.ts',
-      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+      roots: {},
       assetRoots: ['assets'],
       packageJson: {},
     };

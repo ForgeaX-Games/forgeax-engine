@@ -1,4 +1,4 @@
-// `forgeax-engine-remote-asset atlas` region-mismatch safety-net test
+// `forgeax asset atlas` region-mismatch safety-net test
 // (feat-20260521-sprite-atlas-animation M5' T-29 / requirements AC-10 (c)).
 //
 // The shelfPack pure function never produces regions whose summed area

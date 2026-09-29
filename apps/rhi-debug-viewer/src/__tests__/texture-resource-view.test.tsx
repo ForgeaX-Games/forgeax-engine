@@ -136,6 +136,7 @@ function model(): ViewerModel {
       },
     ],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [
       {
         workIndex: 0,
@@ -154,6 +155,7 @@ function model(): ViewerModel {
             resourceKind: 'textureView',
             bufferOffset: null,
             bufferSize: null,
+            dynamicOffset: null,
           },
           {
             groupIndex: 0,
@@ -163,12 +165,14 @@ function model(): ViewerModel {
             resourceKind: 'buffer',
             bufferOffset: 0,
             bufferSize: 256,
+            dynamicOffset: null,
           },
         ],
         vertexBuffers: [],
         indexBuffer: null,
         attachments: {
           colorViewHandleIds: ['view:array'],
+          colorResolveViewHandleIds: [null],
           depthStencilViewHandleId: 'view:depth',
         },
       },
@@ -182,6 +186,7 @@ function model(): ViewerModel {
         workIndices: [0],
         commandIndices: [0],
         colorAttachmentViewHandleIds: ['view:array'],
+        colorAttachmentResolveViewHandleIds: [null],
         depthStencilViewHandleId: 'view:depth',
       },
     ],

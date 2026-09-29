@@ -1,6 +1,7 @@
-import type { BindGroup, BindGroupLayout, Buffer } from '@forgeax/engine-rhi';
+import type { BindGroup, BindGroupLayout, Buffer, TextureView } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
 import type { MaterialSnapshot } from '../../render-system-extract';
+import type { RenderTargetTextureSource } from '../../targets/contracts';
 import type { MaterialBgAssemblyCacheEntry } from '../frame-snapshot';
 import { isMaterialBgAssemblyCacheHit } from '../main-pass-material';
 
@@ -16,7 +17,6 @@ describe('material bind-group assembly cache', () => {
       prefilterView: {},
       prefilterSampler: {},
       brdfLutView: {},
-      brdfLutSampler: {},
       intensityBuffer: {},
     } as MaterialBgAssemblyCacheEntry['skylightResources'];
     const cached: MaterialBgAssemblyCacheEntry = {
@@ -35,7 +35,77 @@ describe('material bind-group assembly cache', () => {
       isMaterialBgAssemblyCacheHit(cached, material, materialBgl, newBuffer, skylightResources, 7),
     ).toBe(false);
     expect(
+      isMaterialBgAssemblyCacheHit(
+        cached,
+        material,
+        materialBgl,
+        oldBuffer,
+        { ...skylightResources, skylightPrefilterView: {} as TextureView },
+        7,
+      ),
+    ).toBe(false);
+    const targetMaterial = {
+      ...material,
+      textureSources: new Map([['baseColorTexture', {} as RenderTargetTextureSource]]),
+    };
+    expect(
+      isMaterialBgAssemblyCacheHit(
+        { ...cached, material: targetMaterial },
+        targetMaterial,
+        materialBgl,
+        oldBuffer,
+        skylightResources,
+        7,
+      ),
+    ).toBe(false);
+    const sceneCached = { ...cached, sceneMaterialBuffer: oldBuffer };
+    expect(
+      isMaterialBgAssemblyCacheHit(
+        sceneCached,
+        material,
+        materialBgl,
+        oldBuffer,
+        skylightResources,
+        7,
+        undefined,
+        oldBuffer,
+      ),
+    ).toBe(true);
+    expect(
+      isMaterialBgAssemblyCacheHit(
+        sceneCached,
+        material,
+        materialBgl,
+        oldBuffer,
+        skylightResources,
+        7,
+        undefined,
+        newBuffer,
+      ),
+    ).toBe(false);
+    expect(
+      isMaterialBgAssemblyCacheHit(
+        sceneCached,
+        material,
+        materialBgl,
+        oldBuffer,
+        skylightResources,
+        7,
+      ),
+    ).toBe(false);
+    expect(
       isMaterialBgAssemblyCacheHit(cached, material, materialBgl, oldBuffer, skylightResources, 8),
+    ).toBe(false);
+    expect(
+      isMaterialBgAssemblyCacheHit(
+        cached,
+        material,
+        materialBgl,
+        oldBuffer,
+        skylightResources,
+        7,
+        {} as TextureView,
+      ),
     ).toBe(false);
   });
 });

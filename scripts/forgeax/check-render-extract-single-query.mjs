@@ -3,10 +3,13 @@
 // (feat-20260517-merge-mesh-renderer-material-renderer M3 / w8;
 // plan-strategy section 4 R-A6 / requirements AC-06 main signal).
 //
-// ts-morph AST traversal of `packages/render/src/render-system-extract.ts`
-// asserting that the file contains exactly ONE call expression whose query
-// descriptor references the `MeshRenderer` token. Auxiliary camera and light
-// queries are intentionally not material-coupled and must not affect the count.
+// ts-morph AST traversal of the extract owners, including the environment
+// projection (`extract/world-environment.ts`), asserting
+// that the implementation contains exactly ONE call expression whose query
+// descriptor references the `MeshRenderer` token. Domain extraction helpers
+// must preserve the one logical renderable query boundary.
+// Auxiliary camera and light queries are intentionally not material-coupled
+// and must not affect the count.
 //
 // Why ts-morph + reverse-grep belt-and-suspenders (research F-B1 +
 // plan-strategy R-A6): the file pre-w9 carries 4 archetype query
@@ -21,9 +24,9 @@
 // pattern outside of World query descriptor literals.
 //
 // Failure modes (exit code 1):
-//   - Anything other than one world.query expression whose descriptor
-//     references `MeshRenderer` (zero means extraction escaped the query
-//     boundary; multiple means the alpha split regrew);
+//   - Anything other than one world.query expression across the extract owner
+//     modules whose descriptor references `MeshRenderer` (zero means extraction
+//     escaped the query boundary; multiple means the alpha split regrew);
 //   - Lingering 5-f32 column-read literal (`m.baseColorR[`,
 //     `m.baseColorG[`, `m.baseColorB[`, `m.metallic[`, `m.roughness[`)
 //     anywhere in the file (reverse-coupling fail-safe);
@@ -43,7 +46,11 @@ import { Project, SyntaxKind } from 'ts-morph';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
-const TARGET = resolve(REPO_ROOT, 'packages/render/src/render-system-extract.ts');
+const TARGETS = [
+  resolve(REPO_ROOT, 'packages/render/src/render-system-extract.ts'),
+  resolve(REPO_ROOT, 'packages/render/src/render-system-extract-tail.ts'),
+  resolve(REPO_ROOT, 'packages/render/src/extract/world-environment.ts'),
+];
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -54,9 +61,9 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-extract-single-query.mjs',
       '',
-      'Asserts that packages/render/src/render-system-extract.ts contains',
-      'EXACTLY ONE world.query call whose descriptor references the',
-      'MeshRenderer token. Pairs with',
+      'Asserts that the render extract owners contain EXACTLY ONE',
+      'world.query call whose descriptor references the MeshRenderer token.',
+      'Pairs with',
       'check-render-record-no-material-asset-get.mjs (record-side',
       'reverse-grep) for AC-06 + AC-07 belt-and-suspenders coverage.',
       '',
@@ -72,7 +79,7 @@ if (args.includes('--help') || args.includes('-h')) {
 const failures = [];
 
 const project = new Project({ skipAddingFilesFromTsConfig: true });
-const sf = project.addSourceFileAtPath(TARGET);
+const sourceFiles = TARGETS.map((target) => project.addSourceFileAtPath(target));
 
 // AST pass: count *.query calls whose first argument is an object literal
 // carrying MeshRenderer in any component-bearing descriptor property.
@@ -86,31 +93,34 @@ const componentDescriptorProperties = new Set([
   'added',
   'changed',
 ]);
-sf.forEachDescendant((node) => {
-  if (node.getKind() !== SyntaxKind.CallExpression) return;
-  const expr = node.getExpression().getText();
-  const isQueryCtor = /\.query$/.test(expr) || /\.query$/.test(expr.split('(')[0]);
-  if (!isQueryCtor) return;
-  const args = node.getArguments();
-  const first = args[0];
-  if (!first) return;
-  if (first.getKind() !== SyntaxKind.ObjectLiteralExpression) return;
-  const props = first.getProperties();
-  for (const p of props) {
-    if (p.getKind() !== SyntaxKind.PropertyAssignment) continue;
-    const name = p.getName();
-    if (!componentDescriptorProperties.has(name)) continue;
-    const init = p.getInitializer();
-    if (!init || init.getKind() !== SyntaxKind.ArrayLiteralExpression) continue;
-    const text = init.getText();
-    if (/\bMeshRenderer\b/.test(text)) {
-      meshRendererQueryHits.push({
-        line: node.getStartLineNumber(),
-        snippet: node.getText().split('\n')[0].slice(0, 120),
-      });
+for (const sf of sourceFiles) {
+  sf.forEachDescendant((node) => {
+    if (node.getKind() !== SyntaxKind.CallExpression) return;
+    const expr = node.getExpression().getText();
+    const isQueryCtor = /\.query$/.test(expr) || /\.query$/.test(expr.split('(')[0]);
+    if (!isQueryCtor) return;
+    const args = node.getArguments();
+    const first = args[0];
+    if (!first) return;
+    if (first.getKind() !== SyntaxKind.ObjectLiteralExpression) return;
+    const props = first.getProperties();
+    for (const p of props) {
+      if (p.getKind() !== SyntaxKind.PropertyAssignment) continue;
+      const name = p.getName();
+      if (!componentDescriptorProperties.has(name)) continue;
+      const init = p.getInitializer();
+      if (!init || init.getKind() !== SyntaxKind.ArrayLiteralExpression) continue;
+      const text = init.getText();
+      if (/\bMeshRenderer\b/.test(text)) {
+        meshRendererQueryHits.push({
+          file: sf.getBaseName(),
+          line: node.getStartLineNumber(),
+          snippet: node.getText().split('\n')[0].slice(0, 120),
+        });
+      }
     }
-  }
-});
+  });
+}
 
 if (meshRendererQueryHits.length !== 1) {
   failures.push({
@@ -122,7 +132,7 @@ if (meshRendererQueryHits.length !== 1) {
 
 // Reverse-grep: 5-f32 column read literals (alpha path direct ECS column
 // access regrowth detector).
-const text = readFileSync(TARGET, 'utf8');
+const text = TARGETS.map((target) => readFileSync(target, 'utf8')).join('\n');
 const fiveF32Patterns = [
   /m\.baseColorR\[/,
   /m\.baseColorG\[/,

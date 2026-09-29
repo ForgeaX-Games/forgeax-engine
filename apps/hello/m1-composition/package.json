@@ -84,8 +84,9 @@
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10"
+    "vite": "8.0.16"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71"

@@ -23,6 +23,9 @@
       "path": "../plugin"
     },
     {
+      "path": "../scene"
+    },
+    {
       "path": "../types"
     },
     {

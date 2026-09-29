@@ -1,3 +1,6 @@
+// Error variants intersect the backing class. Check detail assignability in both
+// directions so equivalent intersection representations retain exact contracts.
+declare const error: NetErrorType;
 import { expectTypeOf, test } from 'vitest';
 import { NetError } from '../src/index';
 import type { NetError as NetErrorType, NetErrorCode, NetErrorDetailFor } from '../src/index';
@@ -15,12 +18,13 @@ test('recovery errors preserve code-specific detail inference', () => {
     hint: 'wait for the current state before requesting recovery',
     detail: { from: 'active', to: 'connecting' },
   });
-  expectTypeOf(unsupported.detail).toEqualTypeOf<NetErrorDetailFor<'protocol-unsupported-version'>>();
-  expectTypeOf(transition.detail).toEqualTypeOf<NetErrorDetailFor<'session-illegal-transition'>>();
+  expectTypeOf(unsupported.detail).toMatchTypeOf<NetErrorDetailFor<'protocol-unsupported-version'>>();
+  expectTypeOf<NetErrorDetailFor<'protocol-unsupported-version'>>().toMatchTypeOf<typeof unsupported.detail>();
+  expectTypeOf(transition.detail).toMatchTypeOf<NetErrorDetailFor<'session-illegal-transition'>>();
+  expectTypeOf<NetErrorDetailFor<'session-illegal-transition'>>().toMatchTypeOf<typeof transition.detail>();
 });
 
 test('all public error codes and details remain exhaustively narrowable', () => {
-  declare const error: NetErrorType;
   const describe = (current: NetErrorType): string => {
     switch (current.code) {
       case 'handshake-profile-mismatch':

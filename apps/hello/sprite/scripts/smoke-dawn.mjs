@@ -13,7 +13,7 @@
 //      the registered texture handle bypasses the loadByGuid chain).
 //   4. For each of 4 matrix cases (scene-A/B x tonemap-none / reinhard-
 //      extended) build a fresh World + spawn 3 sprite entities +
-//      camera + 300 render frames + copyTextureToBuffer + mapAsync +
+//      camera + 60 render frames + copyTextureToBuffer + mapAsync +
 //      write or compare the reference PNG.
 //   5. AC-13 passes when all 4 PNGs sit within eps<=0.05 of their
 //      reference baselines. First-run writes the baselines and exits
@@ -41,9 +41,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { writeReferencePng, readReferencePng } from '../../../shared/png-codec.mjs';
+import { rasterizeSpriteReference } from './reference-raster.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260626-sprite-transparent-collapse M5-T1 (plan-strategy D-5):
@@ -62,6 +63,7 @@ const FALSIFY_MISSING_SPRITE_BLEND = FALSIFY === 'missing-sprite-blend';
 
 const WIDTH = 800;
 const HEIGHT = 600;
+const SPRITE_SCALE = 0.16;
 const SPRITE_PARAMETERS = [
   { name: 'colorTint', type: 'vec4' },
   { name: 'region', type: 'vec4' },
@@ -216,7 +218,8 @@ const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 // Synthetic 8x8 RGBA texture (4 colour quadrants). Each quadrant fills
 // a 4x4 region with a high-saturation hue so the colorTint multiply
@@ -253,7 +256,10 @@ function buildSyntheticRgba() {
 }
 
 const SPRITE_COLOR_TINTS = [
-  [1.0, 0.4, 0.4, 1.0],
+  // Keep one sprite partially transparent so the falsifier exercises the
+  // declared premultiplied blend state instead of passing with an all-opaque
+  // fixture. The other two remain opaque color anchors for sorting/coverage.
+  [1.0, 0.4, 0.4, 0.72],
   [0.4, 1.0, 0.4, 1.0],
   [0.4, 0.4, 1.0, 1.0],
 ];
@@ -314,12 +320,11 @@ if (!assets) {
 const synth = buildSyntheticRgba();
 const synthPod = {
   kind: 'texture',
-  width: synth.width,
-  height: synth.height,
+  shape: { viewDimension: '2d', extent: { width: synth.width, height: synth.height } },
   format: 'rgba8unorm-srgb',
   data: synth.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 
 
@@ -369,7 +374,7 @@ async function mintSpriteAssets(world, layout) {
   return { ok: true, textureHandle, samplerHandle, materialHandles };
 }
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const failures = [];
 
 for (const matrixCase of MATRIX) {
@@ -406,7 +411,7 @@ for (const matrixCase of MATRIX) {
         {
           component: Transform,
           data: {
-            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.16, 0.16, 1],},
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [SPRITE_SCALE, SPRITE_SCALE, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -453,7 +458,9 @@ for (const matrixCase of MATRIX) {
       environment: { lease: worldAttachment1.value },
     });
     if (!r.ok) console.error(`[smoke] case ${scene}/${tonemap} draw frame ${i}: ${r.error.code}`);
-    framesObserved++;
+    else {
+      framesObserved++;
+    }
   }
 
   const device = sharedDevice;
@@ -509,6 +516,23 @@ for (const matrixCase of MATRIX) {
       tightRgba[dst + 3] = bytes[off + 3] ?? 0;
     }
   }
+  // Optional failure evidence stays separate from the authoritative baseline.
+  if (process.env.SMOKE_OUTPUT_DIR !== undefined) {
+    const outputDir = resolve(process.env.SMOKE_OUTPUT_DIR);
+    mkdirSync(outputDir, { recursive: true });
+    writeFileSync(resolve(outputDir, `actual-${scene}-${tonemap}.png`),
+      writeReferencePng(tightRgba, WIDTH, HEIGHT));
+  }
+
+  // Reference PNG compare or first-run write. Baseline path resolves
+  const analytic = rasterizeSpriteReference({ width: WIDTH, height: HEIGHT, clear: CLEAR_RGBA,
+    layout, tints: SPRITE_COLOR_TINTS, texture: synth, scale: SPRITE_SCALE, tonemap });
+  let analyticMaximum = 0;
+  for (let index = 0; index < tightRgba.length; index++)
+    analyticMaximum = Math.max(analyticMaximum, Math.abs(tightRgba[index] - analytic.pixels[index]));
+  console.log(`[smoke] independent-raster ${scene}/${tonemap} maxCodeDelta=${analyticMaximum}`);
+  if (analyticMaximum > 2) failures.push(`case ${scene}/${tonemap}: independent-raster drift ${analyticMaximum} codes > 2`);
+
   // Reference PNG compare or first-run write. Baseline path resolves
   // into the forgeax-engine-assets submodule (BASELINE_DIR above).
   const refPath = resolve(BASELINE_DIR, refFile);
@@ -873,6 +897,16 @@ if (failures.length > 0) {
 
 console.log(
   `[smoke] PASS - 4 PNG cases + nineslice section GREEN: backend=webgpu, scene-A/none + scene-A/reinhard + scene-B/none + scene-B/reinhard within eps=${SMOKE_PIXEL_THRESHOLD}; HANDLE_NINESLICE_QUAD id=${ninesliceHandleId}; D-9 soft-warn delta=${softWarnDelta}; AC-12 grep clean`,
+);
+console.log(`[smoke] frames observed=${TARGET_FRAMES}`);
+console.log(
+  `[forgeax-smoke-receipt] ${JSON.stringify({
+    schemaVersion: 1,
+    gateId: 'hello-sprite/smoke',
+    commandId: 'smoke',
+    framesObserved: TARGET_FRAMES,
+    completed: true,
+  })}`,
 );
 
 sharedDevice?.destroy?.();

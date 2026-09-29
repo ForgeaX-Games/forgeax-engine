@@ -1154,7 +1154,7 @@ fn import_tauri_report(
     let required = [
         ("schemaVersion", json!(2)),
         ("verdict", json!("ok")),
-        ("wgpuVersion", json!("30.0.0")),
+        ("wgpuVersion", json!("30.0.1")),
     ];
     for (field, expected) in required {
         if report.get(field) != Some(&expected) {
@@ -1217,11 +1217,11 @@ fn import_upstream_report(
         })?;
     for (field, expected) in [
         ("schemaVersion", json!(1)),
-        ("wgpuVersion", json!("30.0.0")),
-        ("wgpuTag", json!("v30.0.0")),
+        ("wgpuVersion", json!("30.0.1")),
+        ("wgpuTag", json!("v30.0.1")),
         (
             "wgpuTagCommit",
-            json!("8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1"),
+            json!("40f4a34ebaf56f9a046231f54125ad046239d3f3"),
         ),
     ] {
         if report.get(field) != Some(&expected) {

@@ -11,7 +11,7 @@
     "candidateSourceSha": { "$ref": "#/$defs/sourceSha" },
     "gates": {
       "type": "array",
-      "minItems": 10,
+      "minItems": 11,
       "items": { "$ref": "#/$defs/gate" },
       "allOf": [
         {
@@ -28,6 +28,7 @@
         { "contains": { "type": "object", "properties": { "id": { "const": "smoke-fleet-0" } } } },
         { "contains": { "type": "object", "properties": { "id": { "const": "smoke-fleet-1" } } } },
         { "contains": { "type": "object", "properties": { "id": { "const": "smoke-fleet-2" } } } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "smoke-fleet-3" } } } },
         { "contains": { "type": "object", "properties": { "id": { "const": "full-local-gate" } } } }
       ]
     },
@@ -114,6 +115,15 @@
                 "contains": {
                   "type": "object",
                   "properties": {
+                    "id": { "const": "smoke-fleet-3" },
+                    "status": { "const": "passed" }
+                  }
+                }
+              },
+              {
+                "contains": {
+                  "type": "object",
+                  "properties": {
                     "id": { "const": "full-local-gate" },
                     "status": { "const": "passed" }
                   }
@@ -151,6 +161,7 @@
             "smoke-fleet-0",
             "smoke-fleet-1",
             "smoke-fleet-2",
+            "smoke-fleet-3",
             "full-local-gate"
           ]
         },

@@ -64,7 +64,8 @@ describe('AC-02: exports accessible', () => {
     const result = mod.GameProjectSchema.safeParse({
       id: 'test',
       name: 'Test',
-      schemaVersion: '1.0.0',
+      schemaVersion: '3.0.0',
+      roots: {},
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -72,14 +73,14 @@ describe('AC-02: exports accessible', () => {
       const gp = result.data;
       expect(gp.id).toBe('test');
       expect(gp.name).toBe('Test');
-      expect(gp.schemaVersion).toBe('1.0.0');
+      expect(gp.schemaVersion).toBe('3.0.0');
     }
   });
 
-  it('resolveDefaultScene is importable', async () => {
+  it('exposes the root schema', async () => {
     const mod = await import('../index.js');
-    expect(mod.resolveDefaultScene).toBeDefined();
-    expect(typeof mod.resolveDefaultScene).toBe('function');
+    expect(mod.GameProjectRootsSchema).toBeDefined();
+    expect(mod.GameProjectRootsSchema.parse({})).toEqual({});
   });
 
   it('keeps the validation primitive owner-local', async () => {

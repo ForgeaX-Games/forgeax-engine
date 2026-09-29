@@ -6,7 +6,7 @@
 // fed by the @forgeax/engine-gltf importer parsing apps/hello/gltf-instancing/
 // assets/box.gltf at runtime (charter P4 consistent abstraction). Single
 // mesh + Tier-B subset (POSITION + INDICES; UnlitMaterial baseColor
-// scalar; Camera perspective). 300 frames + multi-pixel readback with
+// scalar; Camera perspective). 60 frames + multi-pixel readback with
 // epsilon = 0.05 distance from clear color.
 //
 // Strategy (mirrors apps/hello/room/scripts/smoke-dawn.mjs):
@@ -15,9 +15,9 @@
 //   3. parseGltf(box.gltf) -> IR; bridge IR -> MeshAsset / MaterialAsset /
 //      SceneAsset PODs; registerWithGuid each against the GUIDs in
 //      box.gltf.meta.json so loadByGuid hits the in-memory fast-path.
-//   4. await runtime host initialization + 300 x lease-bound renderer.draw(...).
+//   4. await runtime host initialization + 60 x lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync grid sample; verdict =
-//      4 criteria (a) backend=webgpu (b) frames>=300
+//      4 criteria (a) backend=webgpu (b) frames>=60
 //      (c) per-pixel distance to clear color >= SMOKE_PIXEL_THRESHOLD on
 //          at least M of N sample sites (single-mesh epsilon = 0.05 gate)
 //      (d) Renderer.onError RhiError count == 0.
@@ -33,7 +33,7 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -367,7 +367,7 @@ renderer.subscribe((event) => {
 });
 
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

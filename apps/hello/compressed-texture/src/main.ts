@@ -147,9 +147,10 @@ async function bootstrap(
     return;
   }
   const texAsset = texLoadRes.value;
+  const mipLevelCount = texAsset.mips.kind === 'packed' ? texAsset.mips.levelCount : 1;
   console.warn(
     `[compressed-texture] texture loaded: format=${texAsset.format} ` +
-    `size=${texAsset.data.byteLength}B mipLevelCount=${texAsset.mipLevelCount ?? 1}`,
+      `size=${texAsset.data.byteLength}B mipLevelCount=${mipLevelCount}`,
   );
 
   // Mint a shared texture handle; the render-system-record path resolves it
@@ -170,16 +171,18 @@ async function bootstrap(
     kind: 'material',
     passes: [
       {
-        program: { module: 'forgeax::standard-pbr' },
-        values: {
-          baseColorFactor: [1, 1, 1, 1],
-          roughnessFactor: 0.8,
-          metallicFactor: 0,
-          baseColorTexture: { handle: textureHandle },
-          baseColorSampler: { handle: samplerHandle },
-        },
+        name: 'Forward',
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
+    values: {
+      baseColor: [1, 1, 1, 1],
+      metallic: 0,
+      roughness: 0.8,
+      baseColorTexture: textureHandle,
+      sampler: samplerHandle,
+    },
   });
 
   // A staggered layout of 4 quads helps the parity smoke (w42) exercise
@@ -377,7 +380,7 @@ async function bootstrapRuntimeRecovery(
     );
     state.phase = 'repaired';
     state.materialHasTexture = true;
-    state.textureDimensions = [result.value.width, result.value.height];
+    state.textureDimensions = [result.value.shape.extent.width, result.value.shape.extent.height];
     state.textureAllocations += 1;
     state.samplerAllocations += 1;
     publish();

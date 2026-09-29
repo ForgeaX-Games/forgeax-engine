@@ -1,19 +1,9 @@
 import * as SceneOwner from '@forgeax/engine-scene';
-// feat-20260608-scene-nesting-ecs-fication M2 / w21 (red phase) — runtime
-// cycle fail-fast (AC-13). Constructs a hand-authored SceneAsset graph
-// A -> B -> C -> A via mount.source resolved through a test-only
-// SceneAssetResolver, bypassing the build-time scanner. World's recursive
-// _instantiateSceneRec is expected to detect the cycle via its private
-// stack (Set<Guid>) and fail-fast pack-cyclic-reference + detail.kind:
-// 'mount-asset' + detail.cycle: GUID[] (plan-strategy §D-3).
+// Keyed runtime cycle gate: A -> B -> C -> A through nested `instance` declarations.
 
 import { World } from '@forgeax/engine-ecs';
-import { err, ok } from '@forgeax/engine-types';
-// Side-effect import: register Transform / ChildOf etc. via the runtime
-// component barrel so the implementation's resolveComponent('ChildOf') call
-// in _spawnMountEntity sees a defined token.
-import '@forgeax/engine-runtime';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { registerSceneComponents } from './helpers/register-scene-components';
 
@@ -22,36 +12,30 @@ function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset
   return world.allocSharedRef('SceneAsset', asset);
 }
 
-describe('runtime cycle fail-fast (w21)', () => {
-  it('A -> B -> C -> A surfaces pack-cyclic-reference / mount-asset', () => {
+describe('runtime cycle fail-fast (keyed SceneAsset)', () => {
+  it('A -> B -> C -> A surfaces pack-cyclic-reference', () => {
     const world = new World();
-    // Build mount entries that name source=0 (parent's refs[0]) — the
-    // resolver maps each parent handle to a different child handle so the
-    // 3-asset chain forms A -> B -> C -> A.
     const assetA: SceneAsset = {
       kind: 'scene',
-      entities: [],
-      mounts: [{ localId: 0 as never, source: 0, memberFirst: 1 as never, memberCount: 0 }],
+      entities: { a: { components: {}, instance: { source: 'B' } } },
     };
     const assetB: SceneAsset = {
       kind: 'scene',
-      entities: [],
-      mounts: [{ localId: 0 as never, source: 0, memberFirst: 1 as never, memberCount: 0 }],
+      entities: { b: { components: {}, instance: { source: 'C' } } },
     };
     const assetC: SceneAsset = {
       kind: 'scene',
-      entities: [],
-      mounts: [{ localId: 0 as never, source: 0, memberFirst: 1 as never, memberCount: 0 }],
+      entities: { c: { components: {}, instance: { source: 'A' } } },
     };
     const handleA = registerSceneAsset(world, assetA);
     const handleB = registerSceneAsset(world, assetB);
     const handleC = registerSceneAsset(world, assetC);
-    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
-      void sourceIdx;
-      const raw = parentHandle as unknown as number;
-      if (raw === (handleA as unknown as number)) return ok(handleB);
-      if (raw === (handleB as unknown as number)) return ok(handleC);
-      if (raw === (handleC as unknown as number)) return ok(handleA);
+    SceneOwner.worldSetSceneAssetResolver(world, (source, parentHandle) => {
+      if (typeof source === 'number') return ok(source as Handle<'SceneAsset', 'shared'>);
+      const parent = Number(parentHandle);
+      if (parent === Number(handleA) && source === 'B') return ok(handleB);
+      if (parent === Number(handleB) && source === 'C') return ok(handleC);
+      if (parent === Number(handleC) && source === 'A') return ok(handleA);
       return err({ code: 'asset-not-found' });
     });
     const r = SceneOwner.worldInstantiateScene(world, handleA);

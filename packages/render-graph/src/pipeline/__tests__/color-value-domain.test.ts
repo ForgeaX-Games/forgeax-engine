@@ -32,6 +32,14 @@ describe('ColorValueDomain', () => {
     expect(JSON.parse(serializeColorResourceDescriptor(descriptor))).toEqual(descriptor);
   });
 
+  it('keeps display-encoded as an explicit domain for float storage', () => {
+    const descriptor: ColorResourceDescriptor = {
+      domain: 'display-encoded',
+      format: 'rgba16float',
+    };
+    expect(JSON.parse(serializeColorResourceDescriptor(descriptor))).toEqual(descriptor);
+  });
+
   it.each([undefined, 'gamma-magic'])('rejects a missing or unknown domain: %s', (value) => {
     const result = deserializeColorValueDomain(value);
     expect(result.ok).toBe(false);

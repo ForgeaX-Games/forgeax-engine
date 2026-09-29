@@ -97,7 +97,11 @@ if (
  */
 export type { EntityHandle } from './entity-handle';
 export type { EcsErrorCode } from './errors';
-export { SharedRefStaleError, UniqueRefStaleError } from './errors';
+export {
+  ArrayRangeOutOfBoundsError,
+  SharedRefStaleError,
+  UniqueRefStaleError,
+} from './errors';
 export {
   createWorldContext,
   worldPlugin,
@@ -244,7 +248,7 @@ export type {
  * // the SharedRefStore publishes release evidence at rc=0.
  * ```
  */
-export type { SharedRefReleaseEvidence } from './shared-ref-store';
+export type { SharedRefReleaseEvidence } from './shared-ref-store.js';
 
 /**
  * ECS-managed handle store (M1). Owns the lifecycle of every
@@ -272,7 +276,7 @@ export type { SharedRefReleaseEvidence } from './shared-ref-store';
  * const data: ComponentData = { component: Position, data: { x: 1, y: 2 } };
  * ```
  */
-export type { ComponentData } from './world';
+export type { ComponentData } from './world.js';
 /**
  * Top-level ECS container. Owns entities, archetypes, systems, and resources.
  *
@@ -283,7 +287,7 @@ export type { ComponentData } from './world';
  * world.update();
  * ```
  */
-export { World } from './world';
+export { World } from './world.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Advanced API — system scheduling, commands, resources, inspection

@@ -2,6 +2,7 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { inventoryDigest } from '../inventory/sync.js';
 import { scanInventory } from '../scanner.js';
 
 describe('AssetInventory', () => {
@@ -18,11 +19,8 @@ describe('AssetInventory', () => {
       [
         'const packageId = new Uint8Array(16);',
         'packageId[15] = 1;',
-        'const meshGuid = new Uint8Array(16);',
-        'meshGuid[15] = 2;',
         'export default {',
-        "schemaVersion: '1.0.0', packageId,",
-        "assets: { mesh: { guid: meshGuid, kind: 'mesh' } }, externalAssets: {},",
+        "schemaVersion: '2.0.0', packageId,",
         "build: () => ({ ok: true, value: { mesh: { kind: 'mesh' } } }),",
         '};',
       ].join('\n'),
@@ -48,9 +46,11 @@ describe('AssetInventory', () => {
     expect(declaration).toMatchObject({
       format: 'pack.ts',
       sourcePath,
-      meta: {
-        importer: 'pack-ts',
-        subAssets: [{ guid, sourceKey: 'mesh', kind: 'mesh' }],
+      value: {
+        schemaVersion: '2.0.0',
+        kind: 'scriptable-pack-source',
+        packageId: '00000000-0000-0000-0000-000000000001',
+        source: sourcePath,
       },
     });
   });
@@ -69,8 +69,21 @@ describe('AssetInventory', () => {
     const { inventory, sourcePath } = getFixture();
     const declaration = inventory.declarations.get(sourcePath);
     expect(inventory.inventory).toEqual([]);
-    expect(declaration?.format === 'pack.ts' ? declaration.meta.subAssets : undefined).toEqual([
-      { guid, sourceIndex: 0, sourceKey: 'mesh', kind: 'mesh' },
-    ]);
+    expect(declaration?.format === 'pack.ts' ? declaration.definition : undefined).toMatchObject({
+      packageId: expect.any(Uint8Array),
+      schemaVersion: '2.0.0',
+    });
+  });
+
+  it('keeps semantic identity stable when the source path is renamed', () => {
+    const before = inventoryDigest({
+      declarations: [{ guid, sourceKey: 'hero/body', kind: 'mesh', payload: {}, refs: [] }],
+    });
+    const after = inventoryDigest({
+      declarations: [{ guid, sourceKey: 'hero/body', kind: 'mesh', payload: {}, refs: [] }],
+    });
+
+    expect(after).toBe(before);
+    expect(after).not.toContain('generated.pack.ts');
   });
 });

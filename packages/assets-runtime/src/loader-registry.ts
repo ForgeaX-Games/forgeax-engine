@@ -33,6 +33,7 @@ export interface PackLoaderInput {
 
 export interface PackLoader {
   readonly kind: string;
+  readonly references?: 'eager' | 'deferred';
   load(input: PackLoaderInput, ctx: LoadContext): unknown;
 }
 
@@ -52,6 +53,9 @@ export type PackLoadResult =
  * ```
  */
 export class LoaderRegistry {
+  referencePolicy(kind: string): 'eager' | 'deferred' {
+    return this.packLoaders.get(kind)?.references ?? this.loaders.get(kind)?.references ?? 'eager';
+  }
   // feat-20260623 M4 / w13: the Map stores Loader<unknown> so host custom kinds
   // (Loader<MyPayload>) are accepted. The P in Loader<P> is covariant (output
   // only: load() returns P), so Loader<Asset> is assignable to Loader<unknown>.

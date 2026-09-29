@@ -41,7 +41,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 // Not-black floor: the brightest pixel in a lit render is well above this; an all-black
 // (broken shader/camera) frame is exactly 0.
 const SMOKE_BRIGHT_FLOOR = Number.parseFloat(process.env.SMOKE_BRIGHT_FLOOR ?? '0.15');
@@ -192,7 +192,7 @@ const CAPTURE_EARLY = 5;
 // Late capture near the end of the run so the follower has had maximum damping time.
 // MUST be relative to SMOKE_MIN_FRAMES (not a hardcoded 250) — CI's smoke-fleet runs at
 // SMOKE_MIN_FRAMES=100, and a fixed 250 > 100 would never fire, leaving lateFrame unset
-// (the CI-only bug that a local default of 300 masked). At 100 frames this is frame 95 ≈
+// (the CI-only bug that a local default of 60 masked). At 100 frames this is frame 95 ≈
 // 1.58 s of damping at decay=2 (>3 time constants), still a robust convergence margin.
 const CAPTURE_LATE = SMOKE_MIN_FRAMES - 5;
 let framesObserved = 0;

@@ -8,7 +8,7 @@
 pnpm install
 pnpm --filter @forgeax/hello-gltf dev    # http://localhost:5173
 pnpm --filter @forgeax/hello-gltf build
-pnpm --filter @forgeax/hello-gltf smoke  # dawn-node 300 frames + pixel readback (epsilon = 0.05)
+pnpm --filter @forgeax/hello-gltf smoke  # dawn-node 60 frames + pixel readback (epsilon = 0.05)
 ```
 
 ## 4-step recipe
@@ -20,7 +20,7 @@ pnpm --filter @forgeax/hello-gltf smoke  # dawn-node 300 frames + pixel readback
 3. `await assets.loadByGuid<MaterialAsset>(materialGuid)` — UnlitMaterial with `baseColor` scalar.
 4. `await assets.loadByGuid<SceneAsset>(sceneGuid)` then `assets.instantiate(handle, world)` — single Box node + Camera node materialised into ECS entities.
 
-The GUIDs come from `assets/box.gltf.meta.json`, written by `forgeax-engine-console asset import apps/hello/gltf/assets/box.gltf` (M4 toolchain). Each `loadByGuid<T>` returns `Result<Handle<T>, AssetError>`; AI users branch on `.ok` and exhaustive-switch on `.error.code` (no `default`; charter P3 explicit failure).
+The GUIDs come from `assets/box.gltf.meta.json`, written by `forgeax asset import apps/hello/gltf/assets/box.gltf` (M4 toolchain). Each `loadByGuid<T>` returns `Result<Handle<T>, AssetError>`; AI users branch on `.ok` and exhaustive-switch on `.error.code` (no `default`; charter P3 explicit failure).
 
 ## Tier-B fork fixture (`assets/box.gltf`)
 
@@ -28,7 +28,7 @@ The GUIDs come from `assets/box.gltf.meta.json`, written by `forgeax-engine-cons
 
 ## Smoke gate (AC-14)
 
-`pnpm --filter @forgeax/hello-gltf smoke` runs the dawn-node headless path: 300 frames + pixel readback with `epsilon <= 0.05` distance from the clear color (0.05, 0.05, 0.08). Three criteria: (a) `backend = webgpu` (b) frames >= 300 (c) at least one meshed sample site exceeds the threshold (charter P3 + P4 verified by a single mesh rendering above clear color).
+`pnpm --filter @forgeax/hello-gltf smoke` runs the dawn-node headless path: 60 frames + pixel readback with `epsilon <= 0.05` distance from the clear color (0.05, 0.05, 0.08). Three criteria: (a) `backend = webgpu` (b) frames >= 60 (c) at least one meshed sample site exceeds the threshold (charter P3 + P4 verified by a single mesh rendering above clear color).
 
 The literal `pnpm --filter @forgeax/hello-gltf smoke` is the SSOT smoke command anchor; it appears byte-for-byte in `apps/hello/gltf/package.json#forgeax.smokeInvocation`, `.github/workflows/ci.yml`, and AGENTS.md `Smoke gate`.
 
@@ -39,7 +39,9 @@ Out-of-scope for this closed loop, with upgrade anchors (see `requirements.md` O
 - `NORMAL` / `TEXCOORD_0` / textures / samplers / images — `feat-future-gltf-textures`.
 - PBR 5 fields (metallic / roughness / occlusionTexture / emissiveFactor / alphaMode) — `feat-future-gltf-pbr-material-fields`.
 - Multi-primitive meshes — `feat-future-gltf-mesh-multi-section`.
-- `KHR_*` extension allowlist (currently empty) — `feat-future-gltf-extensions-allowlist`.
+- This Tier-B fixture intentionally has no `KHR_*` declarations; the package
+  importer supports the current extension surface documented in
+  `packages/gltf/README.md`.
 - Camera ortho — `feat-future-gltf-camera-ortho`.
 - Skin / morph / animation — `feat-future-gltf-skin` / `feat-future-gltf-morph` / `feat-future-gltf-animation`.
 - gltf build-time cook (gltf -> .pack.json + dead-code-elim) — `feat-future-gltf-buildtime-cook`.

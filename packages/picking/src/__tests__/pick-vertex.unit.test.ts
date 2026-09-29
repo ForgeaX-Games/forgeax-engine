@@ -24,7 +24,7 @@ import {
   MeshFilter,
   MeshRenderer,
 } from '@forgeax/engine-render';
-import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, propagateTransforms, Transform } from '@forgeax/engine-scene';
 
 import type { Handle, MaterialAsset, MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
@@ -40,7 +40,7 @@ const VP = 600; // square viewport so screen-centre maps to the -Z axis ray
 // ── helpers ─────────────────────────────────────────────────────────────
 
 function readWorldMatrix(world: World, entity: EntityHandle): Float32Array | undefined {
-  const result = world.get(entity, Transform);
+  const result = world.get(entity, GlobalTransform);
   if (!result.ok) return undefined;
   return new Float32Array(result.value.world);
 }
@@ -57,6 +57,20 @@ interface Scene {
   world: World;
   assets: AssetRegistry;
   material: Handle<'MaterialAsset', 'shared'>;
+}
+
+// The test meshes below intentionally keep their interleaved vertex buffers
+// padded to the canonical position/normal/uv/tangent stride.  Empty typed
+// arrays are the geometry layout SSOT's presence sentinels; retaining them in
+// the fixture makes the declared projection agree with the buffer stride.
+const EMPTY_ATTRIBUTE = new Float32Array(0);
+function interleavedAttributes(position: Float32Array | Uint16Array): VertexAttributeMap {
+  return {
+    position,
+    normal: EMPTY_ATTRIBUTE,
+    uv: EMPTY_ATTRIBUTE,
+    tangent: EMPTY_ATTRIBUTE,
+  };
 }
 
 function makeScene(): Scene {
@@ -118,7 +132,7 @@ function registerTriangle(scene: Scene): Handle<'MeshAsset', 'shared'> {
     kind: 'mesh',
     vertices: v,
     indices: new Uint16Array([0, 1, 2]),
-    attributes: { position: positions },
+    attributes: interleavedAttributes(positions),
     submeshes: [
       { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
     ],
@@ -208,7 +222,7 @@ function registerCube(scene: Scene): Handle<'MeshAsset', 'shared'> {
     kind: 'mesh',
     vertices: v,
     indices,
-    attributes: { position: positions },
+    attributes: interleavedAttributes(positions),
     submeshes: [
       {
         indexOffset: 0,
@@ -248,7 +262,7 @@ function registerSkinnedTriangle(scene: Scene): Handle<'MeshAsset', 'shared'> {
     v[i * 18 + 17] = skinWeight[i * 4 + 3] as number;
   }
   const attrs: VertexAttributeMap = {
-    position: positions,
+    ...interleavedAttributes(positions),
     skinIndex,
     skinWeight,
   };
@@ -354,7 +368,7 @@ function computeViewProj(
   const proj = mat4.create();
   const kind = cameraProjectionFromF32(cam.projection);
   if (kind === 'orthographic') {
-    mat4.orthographic(proj, cam.left, cam.right, cam.bottom, cam.top, cam.near, cam.far);
+    mat4.orthographic(proj, cam.left, cam.right, cam.top, cam.bottom, cam.near, cam.far);
   } else {
     mat4.perspective(proj, cam.fov, cam.aspect, cam.near, cam.far);
   }
@@ -482,7 +496,7 @@ describe('pickVertexOnEntity', () => {
   // ── AC-03: vertex worldPos and vertexIndex correctness ─────────────
 
   describe('AC-03: vertex worldPos and vertexIndex correctness', () => {
-    it('worldPos matches Transform.world x local position for each candidate (cube, epsilon 1e-4)', () => {
+    it('worldPos matches GlobalTransform.world x local position for each candidate (cube, epsilon 1e-4)', () => {
       const scene = makeScene();
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const mesh = registerCube(scene);
@@ -742,7 +756,7 @@ describe('pickVertexOnEntity', () => {
       }
     });
 
-    it('skinned mesh worldPos is rest-pose transformed by Transform.world', () => {
+    it('skinned mesh worldPos is rest-pose transformed by GlobalTransform.world', () => {
       const scene = makeScene();
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const mesh = registerSkinnedTriangle(scene);
@@ -1024,7 +1038,7 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         indices: new Uint16Array([0, 1, 2, 3]),
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1074,7 +1088,7 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1151,7 +1165,7 @@ describe('w6: degradation input + builtin fallback', () => {
       const result = scene.assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
         kind: 'mesh',
         vertices: v,
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1194,7 +1208,7 @@ describe('w6: degradation input + builtin fallback', () => {
       const result = scene.assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
         kind: 'mesh',
         vertices: v,
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1249,7 +1263,7 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1298,7 +1312,7 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,
@@ -1539,7 +1553,7 @@ describe('w7: pickVertex full-scene', () => {
         kind: 'mesh',
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
-        attributes: { position: positions },
+        attributes: interleavedAttributes(positions),
         submeshes: [
           {
             indexOffset: 0,

@@ -11,7 +11,7 @@
 // `shared<VideoAsset>` (a branded u32 handle, NOT a bare GUID string), the
 // three play-state fields use `bool` / `f32`. No opaque / object field type is
 // introduced — the host HTMLVideoElement reference travels through the
-// VideoElementProvider World Resource (plan-strategy D-1 / w9), never inside an
+// VideoSourceProvider World Resource (plan-strategy D-1 / w9), never inside an
 // ECS field (research Finding 5: schema vocab closed).
 //
 // Decision anchors:
@@ -31,7 +31,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * Fields:
  *   - `clip: shared<VideoAsset>` — handle to the VideoAsset describing the
  *     source URL (mirrors `AudioSource.clip`). Resolved into an
- *     HTMLVideoElement at frame time via the host `VideoElementProvider`
+ *     HTMLVideoElement at frame time via the host `VideoSourceProvider`
  *     (the engine never decodes video bytes — D-1).
  *   - `playing: bool` — whether the clip advances this frame (default false).
  *   - `loop: bool` — whether the clip restarts at end (default false).

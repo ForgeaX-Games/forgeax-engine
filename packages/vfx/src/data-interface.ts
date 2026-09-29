@@ -6,11 +6,12 @@ export type VfxDataInterfaceToken = `vfx:${VfxDataInterfaceKind}`;
 
 export type VfxDataInterfaceBindingType = VfxDataInterfaceBindingTypeByKind[VfxDataInterfaceKind];
 
+export type VfxDataInterfaceResourceKind = 'buffer' | 'texture-view' | 'sampler';
+
 type VfxDataInterfaceBindingTypeByKind = {
   readonly camera: 'uniform';
   readonly 'scene-depth': 'sampled-depth';
   readonly noise: 'sampled-float';
-  readonly channel: 'storage-read';
 };
 
 export type VfxDataInterfaceLifetime = 'generation';
@@ -21,6 +22,8 @@ export interface VfxDataInterfaceRequirement {
   readonly binding: number;
   readonly bindingType: VfxDataInterfaceBindingType;
   readonly lifetime: VfxDataInterfaceLifetime;
+  /** Scene-depth composition is intentionally proven only for single-sample targets. */
+  readonly sampleCount?: 1;
 }
 
 export interface VfxDataInterfaceResource {
@@ -28,6 +31,18 @@ export interface VfxDataInterfaceResource {
   readonly kind: VfxDataInterfaceKind;
   readonly bindingType: VfxDataInterfaceBindingType;
   readonly generation: number;
+  readonly sampleCount?: number;
+  /**
+   * Provider-owned opaque resource. Render owners refine this to their typed
+   * prepared-resource reference; VFX never inspects a backend handle.
+   */
+  readonly resource?: {
+    readonly kind: 'buffer' | 'texture-view' | 'sampler';
+    readonly value: unknown;
+    /** Required when a provider supplies an external buffer to a compute bind group. */
+    readonly size?: number;
+    readonly usage?: 'uniform' | 'storage';
+  };
 }
 
 export interface VfxDataInterfaceErrorDetail {
@@ -37,6 +52,8 @@ export interface VfxDataInterfaceErrorDetail {
   readonly actualGeneration?: number;
   readonly expectedBindingType?: VfxDataInterfaceBindingType;
   readonly actualBindingType?: VfxDataInterfaceBindingType;
+  readonly expectedResourceKind?: VfxDataInterfaceResourceKind;
+  readonly actualResourceKind?: VfxDataInterfaceResourceKind;
 }
 
 export interface VfxDataInterfaceError {
@@ -62,6 +79,16 @@ export interface VfxDataInterfaceResolution {
   readonly generation: number;
   readonly readiness: 'ready';
   readonly resources: readonly VfxDataInterfaceResource[];
+}
+
+function expectedResourceKind(kind: VfxDataInterfaceKind): VfxDataInterfaceResourceKind {
+  switch (kind) {
+    case 'camera':
+      return 'buffer';
+    case 'scene-depth':
+    case 'noise':
+      return 'texture-view';
+  }
 }
 
 function failure(
@@ -157,6 +184,44 @@ export function resolveVfxDataInterfaces(
             expectedBindingType: requirement.bindingType,
             actualBindingType: resource.bindingType,
           },
+        ),
+      );
+    }
+    const expectedKind = expectedResourceKind(requirement.kind);
+    if (resource.resource === undefined) {
+      return err(
+        failure(
+          'vfx-data-interface-missing',
+          requirement,
+          `${requirement.kind} backed by a resident ${expectedKind} resource`,
+          `refresh provider ${provider.id} with a generation-owned resource before dispatch`,
+          { providerId: provider.id, expectedResourceKind: expectedKind },
+        ),
+      );
+    }
+    if (resource.resource.kind !== expectedKind) {
+      return err(
+        failure(
+          'vfx-data-interface-wrong-type',
+          requirement,
+          `${requirement.kind} backed by a ${expectedKind} resource`,
+          `repair provider ${provider.id} so its opaque resource matches the reflected binding kind`,
+          {
+            providerId: provider.id,
+            expectedResourceKind: expectedKind,
+            actualResourceKind: resource.resource.kind,
+          },
+        ),
+      );
+    }
+    if (requirement.sampleCount !== undefined && resource.sampleCount !== requirement.sampleCount) {
+      return err(
+        failure(
+          'vfx-data-interface-wrong-type',
+          requirement,
+          `a scene-depth resource with sampleCount=${requirement.sampleCount}`,
+          `provide a single-sample scene depth target for ${provider.id}; MSAA resolve is not implicit`,
+          { providerId: provider.id },
         ),
       );
     }

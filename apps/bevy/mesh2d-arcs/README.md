@@ -10,7 +10,7 @@ an orthographic camera, and `compute2dBounds` debug overlays.
 ```sh
 pnpm --filter @forgeax/bevy-mesh2d-arcs typecheck
 pnpm --filter @forgeax/bevy-mesh2d-arcs build
-SMOKE_MIN_FRAMES=300 pnpm --filter @forgeax/bevy-mesh2d-arcs smoke
+SMOKE_MIN_FRAMES=60 pnpm --filter @forgeax/bevy-mesh2d-arcs smoke
 pnpm --filter @forgeax/bevy-mesh2d-arcs smoke:browser
 ```
 
@@ -21,4 +21,4 @@ and a 320x180 canvas with no page, console, request, or response errors.
 
 This app is a focused geometry/material oracle, not a second game scene: it has no authored
 Pack/GUID asset, input action, gameplay/reset owner, or Preview integration. The coherent
-`templates/game-default` game remains the consumer for gameplay-sized compositions.
+`templates/game-3d` game remains the consumer for gameplay-sized compositions.

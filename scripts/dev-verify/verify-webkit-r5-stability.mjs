@@ -1,8 +1,10 @@
 // scripts/dev-verify/verify-webkit-r5-stability.mjs
 //
-// bug-20260622 R5 WS1+WS2 shared WebKit e2e probe.
+// bug-20260622 R5 WS1+WS2 browser fallback e2e probe. The protected CI job
+// invokes it with FORGEAX_FALLBACK_BROWSER=chromium; WebKit remains an explicit
+// local compatibility mode only.
 // Mirrors verify-webkit-hello-triangle.mjs structure:
-//   webkit.launch -> scan wasm-trap signatures (panicked-at / Unreachable
+//   browser launch -> scan wasm-trap signatures (panicked-at / Unreachable
 //   code) -> screenshot non-black -> channel proof -> verdict.
 //
 // Architecture: reuses the hello-triangle dev server (DEV_SERVER_URL, default
@@ -31,12 +33,13 @@
 //   SCREENSHOT_B=/tmp/r5-bad-submit.png     mode (b) screenshot
 //   REQUIRE_PIXEL=1                         disable pixel gate with 0
 //   REQUIRE_NO_GPU=1                        disable channel proof gate with 0
+//   FORGEAX_BROWSER_HEADLESS=0              headed Chromium under Xvfb on Linux
 //
 // Exit codes:
 //   0  both modes pass
 //   1  any mode fails
 
-import { webkit } from 'playwright';
+import { chromium, webkit } from 'playwright';
 import {
   closeBrowserWithDeadline,
   detectWasmCrash,
@@ -45,6 +48,36 @@ import {
 } from './retry-until-pass.mjs';
 
 const DEV_SERVER_URL = (process.env.DEV_SERVER_URL ?? 'http://localhost:5181/').replace(/\/$/, '');
+const BROWSER_ENGINE = process.env.FORGEAX_FALLBACK_BROWSER ?? 'chromium';
+if (BROWSER_ENGINE !== 'webkit' && BROWSER_ENGINE !== 'chromium') {
+  throw new Error(
+    `unsupported FORGEAX_FALLBACK_BROWSER=${BROWSER_ENGINE}; expected webkit or chromium`,
+  );
+}
+const IS_CHROMIUM = BROWSER_ENGINE === 'chromium';
+const BROWSER_LABEL = IS_CHROMIUM ? 'Chromium' : 'WebKit';
+const browserType = IS_CHROMIUM ? chromium : webkit;
+const browserHeadless = !['0', 'false'].includes(
+  (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+);
+const browserLaunchOptions = IS_CHROMIUM
+  ? {
+      headless: browserHeadless,
+      ...(process.env.FORGEAX_CHROMIUM_EXECUTABLE === undefined
+        ? {}
+        : { executablePath: process.env.FORGEAX_CHROMIUM_EXECUTABLE }),
+      ...(process.env.FORGEAX_CHROME_CHANNEL === undefined
+        ? {}
+        : { channel: process.env.FORGEAX_CHROME_CHANNEL }),
+      args: [
+        '--disable-features=WebGPU',
+        '--disable-gpu',
+        '--enable-unsafe-swiftshader',
+        '--disable-gpu-driver-bug-workarounds',
+        '--no-sandbox',
+      ],
+    }
+  : { headless: browserHeadless };
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 60000);
 const SCREENSHOT_A = process.env.SCREENSHOT_A ?? '/tmp/r5-over-capacity.png';
 const SCREENSHOT_B = process.env.SCREENSHOT_B ?? '/tmp/r5-bad-submit.png';
@@ -99,7 +132,7 @@ async function screenshotAndSample(page, path, timeoutMs) {
   );
 }
 
-// Each mode launches its OWN fresh browser per attempt: the WebKit wasm
+// Each mode launches its OWN fresh browser per attempt: the browser wasm
 // cold-start crash is a per-process memory fault, so a fresh process is what
 // recovers it. This gives up the shared-compile speedup (both modes reusing one
 // launch) in exchange for per-attempt isolation — stability > that micro-opt.
@@ -107,7 +140,7 @@ async function screenshotAndSample(page, path, timeoutMs) {
 // mode still pays only one cold compile per attempt.
 async function runMode(label, hash, screenshotPath) {
   console.log(`--- ${label} ---`);
-  const browser = await webkit.launch({ headless: true });
+  const browser = await browserType.launch(browserLaunchOptions);
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     page.setDefaultTimeout(TIMEOUT_MS);
@@ -138,7 +171,7 @@ async function runMode(label, hash, screenshotPath) {
       // Playwright's second argument is the page-function argument, not the
       // options object. Passing the timeout as the second argument silently
       // used the default polling budget and made a completed probe look
-      // hung on slower WebKit cold starts.
+      // hung on a slower browser cold start.
       await page.waitForFunction(() => '__r5Ready' in window, undefined, { timeout: 15000 });
       ready = await evaluateWithDeadline(
         page,
@@ -188,10 +221,25 @@ async function runMode(label, hash, screenshotPath) {
     try {
       channelProof = await evaluateWithDeadline(
         page,
-        () => ({
-          hasGpu: typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu,
-          gl2: !!document.createElement('canvas').getContext('webgl2'),
-        }),
+        async () => {
+          const gpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
+          let webgpuAdapterStatus = 'absent';
+          if (gpu !== undefined && typeof gpu.requestAdapter === 'function') {
+            try {
+              webgpuAdapterStatus =
+                (await gpu.requestAdapter()) === null ? 'unavailable' : 'available';
+            } catch {
+              webgpuAdapterStatus = 'error';
+            }
+          }
+          const webgl2 = !!document.createElement('canvas').getContext('webgl2');
+          return {
+            hasGpu: gpu !== undefined && !!gpu,
+            webgpuAdapterStatus,
+            webgl2,
+            gl2: webgl2,
+          };
+        },
         undefined,
         TIMEOUT_MS,
         'R5 channel probe',
@@ -224,7 +272,7 @@ async function runMode(label, hash, screenshotPath) {
     const pixNonBlack = ss && !ss.allBlack;
     return { navOk, panicSeen, ready, logs, channelProof, ss, probe, statusText, pixNonBlack };
   } finally {
-    await closeBrowserWithDeadline(browser, 10000, 'R5 WebKit browser close');
+    await closeBrowserWithDeadline(browser, 10000, `R5 ${BROWSER_LABEL} browser close`);
   }
 }
 
@@ -303,12 +351,12 @@ function evalModeB(b) {
 // ── entry ───────────────────────────────────────────────────────────────────
 
 async function run() {
-  console.log('=== forgeax R5 WebKit stability probe ===');
+  console.log(`=== forgeax R5 ${BROWSER_LABEL} stability probe ===`);
   console.log(`dev server: ${DEV_SERVER_URL}`);
   console.log('');
 
   // Each mode is retried independently with a fresh browser per attempt: a
-  // WebKit wasm cold-start crash (naga miscompile / wgpu OOB+parking_lot) is
+  // Browser wasm cold-start crash (naga miscompile / wgpu OOB+parking_lot) is
   // non-deterministic, so a fresh process recovers. Only that recognized crash
   // is retryable; deterministic navigation, pixel, or semantic failures stop
   // after one attempt. Mode (b)'s deliberate handled validation error remains
@@ -336,7 +384,12 @@ async function run() {
 
   // Overall
   const overall = passA && passB;
-  const channelGateFailed = REQUIRE_NO_GPU && a.channelProof?.hasGpu === true;
+  const channelGateFailed =
+    REQUIRE_NO_GPU &&
+    (a?.channelProof?.webgl2 !== true ||
+      (BROWSER_ENGINE === 'chromium'
+        ? !['absent', 'unavailable'].includes(a?.channelProof?.webgpuAdapterStatus)
+        : a?.channelProof?.hasGpu !== false));
 
   console.log('\n=== OVERALL ===');
   console.log(`(a) over-capacity: ${passA ? 'PASS' : 'FAIL'}`);
@@ -344,11 +397,13 @@ async function run() {
   console.log(`OVERALL: ${overall ? 'PASS' : 'FAIL'}`);
 
   console.log('\n=== CHANNEL PROOF ===');
-  console.log(`navigator.gpu: ${a.channelProof?.hasGpu ?? 'unknown'}`);
-  console.log(`webgl2: ${a.channelProof?.gl2 ?? 'unknown'}`);
+  console.log(`navigator.gpu: ${a?.channelProof?.hasGpu ?? 'unknown'}`);
+  console.log(`webgl2: ${a?.channelProof?.webgl2 ?? a?.channelProof?.gl2 ?? 'unknown'}`);
 
   if (channelGateFailed) {
-    console.log('CHANNEL GATE FAILED: navigator.gpu present, not exercising Channel 3');
+    console.log(
+      'CHANNEL GATE FAILED: browser did not prove WebGPU adapter absence and WebGL2=true',
+    );
   }
 
   const exitCode = overall && !channelGateFailed ? 0 : 1;

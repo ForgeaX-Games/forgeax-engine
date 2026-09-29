@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { stripVTControlCharacters } from 'node:util';
 
 import { chromium } from 'playwright';
+import browserLaunch from '../../../scripts/ci/browser-launch.json' with { type: 'json' };
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = resolve(packageRoot, '..', '..');
@@ -39,27 +41,31 @@ try {
   dshProcess = await launch(
     dsh,
     ['web', '--host', '127.0.0.1', '--port', '0'],
-    /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+)/,
+    /dsh web:\s+(http:\/\/127\.0\.0\.1:\d+\S*)/,
     { DSH_HOME: home, FORGEAX_ENGINE_ENDPOINT: engineProcess.endpoint },
   );
 
   browser = await chromium.launch({
-    headless: true,
-    channel: process.env.FORGEAX_PLAYWRIGHT_CHANNEL ?? 'chrome',
-    args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
+    ...browserLaunch,
+    headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' && !!process.env.CI,
+    channel: process.env.FORGEAX_PLAYWRIGHT_CHANNEL ?? browserLaunch.channel,
   });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
   await page.goto(dshProcess.endpoint, { waitUntil: 'domcontentloaded' });
-  await dismissIfVisible(page, '\u7ee7\u7eed');
-  await dismissIfVisible(page, '\u7a0d\u540e\u914d\u7f6e');
+  await dismissIfVisible(page, 'Continue');
+  await dismissIfVisible(page, 'Configure later');
 
   const panel = page.locator('[data-forgeax-panel="mounted"]');
   await panel.waitFor();
   await page.locator('[data-forgeax-ready="true"]').waitFor();
+  // Software GPU runs retain the 300-frame requirement without a 30s FPS floor.
   await page.waitForFunction(() => {
     const text = document.querySelector('[data-forgeax-status]')?.textContent ?? '';
     const matched = text.match(/FRAMEID\s*(\d+)/i);
     return Number(matched?.[1] ?? 0) >= 300;
+  }, null, { timeout: 180_000 }).catch(async (cause) => {
+    const status = await page.locator('[data-forgeax-status]').innerText();
+    throw new Error(`DSH did not reach 300 frames: ${status}`, { cause });
   });
   const iframe = page.locator('iframe[data-forgeax-engine-frame="real"]');
   await iframe.waitFor();
@@ -96,7 +102,7 @@ try {
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
-      dshUi: dshProcess.endpoint,
+      dshUi: new URL(dshProcess.endpoint).origin,
       engine: engineProcess.endpoint,
       beforeStatus,
       afterStatus,
@@ -137,36 +143,46 @@ async function countStatusRequests(page, durationMs) {
 
 async function launch(command, args, pattern, env) {
   const child = spawn(command, args, {
+    detached: process.platform !== 'win32',
     cwd: repositoryRoot,
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const stop = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((resolvePromise) => child.once('exit', resolvePromise));
+    if (process.platform !== 'win32' && child.pid !== undefined) {
+      process.kill(-child.pid, 'SIGTERM');
+    } else {
+      child.kill('SIGTERM');
+    }
+    await exited;
+  };
   const endpoint = await new Promise((resolvePromise, reject) => {
     let output = '';
     const timer = setTimeout(() => reject(new Error(`${command} URL timeout: ${output}`)), 15_000);
     const onData = (chunk) => {
       output += chunk.toString('utf8');
-      const matched = output.match(pattern);
+      const matched = stripVTControlCharacters(output).match(pattern);
       if (matched?.[1] === undefined) return;
       clearTimeout(timer);
       resolvePromise(matched[1]);
     };
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.once('exit', (code) => {
       clearTimeout(timer);
       reject(new Error(`${command} exited before ready: ${code}: ${output}`));
     });
+  }).catch(async (error) => {
+    if (child.pid !== undefined) await stop();
+    throw error;
   });
-  return {
-    endpoint,
-    async stop() {
-      if (child.exitCode !== null) return;
-      const exited = new Promise((resolvePromise) => child.once('exit', resolvePromise));
-      child.kill('SIGTERM');
-      await exited;
-    },
-  };
+  return { endpoint, stop };
 }
 
 function run(command, args, env) {

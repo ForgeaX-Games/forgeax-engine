@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsup';
 
-import { baseTsupConfig } from '../../tsup.base';
+import { baseTsupConfig } from '../../config/tsup.base';
 
 const packageId = '@forgeax/engine-dsh';
 

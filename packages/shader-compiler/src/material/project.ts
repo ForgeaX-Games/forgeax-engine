@@ -1,5 +1,14 @@
+import { isStandardRootModule } from '@forgeax/engine-pack';
 import type { MaterialAsset, MaterialError, MaterialValue } from '@forgeax/engine-types';
-import { createMaterialError, err, ok, type Result } from '@forgeax/engine-types';
+import {
+  createMaterialError,
+  deriveStandardLayerPlan,
+  err,
+  isMaterialPhysicalContractError,
+  ok,
+  type Result,
+  type StandardLayerPlan,
+} from '@forgeax/engine-types';
 import type { MaterialVariantContext } from './variant-context.js';
 
 export interface MaterialProjectionContext {
@@ -22,6 +31,7 @@ export interface MaterialStaticSelection {
 export interface MaterialProjection {
   readonly runtimeValues: Readonly<Record<string, MaterialValue>>;
   readonly staticSelection: MaterialStaticSelection;
+  readonly layerPlan: StandardLayerPlan;
 }
 
 function staticNames(selection: MaterialStaticSelection): readonly string[] {
@@ -37,6 +47,21 @@ export function projectMaterial(
   material: MaterialAsset,
   context: MaterialProjectionContext,
 ): Result<MaterialProjection, MaterialError> {
+  let layerPlan: StandardLayerPlan;
+  try {
+    const standard = material.passes?.some((pass) => isStandardRootModule(pass.program.module));
+    layerPlan = deriveStandardLayerPlan(
+      standard ? (material.parameters ?? []) : [],
+      standard ? material.passes : undefined,
+    );
+  } catch (error) {
+    if (isMaterialPhysicalContractError(error)) {
+      return err(
+        createMaterialError('material-physical-contract-invalid', error.detail, error.message),
+      );
+    }
+    throw error;
+  }
   const values = material.values ?? {};
   const runtimeValues: Record<string, MaterialValue> = {};
   for (const [name, value] of Object.entries(values)) {
@@ -66,5 +91,5 @@ export function projectMaterial(
       }),
     );
   }
-  return ok({ runtimeValues, staticSelection });
+  return ok({ runtimeValues, staticSelection, layerPlan });
 }

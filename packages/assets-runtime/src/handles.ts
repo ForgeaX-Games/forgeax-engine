@@ -121,10 +121,8 @@ export const HANDLE_NINESLICE_QUAD: Handle<'MeshAsset', 'shared'> = toShared<'Me
 /**
  * Stable GUIDs for the builtin meshes — the dash-form of
  * `deriveBuiltin('HANDLE_<NAME>')` (UUIDv5, ForgeaX namespace) in
- * `@forgeax/engine-pack`. They are inlined here (not imported) because the
- * pack derivation runs under top-level `await` (async SubtleCrypto) and
- * dragging that into the AssetRegistry constructor — a synchronous hot path
- * consumed engine-wide — would make the whole runtime module graph async.
+ * `@forgeax/engine-pack`. The fixed values avoid runtime SHA-1 work when
+ * constructing the builtin handle table.
  *
  * The single source of truth remains `deriveBuiltin`: a cross-package
  * guard test (`builtin-guid-ssot.test.ts`) asserts each literal equals the
@@ -169,12 +167,15 @@ export const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
   // ParticleEffectPlayer.effect (shared<ParticleEffectAsset>) uses the same
   // scene-pack refs[] index contract as every other scalar shared field.
   'effect',
+  'density',
   // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w27:
   // Skylight.equirect + SkyboxBackground.equirect (shared<EquirectAsset>). The
   // generic extractSceneEntityHandleGuids path already covers shared< fields by
   // schema; this allowlist is the second scene-parse path (parseScenePayload),
   // so the new handle field name is registered here too (R-1).
   'equirect',
+  'iesProfile',
+  'cookie',
 ]);
 
 /**
@@ -183,4 +184,4 @@ export const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
  * index that resolves to a GUID string. Coexists with HANDLE_FIELD_NAMES;
  * a field name lives in exactly one set.
  */
-export const HANDLE_ARRAY_FIELD_NAMES: ReadonlySet<string> = new Set(['materials']);
+export const HANDLE_ARRAY_FIELD_NAMES: ReadonlySet<string> = new Set(['materials', 'clips']);

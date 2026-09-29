@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 import { PNG } from 'pngjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,11 +42,11 @@ try {
   );
   const url = await waitForServer(vite);
   browser = await chromium.launch({
+    ...browserLaunch,
+    args: [...browserLaunch.args, ...(process.env.CI ? ['--use-angle=swiftshader'] : [])],
     headless: true,
-    channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
   });
-  const page = await browser.newPage({ viewport: { width: 64, height: 64 } });
+  const page = await browser.newPage({ viewport: { width: 128, height: 128 } });
   const pageErrors = [];
   const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));

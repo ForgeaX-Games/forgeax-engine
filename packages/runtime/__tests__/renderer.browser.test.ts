@@ -19,7 +19,7 @@
 // this case PASSES, AC-05 is delivered).
 
 import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
+import type { Renderer, RendererEvent } from '@forgeax/engine-render';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRenderer } from '../src/createRenderer';
@@ -67,19 +67,36 @@ describe('renderer.browser - WebGPU path RHI contract (AC-05)', () => {
     expect(renderer.inspect().capabilities.backendKind).toBe('webgpu');
 
     // (b) draw 1 frame: pass an empty World. D-S2 RenderSystem reports
-    // 'render-system-no-camera' through onError but draw itself returns
-    // void.
+    // 'render-system-no-camera' through an error event, while the public draw
+    // contract still returns a receipt for the clear-only submit.
     const world = new World();
     const attached = renderer.attach(world);
     expect(attached.ok).toBe(true);
     if (!attached.ok) return;
     world.update(1 / 60).unwrap();
-    expect(
-      renderer.draw({
-        leases: [attached.value],
-        camera: { lease: attached.value },
-        environment: { lease: attached.value },
-      }).ok,
-    ).toBe(true);
+    const events: RendererEvent[] = [];
+    const unsubscribe = renderer.subscribe((event) => events.push(event));
+    const drawn = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
+    expect(drawn.ok).toBe(true);
+    if (!drawn.ok) return;
+    expect((await drawn.value.completed).ok).toBe(true);
+    unsubscribe();
+
+    const errorEvents = events.filter(
+      (event): event is Extract<RendererEvent, { kind: 'error' }> => event.kind === 'error',
+    );
+    expect(errorEvents).toHaveLength(1);
+    const error = errorEvents[0]?.error;
+    expect(error?.code).toBe('device-operation-failed');
+    if (error?.code === 'device-operation-failed') {
+      expect(error.detail.cause.code).toBe('render-system-no-camera');
+    }
+    expect(errorEvents.some((event) => event.error.code === 'frame-input-invalid')).toBe(false);
+    expect(events.some((event) => event.kind === 'frame-submitted')).toBe(true);
+    expect(renderer.inspect().perFramePassNames).not.toContain('output-transform');
   });
 });

@@ -179,7 +179,11 @@ describe('browser-backend focus loss', () => {
     const cancelled = env.backend.sample();
     expect(cancelled.downKeys.size).toBe(0);
     expect(cancelled.downCodes?.size).toBe(0);
+    expect(cancelled.pressedKeys?.size).toBe(0);
+    expect(cancelled.pressedCodes?.size).toBe(0);
     expect(cancelled.buttons).toEqual([false, false, false]);
+    expect(cancelled.pressedButtons).toEqual([false, false, false]);
+    expect(cancelled.releasedButtons).toEqual([false, false, false]);
     expect(cancelled.focusReset).toBe(true);
     expect(cancelled.pointerLocked).toBe(false);
     expect(cancelled.pointers).toBeUndefined();

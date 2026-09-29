@@ -6,3 +6,5 @@ declare module 'virtual:forgeax/bundler' {
     readonly shaderManifestUrl?: string;
   };
 }
+
+declare const __FORGEAX_PRODUCT_HEAD__: string;

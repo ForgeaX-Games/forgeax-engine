@@ -15,6 +15,41 @@ describe('prepared graphics browser contract', () => {
     renderer = undefined;
   });
 
+  it('isolates a missing particle shader while preserving the Standard frame', async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    renderer = await requireRenderer(
+      canvas,
+      {
+        features: [preparedFeature('missing.particle.material', 'missing-material')],
+      },
+      { shaderManifestUrl: '/shaders/manifest.json' },
+    );
+    const errors: unknown[] = [];
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') errors.push(event.error);
+    });
+    const world = preparedWorld();
+    const lease = renderer.attach(world).unwrap();
+    world.update(1 / 60).unwrap();
+    const frame = renderer.draw(frameRequest(lease));
+    expect(frame.ok).toBe(true);
+    if (!frame.ok) throw frame.error;
+    (await frame.value.completed).unwrap();
+    expect(renderer.inspect().featureDiagnostics).toContainEqual(
+      expect.objectContaining({ identity: 'missing.particle.material', status: 'failed' }),
+    );
+    expect(renderer.inspect().perFramePassNames).toContain('main');
+    expect(
+      renderer
+        .inspect()
+        .perFramePassNames.some((name) => name.includes('missing.particle.material')),
+    ).toBe(false);
+    expect(JSON.stringify(errors)).toContain('material-shader-not-found');
+    expect(JSON.stringify(errors)).toContain('test::missing-particle-material');
+  }, 30_000);
+
   it('records a prepared operation through real WebGPU and returns a receipt', async () => {
     if (typeof navigator?.gpu?.requestAdapter !== 'function') {
       throw new Error('WebGPU is unavailable');
@@ -43,7 +78,7 @@ describe('prepared graphics browser contract', () => {
       expect((await renderer.observe(frame.value, { include: ['draws'] })).ok).toBe(true);
     expect(errors).not.toContain('render-feature-prepared-state-mismatch');
     canvas.remove();
-  });
+  }, 30_000);
 
   // This negative path intentionally exercises a real WebGPU pipeline before
   // the renderer reports the structured stage error. Its cold lavapipe start

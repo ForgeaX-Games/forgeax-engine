@@ -12,7 +12,7 @@ import { RhiErrorListenerRegistry } from '../lifecycle';
 import type { RenderFrameState } from '../record/frame-snapshot';
 import { makeZeroCameraFallbackSnapshot } from '../record/frame-snapshot';
 import type { PipelineState, RenderSystemInternals } from '../record/render-context';
-import { ensureCompiledFrameGraph } from '../record/typed-frame-graph';
+import { ensureCompiledFrameGraph, executeCompiledFrameGraph } from '../record/typed-frame-graph';
 import type { RenderPipeline, RenderPipelineFrame } from '../render-pipeline';
 import type {
   ExtractedLights,
@@ -20,6 +20,7 @@ import type {
   RenderableSnapshot,
 } from '../render-system-extract';
 import { RenderScene } from '../scene/render-scene';
+import type { OcclusionFrameProjection } from '../scene/visibility/occlusion-runtime';
 
 const material = {
   baseColor: new Float32Array([1, 1, 1]),
@@ -52,11 +53,27 @@ function snapshot(entityKey: number): RenderableSnapshot {
   };
 }
 
+function updateSnapshot(value: RenderableSnapshot) {
+  return {
+    kind: 'update' as const,
+    worldId: value.worldId,
+    entityKey: value.entityKey,
+    snapshot: value,
+  };
+}
+
 function preparedFrame(view: GpuDrivenView): PreparedGpuDrivenFrame {
   return {
     topologySignature: `view-generation:${view.inspect().resourceGeneration}`,
-    entityKeys: new Set(),
-    ownsAllRenderables: true,
+    worldKeys: [],
+    ownsAllDrawItems: true,
+    standardPbrFrameResources: {
+      materialBindGroups: [],
+      materialSlotIndicesByEntity: new Map(),
+      instancesBindGroup: {} as never,
+      materialStride: 0,
+      sceneMaterialBuffer: {} as never,
+    },
     _commitResourceReplacement: () => view._commitResourceReplacement(),
     project: (graph) => {
       const projected = view.addPasses(graph);
@@ -66,12 +83,170 @@ function preparedFrame(view: GpuDrivenView): PreparedGpuDrivenFrame {
 }
 
 describe('GpuDrivenView graph projection', () => {
+  it('keeps receiver rows optional, updates stable addresses, and reseeds them after overflow', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const shader = (await rhi.createShaderModule(device, { code: 'synthetic' })).unwrap();
+    const projection = new RenderScene();
+    const delta = projection.apply([updateSnapshot(snapshot(1))]);
+    const available = GpuScene.create(device, 1).unwrap();
+    if (available.status !== 'available') throw new Error('missing structural GPU Scene');
+    available.scene.sync(delta).unwrap();
+    const topology = new BatchTopology();
+    topology.rebuild(projection.slotsSnapshot());
+    const view = GpuDrivenView.create({
+      device,
+      shaderModuleFactory: { createShaderModule: () => ok(shader) },
+    }).unwrap();
+    const planes = frustum.fromViewProjection(frustum.create(), mat4.identity(mat4.create()));
+    const update = (rows?: Uint32Array) =>
+      view.update(
+        topology.plan(),
+        available.scene,
+        planes,
+        undefined,
+        0,
+        undefined,
+        undefined,
+        undefined,
+        rows,
+      );
+    const writes = vi.spyOn(device.queue, 'writeBuffer');
+    const destroys = vi.spyOn(device, 'destroyBuffer');
+    try {
+      update().unwrap();
+      expect(view.visibleSurfaceRowsBuffer).toBeUndefined();
+      expect(update(new Uint32Array(2)).ok).toBe(false);
+      update(new Uint32Array([7])).unwrap();
+      const first = view.visibleSurfaceRowsBuffer;
+      expect(first).toBeDefined();
+      writes.mockClear();
+      update(new Uint32Array([7])).unwrap();
+      expect(writes.mock.calls.some(([buffer]) => buffer === first)).toBe(false);
+      update(new Uint32Array([11])).unwrap();
+      expect(view.visibleSurfaceRowsBuffer).toBe(first);
+      expect(
+        writes.mock.calls.some(
+          ([buffer, , data]) => buffer === first && data instanceof Uint32Array && data[0] === 11,
+        ),
+      ).toBe(true);
+      view._commitResourceReplacement();
+      await device.queue.onSubmittedWorkDone();
+      destroys.mockClear();
+      view._recoverFromOverflow().unwrap();
+      const next = view.visibleSurfaceRowsBuffer;
+      expect(next).toBeDefined();
+      expect(next).not.toBe(first);
+      expect(destroys).not.toHaveBeenCalledWith(first);
+      writes.mockClear();
+      update(new Uint32Array([11])).unwrap();
+      expect(writes.mock.calls.some(([buffer]) => buffer === next)).toBe(true);
+      expect(view.inspect().candidateUploadBytes).toBeGreaterThan(0);
+      view._commitResourceReplacement();
+      await device.queue.onSubmittedWorkDone();
+      expect(destroys).toHaveBeenCalledWith(first);
+      update().unwrap();
+      expect(view.visibleSurfaceRowsBuffer).toBeUndefined();
+    } finally {
+      view.dispose();
+      available.scene.dispose();
+    }
+  });
+
+  it('reuses the compiled graph when an occlusion reservation rotates pages', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const activePipeline: RenderPipeline = {
+      build: ({ projectGpuDriven }) => {
+        const projected = projectGpuDriven({ format: 'rgba8unorm', sampleCount: 1 });
+        return projected.ok ? ok(undefined) : projected;
+      },
+    };
+    const frameState = {
+      compiledFrameGraph: null,
+      compiledFrameGraphTopologyKey: null,
+      retiredCompiledFrameGraphs: new Set(),
+      activePipeline,
+      installedPipelineConfig: undefined,
+    } as unknown as RenderFrameState;
+    const errors: unknown[] = [];
+    const errorRegistry = new RhiErrorListenerRegistry();
+    errorRegistry.add((error) => errors.push(error));
+    const internals = { device, errorRegistry } as unknown as RenderSystemInternals;
+    const pipelineState = {
+      format: 'rgba8unorm',
+      colorAttachmentFormat: 'rgba8unorm',
+    } as unknown as PipelineState;
+    const lights = {
+      cascadeCount: undefined,
+      pointShadow: [],
+      spot: [],
+    } as unknown as ExtractedLights;
+    let pageIndex = 0;
+    const projection = {
+      get pageIndex() {
+        return pageIndex;
+      },
+      sampleCount: 1,
+    } as unknown as OcclusionFrameProjection;
+    const compile = (prepared?: PreparedGpuDrivenFrame) =>
+      ensureCompiledFrameGraph(
+        internals,
+        frameState,
+        pipelineState,
+        makeZeroCameraFallbackSnapshot(),
+        lights,
+        1,
+        1,
+        undefined,
+        prepared,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        projection,
+      );
+
+    const first = compile();
+    expect(first).not.toBeNull();
+    if (first === null) return;
+    const prepared: PreparedGpuDrivenFrame = {
+      topologySignature: 'stable-gpu-driven-test',
+      worldKeys: [],
+      ownsAllDrawItems: true,
+      standardPbrFrameResources: {
+        materialBindGroups: [],
+        materialSlotIndicesByEntity: new Map(),
+        instancesBindGroup: {} as never,
+        materialStride: 0,
+        sceneMaterialBuffer: {} as never,
+      },
+      _commitResourceReplacement: () => undefined,
+      project: (graph) => {
+        const pass = graph.addComputePass('gpu-driven-test', {
+          accesses: [],
+          encode: () => undefined,
+        });
+        return pass.ok ? ok({ accesses: [], encode: () => undefined }) : pass;
+      },
+    };
+    const gpu = compile(prepared);
+    expect(gpu).not.toBe(first);
+    expect(gpu?.inspect().passes.map(({ name }) => name)).toContain('gpu-driven-test');
+    expect(compile(prepared)).toBe(gpu);
+    pageIndex = 1;
+    expect(compile(prepared)).toBe(gpu);
+    const second = compile();
+    expect(second).not.toBe(gpu);
+    expect(errors).toHaveLength(0);
+  });
+
   it('records reset, compact, and finalize in one typed graph', async () => {
     const adapter = (await rhi.requestAdapter()).unwrap();
     const device = (await adapter.requestDevice()).unwrap();
     const shader = (await rhi.createShaderModule(device, { code: 'synthetic' })).unwrap();
     const projection = new RenderScene();
-    const delta = projection.apply([{ kind: 'create', snapshot: snapshot(1) }]);
+    const delta = projection.apply([updateSnapshot(snapshot(1))]);
     const sceneAvailability = GpuScene.create(device, 1).unwrap();
     expect(sceneAvailability.status).toBe('available');
     if (sceneAvailability.status !== 'available') return;
@@ -96,9 +271,9 @@ describe('GpuDrivenView graph projection', () => {
       visibleCapacity: 1,
       updateCount: 1,
       bufferRebuilds: 1,
-      candidateUploadBytes: 28,
-      batchUploadBytes: 28,
-      viewConstantsUploadBytes: 112,
+      candidateUploadBytes: 304,
+      batchUploadBytes: 32,
+      viewConstantsUploadBytes: 304,
       bindGroupCreates: 1,
     });
 
@@ -114,7 +289,7 @@ describe('GpuDrivenView graph projection', () => {
       bufferRebuilds: 1,
       candidateUploadBytes: 0,
       batchUploadBytes: 0,
-      viewConstantsUploadBytes: 112,
+      viewConstantsUploadBytes: 304,
       bindGroupCreates: 0,
     });
 
@@ -132,6 +307,11 @@ describe('GpuDrivenView graph projection', () => {
         name: 'gpu-driven.finalize-indirect',
         kind: 'compute',
         dependencies: ['gpu-driven.frustum-compact'],
+      },
+      {
+        name: 'gpu-driven.lod-selection-readback',
+        kind: 'copy',
+        dependencies: ['gpu-driven.frustum-compact', 'gpu-driven.finalize-indirect'],
       },
     ]);
     const encoder = device.createCommandEncoder({ label: 'gpu-driven-view' }).unwrap();
@@ -153,7 +333,7 @@ describe('GpuDrivenView graph projection', () => {
     const shader = (await rhi.createShaderModule(device, { code: 'synthetic' })).unwrap();
     const destroyBuffer = vi.spyOn(device, 'destroyBuffer');
     const projection = new RenderScene();
-    const firstDelta = projection.apply([{ kind: 'create', snapshot: snapshot(1) }]);
+    const firstDelta = projection.apply([updateSnapshot(snapshot(1))]);
     const sceneAvailability = GpuScene.create(device, 2).unwrap();
     expect(sceneAvailability.status).toBe('available');
     if (sceneAvailability.status !== 'available') return;
@@ -192,6 +372,7 @@ describe('GpuDrivenView graph projection', () => {
     const frameState = {
       compiledFrameGraph: null,
       compiledFrameGraphTopologyKey: null,
+      compiledFrameGraphGeneration: 0,
       retiredCompiledFrameGraphs: new Set(),
       activePipeline,
       installedPipelineConfig: undefined,
@@ -209,30 +390,80 @@ describe('GpuDrivenView graph projection', () => {
       pointShadow: [],
       spot: [],
     } as unknown as ExtractedLights;
-    const compile = (prepared: PreparedGpuDrivenFrame) =>
+    const compile = (prepared: PreparedGpuDrivenFrame, width = 1) =>
       ensureCompiledFrameGraph(
         internals,
         frameState,
         pipelineState,
         makeZeroCameraFallbackSnapshot(),
         lights,
-        1,
+        width,
         1,
         undefined,
         prepared,
       );
+
+    Object.defineProperty(device, 'surfaceViewFormats', {
+      configurable: true,
+      value: false,
+    });
+    Object.defineProperty(device, 'caps', {
+      configurable: true,
+      value: { ...device.caps, rgba16floatRenderable: false },
+    });
+    expect(compile(preparedFrame(view))).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      code: 'webgpu-runtime-error',
+      detail: { error: { code: 'surface-raw-endpoint-failed' } },
+    });
+    errors.length = 0;
+    delete (device as unknown as { caps?: unknown }).caps;
+    delete (device as unknown as { surfaceViewFormats?: unknown }).surfaceViewFormats;
+
     const compiledPrevious = compile(preparedFrame(view));
     expect(compiledPrevious).not.toBeNull();
     if (compiledPrevious === null) return;
+    expect(frameState.compiledFrameGraphGeneration).toBe(1);
+    const initialEncoder = device
+      .createCommandEncoder({ label: 'gpu-driven-view-initial' })
+      .unwrap();
+    expect(
+      executeCompiledFrameGraph(
+        internals,
+        frameState,
+        { encoder: initialEncoder } as RenderPipelineFrame,
+        initialEncoder,
+      ),
+    ).toBe(true);
 
-    const secondDelta = projection.apply([{ kind: 'create', snapshot: snapshot(2) }]);
+    Object.defineProperty(device, 'surfaceViewFormats', {
+      configurable: true,
+      value: false,
+    });
+    Object.defineProperty(device, 'caps', {
+      configurable: true,
+      value: { ...device.caps, rgba16floatRenderable: false },
+    });
+    expect(compile(preparedFrame(view))).toBe(compiledPrevious);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      code: 'webgpu-runtime-error',
+      detail: { error: { code: 'surface-raw-endpoint-failed' } },
+    });
+    errors.length = 0;
+    delete (device as unknown as { caps?: unknown }).caps;
+    delete (device as unknown as { surfaceViewFormats?: unknown }).surfaceViewFormats;
+
+    const secondDelta = projection.apply([updateSnapshot(snapshot(2))]);
     sceneAvailability.scene.sync(secondDelta).unwrap();
     topology.rebuild(projection.slotsSnapshot());
     view.update(topology.plan(), sceneAvailability.scene, planes).unwrap();
 
     expect(view.inspect()).toMatchObject({ candidateCount: 2, candidateCapacity: 2 });
     forceCompileFailure = true;
-    expect(compile(preparedFrame(view))).toBe(compiledPrevious);
+    expect(compile(preparedFrame(view), 2)).toBe(compiledPrevious);
+    expect(frameState.compiledFrameGraphGeneration).toBe(1);
     expect(errors).toHaveLength(1);
     expect(destroyBuffer.mock.calls.some(([buffer]) => buffer === previousVisible)).toBe(false);
     const encoder = device.createCommandEncoder({ label: 'gpu-driven-view-lkg' }).unwrap();
@@ -240,12 +471,31 @@ describe('GpuDrivenView graph projection', () => {
 
     forceCompileFailure = false;
     const retirePrevious = vi.spyOn(compiledPrevious, 'retire');
-    const acceptedGraph = compile(preparedFrame(view));
+    const acceptedGraph = compile(preparedFrame(view), 2);
     expect(acceptedGraph).not.toBe(compiledPrevious);
+    expect(retirePrevious).not.toHaveBeenCalled();
+    expect(destroyBuffer.mock.calls.some(([buffer]) => buffer === previousVisible)).toBe(false);
+    expect(frameState.compiledFrameGraphGeneration).toBe(2);
+    expect(retirePrevious).not.toHaveBeenCalled();
+    const acceptedEncoder = device
+      .createCommandEncoder({ label: 'gpu-driven-view-accepted' })
+      .unwrap();
+    expect(
+      executeCompiledFrameGraph(
+        internals,
+        frameState,
+        { encoder: acceptedEncoder } as RenderPipelineFrame,
+        acceptedEncoder,
+      ),
+    ).toBe(true);
     expect(retirePrevious).toHaveBeenCalledOnce();
     await device.queue.onSubmittedWorkDone();
     await Promise.resolve();
     expect(destroyBuffer.mock.calls.some(([buffer]) => buffer === previousVisible)).toBe(true);
+
+    const returnedToPreviousTopology = compile(preparedFrame(view), 1);
+    expect(returnedToPreviousTopology).not.toBe(acceptedGraph);
+    expect(frameState.compiledFrameGraphGeneration).toBe(3);
 
     view.dispose();
     sceneAvailability.scene.dispose();
@@ -257,7 +507,7 @@ describe('GpuDrivenView graph projection', () => {
     const shader = (await rhi.createShaderModule(device, { code: 'synthetic' })).unwrap();
     const destroyBuffer = vi.spyOn(device, 'destroyBuffer');
     const projection = new RenderScene();
-    const firstDelta = projection.apply([{ kind: 'create', snapshot: snapshot(1) }]);
+    const firstDelta = projection.apply([updateSnapshot(snapshot(1))]);
     const sceneAvailability = GpuScene.create(device, 2).unwrap();
     expect(sceneAvailability.status).toBe('available');
     if (sceneAvailability.status !== 'available') return;
@@ -274,7 +524,7 @@ describe('GpuDrivenView graph projection', () => {
     expect(firstVisible).toBeDefined();
     if (firstVisible === undefined) return;
 
-    const secondDelta = projection.apply([{ kind: 'create', snapshot: snapshot(2) }]);
+    const secondDelta = projection.apply([updateSnapshot(snapshot(2))]);
     sceneAvailability.scene.sync(secondDelta).unwrap();
     topology.rebuild(projection.slotsSnapshot());
     view.update(topology.plan(), sceneAvailability.scene, planes).unwrap();

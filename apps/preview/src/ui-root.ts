@@ -21,6 +21,7 @@ export function reportPreviewEngineFailure(
 
 export function createPreviewUiRun(parent: HTMLElement): PreviewUiRun {
   const uiRoot = document.createElement('div');
+  uiRoot.id = 'game-ui';
   uiRoot.dataset.forgeaxUiRoot = 'true';
   parent.appendChild(uiRoot);
   const authoring = createUiAuthoringHost(parent);

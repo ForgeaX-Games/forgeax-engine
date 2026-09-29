@@ -16,6 +16,6 @@ describe('Points/Lines conservative transformed culling bounds', () => {
       kind: 'lines',
       widthPx: 4,
     });
-    expect([...expanded]).toEqual([-3, -3, -2, 3, 3, 2]);
+    expect([...expanded]).toEqual([-9, -9, -8, 9, 9, 8]);
   });
 });

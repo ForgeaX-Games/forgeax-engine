@@ -20,6 +20,7 @@ import {
   type SourceOverrideMap,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
+import { jsonOf, type PackageFetcher, readPackage } from '../internal/package-read.js';
 
 /** Runtime catalog row parsed from the shared pack-index POD shape. */
 export interface CatalogRecord {
@@ -61,14 +62,6 @@ export function createInlineCatalogRecord(
     ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((ref) => ref.guid) } : {}),
   };
 }
-
-type CatalogFetch = (
-  input: string,
-  init?: { readonly cache?: 'no-store' },
-) => PromiseLike<{
-  readonly ok: boolean;
-  json(): Promise<unknown>;
-}>;
 
 function parseError(
   expected: string,
@@ -113,7 +106,10 @@ function checkExpectedRevision(
 }
 
 /** Resolve a catalog entry URL against the configured pack-index URL. */
-export function resolveCatalogAssetUrl(registry: AssetRegistry, packageUrl: string): string {
+export function resolveCatalogAssetUrl(
+  registry: Pick<AssetRegistry, 'packIndexUrl'>,
+  packageUrl: string,
+): string {
   const packIndexUrl = registry.packIndexUrl;
   if (packIndexUrl === undefined) return packageUrl;
 
@@ -319,34 +315,24 @@ export function parseCatalog(
 /** Fetch and parse a catalog using the shared JSON/error boundary. */
 export async function fetchCatalog(
   url: string,
-  fetch: CatalogFetch,
+  fetch: PackageFetcher,
   resolveUrl?: (packageUrl: string) => string,
   expectedRevision?: ResourceRevision,
   expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>,
   requestInit?: { readonly cache?: 'no-store' },
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
-  let raw: unknown;
-  try {
-    const response = requestInit === undefined ? await fetch(url) : await fetch(url, requestInit);
-    if (!response.ok) {
-      return err(
-        new AssetError({
-          code: 'asset-fetch-failed',
-          expected: `fetch(${url}) to return ok`,
-          hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-        }),
-      );
-    }
-    raw = await response.json();
-  } catch {
+  const read = await readPackage(fetch, url, jsonOf, requestInit);
+  if (!read.ok) {
     return err(
       new AssetError({
         code: 'asset-fetch-failed',
-        expected: `fetch(${url}) to succeed`,
-        hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
+        expected: `${read.error.malformed ? 'JSON' : 'readable'} catalog at ${url}`,
+        hint: `${read.error.observed} after ${read.error.attempts} request(s); ${ASSET_ERROR_HINTS['asset-fetch-failed']}`,
+        detail: { field: 'request', value: url, reason: read.error.observed },
       }),
     );
   }
+  const raw = read.value;
   return parseCatalog(raw, resolveUrl, expectedRevision, expectedScope);
 }
 

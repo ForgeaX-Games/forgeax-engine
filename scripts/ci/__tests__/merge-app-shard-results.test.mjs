@@ -255,3 +255,52 @@ test('w17: rejects shared, cross-app, unknown, and incomplete shard inventories 
     }
   }
 });
+
+test('repair: accepts a complete Pack closure and rejects a partial closure', () => {
+  const guid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+  const complete = [
+    'apps/alpha/dist/shaders/manifest.json',
+    'apps/alpha/dist/pack-index.json',
+    `apps/alpha/dist/assets/${guid}.pack-fixture.json`,
+    `apps/alpha/dist/assets/${guid}-body.bin`,
+  ];
+  const reports = validReports();
+  const { root, reportsDir } = fixture({
+    reports,
+    inventories: [complete, paths(['beta']), paths(['gamma'])],
+  });
+  try {
+    const pass = run(root, reportsDir);
+    assert.equal(pass.exitCode, 0, pass.stderr || pass.stdout);
+    writeFileSync(
+      join(reportsDir, 'artifact-inventory-0.json'),
+      JSON.stringify(complete.slice(0, -1)),
+    );
+    const partial = run(root, reportsDir);
+    assert.notEqual(partial.exitCode, 0);
+    assert.equal(JSON.parse(partial.stdout).code, 'ci-shard-inventory-pack-closure-missing');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repair: accepts the canonical .pack.json sidecar closure', () => {
+  const guid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+  const complete = [
+    'apps/alpha/dist/shaders/manifest.json',
+    'apps/alpha/dist/pack-index.json',
+    `apps/alpha/dist/assets/${guid}.pack.json`,
+    `apps/alpha/dist/assets/${guid}-body.bin`,
+  ];
+  const reports = validReports();
+  const { root, reportsDir } = fixture({
+    reports,
+    inventories: [complete, paths(['beta']), paths(['gamma'])],
+  });
+  try {
+    const result = run(root, reportsDir);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

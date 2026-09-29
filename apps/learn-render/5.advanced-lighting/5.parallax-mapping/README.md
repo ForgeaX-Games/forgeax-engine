@@ -17,7 +17,7 @@ pnpm --filter "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping"
 # Build (composes parallax.wgsl via naga_oil + validates bindings vs paramSchema)
 pnpm --filter "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping" build
 
-# Smoke (dawn-node structural-only, 300 frames, onError=0)
+# Smoke (dawn-node structural-only, 60 frames, onError=0)
 pnpm --filter "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping" smoke
 
 # Smoke (browser pixel readback: non-black + textured + basic->POM algo diff)
@@ -101,7 +101,7 @@ window.addEventListener('keydown', (ev) => {
 LO 5.5 transforms the view, light, and fragment positions into **tangent space** in the vertex shader, then runs the whole parallax + lighting computation there. This demo does the same — but builds the TBN basis **in-shader** from the per-vertex tangent that `createPlaneGeometry` (and `HANDLE_QUAD`) already emit at `@location(3)`. No geometry-format change, no extra vertex attribute:
 
 ```wgsl
-let n = normalize(meshes[idx].normalMatrix * in.normal);
+let n = normalize(transformNormal(meshes[idx].worldFromLocal, in.normal));
 let t = normalize(t0 - dot(t0, n) * n);          // Gram-Schmidt
 let b = cross(n, t) * in.tangent.w;              // handedness from tangent.w
 let worldToTangent = transpose(mat3x3<f32>(t, b, n));

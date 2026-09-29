@@ -38,8 +38,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!hdr.ok) { console.error('[bevy-specular-tint] HDR load failed:', hdr.error.code); return; }
   if (!tint.ok) { console.error('[bevy-specular-tint] texture load failed:', tint.error.code); return; }
   const equirect = app.world.allocSharedRef('EquirectAsset', hdr.value);
-  const specularTintTexture = unwrapHandle(app.world.allocSharedRef('TextureAsset', tint.value));
-  buildSpecularTintWorld(app.world, equirect, specularTintTexture, target.width / Math.max(target.height, 1));
+  const specularColorTexture = unwrapHandle(app.world.allocSharedRef('TextureAsset', tint.value));
+  buildSpecularTintWorld(app.world, equirect, specularColorTexture, target.width / Math.max(target.height, 1));
   app.onError((error) => console.error('[bevy-specular-tint] app error:', error.code, error.hint));
   const started = app.start();
   if (!started.ok) console.error('[bevy-specular-tint] app.start failed:', started.error);

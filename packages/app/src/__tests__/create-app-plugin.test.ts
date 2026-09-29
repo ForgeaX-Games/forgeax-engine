@@ -28,9 +28,9 @@ import {
   createAudioIntentBackend,
 } from '@forgeax/engine-audio';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
-import { inputBackendPlugin } from '@forgeax/engine-input';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, inputBackendPlugin } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
-import type { Plugin } from '@forgeax/engine-plugin';
+import type { Context, Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
@@ -103,6 +103,7 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     expect(names).toContain('advanceAnimationPlayer');
     expect(names).toContain('transitionStates');
     expect(names).toContain('input-frame-start-scan');
+    expect(world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)).toBe(true);
 
     await ctx.fiber.dispose();
     const disposedNames = systemNames(world);
@@ -110,6 +111,7 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     expect(disposedNames).not.toContain('advanceAnimationPlayer');
     expect(disposedNames).not.toContain('transitionStates');
     expect(disposedNames).not.toContain('input-frame-start-scan');
+    expect(world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)).toBe(false);
   });
 
   it('inputPlugin remains pending while its backend service is unavailable', async () => {
@@ -195,6 +197,40 @@ describe('createApp plugin runner -- build failure (AC-05)', () => {
 });
 
 describe('createApp plugin runner -- physics async timing (AC-06)', () => {
+  it('exposes a dynamically installed physics provider only after activation', async () => {
+    const app = (await createApp({ renderer: makeRendererStub(), world: new World() })).unwrap();
+    const physics = {} as Context['physics'];
+    let finishActivation!: () => void;
+    const activation = new Promise<void>((resolve) => {
+      finishActivation = resolve;
+    });
+    let published!: () => void;
+    const publication = new Promise<void>((resolve) => {
+      published = resolve;
+    });
+    const fiber = app.pluginContext.plugin({
+      name: 'delayed-physics-provider',
+      provide: 'physics',
+      async apply(ctx) {
+        ctx.provide('physics', physics);
+        published();
+        await activation;
+      },
+    });
+    try {
+      await publication;
+      expect(app.physics).toBeUndefined();
+      finishActivation();
+      await fiber.await();
+      expect(app.physics).toBe(physics);
+      await fiber.dispose();
+      expect(app.physics).toBeUndefined();
+    } finally {
+      finishActivation();
+      await app.dispose();
+    }
+  });
+
   it('app.physics is populated immediately after createApp resolves (no timing gap)', {
     skip: !rapierAvailable,
   }, async () => {

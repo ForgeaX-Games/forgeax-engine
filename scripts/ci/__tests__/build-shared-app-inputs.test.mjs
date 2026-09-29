@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
 const script = join(repoRoot, 'scripts', 'ci', 'build-shared-app-inputs.mjs');
+const unpackScript = join(repoRoot, 'scripts', 'ci', 'unpack-shared-app-inputs.mjs');
 
-test('shared inputs preserve both raw source paths and Vite-emitted asset paths', () => {
+test('shared inputs preserve raw assets and required engine shader entries', async () => {
   const output = mkdtempSync(join(tmpdir(), 'forgeax-shared-inputs-'));
   const projection = `${output}-projection`;
   try {
@@ -19,6 +21,13 @@ test('shared inputs preserve both raw source paths and Vite-emitted asset paths'
     );
     assert.equal(result.status, 0, result.stderr);
     const catalog = JSON.parse(readFileSync(join(output, 'assets', 'catalog.json'), 'utf8'));
+    const shaderManifest = await readShaderManifestPublication(
+      JSON.parse(readFileSync(join(output, 'shaders', 'manifest.json'), 'utf8')),
+    );
+    assert.ok(
+      shaderManifest.entries.some((entry) => entry.wgsl.includes('fs_ssao_calc')),
+      'shared shader manifest includes the SSAO fullscreen entry used by the browser oracle',
+    );
     assert.equal(
       catalog.some((entry) => entry.sourcePath.endsWith('meshes/cube-mesh.stub')),
       false,
@@ -44,13 +53,16 @@ test('shared inputs preserve both raw source paths and Vite-emitted asset paths'
   }
 });
 
-test('catalog-only shared inputs do not stage or publish serialized payload bytes', () => {
+test('catalog-only recovery ignores the inherited consumer manifest and omits serialized payload bytes', () => {
   const output = mkdtempSync(join(tmpdir(), 'forgeax-shared-catalog-only-'));
   try {
     const result = spawnSync(
       process.execPath,
       [script, '--root', repoRoot, '--out', output, '--catalog-only'],
-      { encoding: 'utf8' },
+      {
+        encoding: 'utf8',
+        env: { ...process.env, FORGEAX_SHARED_APP_INPUTS_MANIFEST: join(output, 'manifest.json') },
+      },
     );
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(readFileSync(join(output, 'manifest.json'), 'utf8'));
@@ -64,5 +76,42 @@ test('catalog-only shared inputs do not stage or publish serialized payload byte
     assert.equal(existsSync(join(output, 'assets', 'payload')), false);
   } finally {
     rmSync(output, { recursive: true, force: true });
+  }
+});
+
+test('shared input transfer is a compact tarball and unpacking is idempotent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-shared-input-archive-'));
+  const source = join(root, 'shared-app-inputs');
+  const transfer = join(root, 'shared-app-inputs-transfer');
+  try {
+    mkdirSync(join(source, 'assets'), { recursive: true });
+    mkdirSync(join(source, 'shaders'), { recursive: true });
+    mkdirSync(transfer, { recursive: true });
+    writeFileSync(join(source, 'manifest.json'), '{"schemaVersion":1}\n');
+    writeFileSync(join(source, 'assets', 'catalog.json'), '[]\n');
+    writeFileSync(join(source, 'shaders', 'manifest.json'), '{}\n');
+    writeFileSync(join(source, 'shaders', 'engine.wgsl'), 'shader\n');
+    const archive = join(transfer, 'shared-app-inputs.tar.gz');
+    const packed = spawnSync(
+      'tar',
+      ['-czf', archive, '-C', source, 'assets', 'shaders', 'manifest.json'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(packed.status, 0, packed.stderr);
+
+    const unpacked = spawnSync(process.execPath, [unpackScript, '--root', root], {
+      encoding: 'utf8',
+    });
+    assert.equal(unpacked.status, 0, unpacked.stderr);
+    assert.equal(existsSync(archive), false);
+    assert.equal(readFileSync(join(source, 'shaders', 'engine.wgsl'), 'utf8'), 'shader\n');
+    assert.equal(existsSync(join(source, 'assets', 'payload')), false);
+
+    const second = spawnSync(process.execPath, [unpackScript, '--root', root], {
+      encoding: 'utf8',
+    });
+    assert.equal(second.status, 0, second.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

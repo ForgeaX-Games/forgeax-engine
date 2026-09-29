@@ -5,17 +5,23 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
+import { parseViteServerUrl } from './server-url.mjs';
 
 const APP = '@forgeax/hello-custom-shader';
 const ROOT = new URL('../../../..', import.meta.url).pathname;
+const browserHeadless = !['0', 'false'].includes(
+  (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+);
+const browserChannel = process.env.FORGEAX_CHROME_CHANNEL ?? (process.env.CI ? browserLaunch.channel : 'chrome');
 
 function waitForServer(process) {
   return new Promise((resolve, reject) => {
     let output = '';
     const onData = (chunk) => {
       output += chunk.toString();
-      const match = output.match(/Local:\s+(https?:\/\/[^\s]+)/);
-      if (match) resolve(match[1]);
+      const url = parseViteServerUrl(output);
+      if (url !== undefined) resolve(url);
     };
     process.stdout.on('data', onData);
     process.stderr.on('data', onData);
@@ -60,6 +66,7 @@ const liveTwoSlotSwapResize = process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_SWAP_RE
 const liveInheritanceRebind = process.env.FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND === '1';
 const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap || liveInheritanceRebind;
 const liveResizeRebuild = liveNormalSlotResize || liveTwoSlotResize;
+const runtimeBoolMode = process.env.FORGEAX_CUSTOM_SHADER_RUNTIME_BOOL === '1';
 const liveMode = liveTwoSlotSwapResize
   ? 'two-slot-swap-resize'
   : liveTwoSlotResize
@@ -89,21 +96,31 @@ function stableJson(value) {
 }
 
 async function readActiveLayoutIdentity(page) {
+  const semanticPack = process.env.FORGEAX_CUSTOM_SHADER_SEMANTIC === '1';
   const packUrl = await page.evaluate(() => {
     const resources = performance
       .getEntriesByType('resource')
       .map((entry) => entry.name)
-      .filter((name) => name.includes('pulse-material.pack'));
+      .filter((name) =>
+        globalThis.location.search.includes('semantic=1') || globalThis.location.search.includes('materialPack=')
+          ? name.includes('pack.json')
+          : name.includes('pulse-material.pack'),
+      );
     return resources.at(-1) ?? null;
   });
-  assert(packUrl !== null, 'browser pack transport did not expose pulse-material.pack.json');
+  assert(packUrl !== null, `browser pack transport did not expose ${semanticPack ? 'semantic material pack' : 'pulse-material.pack.json'}`);
   const pack = await page.evaluate(async (url) => {
+    const requested = new URLSearchParams(globalThis.location.search).get('materialPack');
     const candidates = [
       url,
       ...performance
         .getEntriesByType('resource')
         .map((entry) => entry.name)
-        .filter((name) => name.includes('pulse-material.pack')),
+        .filter((name) =>
+          requested === null && !globalThis.location.search.includes('semantic=1')
+            ? name.includes('pulse-material.pack')
+            : name.includes('pack.json'),
+        ),
     ];
     for (const candidate of [...new Set(candidates)].reverse()) {
       const response = await fetch(candidate, { cache: 'no-store' });
@@ -169,6 +186,9 @@ const vite = spawn('pnpm', ['-F', APP, 'dev', '--', '--host', '127.0.0.1'], {
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let browser;
+let page;
+let consoleLedger = [];
+let requestFailures = [];
 
 async function stopVite() {
   const pid = vite.pid;
@@ -199,14 +219,16 @@ async function closeBrowserBounded() {
 try {
   const url = await waitForServer(vite);
   browser = await chromium.launch({
-    headless: true,
-    channel: 'chrome',
-    args: ['--disable-features=MacAppCodeSignClone', '--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
+    headless: browserHeadless,
+    channel: browserChannel,
+    args: process.env.CI && process.platform === 'linux'
+      ? [...browserLaunch.args, '--use-angle=swiftshader']
+      : ['--disable-features=MacAppCodeSignClone', '--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
   });
-  const page = await browser.newPage();
+  page = await browser.newPage();
   const consoleErrors = [];
-  const consoleLedger = [];
-  const requestFailures = [];
+  consoleLedger = [];
+  requestFailures = [];
   page.on('pageerror', (error) => consoleErrors.push(error.message));
   page.on('pageerror', (error) => consoleLedger.push({ type: 'pageerror', text: error.message }));
   page.on('console', (message) => {
@@ -224,6 +246,16 @@ try {
   const query = new URLSearchParams();
   if (variant !== undefined) query.set('falsify', variant);
   if (liveMode !== undefined) query.set('live', liveMode);
+  if (process.env.FORGEAX_CUSTOM_SHADER_PACK_URL !== undefined) {
+    query.set('materialPack', process.env.FORGEAX_CUSTOM_SHADER_PACK_URL);
+  }
+  if (process.env.FORGEAX_CUSTOM_SHADER_SEMANTIC === '1') query.set('semantic', '1');
+  if (process.env.FORGEAX_CUSTOM_SHADER_EXPECTED_GUID !== undefined) {
+    query.set('materialGuid', process.env.FORGEAX_CUSTOM_SHADER_EXPECTED_GUID);
+  }
+  if (process.env.FORGEAX_CUSTOM_SHADER_DERIVED_GUID !== undefined) {
+    query.set('derivedMaterialGuid', process.env.FORGEAX_CUSTOM_SHADER_DERIVED_GUID);
+  }
   const queryString = query.toString();
   const targetUrl = queryString === '' ? url : `${url}?${queryString}`;
   await page.goto(targetUrl, { waitUntil: 'networkidle' });
@@ -235,7 +267,9 @@ try {
   await page.waitForFunction(
     () => {
       const diagnostics = globalThis.__forgeaxMaterialEvidence?.renderDiagnostics;
-      return diagnostics?.shader?.status === 'ok' && diagnostics?.readback?.status === 'ok';
+      return diagnostics?.shader?.status === 'ok' &&
+        diagnostics?.readback?.status === 'ok' &&
+        diagnostics.readback.nonZeroBytes > 0;
     },
     null,
     { timeout: 30000 },
@@ -390,6 +424,13 @@ try {
   );
   assert(typeof evidence.layoutIdentity === 'string', 'browser evidence lacks active layoutIdentity');
   assert(typeof evidence.materialIdentity?.compilerFingerprint === 'string', 'browser evidence lacks compiler fingerprint');
+  if (process.env.FORGEAX_CUSTOM_SHADER_EXPECTED_GUID !== undefined) {
+    assert(
+      evidence.rootGuid?.toLowerCase() ===
+        process.env.FORGEAX_CUSTOM_SHADER_EXPECTED_GUID.toLowerCase(),
+      `browser material GUID mismatch: expected ${process.env.FORGEAX_CUSTOM_SHADER_EXPECTED_GUID}`,
+    );
+  }
   assert(evidence.rootGuid !== evidence.derivedGuid, 'root and derived GUIDs must remain distinct');
   assert(evidence.rootArtifactDigest === evidence.derivedArtifactDigest, 'cooked artifacts diverged');
   assert(evidence.rootCookInputDigest === evidence.derivedCookInputDigest, 'specialization inputs diverged');
@@ -398,10 +439,20 @@ try {
     JSON.stringify(evidence.renderedTextureHandles) === JSON.stringify(evidence.resolvedTextureHandles),
     'browser texture bindings do not match the resolved per-slot resources',
   );
-  assert(
-    JSON.stringify(stableJson(evidence.values)) === JSON.stringify(stableJson(evidence.resolvedValues)),
-    'browser values do not match the runtime-resolved record',
-  );
+  if (!runtimeBoolMode) {
+    assert(
+      JSON.stringify(stableJson(evidence.values?.time)) ===
+        JSON.stringify(stableJson(evidence.resolvedValues?.time)) &&
+        JSON.stringify(stableJson(evidence.values?.speed)) ===
+          JSON.stringify(stableJson(evidence.resolvedValues?.speed)),
+      'browser inherited values lost shared runtime parameters',
+    );
+    assert(
+      JSON.stringify(stableJson(evidence.values?.baseColor)) !==
+        JSON.stringify(stableJson(evidence.resolvedValues?.baseColor)),
+      'browser inherited values lost the derived baseColor override',
+    );
+  }
   assert(evidence.rendererErrorCodes.length === 0, `renderer errors: ${evidence.rendererErrorCodes.join('; ')}`);
   assert(evidence.drawErrorCodes.length === 0, `draw errors: ${evidence.drawErrorCodes.join('; ')}`);
   assert(
@@ -422,6 +473,8 @@ try {
       layoutIdentity: evidence.layoutIdentity,
       materialIdentity: evidence.materialIdentity,
       browserCarrier: evidence.browserCarrier,
+      webgpu: evidence.webgpu,
+      renderDiagnostics: evidence.renderDiagnostics,
       textureHandlesDistinct: evidence.renderedTextureHandles[0] !== evidence.renderedTextureHandles[1],
       liveMutation: evidence.liveMutation,
       resizeRebuild: evidence.resizeRebuild,
@@ -435,6 +488,16 @@ try {
 } catch (error) {
   const variant = falsificationVariant();
   if (variant !== undefined) console.error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
+  if (page !== undefined) {
+    const diagnostic = await page
+      .evaluate(() => ({
+        url: globalThis.location.href,
+        evidence: globalThis.__forgeaxMaterialEvidence,
+        bodyText: document.body?.innerText?.slice(0, 2000) ?? '',
+      }))
+      .catch((cause) => ({ evaluateError: cause instanceof Error ? cause.message : String(cause) }));
+    console.error(`custom-shader browser diagnostic: ${JSON.stringify({ diagnostic, consoleLedger, requestFailures })}`);
+  }
   console.error(`custom-shader browser smoke failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {

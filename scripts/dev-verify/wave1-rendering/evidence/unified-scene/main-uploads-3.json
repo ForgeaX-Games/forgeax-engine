@@ -1,0 +1,96 @@
+{
+  "schema": "forgeax.render-scene-benchmark.v1",
+  "label": "main-uploads-3",
+  "sourceRoot": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-unified-baseline",
+  "sourceHead": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+  "sourceStatus": {
+    "trackedDirty": false,
+    "entries": []
+  },
+  "workload": {
+    "worlds": 2,
+    "ordinaryEntitiesPerWorld": 256,
+    "mixedFields": ["Instances", "GlobalTransform", "MaterialAsset", "Visibility", "ChildOf"],
+    "instanceCounts": [3, 0, 1, 2]
+  },
+  "timing": {
+    "warmupCount": 8,
+    "sampleCount": 31,
+    "medianMs": 7.071124999999995,
+    "p95Ms": 13.706834000000072,
+    "minMs": 5.465542000000028,
+    "maxMs": 15.261541999999963,
+    "samplesMs": [
+      5.992874999999998, 15.261541999999963, 6.171457999999973, 9.435124999999971,
+      7.207833999999991, 8.943791999999974, 7.071124999999995, 10.699124999999981,
+      7.139250000000004, 6.698749999999961, 6.115084000000024, 5.742166999999995, 5.883250000000032,
+      5.711917000000028, 5.465542000000028, 11.928875000000005, 5.9832079999999905,
+      10.509957999999983, 5.48191700000001, 7.999915999999985, 5.674832999999978, 7.786707999999976,
+      6.164833000000044, 8.594375000000014, 5.929000000000087, 8.795624999999973,
+      6.2614580000000615, 9.534582999999998, 13.706834000000072, 7.9002080000000205,
+      5.940666999999962
+    ],
+    "oracleChecks": 31,
+    "oracleTimed": false
+  },
+  "touched": {
+    "median": 0,
+    "p95": 0,
+    "samples": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ]
+  },
+  "scene": {
+    "fullRebuilds": 40,
+    "projectionRecords": 517,
+    "deltaFrames": 0,
+    "noChangeFrames": 0,
+    "transformUpdates": 0
+  },
+  "gpu": {
+    "probe": "rhi-null",
+    "status": "resident",
+    "uploadCallsPerSample": [
+      5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
+    ],
+    "uploadBytesPerSample": [
+      671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744,
+      671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744,
+      671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744, 671744
+    ],
+    "uploadCalls": 240,
+    "uploadBytes": 32112640,
+    "inspection": {
+      "status": "resident",
+      "capacity": 1024,
+      "tables": {
+        "primitive": {
+          "capacity": 1024,
+          "bytes": 65536
+        },
+        "instance": {
+          "capacity": 1024,
+          "bytes": 16384
+        },
+        "transform": {
+          "capacity": 1024,
+          "bytes": 131072
+        },
+        "drawTemplate": {
+          "capacity": 1024,
+          "bytes": 32768
+        },
+        "material": {
+          "capacity": 1024,
+          "bytes": 425984
+        }
+      },
+      "uploadRanges": 240,
+      "uploadBytes": 32112640,
+      "capacityGrows": 0,
+      "fullRebuilds": 40,
+      "clearedSlots": 0,
+      "noChangeFrames": 0
+    }
+  }
+}

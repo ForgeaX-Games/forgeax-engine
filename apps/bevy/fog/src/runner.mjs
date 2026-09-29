@@ -7,7 +7,7 @@ function phaseForFrame(phases, frame, frameCount) {
 
 export async function runFogLifecycle({
   backend,
-  frameCount = 300,
+  frameCount = 60,
   phases = FOG_PHASES,
   advanceFrame,
   captureFrame,

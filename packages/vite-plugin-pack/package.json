@@ -37,7 +37,7 @@
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "typescript": "^5.8.3"
+    "chokidar": "4.0.3"
   },
   "peerDependencies": {
     "vite": "^7 || ^8"
@@ -47,6 +47,7 @@
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
@@ -60,7 +61,8 @@
     "@types/node": "^20.14.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "vite": "8.0.10"
+    "typescript": "6.0.3",
+    "vite": "8.0.16"
   },
   "forgeax": {
     "metrics": {

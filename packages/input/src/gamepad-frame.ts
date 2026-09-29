@@ -124,7 +124,7 @@ function remapToStandardLayout(gp: RawGamepadStub, tokens: MappingTokens): Remap
   return { pressed, buttonValues, axes };
 }
 
-/** Build an empty-signal slot sample (non-standard-no-match / disconnected). */
+/** Build an empty-signal slot sample for a connected non-standard pad with no mapping. */
 function emptySlot(index: number): GamepadSlotSample {
   return {
     index,
@@ -164,8 +164,8 @@ function edges(
  *   and the slot reports standardMapping=true (D-1 semantic redefinition).
  *   With no lookup or no match, the slot reports standardMapping=false with
  *   empty readpoints and connected=true (Feat1 behaviour, AC-04).
- * - Disconnected slots (in prev but not in cur) produce a slot with
- *   standardMapping=false and all readpoints empty.
+ * - Disconnected slots (in prev but not in cur) produce no entry: a slot
+ *   absent from the sample reads as connected=false.
  * - Null entries in the browser getGamepads() array are skipped by the
  *   caller before calling this function.
  *
@@ -179,25 +179,14 @@ export function diffGamepadFrame(
   remapLookup?: (gamepadId: string) => MappingTokens | null,
 ): GamepadSlotSample[] {
   const results: GamepadSlotSample[] = [];
-  const prevIndices = new Set(prev.keys());
-  const curIndices = new Set<number>();
 
   for (const gp of curGamepads) {
-    curIndices.add(gp.index);
     const prevPressed = prev.get(gp.index)?.pressed ?? new Set<number>();
     results.push(
       gp.mapping === 'standard'
         ? diffStandardSlot(gp, prevPressed)
         : diffNonStandardSlot(gp, prevPressed, remapLookup),
     );
-  }
-
-  // Disconnected slots: emit empty-signal entries for slots that were in prev
-  // but not in cur, so the snapshot reader reports connected=false.
-  for (const idx of prevIndices) {
-    if (!curIndices.has(idx)) {
-      results.push(emptySlot(idx));
-    }
   }
 
   return results;

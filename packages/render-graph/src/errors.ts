@@ -66,6 +66,28 @@ export type RenderGraphErrorCode = keyof RenderGraphErrorDetailByCode;
 /** Detail union projected from the private code-to-detail map. */
 export type RenderGraphErrorDetail = RenderGraphErrorDetailByCode[RenderGraphErrorCode];
 
+/** Failure stages for the shared float/output surface contract. */
+export type SurfaceFailureKind =
+  | 'allocation'
+  | 'attachment'
+  | 'sampled-read'
+  | 'view-domain'
+  | 'raw-endpoint';
+
+/** Closed error codes derived from the surface failure kinds. */
+export type SurfaceFailureCode = `surface-${SurfaceFailureKind}-failed`;
+
+/** Shared detail for graph and render-surface recovery. */
+export interface RenderSurfaceFailureDetail {
+  readonly lane: string;
+  readonly stage: string;
+  readonly target: string;
+  readonly format: string;
+  readonly domain: string;
+  readonly endpoint: string;
+  readonly capability: string;
+}
+
 /**
  * Constructor arguments correlated by code. `detail` remains optional to
  * preserve the existing envelope behavior for callers that only need the
@@ -143,7 +165,12 @@ export interface ResourceAccessDetail {
 }
 
 export interface CapabilityDetail extends ResourceAccessDetail {
-  readonly capability: 'compute' | 'storage-buffer' | 'storage-texture' | 'indirect';
+  readonly capability:
+    | 'compute'
+    | 'storage-buffer'
+    | 'storage-texture'
+    | 'indirect'
+    | 'color-attachments';
 }
 
 export interface DescriptorDetail {

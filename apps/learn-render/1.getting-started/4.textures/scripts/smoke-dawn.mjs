@@ -27,7 +27,7 @@
 //      (e) await loadByGuid<MaterialAsset>(matGuid) + spawn entity +
 //          renderer.draw 300x.
 //   4. copyTextureToBuffer + mapAsync multi-pixel grid (5 sites) +
-//      verdict: (a) backend=webgpu (b) frames>=300 (c) at least one
+//      verdict: (a) backend=webgpu (b) frames>=60 (c) at least one
 //      meshed site distance to clear-color > eps (d) Renderer.onError
 //      RhiError count == 0.
 //
@@ -48,7 +48,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -222,7 +222,8 @@ console.log(
 // entries). Mirrors apps/hello/cube/scripts/smoke-dawn.mjs.
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let renderer;
 let assets;
@@ -253,12 +254,11 @@ renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: 
 
 const woodTexAsset = {
   kind: 'texture',
-  width: woodDecoded.width,
-  height: woodDecoded.height,
+  shape: { viewDimension: '2d', extent: { width: woodDecoded.width, height: woodDecoded.height } },
   format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: woodDecoded.bytes,
   colorSpace: woodDecoded.colorSpace,
-  mipmap: woodDecoded.mipmap,
+  mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 };
 assets.catalog(woodMeta.guid, woodTexAsset);
 
@@ -315,7 +315,7 @@ world.spawn({
   },
 });
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

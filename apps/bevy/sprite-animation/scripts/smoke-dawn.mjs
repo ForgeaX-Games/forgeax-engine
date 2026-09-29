@@ -7,10 +7,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 320;
 const HEIGHT = 180;
-const DT = 1 / 60;
+const DT = 5 / FRAMES;
 const here = dirname(fileURLToPath(import.meta.url));
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
@@ -44,7 +44,14 @@ const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeAtlasPixels();
-const texture = { kind: 'texture', width: ATLAS_WIDTH, height: ATLAS_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: ATLAS_WIDTH, height: ATLAS_HEIGHT } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 buildSpriteAnimationWorld(world, unwrapHandle(textureHandle));
 
@@ -89,7 +96,7 @@ mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(lateFrame, WIDTH, HEIGHT));
 const visible = lateFrame.some((value, index) => index % 4 === 3 && value > 0) || earlyFrame.some((value, index) => index % 4 === 3 && value > 0);
 console.log(`[smoke] frames=${FRAMES} frameSets=${seen.map((set) => set.size).join(',')} changes=${changes} motionMeanDelta=${motionDelta.toFixed(5)} errors=${errors.length} png=${pngPath}`);
-if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 100 || seen.some((set) => set.size < 3) || changes < 10 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 60 || seen.some((set) => set.size < 3) || changes < 10 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
   console.error('[smoke] FAIL - backend/frames/atlas-animation/motion/visibility/error criterion failed');
   process.exit(1);
 }

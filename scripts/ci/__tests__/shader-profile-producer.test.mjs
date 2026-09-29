@@ -1,0 +1,258 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { test } from 'node:test';
+
+import { engineShaderSourceDigest } from '../../../packages/vite-plugin-shader/dist/source-digest.mjs';
+import {
+  sharedShaderInputFingerprint,
+  sharedShaderReceipt,
+} from '../../lib/shared-build-cache.mjs';
+
+const script = 'scripts/forgeax/prepare-shader-release-inputs.mjs';
+
+test('preparing one shader profile preserves declarations and other profiles', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-shader-profile-test-'));
+  const input = join(root, 'input');
+  const output = join(root, 'output');
+  try {
+    mkdirSync(join(input, 'point-ssao', 'shaders'), { recursive: true });
+    writeFileSync(join(input, 'point-ssao', 'shaders', 'manifest.json'), '{"entries":[]}');
+    mkdirSync(join(output, 'base-ssao'), { recursive: true });
+    writeFileSync(join(output, 'base-ssao', 'manifest.json'), 'existing base');
+    writeFileSync(join(output, 'load-engine-shader-entries.d.ts'), 'existing declaration');
+    const args = [script, '--profile', 'point-ssao', '--input', input, '--output', output];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      execFileSync(process.execPath, args, { encoding: 'utf8' });
+      assert.equal(
+        readFileSync(join(output, 'point-ssao', 'manifest.json'), 'utf8'),
+        '{"entries":[]}',
+      );
+      assert.equal(
+        readFileSync(join(output, 'base-ssao', 'manifest.json'), 'utf8'),
+        'existing base',
+      );
+      assert.equal(
+        readFileSync(join(output, 'load-engine-shader-entries.d.ts'), 'utf8'),
+        'existing declaration',
+      );
+      const imports = JSON.parse(readFileSync(join(output, 'point-ssao', 'imports.json'), 'utf8'));
+      assert.ok(Object.keys(imports).some((key) => key.includes('slot::surface')));
+      const record = JSON.parse(readFileSync(join(output, 'point-ssao', 'source.json'), 'utf8'));
+      assert.equal(record.shaderSourceDigest, engineShaderSourceDigest('packages/shader/src'));
+    }
+    const invalid = spawnSync(
+      process.execPath,
+      [script, '--profile', '../unknown', '--output', output],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /unknown shader profile/);
+    assert.equal(
+      readFileSync(join(output, 'point-ssao', 'manifest.json'), 'utf8'),
+      '{"entries":[]}',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('SDK and browser use one profile producer and preserve source-build validation', () => {
+  const sdk = readFileSync('scripts/forgeax/build-sdk.mjs', 'utf8');
+  const browser = readFileSync('scripts/ci/run-split-vitest-browser.mjs', 'utf8');
+  const producer = readFileSync(script, 'utf8');
+  const sourceProducer = readFileSync('scripts/build-shared-inputs.mjs', 'utf8');
+  assert.match(sdk, /prepare-shader-release-inputs\.mjs',\s*'--build'/);
+  assert.doesNotMatch(sdk, /\['point-base', '--point-shadows'\]/);
+  assert.match(
+    browser,
+    /prepare-shader-release-inputs\.mjs'[\s\S]*'--build'[\s\S]*'--profile',[\s\S]*'point-ssao'/,
+  );
+  assert.ok(browser.indexOf('const profileInputs =') > browser.indexOf('if (options.dryRun)'));
+  assert.ok(
+    browser.indexOf('const prepared =') < browser.indexOf('const cliPath = resolveCliPath()'),
+  );
+  assert.match(producer, /FORGEAX_ENGINE_SHADER_SOURCE_BUILD: '1'/);
+  assert.ok(
+    sourceProducer.indexOf("process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1'") <
+      sourceProducer.indexOf('await build('),
+  );
+  assert.match(browser, /'--passWithNoTests=false'/);
+});
+
+test('Editor prerequisite prepares the default shader profile before recording engine dist', () => {
+  const source = readFileSync('scripts/ci/build-editor-prerequisite.mjs', 'utf8');
+  const profile = source.indexOf("'scripts/forgeax/prepare-shader-release-inputs.mjs'");
+  assert.ok(profile > source.indexOf('contract.packageBuild.command'));
+  assert.ok(profile < source.indexOf("stageTimingsMs['engine-dist']"));
+  assert.match(source.slice(profile), /'--build', '--profile', 'base-ssao'/);
+});
+
+test('profile CLI reuses transferred bytes and rebuilds missing, stale or corrupt acceleration', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-shader-cli-'));
+  const write = (path, content) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  };
+  try {
+    for (const file of [
+      script,
+      'scripts/lib/shared-build-cache.mjs',
+      'scripts/build-task-cache.mjs',
+      'packages/vite-plugin-shader/dist/source-digest.mjs',
+    ]) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      cpSync(file, join(root, file));
+    }
+    write('package.json', '{"type":"module"}');
+    write('packages/compiler/package.json', '{"name":"@fixture/compiler"}');
+    write(
+      'packages/vite-plugin-shader/package.json',
+      '{"name":"@forgeax/engine-vite-plugin-shader","dependencies":{"@fixture/compiler":"workspace:*"}}',
+    );
+    write('packages/compiler/dist/index.js', 'original');
+    write(
+      'packages/shader/src/surface.wgsl',
+      '#define_import_path forgeax_material::default_standard_surface\nfn surface() {}',
+    );
+    write(
+      'packages/shader/src/default-standard-pbr.wgsl',
+      '#import forgeax_material::slot::surface::surface',
+    );
+    write('pnpm-lock.yaml', 'fixture');
+    write('scripts/ci/build-shared-app-inputs.mjs', 'fixture');
+    // A deterministic stand-in for the expensive source compiler. The real
+    // producer is exercised separately; this test proves CLI branch/recovery.
+    write(
+      'scripts/build-shared-inputs.mjs',
+      `
+      import { mkdirSync, writeFileSync } from 'node:fs';
+      import { resolve } from 'node:path';
+      const out = process.argv[process.argv.indexOf('--out') + 1];
+      mkdirSync(resolve(out, 'shaders'), { recursive: true });
+      writeFileSync(resolve(out, 'shaders/manifest.json'), '{"sourceBuild":true}');
+      console.log('SOURCE_BUILD_CALLED');
+    `,
+    );
+    const input = join(root, 'local');
+    const output = join(root, 'published');
+    const sharedPath = join(root, 'shared-app-inputs/manifest.json');
+    const shaderPath = join(root, 'shared-app-inputs/shaders/manifest.json');
+    const profile = { pointShadows: true, hdrpSsao: true };
+    const shared = {
+      schemaVersion: 1,
+      producer: 'shared-app-inputs',
+      payload: { engineShaderManifest: 'shared-app-inputs/shaders/manifest.json' },
+    };
+    const publish = () => {
+      write('shared-app-inputs/shaders/manifest.json', '{"shared":true}');
+      writeFileSync(
+        sharedPath,
+        JSON.stringify({
+          ...shared,
+          shaderBuild: sharedShaderReceipt(
+            root,
+            shaderPath,
+            sharedShaderInputFingerprint(root, profile),
+          ),
+        }),
+      );
+    };
+    publish();
+    const args = [
+      join(root, script),
+      '--build',
+      '--profile',
+      'point-ssao',
+      '--input',
+      input,
+      '--output',
+      output,
+      '--shared-input-manifest',
+      sharedPath,
+    ];
+    const invoke = (env = {}) =>
+      execFileSync(process.execPath, args, {
+        cwd: root,
+        env: { ...process.env, FORGEAX_BUILD_NO_TASK_CACHE: '0', ...env },
+        encoding: 'utf8',
+      });
+    assert.match(invoke(), /verified shared point-ssao; compile count=0/);
+    assert.equal(existsSync(input), false, 'shared hit must not run the local producer');
+    assert.equal(readFileSync(join(output, 'point-ssao/manifest.json'), 'utf8'), '{"shared":true}');
+    for (const mutate of [
+      () => rmSync(sharedPath),
+      () => writeFileSync(sharedPath, '{}'),
+      () => writeFileSync(sharedPath, '{'),
+      () => rmSync(shaderPath),
+      () => writeFileSync(shaderPath, '{"shared":null}'),
+      () => write('packages/compiler/dist/index.js', 'changed'),
+      () =>
+        write(
+          'packages/shader/src/surface.wgsl',
+          '#define_import_path forgeax_material::default_standard_surface\nfn changed() {}',
+        ),
+      () =>
+        writeFileSync(
+          sharedPath,
+          JSON.stringify({
+            ...shared,
+            shaderBuild: sharedShaderReceipt(
+              root,
+              shaderPath,
+              sharedShaderInputFingerprint(root, { ...profile, pointShadows: false }),
+            ),
+          }),
+        ),
+    ]) {
+      publish();
+      mutate();
+      assert.match(invoke(), /SOURCE_BUILD_CALLED/);
+      assert.equal(
+        readFileSync(join(output, 'point-ssao/manifest.json'), 'utf8'),
+        '{"sourceBuild":true}',
+      );
+    }
+    publish();
+    assert.match(invoke({ FORGEAX_BUILD_NO_TASK_CACHE: '1' }), /SOURCE_BUILD_CALLED/);
+    mkdirSync(join(output, 'base-base'), { recursive: true });
+    writeFileSync(join(output, 'base-base/manifest.json'), 'obsolete duplicate');
+    const allProfiles = execFileSync(
+      process.execPath,
+      [
+        join(root, script),
+        '--build',
+        '--input',
+        input,
+        '--output',
+        output,
+        '--shared-input-manifest',
+        sharedPath,
+      ],
+      { cwd: root, env: { ...process.env, FORGEAX_BUILD_NO_TASK_CACHE: '0' }, encoding: 'utf8' },
+    );
+    assert.equal((allProfiles.match(/SOURCE_BUILD_CALLED/g) ?? []).length, 1);
+    assert.match(allProfiles, /verified shared point-ssao; compile count=0/);
+    for (const name of ['base-base', 'point-base']) {
+      assert.equal(existsSync(join(output, name)), false);
+    }
+    for (const name of ['base-ssao', 'point-ssao']) {
+      assert.equal(
+        readFileSync(join(output, name, 'manifest.json'), 'utf8'),
+        name === 'point-ssao' ? '{"shared":true}' : '{"sourceBuild":true}',
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

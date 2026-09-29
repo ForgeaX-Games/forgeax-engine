@@ -16,7 +16,8 @@
 //   research Finding 2: 4 call sites at L1036/1100/1124/3905
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import { packMeshBin } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,39 +37,23 @@ function parseGuid(g: string): AssetGuid {
 }
 
 /**
- * Minimal synthetic mesh bin payload — 28B v2 header + Float32Array vertices
- * + Uint16Array indices + JSON tail. Compatible with unpackMeshBin.
+ * Minimal mesh encoded through the current canonical vertex and binary owners.
  */
 function makeMeshBinPayload(): Uint8Array {
-  const vertices = new Float32Array(36);
-  for (let i = 0; i < 3; i++) {
-    const base = i * 12;
-    vertices[base + 0] = i * 1.0;
-    vertices[base + 1] = 0;
-    vertices[base + 2] = 0;
-    vertices[base + 3] = 0;
-    vertices[base + 4] = 1;
-    vertices[base + 5] = 0;
-    vertices[base + 6] = 0;
-    vertices[base + 7] = 0;
-    vertices[base + 8] = 1;
-    vertices[base + 9] = 0;
-    vertices[base + 10] = 0;
-    vertices[base + 11] = 1;
-  }
-
+  const attributes = {
+    position: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+    normal: new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0]),
+    uv: new Float32Array(6),
+    tangent: new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]),
+  };
+  const { vertices } = packInterleavedVertexAttributes(attributes, 3).unwrap();
   const indices = new Uint16Array([0, 1, 2]);
 
-  const packed = packMeshBinV4(
+  const packed = packMeshBin(
     {
       vertices,
       indices,
-      attributes: {
-        position: new Float32Array(9),
-        normal: new Float32Array(9),
-        uv: new Float32Array(6),
-        tangent: new Float32Array(12),
-      },
+      attributes,
       submeshes: [
         {
           indexOffset: 0,

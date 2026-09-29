@@ -17,6 +17,7 @@
 // use restoreMocks() (mockClear) to prevent cross-block call-count leakage.
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { makeCanvasContext, validateSurfacePresentationProof } from '../adapter';
 import { makeRhiCommandEncoder } from '../command-encoder';
 import { makeRhiDevice, type RawDeviceLike } from '../device';
 import { __resetForTests, ensureRhiWgpuReady, getRhiWgpuModule } from '../internal/wasm-loader';
@@ -69,6 +70,18 @@ function restoreMocks(): void {
   fakeWasmSurface.getConfiguration.mockClear();
   fakeWasmAdapter.requestDevice.mockClear();
 }
+
+describe('command encoder finish', () => {
+  it('a second finish() returns command-encoder-finished and never reaches the wasm handle', () => {
+    const finish = vi.fn(() => ({}));
+    const encoder = makeRhiCommandEncoder({ finish });
+    expect(encoder.finish().ok).toBe(true);
+    const second = encoder.finish();
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe('command-encoder-finished');
+    expect(finish).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('compute-pass forwarding', () => {
   it('raises a structured capability refusal when the raw encoder has no compute pass', () => {
@@ -125,6 +138,142 @@ describe('compute-pass forwarding', () => {
     expect(rawPass.dispatchWorkgroups).toHaveBeenCalledWith(2, 3, 4);
     expect(rawPass.dispatchWorkgroupsIndirect).toHaveBeenCalledWith(indirect, 8n);
     expect(rawPass.end).toHaveBeenCalledOnce();
+  });
+
+  it('encodes and immediately ends one raw empty compute pass with owning receivers', () => {
+    let beginReceiver: unknown;
+    let endReceiver: unknown;
+    const descriptor = { timestampWrites: { querySet: {}, beginningOfPassWriteIndex: 0 } };
+    const rawPass = {
+      end(this: unknown) {
+        endReceiver = this;
+      },
+    };
+    const rawEncoder = {
+      beginComputePass(this: unknown, received: unknown) {
+        beginReceiver = this;
+        expect(received).toBe(descriptor);
+        return rawPass;
+      },
+    };
+
+    makeRhiCommandEncoder(rawEncoder).encodeEmptyComputePass(descriptor);
+
+    expect(beginReceiver).toBe(rawEncoder);
+    expect(endReceiver).toBe(rawPass);
+  });
+});
+
+describe('surface presentation proof', () => {
+  it('requires descriptor, acquisition, and validation evidence together', () => {
+    expect(
+      validateSurfacePresentationProof({ descriptor: true, acquisition: true, validation: true }),
+    ).toBe(true);
+    expect(
+      validateSurfacePresentationProof({ descriptor: true, acquisition: true, validation: false }),
+    ).toBe(false);
+    expect(
+      validateSurfacePresentationProof({ descriptor: true, acquisition: false, validation: true }),
+    ).toBe(false);
+    expect(
+      validateSurfacePresentationProof({ descriptor: false, acquisition: true, validation: true }),
+    ).toBe(false);
+  });
+
+  it('keeps acquire and present separate from pixel readback evidence', () => {
+    const rawContext = {
+      configure: vi.fn(),
+      unconfigure: vi.fn(),
+      getConfiguration: vi.fn(() => null),
+      getCurrentTexture: vi.fn(),
+      probeSurfacePresentation: vi.fn(() => ({
+        descriptor: true,
+        acquisition: true,
+        validation: true,
+      })),
+    };
+    const context = makeCanvasContext(rawContext);
+    const result = context.configure({
+      device: {} as never,
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(rawContext.probeSurfacePresentation).toHaveBeenCalledOnce();
+    expect(context.presentationProof).toBeDefined();
+    if (context.presentationProof !== undefined) {
+      expect(validateSurfacePresentationProof(context.presentationProof)).toBe(true);
+    }
+  });
+
+  it('turns a fallible raw probe into a structured configure failure', () => {
+    const rawContext = {
+      configure: vi.fn(),
+      unconfigure: vi.fn(),
+      getConfiguration: vi.fn(() => null),
+      getCurrentTexture: vi.fn(),
+      probeSurfacePresentation: vi.fn(() => {
+        throw new Error('surface acquire failed');
+      }),
+    };
+    const context = makeCanvasContext(rawContext);
+    const result = context.configure({
+      device: {} as never,
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(rawContext.getCurrentTexture).not.toHaveBeenCalled();
+  });
+
+  it('preserves an asynchronous surface-present cause for the next RHI boundary', async () => {
+    const rawSurfaceTexture = {
+      getTexture: vi.fn(() => ({ __brand: 'Texture' })),
+      present: vi.fn(() => {
+        throw new Error('device-operation-failed: surface image was not accepted');
+      }),
+    };
+    const rawContext = {
+      configure: vi.fn(),
+      unconfigure: vi.fn(),
+      getConfiguration: vi.fn(() => null),
+      getCurrentTexture: vi.fn(() => rawSurfaceTexture),
+    };
+    const context = makeCanvasContext(rawContext);
+
+    const first = context.getCurrentTexture();
+    expect(first.ok).toBe(true);
+    await Promise.resolve();
+
+    const second = context.getCurrentTexture();
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.error.code).toBe('webgpu-runtime-error');
+      expect(second.error.hint).toContain('device-operation-failed');
+    }
+  });
+
+  it('always unconfigures the raw surface after a failed pending present', async () => {
+    const rawContext = {
+      configure: vi.fn(),
+      unconfigure: vi.fn(),
+      getConfiguration: vi.fn(() => null),
+      getCurrentTexture: vi.fn(() => ({
+        getTexture: vi.fn(() => ({ __brand: 'Texture' })),
+        present: vi.fn(() => {
+          throw new Error('surface-present-failed');
+        }),
+      })),
+    };
+    const context = makeCanvasContext(rawContext);
+
+    expect(context.getCurrentTexture().ok).toBe(true);
+    await Promise.resolve();
+    context.unconfigure();
+
+    expect(rawContext.unconfigure).toHaveBeenCalledOnce();
   });
 });
 
@@ -549,6 +698,27 @@ function setNavigatorGpu(gpu: unknown): void {
         expect(r.device.caps.rgba16floatRenderable).toBe(true);
       });
 
+      it('passes the wasm Extent3d object to the rgba16float capability probe', () => {
+        let descriptor: Record<string, unknown> | undefined;
+        const r = makeRhiDevice(
+          mockRawDevice({
+            createTexture: (value) => {
+              descriptor = value as Record<string, unknown>;
+              return { destroy: () => {} };
+            },
+          }),
+        );
+
+        expect(r.device.caps.rgba16floatRenderable).toBe(true);
+        expect(descriptor).toMatchObject({
+          label: 'forgeax-caps-probe-rgba16float-renderable',
+          format: 'rgba16float',
+          usage: 16,
+          size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+        });
+        expect(Array.isArray((descriptor as { size?: unknown }).size)).toBe(false);
+      });
+
       it('AC-01 (m1-1-b): caps.rg11b10ufloatRenderable is true when feature present and probe succeeds', () => {
         const r = makeRhiDevice(mockRawDevice({ features: ['rg11b10ufloat-renderable'] }));
         expect(typeof r.device.caps.rg11b10ufloatRenderable).toBe('boolean');
@@ -583,6 +753,13 @@ function setNavigatorGpu(gpu: unknown): void {
           expect(result.error.hint).toContain('check engine.rhi.caps.compute');
         }
         expect(createComputePipeline).not.toHaveBeenCalled();
+      });
+
+      it('does not advertise indirect draws on the WebGL2 backend', () => {
+        const r = makeRhiDevice(mockRawDevice({ features: ['indirect-first-instance'] }));
+
+        expect(r.device.caps.indirectDrawing).toBe(false);
+        expect(r.device.caps.firstInstanceIndirect).toBe(false);
       });
 
       it('timestamp QuerySet creation is an explicit WebGL2 capability refusal', () => {
@@ -737,6 +914,88 @@ function setNavigatorGpu(gpu: unknown): void {
         expect(destroyLog).toEqual(['rgba16float']);
       });
 
+      it('D-2.1: caps probes use wasm extent objects and destroy probe textures', () => {
+        const descriptors: unknown[] = [];
+        const destroyLog: string[] = [];
+        const raw = mockRawDevice({
+          features: ['rg11b10ufloat-renderable'],
+          createTexture: (desc) => {
+            descriptors.push(desc);
+            const format = (desc as { format: string }).format;
+            return { destroy: () => destroyLog.push(format) };
+          },
+        });
+
+        const r = makeRhiDevice(raw);
+
+        expect(r.device.caps.rgba16floatRenderable).toBe(true);
+        expect(r.device.caps.rg11b10ufloatRenderable).toBe(true);
+        expect(descriptors).toHaveLength(2);
+        for (const descriptor of descriptors) {
+          expect(descriptor).toEqual(
+            expect.objectContaining({
+              size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+            }),
+          );
+        }
+        expect(destroyLog).toEqual(['rgba16float', 'rg11b10ufloat']);
+      });
+
+      it('D-2.2: createTexture projects public descriptors into strict wasm shape', () => {
+        const descriptors: Record<string, unknown>[] = [];
+        const raw = mockRawDevice({
+          createTexture: (desc) => {
+            const projected = desc as Record<string, unknown>;
+            if (Array.isArray(projected.size)) throw new Error('wasm extent must be an object');
+            if (Object.values(projected).some((value) => value === undefined)) {
+              throw new Error('wasm descriptor must omit undefined fields');
+            }
+            descriptors.push(projected);
+            return { destroy() {} };
+          },
+        });
+        const r = makeRhiDevice(raw);
+        descriptors.length = 0;
+
+        const viewFormats = ['rgba16float'] as const;
+        const result = r.device.createTexture({
+          size: [8, 4],
+          format: 'rgba8unorm',
+          usage: 0x10,
+          label: undefined,
+          mipLevelCount: undefined,
+          sampleCount: undefined,
+          dimension: undefined,
+          viewFormats,
+          textureBindingViewDimension: undefined,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(descriptors).toHaveLength(1);
+        expect(descriptors[0]).toEqual({
+          size: { width: 8, height: 4, depthOrArrayLayers: 1 },
+          format: 'rgba8unorm',
+          usage: 0x10,
+          viewFormats: ['rgba16float'],
+        });
+        expect(descriptors[0]?.viewFormats).not.toBe(viewFormats);
+
+        const scalar = r.device.createTexture({
+          size: 3 as never,
+          format: 'rgba8unorm',
+          usage: 0x10,
+        });
+        const object = r.device.createTexture({
+          size: { width: 6, height: 5, depthOrArrayLayers: 2 },
+          format: 'rgba8unorm',
+          usage: 0x10,
+        });
+        expect(scalar.ok).toBe(true);
+        expect(object.ok).toBe(true);
+        expect(descriptors[1]?.size).toEqual({ width: 3, height: 1, depthOrArrayLayers: 1 });
+        expect(descriptors[2]?.size).toEqual({ width: 6, height: 5, depthOrArrayLayers: 2 });
+      });
+
       it('D-2.1: missing createTexture method maps rgba16floatRenderable to false', () => {
         const base = mockRawDevice();
         const { createTexture: _, ...rest } = base as unknown as Record<string, unknown>;
@@ -878,7 +1137,12 @@ function setNavigatorGpu(gpu: unknown): void {
         await ensureRhiWgpuReady();
 
         const { requestAdapter } = await import('../index');
-        const mockCanvas = { width: 800, height: 600 } as unknown as HTMLCanvasElement;
+        const getContext = vi.fn(() => null);
+        const mockCanvas = {
+          width: 800,
+          height: 600,
+          getContext,
+        } as unknown as HTMLCanvasElement;
 
         const result = await requestAdapter(undefined, mockCanvas);
 
@@ -891,6 +1155,15 @@ function setNavigatorGpu(gpu: unknown): void {
         expect(fakeWasmNamespace.RhiWgpuInstance.create).toHaveBeenCalled();
         expect(fakeWasmInstance.requestAdapterWithCanvas).toHaveBeenCalledWith(mockCanvas);
         expect(fakeWasmInstance.requestAdapter).not.toHaveBeenCalled();
+        expect(getContext).toHaveBeenCalledWith(
+          'webgl2',
+          expect.objectContaining({
+            alpha: true,
+            antialias: false,
+            premultipliedAlpha: true,
+            preserveDrawingBuffer: false,
+          }),
+        );
       });
 
       test('AC-06: requestAdapter without canvas navigator.gpu absent => calls plain requestAdapter', async () => {
@@ -914,7 +1187,12 @@ function setNavigatorGpu(gpu: unknown): void {
         await ensureRhiWgpuReady();
 
         const { requestAdapter } = await import('../index');
-        const mockCanvas = { width: 800, height: 600 } as unknown as HTMLCanvasElement;
+        const getContext = vi.fn(() => null);
+        const mockCanvas = {
+          width: 800,
+          height: 600,
+          getContext,
+        } as unknown as HTMLCanvasElement;
 
         const adapterResult = await requestAdapter(undefined, mockCanvas);
         expect(adapterResult.ok).toBe(true);
@@ -930,6 +1208,17 @@ function setNavigatorGpu(gpu: unknown): void {
           expect(ctxResult.value.getCurrentTexture).toBeTypeOf('function');
         }
         expect(fakeWasmInstance.createSurface).toHaveBeenCalledWith(mockCanvas);
+        expect(getContext).toHaveBeenCalledTimes(2);
+        for (const [, options] of getContext.mock.calls) {
+          expect(options).toEqual(
+            expect.objectContaining({
+              alpha: true,
+              antialias: false,
+              premultipliedAlpha: true,
+              preserveDrawingBuffer: false,
+            }),
+          );
+        }
       });
 
       test('AC-07: acquireCanvasContext when navigator.gpu present => uses webgpu context path', async () => {
@@ -1266,6 +1555,36 @@ function setNavigatorGpu(gpu: unknown): void {
       if (!result.ok) {
         expect(result.error.code).toBe('webgpu-runtime-error');
       }
+    });
+
+    it('raw creation failure returns no handle and the next legal creation succeeds', () => {
+      let calls = 0;
+      const r = makeRhiDevice(
+        buildRaw((_desc?: unknown) => {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error(
+              '[rhi-code:webgpu-runtime-error] Validation { description: "invalid pipeline" }',
+            );
+          }
+          return { pipeline: 'legal' };
+        }),
+      );
+      const descriptor = {
+        vertex: { entryPoint: 'vs_main' },
+        fragment: undefined,
+        layout: 'auto',
+      } as unknown as Parameters<typeof r.device.createRenderPipeline>[0];
+
+      const failed = r.device.createRenderPipeline(descriptor);
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.error.code).toBe('webgpu-runtime-error');
+      expect(failed).not.toHaveProperty('value');
+
+      const recovered = r.device.createRenderPipeline(descriptor);
+      expect(recovered.ok).toBe(true);
+      if (recovered.ok) expect(recovered.value).toEqual({ pipeline: 'legal' });
+      expect(calls).toBe(2);
     });
 
     it('(c) valid descriptor => ok with handle', () => {

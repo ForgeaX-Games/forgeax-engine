@@ -1,6 +1,6 @@
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type {
   RenderFeatureDrawRecord,
   RenderFeatureGraphicsPassDescriptor,
@@ -11,12 +11,13 @@ import { validateRenderFeatureGraphicsPass } from '../features/prepared-graphics
 import { createPreparedGraphicsStore } from '../features/prepared-graphics-store';
 import { createRenderFeatureTarget } from '../features/targets';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 function feature(): RenderFeature<{ readonly ready: true }> {
   return {
     identity: 'synthetic.generation',
     extract: () => ok({ ready: true }),
-    plan: () => ok({ resources: [], passes: [] }),
+    plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
   };
 }
 
@@ -135,14 +136,14 @@ describe('prepared graphics generation ownership', () => {
 
   it('keeps registration while replacing prepared state after a pipeline generation switch', () => {
     const host = createRenderFeatureHost([feature()]).unwrap();
-    const before = runRenderFeatureFrame(host, {
+    const before = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
       generation: 1,
       caps: { backendKind: 'null' } as never,
     });
-    const after = runRenderFeatureFrame(host, {
+    const after = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 2,

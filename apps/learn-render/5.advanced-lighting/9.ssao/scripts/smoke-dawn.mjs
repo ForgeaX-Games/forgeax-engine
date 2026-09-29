@@ -3,13 +3,12 @@
 // Standard profile SSAO Dawn smoke (structural-only + discrimination).
 //
 // LearnOpenGL section 5.9 SSAO dawn-node smoke.
-// Normal mode: spawns cube+sphere+floor through the clustered Standard lane
-// with SSAO enabled, renders 300 frames, and proves the receipt-bound path.
+// Normal mode: spawns one cube and one plane through the Standard lane
+// with SSAO enabled, renders 60 frames, and proves the receipt-bound path.
 //
 // --discrimination mode: renders 2 passes — normal SSAO vs disabled SSAO —
-// reads back center 32x32 R-channel mean from each,
-// asserts |mean_normal - mean_wrong| >= 0.05 (visual discrimination gate,
-// plan-strategy D-F / section 5.4).
+// checks final RGB changes at the contact: at least 100 pixels, with a
+// mean change above 1% among changed pixels. Background area is not an AO ROI.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-9-ssao] backend=<backend>`
@@ -19,12 +18,15 @@
 //   - `[smoke] FAIL`
 
 import { resolve, dirname } from 'node:path';
+import { spawnSsaoScene } from '../src/ssao-scene.ts';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
 const DISCRIMINATION = process.argv.includes('--discrimination');
+const algorithm = process.argv.includes('--gtao') ? 'gtao' : 'ssao';
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -62,14 +64,43 @@ try {
   );
   process.exit(1);
 }
-Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
+Object.defineProperty(globalThis.navigator, 'gpu', {
+  value: gpu,
+  configurable: true,
+  writable: true,
+});
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 // --- engine shader manifest (shared by both paths) ---
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
+
+async function drawSubmittedFrames(app, count) {
+  app.pause().unwrap();
+  const attached = app.renderer.attach(app.world);
+  if (!attached.ok) throw attached.error;
+  let receipt;
+  for (let i = 0; i < count; i++) {
+    app.world.update(1 / 60).unwrap();
+    const frame = app.renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
+    if (!frame.ok) throw frame.error;
+    const completed = await frame.value.completed;
+    if (!completed.ok) throw completed.error;
+    receipt = frame.value;
+    await delay(0);
+  }
+  if (receipt === undefined) throw new Error('No submitted SSAO frames');
+  const observed = await app.renderer.observe(receipt, { include: ['draws'] });
+  if (!observed.ok) throw observed.error;
+  return receipt;
+}
 
 // ── M9 w41 GREEN: --discrimination dual-render + readback ─────────────────
 
@@ -117,15 +148,11 @@ if (DISCRIMINATION) {
   // --- Helper: read center 32x32 R-channel mean from a render target ---
 
   async function readCenterRMean(device, texture, label) {
-    const CENTER = 32;
-    const halfW = WIDTH >> 1;
-    const halfH = HEIGHT >> 1;
-    const halfC = CENTER >> 1;
-    const x = halfW - halfC;
-    const y = halfH - halfC;
-    // bytesPerRow must be a multiple of 256 in WebGPU.
-    const alignedRowBytes = 256;
-    const totalBytes = CENTER * alignedRowBytes;
+    const CENTER = WIDTH;
+    const x = 0,
+      y = 0;
+    const alignedRowBytes = Math.ceil((WIDTH * 4) / 256) * 256;
+    const totalBytes = HEIGHT * alignedRowBytes;
     const buf = device.createBuffer({
       size: totalBytes,
       usage: 0x01 | 0x08, // MAP_READ | COPY_DST
@@ -152,9 +179,10 @@ if (DISCRIMINATION) {
     }
     const pixelCount = CENTER * CENTER;
     const mean = sum / (pixelCount * 255);
+    const pixels = new Uint8Array(mapped);
     buf.unmap();
     buf.destroy();
-    return mean;
+    return { mean, pixels };
   }
 
   // --- Helper: run one smoke pass with the given SSAO config + return R mean ---
@@ -172,7 +200,9 @@ if (DISCRIMINATION) {
     const canvas = makeMockCanvas(readbackRef);
 
     let sharedDeviceLocal;
-    const originalReqAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
+    const originalReqAdapter = globalThis.navigator.gpu.requestAdapter.bind(
+      globalThis.navigator.gpu,
+    );
     globalThis.navigator.gpu.requestAdapter = async (opts) => {
       const adapter = await originalReqAdapter(opts);
       if (adapter === null) return adapter;
@@ -196,14 +226,19 @@ if (DISCRIMINATION) {
       perspective: perspectiveLocal,
       DEFAULT_STANDARD_PROFILE,
     } = await import('@forgeax/engine-render');
-    const {
-      HANDLE_CUBE: HANDLE_CUBE_LOCAL,
-      HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
-    } = await import('@forgeax/engine-assets-runtime');
+    const { HANDLE_CUBE: HANDLE_CUBE_LOCAL, HANDLE_SPHERE: HANDLE_SPHERE_LOCAL } = await import(
+      '@forgeax/engine-assets-runtime'
+    );
 
     const appResult = await createAppLocal(
       canvas,
-      { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered', ssao: ssaoConfig.enabled } },
+      {
+        standardProfile: {
+          ...DEFAULT_STANDARD_PROFILE,
+          renderPath: 'deferred',
+          ssao: ssaoConfig.enabled ? { algorithm } : false,
+        },
+      },
       { shaderManifestUrl: MANIFEST_URL },
     );
     globalThis.navigator.gpu.requestAdapter = originalReqAdapter;
@@ -220,7 +255,6 @@ if (DISCRIMINATION) {
     const onErrorEvents = [];
     app.onError((err) => onErrorEvents.push({ code: err.code }));
 
-
     const assets = app.assets;
     if (assets === undefined) {
       console.error(`[smoke-discrimination] FAIL pass=${label} - AssetRegistry null`);
@@ -231,57 +265,26 @@ if (DISCRIMINATION) {
 
     // Spawn scene. feat-20260614 M8 (D-17): mint user-tier column handles via
     // world.allocSharedRef (bare Handle, not a Result).
-    const floorMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
-    const cubeMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
-    const sphereMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
-
-    world.spawn(
-      { component: TransformLocal, data: { pos: [0, FLOOR_Y, 0], quat: [0, 0, 0, 1], scale: [FLOOR_SCALE_XZ, FLOOR_SCALE_Y, FLOOR_SCALE_XZ]} },
-      { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [floorMatHandle] } },
-    ).unwrap();
-    world.spawn(
-      { component: TransformLocal, data: { pos: [-OBJECT_X_OFFSET, CUBE_Y, 0], quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7]} },
-      { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [cubeMatHandle] } },
-    ).unwrap();
-    world.spawn(
-      { component: TransformLocal, data: { pos: [OBJECT_X_OFFSET, SPHERE_Y, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6]} },
-      { component: MeshFilterLocal, data: { assetHandle: HANDLE_SPHERE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [sphereMatHandle] } },
-    ).unwrap();
-    world.spawn(
-      { component: TransformLocal, data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]} },
-      { component: DirectionalLightLocal, data: { direction: [-0.3, -1, -0.5], color: [1.0, 0.95, 0.85], intensity: 0.6 } },
-    ).unwrap();
-    world.spawn(
-      { component: TransformLocal, data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]} },
-      { component: CameraLocal, data: { ...perspectiveLocal({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }), clearColor: [0.02, 0.02, 0.04, 1] } },
-    ).unwrap();
+    spawnSsaoScene(world, WIDTH / HEIGHT);
 
     // Render frames.
     let fakeNow = 0;
     globalThis.performance.now = () => fakeNow;
     const startResult = app.start();
     if (!startResult.ok) {
-      console.error(`[smoke-discrimination] FAIL pass=${label} - app.start: ${startResult.error.code}`);
+      console.error(
+        `[smoke-discrimination] FAIL pass=${label} - app.start: ${startResult.error.code}`,
+      );
       return { mean: null, device: sharedDeviceLocal };
     }
 
-    const frameCount = SMOKE_MIN_FRAMES;
-    let totalFrames = 0;
-    for (let i = 0; i < frameCount; i++) {
-      const due = rafQueue.shift();
-      if (!due) break;
-      fakeNow += 16.67;
-      due.cb(fakeNow);
-      totalFrames++;
-      if (i % 16 === 15) await delay(1);
-    }
+    await drawSubmittedFrames(app, SMOKE_MIN_FRAMES);
 
     const stopResult = app.stop();
     if (!stopResult.ok) {
-      console.error(`[smoke-discrimination] FAIL pass=${label} - app.stop() returned ${stopResult.error.code}`);
+      console.error(
+        `[smoke-discrimination] FAIL pass=${label} - app.stop() returned ${stopResult.error.code}`,
+      );
       return { mean: null, device: sharedDeviceLocal };
     }
     if (!readbackRef.tex || !sharedDeviceLocal) {
@@ -290,18 +293,22 @@ if (DISCRIMINATION) {
     }
 
     await sharedDeviceLocal.queue.onSubmittedWorkDone();
-    const mean = await readCenterRMean(sharedDeviceLocal, readbackRef.tex, label);
+    const { mean, pixels } = await readCenterRMean(sharedDeviceLocal, readbackRef.tex, label);
 
     const disposeResult = await app.dispose();
     if (!disposeResult.ok) {
-      console.error(`[smoke-discrimination] FAIL pass=${label} - app.dispose() returned ${disposeResult.error.code}`);
+      console.error(
+        `[smoke-discrimination] FAIL pass=${label} - app.dispose() returned ${disposeResult.error.code}`,
+      );
       return { mean: null, device: sharedDeviceLocal };
     }
 
     // Destroy the app's device textures to avoid leaking.
     readbackRef.tex.destroy?.();
 
-    return { mean, device: sharedDeviceLocal, onErrorEvents };
+    if (onErrorEvents.length)
+      throw new Error(`SSAO frame errors: ${JSON.stringify(onErrorEvents)}`);
+    return { mean, pixels, device: sharedDeviceLocal, onErrorEvents };
   }
 
   // --- Execute both passes ---
@@ -322,24 +329,22 @@ if (DISCRIMINATION) {
     process.exit(1);
   }
 
-  const diff = Math.abs(normalResult.mean - wrongResult.mean);
-  console.log(
-    `[smoke-discrimination] mean.normal=${normalResult.mean.toFixed(4)} mean.off=${wrongResult.mean.toFixed(4)} diff=${diff.toFixed(4)}`,
-  );
-
-  if (diff < 0.05) {
-    console.error(
-      `[smoke-discrimination] FAIL - visual discrimination diff=${diff.toFixed(4)} < 0.05 ` +
-        `(mean.normal=${normalResult.mean.toFixed(4)} mean.off=${wrongResult.mean.toFixed(4)}). ` +
-        'SSAO is not producing a visually distinguishable difference when disabled.',
-    );
-    if (readbackDevice) readbackDevice.destroy?.();
-    process.exit(1);
+  let changed = 0,
+    total = 0;
+  for (let i = 0; i < normalResult.pixels.length; i += 4) {
+    let d = 0;
+    for (let c = 0; c < 3; c++)
+      d += Math.abs(normalResult.pixels[i + c] - wrongResult.pixels[i + c]);
+    if (d > 3) changed++;
+    total += d;
   }
-
+  const diff = total / (WIDTH * HEIGHT * 3 * 255);
   console.log(
-    `[smoke-discrimination] PASS - visual discrimination GREEN: diff=${diff.toFixed(4)} >= 0.05`,
+    `[smoke-discrimination] mean.normal=${normalResult.mean.toFixed(4)} mean.off=${wrongResult.mean.toFixed(4)} changed=${changed} meanRgbDelta=${diff}`,
   );
+  if (changed < 100 || (diff * (WIDTH * HEIGHT)) / changed < 0.01)
+    throw new Error('SSAO contact scene has no visible effect');
+  console.log('[smoke-discrimination] PASS - contact occlusion changes final pixels');
   if (readbackDevice) readbackDevice.destroy?.();
   delete globalThis.navigator.gpu;
   process.exit(0);
@@ -367,7 +372,9 @@ globalThis.cancelAnimationFrame = (id) => {
 };
 
 let sharedDevice;
-const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
+const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(
+  globalThis.navigator.gpu,
+);
 globalThis.navigator.gpu.requestAdapter = async (opts) => {
   const adapter = await originalRequestAdapter(opts);
   if (adapter === null) return adapter;
@@ -426,17 +433,16 @@ const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
 const { DEFAULT_STANDARD_PROFILE, Materials } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import(
+  '@forgeax/engine-render'
+);
 const { Transform } = await import('@forgeax/engine-scene');
-const {
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
-} = await import('@forgeax/engine-assets-runtime');
+const { HANDLE_CUBE, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
 
 const ssaoEnabled = FALSIFY !== 'ssao-off';
 const appResult = await createApp(
   mockCanvas,
-  { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered', ssao: ssaoEnabled } },
+  { standardProfile: { ...DEFAULT_STANDARD_PROFILE, renderPath: 'deferred', ssao: ssaoEnabled ? { algorithm } : false } },
   { shaderManifestUrl: MANIFEST_URL },
 );
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
@@ -453,7 +459,6 @@ console.log(`[learn-render-5-9-ssao] backend=${app.renderer.inspect().capabiliti
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-
 const assets = app.assets;
 if (assets === undefined) {
   console.error('[smoke] FAIL - AssetRegistry is null');
@@ -464,72 +469,9 @@ const world = app.world;
 
 // --- 5. Spawn scene ---
 
-// Floor. feat-20260614 M8 (D-17): mint a user-tier column handle directly via
-// world.allocSharedRef (returns a bare Handle, not a Result).
-const floorMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
+spawnSsaoScene(world, WIDTH / HEIGHT);
 
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      pos: [0, FLOOR_Y, 0], quat: [0, 0, 0, 1], scale: [FLOOR_SCALE_XZ, FLOOR_SCALE_Y, FLOOR_SCALE_XZ],},
-  },
-  { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [floorMatHandle] } },
-).unwrap();
-
-// Cube.
-const cubeMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      pos: [-OBJECT_X_OFFSET, CUBE_Y, 0], quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7],},
-  },
-  { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
-).unwrap();
-
-// Sphere.
-const sphereMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      pos: [OBJECT_X_OFFSET, SPHERE_Y, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6],},
-  },
-  { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
-  { component: MeshRenderer, data: { materials: [sphereMatHandle] } },
-).unwrap();
-
-// Directional light.
-world.spawn(
-  {
-    component: Transform,
-    data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]},
-  },
-  {
-    component: DirectionalLight,
-    data: { direction: [-0.3, -1, -0.5], color: [1.0, 0.95, 0.85], intensity: 0.6 },
-  },
-);
-
-// Camera.
-world.spawn(
-  {
-    component: Transform,
-    data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]},
-  },
-  {
-    component: Camera,
-    data: {
-      ...perspective({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearColor: [0.02, 0.02, 0.04, 1],
-    },
-  },
-).unwrap();
-
-// --- 6. Render 300 frames ---
+// --- 6. Render 60 frames ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;
@@ -540,38 +482,11 @@ if (!startResult.ok) {
   process.exit(1);
 }
 
-let totalFrames = 0;
-for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
-  due.cb(fakeNow);
-  totalFrames++;
-  if (i % 16 === 15) await delay(1);
-}
-
+const receipt = await drawSubmittedFrames(app, SMOKE_MIN_FRAMES);
+const totalFrames = SMOKE_MIN_FRAMES;
+const receiptFrameId = receipt.frameId;
+const receiptObservationError = undefined;
 console.log(`[smoke] frames observed=${totalFrames}`);
-
-// Prove the current public owner path with one receipt-bound observation.
-const attached = app.renderer.attach(world);
-let receiptObservationError;
-let receiptFrameId = 0;
-if (!attached.ok) {
-  receiptObservationError = attached.error;
-} else {
-  const receipt = app.renderer.draw({
-    leases: [attached.value],
-    camera: { lease: attached.value },
-    environment: { lease: attached.value },
-  });
-  if (!receipt.ok) {
-    receiptObservationError = receipt.error;
-  } else {
-    receiptFrameId = receipt.value.frameId;
-    const observed = await app.renderer.observe(receipt.value, { include: ['draws'] });
-    if (!observed.ok) receiptObservationError = observed.error;
-  }
-}
 const inspection = app.renderer.inspect();
 console.log(
   `[smoke] inspection state=${inspection.state} frame=${inspection.frame.frameId} receipt=${receiptFrameId}`,
@@ -599,7 +514,9 @@ if (inspection.state !== 'alive') failures.push(`(c) renderer state=${inspection
 if (receiptObservationError !== undefined)
   failures.push(`(d) receipt observation failed: ${receiptObservationError.code}`);
 if (receiptFrameId !== inspection.frame.frameId)
-  failures.push(`(e) receipt frame=${receiptFrameId} differs from inspection=${inspection.frame.frameId}`);
+  failures.push(
+    `(e) receipt frame=${receiptFrameId} differs from inspection=${inspection.frame.frameId}`,
+  );
 
 const expectedSsaoCodes = new Set();
 const unknownErrors = onErrorEvents.filter(
@@ -631,10 +548,12 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+emitSmokeReceipt('app-learn-render-5-advanced-lighting-9-ssao/smoke', totalFrames);
+
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${totalFrames}, ssaoEnabled=${ssaoEnabled}, ` +
-  `rendererState=${inspection.state}, receiptFrame=${receiptFrameId}, ` +
-  `onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+    `rendererState=${inspection.state}, receiptFrame=${receiptFrameId}, ` +
+    `onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

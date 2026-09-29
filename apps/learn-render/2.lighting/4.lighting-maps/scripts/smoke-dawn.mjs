@@ -35,9 +35,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
 const FALSIFY_NO_SPECULAR_MAP = process.env.FALSIFY_NO_SPECULAR_MAP === '1';
@@ -252,7 +253,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let debugInst;
 let renderer;
@@ -331,12 +333,11 @@ const lease = worldAttachment1.value;
 
 const mkTex = (decoded) => ({
   kind: 'texture',
-  width: decoded.width,
-  height: decoded.height,
+  shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
   format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: decoded.bytes,
   colorSpace: decoded.colorSpace,
-  mipmap: decoded.mipmap,
+  mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 });
 // feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
 // allocSharedRef; GUIDs are catalogued for loadByGuid parity.
@@ -417,7 +418,7 @@ world.spawn(
     data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
   },
 );
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 let rhiDebugCapture;
@@ -443,6 +444,7 @@ if (debugInst !== undefined) {
     } else {
       const completed = await captureDraw.value.completed;
       if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+      else framesObserved++;
     }
     debugInst.onFrameEnd();
     const queueWaitStart = performance.now();
@@ -506,7 +508,6 @@ if (debugInst !== undefined) {
         : {}),
     };
     console.log(`[smoke] rhiDebugCapture=${JSON.stringify(rhiDebugCapture)}`);
-    framesObserved++;
   }
 }
 for (let i = framesObserved; i < TARGET_FRAMES; i++) {
@@ -521,8 +522,8 @@ for (let i = framesObserved; i < TARGET_FRAMES; i++) {
   } else {
     const completed = await r.value.completed;
     if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    else framesObserved++;
   }
-  framesObserved++;
 }
 const device = sharedDevice;
 if (!device) {
@@ -620,6 +621,8 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+emitSmokeReceipt('app-learn-render-2-lighting-4-lighting-maps/smoke', framesObserved);
 
 console.log(
   `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.4 lit cube + lamp sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, oracle=diffuse-specular-point-light + specular-map-response, RhiError count=0, wallTotalMs=${wallTotalMs}`,

@@ -30,7 +30,13 @@ AI 引擎用户的工程模型是「`Engine.create({ canvas })` → `world.spawn
 
 | Method | Parameters | Returns | Status |
 |:--|:--|:--|:--|
-| `requestDevice()` | -- | `Result<RhiWgpuDevice, JsValue>` | stable |
+| `features` | -- | JS `Set<string>` of advertised feature names | stable |
+| `requestDevice(options?)` | Optional `{ requiredFeatures: string[] }` | `Result<RhiWgpuDevice, JsValue>` | stable |
+
+Feature requests are forwarded to wgpu, including `depth32float-stencil8` for
+Engine Reverse-Z targets. Unknown names reject at this boundary; unsupported
+features reject during device creation. No request silently drops required
+features.
 
 ### RhiWgpuDevice
 
@@ -113,3 +119,15 @@ pnpm -F @forgeax/engine-wgpu-wasm fetch-wasm
 ## 体积承诺
 
 `forgeax.metrics.bundle-size` 阈值 5 MB（gzip），与 `@forgeax/engine-rhi-wgpu` 旧 baseline 同源（feat-20260511-rhi-wgpu-impl 实测 0.51 MB → 本闭环合并 naga 后预计 0.66–0.9 MB；超 1 MB 触发 RK-3 评审 wasm-opt -Oz override，超 5 MB 触发 fail-fast block）。
+
+## Render bundle lifetime
+
+`RhiWgpuRenderBundleEncoder` retains native command resources until `finish`, then
+creates one immutable `RhiWgpuRenderBundle`. Executing bundles reads their live
+registry identities without consuming the JS objects. Dropping a bundle removes its
+registry entry; submitted native work retains its own resource references. Encoder
+descriptors and temporary commands are released after finish instead of being leaked.
+
+The WebGL2 `mapAsync` path polls the buffer's own device and yields between pending
+polls. This completes readback even after the final submission and delivers mapping
+errors through the existing Promise/Result boundary. It does not poll other devices.

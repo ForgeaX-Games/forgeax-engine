@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, webkit } from 'playwright';
 import { preview } from 'vite';
+import { waitForPreview } from './preview-readiness.mjs';
 import { chromeLaunchOptions } from './chrome-options.mjs';
 
 const port = 5199;
@@ -13,18 +14,6 @@ const server = await preview({
   preview: { host: '127.0.0.1', port, strictPort: true },
   logLevel: 'error',
 });
-
-async function waitForServer() {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/`);
-      if (response.ok) return;
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error('preview server deadline exceeded');
-}
 
 function assertFaultView(view) {
   if (view.status === 'running') throw new Error('fault view still presents the Engine as running');
@@ -39,10 +28,7 @@ function assertFaultView(view) {
 
 function capabilityTruth(report) {
   return {
-    requestedTier: report.requestedTier,
-    actualTier: report.actualTier,
-    selectionReason: report.selectionReason,
-    sharedEvidencePassed: report.sharedEvidencePassed,
+    workers: report.workers,
     capabilities: report.capabilities,
   };
 }
@@ -57,10 +43,10 @@ async function captureCanvas(page, name) {
 }
 
 try {
-  await waitForServer();
+  await waitForPreview(server);
   const browser = await chromium.launch(chromeLaunchOptions());
   const reports = [];
-  for (const tier of ['main-serial', 'engine-worker', 'shared']) {
+  for (const tier of ['main-serial', 'engine-worker', 'shared', 'render-worker', 'auto']) {
     const page = await browser.newPage();
     const errors = [];
     const logs = [];
@@ -77,11 +63,14 @@ try {
       throw new Error(`${tier} did not become ready: ${String(error)}; output=${output}; errors=${errors.join(' | ')}; logs=${logs.join(' | ')}`);
     }
     const report = JSON.parse(await page.locator('#execution-report').textContent());
-    if (report.actualTier !== tier) throw new Error(`unexpected tier: ${report.actualTier}`);
+    const expected = { engine: tier !== 'main-serial', render: tier === 'render-worker' || tier === 'auto', kernels: tier === 'shared' || tier === 'auto' };
+    for (const [worker, enabled] of Object.entries(expected)) {
+      if (report.workers[worker].enabled !== enabled) throw new Error(`unexpected ${worker} policy: ${JSON.stringify(report.workers)}`);
+    }
     const expectedRealm = tier === 'main-serial' ? 'host' : 'worker';
     if (report.engine.realm !== expectedRealm) throw new Error(`unexpected realm: ${report.engine.realm}`);
     if (report.world.identity === null) throw new Error('missing World identity');
-    if (tier === 'shared' && report.kernelDispatch.usedShared !== true) {
+    if ((tier === 'shared' || tier === 'auto') && report.kernelDispatch.usedShared !== true) {
       throw new Error(`shared kernel did not dispatch: ${JSON.stringify(report.kernelDispatch)}`);
     }
     if (report.world.health !== 'healthy' || report.engine.health !== 'running') {
@@ -414,12 +403,11 @@ try {
       );
       refusal = JSON.parse(await refusalPage.locator('#execution-report').textContent());
       if (
-        refusal.code !== 'app-execution-tier-unavailable' ||
-        refusal.requestedTier !== 'engine-worker' ||
-        refusal.actualTier !== null ||
+        refusal.code !== 'app-execution-worker-unavailable' ||
+        refusal.requestedWorkers.engine !== true ||
         !Array.isArray(refusal.capabilityTruth?.missingCapabilities) ||
         refusal.capabilityTruth.missingCapabilities.length === 0 ||
-        refusal.detail?.requestedTier !== 'engine-worker'
+        refusal.detail?.worker !== 'engine'
       ) {
         throw new Error(`unavailable tier was not refused structurally: ${JSON.stringify(refusal)}`);
       }

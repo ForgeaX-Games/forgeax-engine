@@ -14,9 +14,15 @@ import * as SceneOwner from '@forgeax/engine-scene';
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
+import { componentDefinition, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { ChildOf, Children, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  Children,
+  GlobalTransform,
+  propagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
 import type { LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
@@ -26,14 +32,14 @@ import { registerSceneComponents } from './helpers/register-scene-components';
 // Read the resolved world mat4 (column-major 16 floats) from the Transform
 // world column array view.
 function worldOf(world: World, entity: EntityHandle): Float32Array {
-  return world.get(entity, Transform).unwrap().world;
+  return world.get(entity, GlobalTransform).unwrap().world;
 }
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
 }
 
-function localId(n: number): LocalEntityId {
+function _localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
@@ -49,11 +55,11 @@ describe('m1t4 — AC-05 roundtrip regression (red-first)', () => {
     // After instantiateScene, the synthetic root has Children populated by mirror hook.
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: {} },
-        { localId: localId(1), components: {} },
-        { localId: localId(2), components: {} },
-      ],
+      entities: {
+        'entity-0': { components: {} },
+        'entity-1': { components: {} },
+        'entity-2': { components: {} },
+      },
     };
 
     const world = new World();
@@ -122,7 +128,7 @@ describe('m1t4 — AC-05 roundtrip regression (red-first)', () => {
   it('(c) degenerate: zero parent-child scene round-trips', () => {
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
+      entities: { 'entity-0': { components: {} } },
     };
 
     const world = new World();
@@ -166,7 +172,7 @@ describe('m1t4 — AC-05 roundtrip regression (red-first)', () => {
 // world produced. The transient world column is reconstructed by propagate from
 // the persisted local TRS -- proving skipping it loses nothing.
 describe('w1 — AC-04 transient world roundtrip numeric equivalence', () => {
-  function localId2(n: number): LocalEntityId {
+  function _localId2(n: number): LocalEntityId {
     return n as LocalEntityId;
   }
 
@@ -174,9 +180,8 @@ describe('w1 — AC-04 transient world roundtrip numeric equivalence', () => {
     // Non-identity local TRS so the world mat4 is a real, distinguishable value.
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId2(0),
+      entities: {
+        'entity-0': {
           components: {
             Transform: {
               pos: [3, 4, 5],
@@ -185,7 +190,7 @@ describe('w1 — AC-04 transient world roundtrip numeric equivalence', () => {
             },
           },
         },
-      ],
+      },
     };
 
     const world = new World();
@@ -207,9 +212,10 @@ describe('w1 — AC-04 transient world roundtrip numeric equivalence', () => {
     if (!collected.ok) return;
 
     // Serialized output must not carry world (transient).
-    for (const ent of collected.value.entities) {
+    for (const ent of Object.values(collected.value.entities)) {
       const t = (ent.components as Record<string, Record<string, unknown>>).Transform;
       if (t !== undefined) expect('world' in t).toBe(false);
+      expect((ent.components as Record<string, unknown>).GlobalTransform).toBeUndefined();
     }
 
     // Round-trip into a fresh world.
@@ -265,5 +271,9 @@ describe('w1 — AC-04 transient world roundtrip numeric equivalence', () => {
     expect(wDst[12] as number).toBeCloseTo(3, 5);
     expect(wDst[13] as number).toBeCloseTo(4, 5);
     expect(wDst[14] as number).toBeCloseTo(5, 5);
+  });
+
+  it('declares GlobalTransform transient and reconstructs it from the authored pair', () => {
+    expect(componentDefinition(GlobalTransform).policy.transient).toBe(true);
   });
 });

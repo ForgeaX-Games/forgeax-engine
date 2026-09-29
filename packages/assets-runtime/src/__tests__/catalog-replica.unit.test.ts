@@ -1,5 +1,5 @@
-import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { type CatalogDelta, type CatalogEntry, catalogOperationsFor } from '@forgeax/engine-types';
+import { describe, expect, it, vi } from 'vitest';
 import { CatalogReplica } from '../registry/catalog-state.js';
 
 type EnumerationResult = { readonly ok: true; readonly value: readonly CatalogEntry[] };
@@ -55,6 +55,62 @@ function source() {
 }
 
 describe('CatalogReplica', () => {
+  it('retains accepted LKG evidence on producer failure without adopting degraded identities', async () => {
+    const fixture = source();
+    const release = fixture.deferEnumeration();
+    const replica = new CatalogReplica(fixture.source as never);
+    const started = replica.start();
+    const accepted = {
+      ...base,
+      projection: {
+        subject: 'imported-output' as const,
+        execution: 'cooked' as const,
+        lifecycle: 'current' as const,
+        operations: catalogOperationsFor({
+          subject: 'imported-output',
+          execution: 'cooked',
+          lifecycle: 'current',
+        }),
+      },
+    };
+    release({ ok: true, value: [accepted, other] });
+    await started;
+    const before = replica.snapshot();
+    fixture.emit({
+      added: [],
+      changed: [],
+      removed: [],
+      authority: 'degraded',
+      diagnostics: [
+        {
+          code: 'source-package-conversion-failed',
+          severity: 'blocking',
+          hint: 'repair source',
+          evidence: [{ type: 'asset', id: base.guid }],
+        },
+      ],
+    });
+    const failed = replica.snapshot();
+    expect(failed.stale).toBe(true);
+    expect(failed.version).toBe(before.version);
+    expect(failed.entries[0]).toEqual({
+      ...accepted,
+      projection: {
+        ...accepted.projection,
+        lastKnownGood: { packageUrl: base.packageUrl },
+      },
+    });
+    expect(failed.entries[1]).toEqual(other);
+    fixture.emit({
+      added: [],
+      changed: [{ ...accepted, packageUrl: '/rejected' }],
+      removed: [],
+      authority: 'degraded',
+    });
+    expect(replica.snapshot().entries[0]?.packageUrl).toBe(base.packageUrl);
+    replica.dispose();
+  });
+
   it('subscribes before enumerate and folds an early delta after the baseline', async () => {
     const fixture = source();
     const release = fixture.deferEnumeration();
@@ -130,6 +186,22 @@ describe('CatalogReplica', () => {
     expect(replica.snapshot()).toMatchObject({ stale: false, entries: [other] });
   });
 
+  it('reuses a baseline accepted by reconcile when a consumer starts later', async () => {
+    const enumerate = vi.fn().mockResolvedValue({ ok: true as const, value: [base] });
+    const replica = new CatalogReplica({
+      enumerate,
+      subscribe: () => () => {},
+      expectedRevision: base.revision,
+    } as never);
+
+    await expect(replica.reconcile()).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [base] },
+    });
+    await expect(replica.start()).resolves.toMatchObject({ ok: true, value: { entries: [base] } });
+    expect(enumerate).toHaveBeenCalledTimes(1);
+  });
+
   it('does not publish or apply a changed row whose revision window is stale', async () => {
     const fixture = source();
     const replica = new CatalogReplica(fixture.source as never);
@@ -192,5 +264,41 @@ describe('CatalogReplica', () => {
       authority: 'degraded',
       diagnostics: [{ code: 'catalog-revision-conflict', severity: 'blocking' }],
     });
+  });
+
+  it('applies a failed lifecycle projection when the producer advances its observation revision', async () => {
+    const fixture = source();
+    const replica = new CatalogReplica(fixture.source as never);
+    await replica.start();
+
+    fixture.emit({
+      added: [],
+      changed: [
+        {
+          ...base,
+          lifecycle: 'failed',
+          revision: {
+            digest: 'failure:source-package-ddc-failed:sha256:old',
+            observedAt: 2,
+            rootId: base.revision.rootId,
+          },
+          diagnostics: [
+            {
+              code: 'source-package-ddc-failed',
+              severity: 'blocking',
+              hint: 'repair and retry',
+            },
+          ],
+        },
+      ],
+      removed: [],
+    });
+
+    expect(replica.snapshot().entries[0]).toMatchObject({
+      guid: base.guid,
+      lifecycle: 'failed',
+      revision: { observedAt: 2 },
+    });
+    expect(replica.snapshot().stale).toBe(false);
   });
 });

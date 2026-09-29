@@ -1,8 +1,18 @@
 import { readFile } from 'node:fs/promises';
-import { createRhiDebugError, replayDeviceRequest, type V7Tape } from '@forgeax/engine-rhi-debug';
+import {
+  createRhiDebugError,
+  replayDeviceRequest,
+  tapeDigest,
+  type V7Tape,
+} from '@forgeax/engine-rhi-debug';
 import { createShaderModule, rhi } from '@forgeax/engine-rhi-webgpu';
 import { err } from '@forgeax/engine-types';
-import type { ArtifactRef, RhiDebugOperationContext } from './operations.js';
+import {
+  type ArtifactRef,
+  type RhiDebugOperationContext,
+  type RhiInspectInput,
+  runRhiDebugOperation,
+} from './operations.js';
 
 export function createCliRhiDebugOperationContext(): RhiDebugOperationContext {
   return {
@@ -107,4 +117,33 @@ export function createCliRhiDebugOperationContext(): RhiDebugOperationContext {
       return { ok: true as const, value: { device: device.value, createShaderModule } };
     },
   };
+}
+
+/** Resolve a file once, then retain its identity throughout decoding and replay. */
+export async function runCliRhiDebugOperation(
+  name: 'rhi.summary' | 'rhi.inspect',
+  input: Omit<RhiInspectInput, 'artifact' | 'workIndex'> & {
+    readonly artifact: string;
+    readonly digest?: string;
+    readonly workIndex?: number;
+  },
+) {
+  const context = createCliRhiDebugOperationContext();
+  const source: ArtifactRef = {
+    kind: 'rhi-tape',
+    source: 'cli',
+    path: input.artifact,
+    digest: input.digest ?? '',
+  };
+  const bytes = await context.readArtifact(source);
+  if (!bytes.ok) return bytes;
+  const artifact = { ...source, digest: input.digest ?? tapeDigest(bytes.value) };
+  return runRhiDebugOperation(
+    name,
+    { ...input, artifact },
+    {
+      ...context,
+      readArtifact: async () => bytes,
+    },
+  );
 }

@@ -56,7 +56,7 @@ Do not fetch a pack-index row or call `loadAudioClipByGuid` at app level. That f
 
 ## Host consumer
 
-`createHostAudioConsumer()` consumes the closed `AudioIntent` union from `@forgeax/engine-audio`. It decodes identical bytes once per `sourceKey`, replaces the decode authority when bytes change under that stable key, fences stale play completions by entity epoch and source-key entry identity, and reports structured decode failure through its `AudioState`. A failed current decode keeps its bytes available for an explicit retry or a later content replacement; an older pending completion cannot delete or supersede a newer entry. `dispose()` clears the cache and closes the underlying engine exactly once.
+`createHostAudioConsumer()` consumes the closed `AudioIntent` union from `@forgeax/engine-audio`. It decodes identical bytes once per `sourceKey`, replaces the decode authority when bytes change under that stable key, fences stale play completions by pending-play identity and source-key entry identity, and reports structured decode failure through its `AudioState`. A failed current decode keeps its bytes available for an explicit retry or a later content replacement; an older pending completion cannot delete or supersede a newer entry. `dispose()` clears the cache and closes the underlying engine exactly once.
 
 `createWebAudioBackend()` is the main-thread adapter over the same consumer. Worker tiers use the intent backend in the Engine Worker and deliver the batch to a Host consumer after each accepted frame credit. No `AudioContext`, `AudioBuffer`, or Web Audio node crosses a realm boundary.
 
@@ -101,7 +101,7 @@ const { contextState, activeSourceCount } = backend.getState();
 
 ## Known limitations
 
-- **gain.value click**: `setBusVolume` and `setVolume` directly assign `GainNode.gain.value`, which may produce an audible pop. Smooth ramp with `setTargetAtTime` is deferred to a future feat (OOS-8).
+- **Gain transitions**: source and bus volume changes use a 10 ms linear AudioParam ramp. Initial gains use the latest control state before playback.
 - **No fade-out on despawn**: entities stop immediately on despawn (OOS-8).
 - **No nested bus routing**: fixed two-bus topology only (OOS-2).
 - **No playback speed control**: deferred (OOS-7).
@@ -133,3 +133,27 @@ Requires Web Audio API (`AudioContext`, `AudioBuffer`, `AudioBufferSourceNode`, 
 - [`@forgeax/engine-app`](../app) -- `createApp({ plugins: [audioPlugin()] })` injection
 - [`@forgeax/engine-ecs`](../ecs) -- World, Entity, System, Resource
 - [`@forgeax/engine-types`](../types) -- `AudioErrorCode`, `AudioError` type definitions SSOT
+
+## Control ordering and retained state
+
+Bus controls are retained by `WebAudioEngine` before lazy context creation.
+The Host keeps only pending play options, so a volume change during decoding
+applies to the eventual node. Stop, replacement and disposal invalidate the
+pending play by identity; completed plays leave no Host entity history.
+
+Backend context failures take precedence in `state().lastError`. Host decode
+errors remain associated with their source key; only successful decoding of
+that source clears its error. An unrelated successful clip cannot clear it.
+
+| Host option | Default | Unit and scope |
+|:--|--:|:--|
+| `maxCachedBytes` | 67108864 | Encoded bytes plus decoded float sample bytes |
+| `maxCachedSources` | 256 | Source publications retained for byte-free reuse |
+| `maxPendingPlays` | 1024 | Entities awaiting decode |
+
+Pass these options as the second argument of `createHostAudioConsumer(engine,
+options)`. Admission beyond a budget reports `decode-failed` with the exhausted
+budget in `detail.reason`. Published source keys stay available until disposal;
+there is no silent eviction that would invalidate byte-free play intents.
+Native decoder working memory and platform node memory are outside this cache
+budget. Dispose stops nodes, releases cache entries and fences late decoding.

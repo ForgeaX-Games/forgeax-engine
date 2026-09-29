@@ -1,8 +1,8 @@
+import type { RenderResourceScope } from '../publication/resource-scope';
 // @forgeax/engine-runtime - RenderSystem record stage: helpers.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import type { World } from '@forgeax/engine-ecs';
 import { type Mat4, mat4 } from '@forgeax/engine-math';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
@@ -65,64 +65,6 @@ export function warnMultiLightDirectional(
           code: 'render-system-multi-light',
           expected: 'at most 1 directional',
           detail: { type: 'directional', got: directionalCount },
-        },
-      );
-    }
-  }
-}
-
-/**
- * feat-20260608-multi-light-warn-once M3: warn-once latch for point light
- * N>4 overrun (first-slice cap). Fires at most once per RenderSystem
- * lifetime.
- */
-export function warnMultiLightPoint(
-  frameState: Pick<RenderFrameState, 'warnedMultiLightPoint'>,
-  pointCount: number,
-  envOverride?: { env?: { NODE_ENV?: string } },
-): void {
-  if (!frameState.warnedMultiLightPoint && pointCount > 4) {
-    frameState.warnedMultiLightPoint = true;
-    const env =
-      envOverride ?? (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
-    if (env?.env?.NODE_ENV !== 'production') {
-      console.warn(
-        '[forgeax] render-system-multi-light point: at most 4 entities (got N=' +
-          pointCount +
-          '). First 4 used; rest dropped.',
-        {
-          code: 'render-system-multi-light',
-          expected: 'at most 4 point',
-          detail: { type: 'point', got: pointCount },
-        },
-      );
-    }
-  }
-}
-
-/**
- * feat-20260608-multi-light-warn-once M3: warn-once latch for spot light
- * N>4 overrun (first-slice cap). Fires at most once per RenderSystem
- * lifetime.
- */
-export function warnMultiLightSpot(
-  frameState: Pick<RenderFrameState, 'warnedMultiLightSpot'>,
-  spotCount: number,
-  envOverride?: { env?: { NODE_ENV?: string } },
-): void {
-  if (!frameState.warnedMultiLightSpot && spotCount > 4) {
-    frameState.warnedMultiLightSpot = true;
-    const env =
-      envOverride ?? (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
-    if (env?.env?.NODE_ENV !== 'production') {
-      console.warn(
-        '[forgeax] render-system-multi-light spot: at most 4 entities (got N=' +
-          spotCount +
-          '). First 4 used; rest dropped.',
-        {
-          code: 'render-system-multi-light',
-          expected: 'at most 4 spot',
-          detail: { type: 'spot', got: spotCount },
         },
       );
     }
@@ -198,7 +140,7 @@ export function warnMultiSkybox(
  */
 export function driveLazyEquirectProjection(
   internals: RenderSystemInternals,
-  world: World,
+  world: RenderResourceScope,
   frameState: Pick<RenderFrameState, 'firedEquirectProjectionFailedHandles'>,
   equirectHandle: number,
 ): void {
@@ -262,23 +204,28 @@ export function computeViewMatrix(camera: CameraSnapshot): Mat4 {
 }
 
 export function computeProjectionMatrix(camera: CameraSnapshot): Mat4 {
+  if (camera.captureProjection !== undefined) {
+    const projection = mat4.create();
+    projection.set(camera.captureProjection);
+    return projection;
+  }
   // feat-20260613 M6 / w20: branch on projection variant. The view UBO
   // record path needs the right matrix shape so the main pass renders
   // correctly under both perspective and orthographic cameras (mirrors
   // the CSM extract fix in render-system-extract.ts).
   const proj = mat4.create();
   if (camera.projection === 'orthographic') {
-    mat4.orthographic(
+    mat4.orthographicReverseZ(
       proj,
       camera.orthoLeft,
       camera.orthoRight,
-      camera.orthoBottom,
       camera.orthoTop,
+      camera.orthoBottom,
       camera.near,
       camera.far,
     );
   } else {
-    mat4.perspective(proj, camera.fov, camera.aspect, camera.near, camera.far);
+    mat4.perspectiveReverseZ(proj, camera.fov, camera.aspect, camera.near, camera.far);
   }
   return proj;
 }

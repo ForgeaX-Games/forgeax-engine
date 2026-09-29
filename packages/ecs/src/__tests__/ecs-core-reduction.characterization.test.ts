@@ -78,9 +78,8 @@ describe('M0 ECS reduction characterization', () => {
     world.sharedRefs.release(handle).unwrap();
 
     expect(() => world.despawn(entity)).not.toThrow();
-    expect(world.sharedRefs.readReleaseEvidence()).toEqual([
-      { payload, refcount: 0, generation: 1, evidence: 'released' },
-    ]);
+    expect(world.sharedRefs.resolve(handle).ok).toBe(false);
+    expect(world.sharedRefs.refcount(handle)).toBe(0);
   });
 
   it('F-07: rejects undefined shared payloads before allocating a slot', () => {

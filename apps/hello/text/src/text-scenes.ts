@@ -59,7 +59,7 @@ export function registerSharedSampler(
  * Each row maps to a requirements AC:
  *   (a) HUD label                  -- name-plate / damage-number style
  *   (b) multi-line text ('\n')     -- AC-21
- *   (c) HDR-bright text (rgb > 1)  -- AC-12 (feeds the bloom bright-pass)
+ *   (c) HDR-bright text (rgb > 1)  -- AC-12 (feeds Bloom extraction)
  *   (d) depth-occluded text        -- AC-11 (sits behind the occluder cube)
  */
 export const TEXT_SCENES: ReadonlyArray<{

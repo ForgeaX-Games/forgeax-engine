@@ -2,37 +2,37 @@
 
 Use this reference for browser capability, wgpu fallback, RHI capture, and CI-form failures.
 
-## WebGPU 提示不是整机能力判决
+## WebGPU messages do not decide whole-machine support
 
-ForgeaX 浏览器运行时优先使用 browser-native WebGPU，并可继续尝试
-wgpu/WASM 的 WebGL2 downlevel lane。`adapter-unavailable` 只描述前一条
-channel；仅凭它、`navigator.gpu` 是否存在，或一条包含 “WebGPU” 的启动文案，
-都不能判定用户机器无法运行 ForgeaX。
+ForgeaX first tries browser-native WebGPU, then may try
+the wgpu/WASM WebGL2 downlevel lane. adapter-unavailable describes only the first
+channel. Neither that error, navigator.gpu presence, nor startup text mentioning WebGPU
+proves the machine cannot run ForgeaX.
 
-按结构化证据分流：
+Route using structured evidence:
 
-| 信号 | 含义 | 行动 |
+| Signal | Meaning | Action |
 |:--|:--|:--|
-| `requestAdapter()` 返回 `null` / `adapter-unavailable` | browser-native WebGPU channel 没拿到 adapter | 继续观察 Runtime 的 wgpu/WebGL2 结果 |
-| `requestAdapter()` 抛错 / `webgpu-runtime-error` + `detail.error.code=request-adapter-threw` | 权限策略、安全上下文或浏览器运行时错误，不等同 adapter 缺失 | 读 `detail.error.name/message`，修对应环境；不要改玩法或渲染器 |
-| WebGL2 fallback 结构化失败 | 第二 channel 也失败 | 读 `.code/.hint`；区分环境、WASM 装载、cap gate 和引擎 bug |
-| Asset/Shader/Pack/App 错误 | 与 GPU 能力无直接关系 | 修错误所属包；禁止 Canvas 兜底、吞入口异常或改换引擎 |
-| `[object Object]` | 上游把错误对象错误地字符串化 | 保留原对象的 `name/message/code/expected/hint/detail/cause` 后重试诊断 |
+| requestAdapter returns null / adapter-unavailable | No native WebGPU adapter | Inspect Runtime's wgpu/WebGL2 outcome. |
+| requestAdapter throws / webgpu-runtime-error with request-adapter-threw | Permissions, secure-context, or browser error | Read detail.error.name/message and repair that environment. |
+| Structured WebGL2 fallback failure | Second channel also failed | Distinguish environment, WASM loading, capability gates, and Engine defects through code/hint. |
+| Asset/Shader/Pack/App error | Not necessarily GPU capability | Repair its owner; do not inject Canvas fallback, swallow startup errors, or replace the engine. |
+| object Object | Error was flattened incorrectly | Preserve name/message/code/expected/hint/detail/cause and diagnose again. |
 
-DevKit 生成的宿主页会递归展示上述结构化字段，并在 WebGPU 相关文本旁明确
-提示 WebGL2 fallback 的存在。发布方只校验“无未捕获异常”时，不能把该绿灯
-当作 ForgeaX 渲染正确性证据；必须保留引擎身份并用真实浏览器画面/像素门禁验证。
+DevKit hosts recursively show structured fields and explain WebGL2 fallback alongside WebGPU messages.
+A publisher's uncaught-error check alone cannot establish rendering correctness;
+preserve Engine identity and verify real browser output/pixels.
 
 ## edge webgpu disabled
 
-**信号**：用户在 Microsoft Edge 报 demo 全屏黑,console 出 `EngineEnvironmentError: webgpu inner=adapter-unavailable`(配的 hint 提到 `edge://flags/#enable-unsafe-webgpu`)。降级到 wgpu wasm 也失败,显示 `webgl2 not available or canvas already in use`。
+**Signal**: Edge demo is black with adapter-unavailable and an unsafe-WebGPU flag hint; wgpu fallback also reports WebGL2 unavailable or canvas already in use.
 
-**根因**:Edge `edge://flags/#enable-unsafe-webgpu = Disabled` 这档配置下,浏览器**全局禁掉所有硬件 GL contexts**(`webgl` / `webgl2` / `experimental-webgl` 全返 null);只剩 Canvas2D。**与引擎无关,也无法在引擎层修复**——wgpu wasm GL backend 没有任何 GL context 可 attach。
+**Cause**: in the observed Edge configuration, disabling edge://flags/#enable-unsafe-webgpu disabled all hardware GL contexts; webgl/webgl2/experimental-webgl returned null. The Engine cannot attach a GL backend when no context exists.
 
 > [!CAUTION]
-> 不要去研究 "canvas pollution" / "type-lock" / "复用 canvas" / "重 mint canvas" 假说。这些都是当时调查中走过的弯路,**经一行 devtools 实验直接证伪**。完整反向避坑见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
+> Canvas pollution/type-lock/recreation hypotheses were falsified by a direct DevTools probe. Historical evidence: [Edge investigation](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md).
 
-**判定**:让用户在 Edge devtools 跑一行,贴回输出。
+**Check**: run this in Edge DevTools and retain the result.
 
 ```js
 const c2 = document.createElement('canvas');
@@ -42,133 +42,139 @@ console.log('webgl :', c3.getContext('webgl')  ? 'OK' : 'null');
 console.log('navigator.gpu:', !!navigator.gpu);
 ```
 
-| 输出组合 | 含义 | 行动 |
+| Result | Meaning | Action |
 |:--|:--|:--|
-| webgl2=null + webgl=null | Edge 全栈禁 GL,与引擎无关 | 引导用户开 `edge://flags/#enable-unsafe-webgpu = Enabled`,重启浏览器 |
-| webgl2=OK 但仍黑屏 | 真 bug,引擎 fallback 链有漏 | 看 EngineEnvironmentError.detail 的 wgpuError.hint,沿 wasm 链回溯 |
-| navigator.gpu=true 但 demo 黑 | 单纯 WebGPU adapter 拿不到(headless / iframe / 远程桌面) | Channel 3 应自动接管;若也失败查 wasm load |
+| webgl2=null and webgl=null | Browser disables the GL stack | Enable the identified flag and restart Edge. |
+| webgl2 works but output remains black | Engine fallback may be defective | Follow EngineEnvironmentError.detail.wgpuError.hint through WASM. |
+| navigator.gpu exists but output is black | Adapter may be unavailable in headless/iframe/remote desktop | Verify Channel 3 fallback; check WASM loading if it also fails. |
 
-**修法**:不修(无法修)。`packages/runtime/src/create-renderer-env-classify.ts:composeEnvErrorHint` 已在两 channel 都报 `adapter-unavailable` / `rhi-not-available` 时拼接 browser-config guidance 到 `error.message`,告诉用户去开 flag。这是当前能做的最优解。
+**Repair**: browser configuration is external to Engine. composeEnvErrorHint in create-renderer-env-classify.ts already adds configuration guidance when both channels fail with adapter-unavailable/rhi-not-available.
 
-**纪律提醒**:**遇到"应该 fallback 但没 fallback"先验证浏览器有没有可降级的目标 context**,再去研究引擎逻辑。一行 devtools 命令省一晚上。
+Verify an actual fallback context exists before debugging fallback selection.
 
 ---
 
 ## wgpu-wasm webgl2 fallback cap gates
 
-**信号**:浏览器在 wgpu-wasm Channel 3 (Edge `enable-unsafe-webgpu=Disabled` / Safari WebKit no-WebGPU)报 `panicked at .../wgpu-29.0.3/src/backend/wgpu_core.rs:N:M: wgpu error: Validation Error`,wrap 成 `RhiError [webgpu-runtime-error]` 出现在 `runShimSyncStep` 抓到的 `buildReadyWebGPU` 链路上。常见三种形态:
+**Signal**: wgpu-wasm Channel 3 reports a wgpu validation panic wrapped as webgpu-runtime-error in runShimSyncStep/buildReadyWebGPU. Common forms:
 
-- `In Device::create_render_pipeline, label='pbr-pipeline-standard' ... Storage class Uniform doesn't match the shader Storage` — shader 编译走了 storage 变体但 pipeline layout 是 uniform
-- `In Device::create_texture, label='msaaColor' ... Downlevel flags DownlevelFlags(VIEW_FORMATS) are required but not supported` — graph allocate 时给了 viewFormats 但 backend 不支持
-- `In Device::create_texture_view ... format reinterpretation` — record 阶段试图给 fallback 路径的 texture 重建 sRGB view
+- Pipeline storage/uniform mismatch: shader chose a storage variant but layout uses uniforms.
+- msaaColor texture creation requires unsupported VIEW_FORMATS: graph allocation supplied viewFormats without gating.
+- Texture-view format reinterpretation: record recreates an sRGB view on an incompatible fallback texture.
 
-**根因**:`maxStorageBuffersPerShaderStage === 0` 是 wgpu-wasm WebGL2 backend 的稳定 proxy(downlevel_webgl2_defaults 设 0),引擎在多处用这个值开/关 fallback 路径。漏一处就静默走错变体或申请不支持的能力,只在 wgpu validation 才接得住,dawn-node smoke / chromium playwright 全绿。
+**Cause**: WebGL2 downlevel defaults expose maxStorageBuffersPerShaderStage=0. Missing a corresponding capability gate can select unsupported variants/formats; ordinary native-WebGPU tests may not exercise this lane.
 
-**典型踩坑**:
+**Common failures**:
 
-1. **写死 `definesKey = 'STORAGE_BUFFER_AVAILABLE=false'` 单 axis 字符串** — 一旦 sibling feat 把 shader 升到多 axis(PBR `+CLUSTER_FORWARD_AVAILABLE`),sorted-key 形态变了,`findVariantByKey` miss,patch 静默 no-op,引擎按默认 storage 变体编译。修法:按 `entry.variants[].defines` 字段对位筛(`v.defines.STORAGE_BUFFER_AVAILABLE === false && v.defines.CLUSTER_FORWARD_AVAILABLE === false`),不拼字符串
-2. **graph addColorTarget 的 `viewFormats: [...]` 进 device.createTexture 没 cap gate** — WebGL2 backend 没 `VIEW_FORMATS` downlevel flag,任何非空 viewFormats panic。修法:`packages/render-graph/src/graph.ts allocateColorTargets` 加 `supportsViewFormats = limits.maxStorageBuffersPerShaderStage > 0` 闸,fallback 时把 viewFormats 当成空
-3. **record 阶段给 graph texture 重建 sRGB view** — 底层 texture 没声明 viewFormats 时 `createTextureView({ format: '*-srgb' })` 失败。修法:fallback 路径下 `pipelineState.format === pipelineState.colorAttachmentFormat`(配的就是 sRGB 格式直挂),直接用 graph 默认 view,跳重建
-4. **wgpu-wasm shim 用 `constructor.name` 派发 wasm-bindgen wrapper** — vite production build 把 `RhiWgpuSampler` / `RhiWgpuTextureView` minify 成单字母 `e` / `t`,shim 的 `if ctor_name == "RhiWgpuSampler"` 全 miss,`createBindGroup` 抛 `unsupported resource constructor 'e'`。recordFrame 每帧重抛但 onError 流被吞,fps=60 假绿。**`pnpm dev` 不 minify 不复现;`pnpm preview` 才复现**。修法:TS adapter 传明确的 `forgeaxKind: 'sampler' | 'textureView'` string literal,Rust shim 优先按 string field 派发,minify 安全。所有"按 wasm-bindgen wrapper class 名字派发"的 shim 路径都要审计
+1. Hardcoded single-axis definesKey='STORAGE_BUFFER_AVAILABLE=false' stops matching when CLUSTER_FORWARD_AVAILABLE adds another axis. Filter entry.variants[].defines structurally instead of constructing sorted-key strings.
+2. Ungated addColorTarget viewFormats reach createTexture without VIEW_FORMATS support. allocateColorTargets must use its capability gate and omit unsupported formats.
+3. Record recreates an sRGB view without declared viewFormats. When fallback pipeline format already equals attachment format, use the graph's default view.
+4. Dispatch by wasm-bindgen constructor.name breaks after minification (RhiWgpuSampler becomes e). Pass explicit forgeaxKind: sampler/textureView and dispatch on that stable field in Rust. Audit all class-name-based paths. Development may pass while minified preview fails; FPS alone can hide repeated errors.
 
-**判定 / 调试方法**(本地能复现就别等 CI):
+**Local reproduction**:
 
 ```bash
-# 1. 起 dev server(任一 hello-* / learn-render demo)
+# 1. Start a hello/learn-render development server.
 cd apps/learn-render/1.getting-started/2.hello-triangle && pnpm dev
 # → http://localhost:5181/
 
-# 2. 用 webkit playwright 跑无头浏览器(WebKit 默认没 WebGPU,自动落到 wgpu-wasm Channel 3)
+# 2. Run headless Playwright WebKit to exercise its no-WebGPU fallback.
 URL=http://localhost:5181/ TIMEOUT_MS=20000 \
   node scripts/dev-verify/verify-webkit-hello-triangle.mjs
 ```
 
-harness 输出含三段诊断:`DRAW DIAG`(globalThis 注入的 draw counter)/ `PIXEL SAMPLE`(canvas readback)/ `SCREENSHOT SAMPLE`(compositor 截图,落 `/tmp/hello-triangle.png`)+ `VERDICT`(`panic seen`/`navigation`)。WebKit 里 canvas pixel readback 经常返回 0,**真闸门是 screenshot 的 PNG**——`Read('/tmp/hello-triangle.png')` 看实际渲染。
+The harness reports DRAW DIAG, PIXEL SAMPLE, SCREENSHOT SAMPLE, and VERDICT. WebKit canvas readback may return zero; inspect the actual compositor PNG at /tmp/hello-triangle.png.
 
-**判定表**:
+**Interpretation**:
 
-| 输出 | 含义 | 修法 |
+| Result | Meaning | Repair |
 |:--|:--|:--|
-| `panic seen: true` + `runShimSyncStep` 在 stack 里 | 引擎在 wgpu-wasm 路径漏 cap gate | 沿 panic message 找 layout/format/feature flag,grep `maxStorageBuffersPerShaderStage` 看相邻代码已有的 gate 形态,补一处 |
-| `panic seen: false` 但 PNG 全黑 | shader/layout 通了但渲染出错(camera/transform/depth) | 看 [DRAW DIAG] counter 是否真有 draw call;若有 draw 但黑则查 frustum/clear-color |
-| `panic seen: false` + PNG 看见(灰)三角形 | 走通了 | 收工 |
+| Panic with runShimSyncStep in stack | Missing fallback capability gate | Use the validation message to identify layout/format/feature and inspect adjacent capability gates. |
+| No panic but black PNG | Rendering-state issue after shader/layout validation | Inspect actual draws, frustum, and clear color through RHI Debug. |
+| No panic and visible triangle | This path passes | Retain evidence. |
 
-**纪律**:wgpu-wasm fallback 改动**必须本地跑 webkit verify**——dawn-node 不能复现(走真 WebGPU 不走 fallback);**chromium playwright `headless: true` 默认无 GPU adapter,实际就是 wgpu-wasm Channel 3**(navigator.gpu === undefined → Channel 3 fallback)。这意味着 `metrics:run-fps`(用 plain `chromium.launch({headless:true})`)和 CI metrics-validate **同一栈**,跟 WebKit 等效;反过来,任何只在 production-build minify 后才暴露的 bug(`constructor.name` 派发坏掉等)`pnpm dev` 看不到,**只有 `pnpm preview`(= vite build minified)+ headless chromium 才复现**。
+Fallback changes require local WebKit verification. Native Dawn does not exercise WebGL2. Headless Chromium configurations without navigator.gpu also take Channel 3, including the historical metrics path. Minification-only defects require production build/preview, not pnpm dev; record the actual selected backend.
 
 ```bash
-# CI metrics 等价的本地 repro:
+# Reproduce the CI metrics path locally:
 pnpm --filter @forgeax/parity-instancing-static build      # production minified
 pnpm metrics:run-fps -- --app apps/parity/instancing-static
-# → p95 fps + onError detail walk(在 demo 加 renderer.onError 钩子用 Object.getOwnPropertyNames 遍历嵌套 detail)
+# Inspect p95 FPS and nested onError details, including non-enumerable properties.
 ```
 
-参见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
+See the [historical Edge investigation](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md).
 
 ---
 
-## 复制实体引用导致派生渲染漏体
+## Replicated entity references omit derived render entities
 
-**信号**：公开 replica state 显示 `bodyLength > 1`，但 canvas 只有蛇头；local render entity map 的数量也小于所有蛇的 body length 之和。
+**Signal**: replica state reports bodyLength > 1 but only the snake head renders; render-map count is below summed body lengths.
 
-**判定**：先以浏览器 E2E 驱动一次增长，再同时读取公开 state 和 `data-render-entity-count`。两者不等时，录一帧 RHI tape 并 inspect RT，确认不是 UI/截图层遗漏。不要只断言 `SnakeBody.segments.length`：replica 中的 `array<entity>` 可表现为索引对象，且 entity reference 不等于 replica row ID。
+**Check**: drive growth through browser E2E, compare public state with data-render-entity-count, then capture/inspect an RHI render target if they differ. SnakeBody.segments may be an indexed object in replica data; entity references are not replica row IDs, so array length alone is insufficient.
 
-**修法**：渲染归属使用稳定、可复制的业务 identity（例如 `playerNetworkId`），让每个派生 segment 自带该值；`SnakeBody.segments` 只用于长度和顺序。对每条 segment 用业务 identity 选 body material，避免用 remapped entity handle 反查 owner。回归测试必须断言 `renderEntityCount == sum(bodyLength)`，并以 RHI RT PNG 证明身体段实际画出。
+**Repair**: use stable replicated business identity such as playerNetworkId for render ownership, carried by each derived segment. Use segments only for ordering/length; select materials by business identity rather than remapped handles. Regress renderEntityCount == sum(bodyLength) and verify visible segments with RHI target pixels.
 
-## RHI tape 录制 (frame record + replay + offline inspect)
+## RHI tape capture, replay, and offline inspection
 
-> RHI 帧录制 / replay / 离线 per-draw inspect（capture -> inspect -> dispose 工作流 + `RhiDebugError` + 跨后端确定性）见 [`forgeax-engine-rhi-debug`](../../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。渲染症状（black/grey-screen / wrong-texture / wrong-binding）的 tape-driven 定位流程在那里的 §症状 -> tape -> inspect 决策流。
+> [`forgeax-engine-rhi-debug`](../../forgeax-engine-rhi-debug/SKILL.md) owns capture/inspect/dispose, structured RhiDebugError recovery, and deterministic replay. Start unexplained black/gray output, wrong textures, or binding investigations there.
 
 ---
 
 ## ci form 2026-06-16
 
+> [!WARNING]
+> Historical workflow snapshot, not current operating instructions. In particular,
+> PR #3158 removed whole Playwright-cache transfers. Read the current
+> [CI operating guide](../../../scripts/ci/README.md) and the workflow at the
+> failing commit before applying any cache, skip or job-layout advice below.
+
 > [!NOTE]
-> feat-20260616-ci-time-cut-roi-batch 把 CI 形态改成"PR vs main push 路由分叉 + cache-matched-key 兜底 prefix-match + Playwright 三 job 共享 cache + vitest-browser/dawn 拆独立 job"。下面四件事是常被误读的形态，列出来当映射表用。
+> Historical CI restructuring separated PR/main routing, prefix-matched caches, shared Playwright caches, and browser/Dawn jobs. These notes explain that revision; current workflow/CI guide remain authoritative.
 
-**形态 1 — vitest 测试命令实际入口（PR vs main 分叉）**：
+**Unit/coverage entry**:
 
-`Vitest unit (PR + main)` step 名字保留兼容旧引用，但 M1 起加了 `if: "!(github.event_name == 'push' && github.ref == 'refs/heads/main')"`——main push 不再跑 unit step（被同 job 下方的 `Vitest coverage (v8) + typecheck` 覆盖，避免双跑）。perf-budget guard 同步拆成 PR 路径读 `vitest-unit-out.json` / main 路径读 `vitest-coverage-out.json` 两 step（D-4：input source 在 yml 层级静态可见）。PR push 仍走 unit step。`vitest-browser` / `vitest-dawn` 始终跑（无 if-gate）。
+Historically the retained Vitest unit step skipped main pushes, where coverage+typecheck already covered it. Performance guards read unit output for PRs and coverage output for main. Browser/Dawn jobs still ran on both paths.
 
-**形态 2 — Playwright cache 形态（三 job 共享）**：
+**Shared Playwright cache**:
 
-`primary-pnpm` / `vitest-browser` / `metrics-validate` 三 job 共享同一 cache key：
+primary-pnpm, vitest-browser, and metrics-validate used the same key:
 ```yaml
 key: playwright-${{ runner.os }}-${{ hashFiles('apps/hello/triangle/package.json') }}
 path: ~/.cache/ms-playwright
 ```
-M2 把 `playwright install --with-deps webkit` 拆成 binary（cache-miss only）+ apt deps（每跑必装，apt 包不入 ~/.cache）。改 `apps/hello/triangle/package.json` 的 `@playwright/test` 版本会失效全部三 job 的 cache。
+Browser binaries install only on cache miss; apt dependencies install each run. Changing the hello-triangle Playwright version invalidates the shared key.
 
-**形态 3 — cache-tsbuildinfo 跳过条件（cache-matched-key）**：
+**cache-tsbuildinfo skip condition**:
 
 ```yaml
 - name: Vitest typecheck (feat-20260608-ci-time-cut)
   if: steps.cache-tsbuildinfo.outputs.cache-matched-key == ''
   run: pnpm run typecheck
 ```
-M4 起从 `cache-hit == 'true'` 升级为 `cache-matched-key != ''`——`cache-matched-key` 在 exact-hit 与 prefix-match 都非空，typecheck step 在 prefix-match 时也 skip（vitest --typecheck 138s 是研究 F-1 的 dominant），ROI win 集中在 main 后续 push（sibling src/** 改动只动 hash 后缀）。`cache-hit` 仅 exact-hit 真。actions/cache@v5 输出 SSOT：`.forgeax-harness/knowledge-base/2026-06-08-actions-cache-v5-readme.md`。
+The historical M4 condition changed exact cache-hit to nonempty cache-matched-key, which also includes prefix hits. This skipped the 138-second typecheck on prefix matches; cache-hit itself is true only for exact matches. Historical actions/cache evidence lives in the Harness knowledge base.
 
-**形态 4 — vitest-browser / vitest-dawn 独立 job（不再嵌在 primary-pnpm 内）**：
+**Separate browser and Dawn jobs**:
 
-M3 拆出来后，`primary-pnpm` 不再跑 `pnpm test:browser` / `pnpm test:dawn`；这俩是 `vitest-browser` / `vitest-dawn` 两个独立 job（PR + main 都跑）。`sticky-comment` job 的 `needs:` 数组里加了它俩，改 needs 时记得三个一起改（漏一个会让 sticky comment 在那 job 红时仍贴绿）。grep `^  vitest-browser:` / `^  vitest-dawn:` 找它俩的 job 定义。
+After M3, primary-pnpm no longer ran browser/Dawn commands internally. Their independent jobs ran for PR/main, and sticky-comment depended on both. Keep result aggregation aligned when changing job dependencies.
 
 > [!IMPORTANT]
-> 这四件改动后果：(a) 改 ci.yml 后必须 `pnpm run lint && pnpm ci:channel-align`（AGENTS.md §Conventions）；(b) "为什么 main push 没跑 unit" 不是 bug，是设计；(c) "为什么 typecheck 有时 skip" 看 `cache-matched-key`，不是 `cache-hit`；(d) Playwright cache 失效要查 `apps/hello/triangle/package.json` 的 hash，不是仓根。
+> After ci.yml changes, run pnpm run lint and pnpm ci:channel-align. For historical skip/cache behavior inspect cache-matched-key and the hello-triangle package hash rather than assuming every skipped unit/typecheck step is a defect.
 
 ---
 
-## 通用纪律
+## Diagnostic discipline
 
 ```mermaid
 flowchart TD
-  A["demo 渲染错 / 测试失败"] --> B{"diff 是否涉及该模块?"}
-  B -->|否| C["先查环境: submodule / build / 退出码"]
-  B -->|是| D["沿调用链回溯到引擎层"]
-  C --> E{"环境修复后仍失败?"}
-  E -->|否| F["环境问题, 收工"]
-  E -->|是| D
-  D --> G["修引擎层 gap（见顶部 IMPORTANT）"]
-  G --> H["加回归测试: 先还原 fix 确认变红"]
-  H --> I["CI 模式本地验证: 看退出码非测试行数"]
+  A["Broken demo or test"] --> B{"Does the diff touch the owner?"}
+  B -->|No| C["Check submodules, build, and exit status"]
+  B -->|Yes| D["Trace the call chain to Engine"]
+  C --> E{"Still fails after environment repair?"}
+  E -->|No| F["Environment repaired"]
+  E -->|Yes| D
+  D --> G["Repair the owning Engine gap"]
+  G --> H["Add regression and confirm it fails without the fix"]
+  H --> I["Run CI-mode checks and inspect exit status"]
 ```
 
 ---

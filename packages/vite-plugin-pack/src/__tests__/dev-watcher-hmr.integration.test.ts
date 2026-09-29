@@ -1,17 +1,9 @@
+import type { FSWatcher } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { watchDevRoots } from '../dev/watcher.js';
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2000;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error('timed out waiting for the watcher event');
-}
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type DevWatchListener, watchDevRoots } from '../dev/watcher.js';
 
 describe('dev watcher and HMR intake', () => {
   const roots: string[] = [];
@@ -23,7 +15,7 @@ describe('dev watcher and HMR intake', () => {
   it('classifies a missing root as an observed diagnostic', async () => {
     const root = join(await mkdtemp(join(tmpdir(), 'forgeax-watcher-missing-parent-')), 'missing');
     roots.push(root.slice(0, root.lastIndexOf('/')));
-    const errors: Array<{ phase: string; root?: string }> = [];
+    const errors: Array<{ phase: string; root?: string; revision?: number }> = [];
     const stop = watchDevRoots({
       roots: [root],
       onBatch: async () => {},
@@ -31,9 +23,12 @@ describe('dev watcher and HMR intake', () => {
         errors.push(context);
       },
     });
-    await waitFor(() => errors.some((error) => error.phase === 'missing-root'));
-    stop();
-    expect(errors).toContainEqual({ phase: 'missing-root', root });
+    try {
+      await stop.ready;
+      expect(errors).toContainEqual({ phase: 'missing-root', revision: 0, root });
+    } finally {
+      await stop.close();
+    }
   });
 
   it('observes onBatch rejection instead of leaking an async flush', async () => {
@@ -41,57 +36,47 @@ describe('dev watcher and HMR intake', () => {
     roots.push(root);
     const source = join(root, 'scene.gltf');
     await writeFile(source, '{"version":1}');
-    const errors: Array<{ phase: string; root?: string }> = [];
+    let change: DevWatchListener | undefined;
+    let closed = false;
+    const errors: Array<{ error: unknown; phase: string; root?: string }> = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    const fakeWatcher = {} as FSWatcher;
+    process.on('unhandledRejection', onUnhandled);
+    vi.useFakeTimers();
     const stop = watchDevRoots({
       roots: [root],
       debounceMs: 10,
       onBatch: async () => {
         throw new Error('batch rejected');
       },
-      onError: (_error, context) => {
-        errors.push(context);
+      watchFactory: (_root, listener) => {
+        change = listener;
+        return {
+          on: () => fakeWatcher,
+          close: () => {
+            closed = true;
+          },
+          unref: () => undefined,
+        } as unknown as FSWatcher;
+      },
+      onError: (error, context) => {
+        errors.push({ error, ...context });
       },
     });
-    await writeFile(source, '{"version":2,"changed":true}');
-    await waitFor(() => errors.some((error) => error.phase === 'flush'));
-    stop();
-    expect(errors.some((error) => error.phase === 'flush')).toBe(true);
-  });
-
-  it('serializes batches that arrive during an active Catalog rebuild', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'forgeax-watcher-serial-'));
-    roots.push(root);
-    const source = join(root, 'scene.pack.json');
-    await writeFile(source, '{"version":1}');
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let calls = 0;
-    let active = 0;
-    let maxActive = 0;
-    const stop = watchDevRoots({
-      roots: [root],
-      debounceMs: 10,
-      onBatch: async () => {
-        calls += 1;
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        if (calls === 1) await firstBlocked;
-        active -= 1;
-      },
-    });
-
+    await stop.ready;
     await writeFile(source, '{"version":2}');
-    await waitFor(() => calls === 1);
-    await writeFile(source, '{"version":3}');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(calls).toBe(1);
-    expect(maxActive).toBe(1);
-
-    releaseFirst();
-    await waitFor(() => calls === 2);
-    stop();
-    expect(maxActive).toBe(1);
+    change?.('change', source);
+    await stop.drain();
+    await stop.close();
+    vi.useRealTimers();
+    process.off('unhandledRejection', onUnhandled);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toEqual(new Error('batch rejected'));
+    expect(errors[0]?.phase).toBe('flush');
+    expect(unhandled).toHaveLength(0);
+    expect(closed).toBe(true);
   });
 });

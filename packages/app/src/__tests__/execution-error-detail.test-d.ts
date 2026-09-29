@@ -8,6 +8,6 @@ it('narrows execution error detail by code', () => {
     expectTypeOf(error.detail.retryable).toEqualTypeOf<false>();
   }
   if (error.code === 'app-execution-deadline-exceeded') {
-    expectTypeOf(error.detail.phase).toEqualTypeOf<'startup' | 'handshake' | 'frame'>();
+    expectTypeOf(error.detail.phase).toEqualTypeOf<'startup' | 'handshake' | 'frame' | 'dispose'>();
   }
 });

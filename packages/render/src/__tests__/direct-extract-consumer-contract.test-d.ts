@@ -2,7 +2,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { CatalogDelta } from '@forgeax/engine-types';
 import { expectTypeOf } from 'vitest';
 import type { PreparedExtractContext } from '../render-system-extract';
-import { extractFrame, extractFrames } from '../render-system-extract';
+import { extractFrame, extractFrames } from '../render-system-extract-tail';
 
 declare const delta: CatalogDelta;
 

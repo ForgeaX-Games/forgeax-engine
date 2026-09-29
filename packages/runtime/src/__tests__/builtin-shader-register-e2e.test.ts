@@ -3,8 +3,8 @@
 //
 // Walks the post-w18/w19/w20 sidecar paramSchemas through derive() and
 // asserts that the BGL shape lines up with plan-strategy §3.4 + the
-// orchestrator Q3 reading (3-texture user region; emissive + occlusion
-// appended via appendInjection(bgl, 'lightmap')).
+// orchestrator Q3 reading (3-texture user region; engine injections appended
+// via appendInjection).
 //
 // Coverage matrix:
 //   - default-standard-pbr     : userRegionBindingEnd === 7
@@ -36,7 +36,7 @@ const STANDARD_PBR_SIDECAR: readonly ParamSchemaEntry[] = [
   { name: 'occlusionStrength', type: 'f32', default: 1.0 },
   { name: 'alphaCutoff', type: 'f32', default: 0.0 },
   { name: 'clearcoat', type: 'f32', default: 0.0 },
-  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
+  { name: 'clearcoatRoughness', type: 'f32', default: 1 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
@@ -130,13 +130,13 @@ describe('5 built-in shader register-time e2e (M4 / w25)', () => {
     // narrowing on the @webgpu/types side.
     type LayoutEntry = readonly GPUBindGroupLayoutEntry[];
 
-    // standard-pbr: 7 + lightmap(4) -> bindings 7..10; +ibl(7) -> 11..17
+    // standard-pbr: 7 + ibl(6) -> bindings 7..12; +transmission(2) -> 13..14
     const pbrOut = derive(STANDARD_PBR_SIDECAR);
-    const lightmap = appendInjection(pbrOut.bglEntries as unknown as LayoutEntry, 'lightmap');
-    expect(lightmap.map((e) => e.binding)).toEqual([7, 8, 9, 10]);
-    const merged = [...(pbrOut.bglEntries as unknown as LayoutEntry), ...lightmap];
-    const ibl = appendInjection(merged, 'ibl');
-    expect(ibl.map((e) => e.binding)).toEqual([11, 12, 13, 14, 15, 16, 17]);
+    const ibl = appendInjection(pbrOut.bglEntries as unknown as LayoutEntry, 'ibl');
+    expect(ibl.map((e) => e.binding)).toEqual([7, 8, 9, 10, 11, 12]);
+    const merged = [...(pbrOut.bglEntries as unknown as LayoutEntry), ...ibl];
+    const transmission = appendInjection(merged, 'transmission');
+    expect(transmission.map((e) => e.binding)).toEqual([13, 14]);
 
     // unlit: 3 + shadow(2) -> bindings 3..4
     const unlitOut = derive(UNLIT_SIDECAR);

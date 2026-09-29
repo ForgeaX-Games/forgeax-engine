@@ -136,7 +136,7 @@ describe.skipIf(SKIP_DAWN)('Dawn replay-owned readback matrix', () => {
     });
   });
 
-  it('reads a known buffer range through the replay owner', async () => {
+  it.each([0x0c, 0x84, 0x184])('reads seeded buffer bytes for captured usage %i', async (usage) => {
     const pack = await loadDawn();
     const adapter = await pack.rhi.requestAdapter();
     expect(adapter.ok).toBe(true);
@@ -154,7 +154,7 @@ describe.skipIf(SKIP_DAWN)('Dawn replay-owned readback matrix', () => {
             create: {
               kind: 'createBuffer',
               handleId: 'buffer:known',
-              desc: { size: 8, usage: 0x0c },
+              desc: { size: 8, usage },
             },
             initialData: [{ hash: 'buffer-known', byteOffset: 0, byteLength: 8 }],
           },
@@ -231,6 +231,13 @@ describe.skipIf(SKIP_DAWN)('Dawn replay-owned readback matrix', () => {
     expect(arrayResult.value.width).toBe(1);
     expect(arrayResult.value.height).toBe(1);
     expect([...arrayResult.value.bytes]).toEqual([96, 97, 98, 99]);
+    // Omitting a request means local mip/layer zero, not texture mip/layer zero.
+    const defaultResult = await replay.value.readResource('view:array');
+    expect(defaultResult.ok).toBe(true);
+    if (!defaultResult.ok) throw new Error(defaultResult.error.hint);
+    expect(defaultResult.value.width).toBe(1);
+    expect(defaultResult.value.height).toBe(1);
+    expect([...defaultResult.value.bytes]).toEqual([...arrayResult.value.bytes]);
     const cubeResult = await replay.value.readResource('view:cube', {
       mipLevel: 0,
       arrayLayer: 5,

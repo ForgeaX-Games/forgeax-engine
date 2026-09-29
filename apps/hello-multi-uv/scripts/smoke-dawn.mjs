@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { solidTexture } from './texture-fixture.mjs';
 // hello-multi-uv headless smoke (AC-10 visual differentiation gate).
 //
 // Strategy: drive the engine ECS path end-to-end, same shape as
 // hello-cube smoke, with a custom 2-UV-set procedural plane mesh.
-// After 300 frames, reads back the render target and checks for
+// After 60 frames, reads back the render target and checks for
 // non-black pixels (baseline visual differentiation gate).
 //
 // AC-10 visual differentiation is carried by the demo's OWN custom shader
@@ -15,11 +16,12 @@
 // second UV set would read uv0 via clamp-to-last (NOT (0,0)); the per-cell
 // variance here exists only because this plane carries a real second set.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { emitSmokeReceipt } from '../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 200;
@@ -202,38 +204,11 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const { createRenderer } = enginePkg;
 const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { readShaderManifestPublication } = await import('@forgeax/engine-shader');
 
 const world = new World();
-const baseColorTexture = {
-  kind: 'texture',
-  width: 2,
-  height: 2,
-  format: 'rgba8unorm',
-  data: new Uint8Array([
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-    255, 128, 64, 255,
-  ]),
-  colorSpace: 'linear',
-  mipmap: false,
-};
-const baseColorTextureHandle = world.allocSharedRef('TextureAsset', baseColorTexture);
-const detailTexture = {
-  kind: 'texture',
-  width: 2,
-  height: 2,
-  format: 'rgba8unorm',
-  data: new Uint8Array([
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-    64, 192, 255, 255,
-  ]),
-  colorSpace: 'linear',
-  mipmap: false,
-};
-const detailTextureHandle = world.allocSharedRef('TextureAsset', detailTexture);
+const baseColorTextureHandle = world.allocSharedRef('TextureAsset', solidTexture([255, 128, 64, 255]));
+const detailTextureHandle = world.allocSharedRef('TextureAsset', solidTexture([64, 192, 255, 255]));
 
 // Mint user-tier column handles for the custom mesh + material via
 // world.allocSharedRef (slots >= 1024, resolved by the renderer through
@@ -323,14 +298,14 @@ let manifestParsed;
 try {
   const manifestRaw = readFileSync(MANIFEST_PATH, 'utf8');
   MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
-  manifestParsed = JSON.parse(manifestRaw);
+  manifestParsed = await readShaderManifestPublication(JSON.parse(manifestRaw));
 } catch {
-  console.error('[smoke] FAIL - manifest.json not found. Run: pnpm --filter @forgeax/hello-multi-uv build first');
+  console.error('[smoke] FAIL - manifest.json missing or invalid. Run: pnpm --filter @forgeax/hello-multi-uv build first');
   process.exit(1);
 }
 
-// Locate the multi-uv-demo material shader entry + read its composed wgsl
-// (the browser app does this via `import './multi-uv-demo.wgsl'`).
+// The published manifest is content-addressed; the engine expansion (same path as
+// renderer admission) restores per-variant composedWgsl.
 const demoShaderEntry = (manifestParsed.materialShaders ?? []).find(
   (m) => m && m.identifier === 'hello-multi-uv::multi-uv-demo',
 );
@@ -338,27 +313,14 @@ if (!demoShaderEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing hello-multi-uv::multi-uv-demo entry');
   process.exit(1);
 }
-let demoComposedWgsl;
-if (
-  demoShaderEntry.composedWgsl.includes('\n') ||
-  demoShaderEntry.composedWgsl.startsWith('struct') ||
-  demoShaderEntry.composedWgsl.startsWith('//') ||
-  demoShaderEntry.composedWgsl.startsWith('@')
-) {
-  demoComposedWgsl = demoShaderEntry.composedWgsl;
-} else {
-  const composedWgslPath = resolve(
-    appRoot,
-    'dist',
-    'shaders',
-    demoShaderEntry.composedWgsl.replace(/^\.\//, ''),
-  );
-  if (!existsSync(composedWgslPath)) {
-    console.error(`[smoke] FAIL - composed wgsl sidecar missing at ${composedWgslPath}`);
-    process.exit(1);
-  }
-  demoComposedWgsl = readFileSync(composedWgslPath, 'utf8');
+// Composed WGSL lives per variant; the canonical (all-axes-on) variant carries
+// the multi-UV sampling path this smoke falsifies.
+const canonicalVariant = (demoShaderEntry.variants ?? []).find((v) => v?.definesKey === '');
+if (typeof canonicalVariant?.composedWgsl !== 'string') {
+  console.error('[smoke] FAIL - hello-multi-uv::multi-uv-demo has no canonical variant composedWgsl');
+  process.exit(1);
 }
+const demoComposedWgsl = canonicalVariant.composedWgsl;
 const manifestParamSchema =
   typeof demoShaderEntry.paramSchema === 'string'
     ? JSON.parse(demoShaderEntry.paramSchema)
@@ -382,7 +344,9 @@ console.log('[smoke] texture binding: PASS schema=baseColorTexture+detailTexture
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const created = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!created.ok) throw created.error;
+  renderer = created.value;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -399,7 +363,9 @@ const inspection = renderer.inspect();
 console.log(`[hello-multi-uv] backend=${inspection.capabilities.backendKind}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 
 // The Standard host resolves the material shader from the build manifest before
@@ -419,7 +385,7 @@ for (let warm = 0; warm < 16; warm++) {
   await yieldTick();
 }
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, 300);
+const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, 60);
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
@@ -524,7 +490,7 @@ if (centerDist <= SMOKE_PIXEL_THRESHOLD) {
 
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
-  failures.push(`(d) Renderer.onError fired ${errors.length} times: [${codes}]`);
+  failures.push(`(d) Renderer error events fired ${errors.length} times: [${codes}]`);
 }
 
 // (e) AC-10 visual differentiation: verify the four corner samples are not all
@@ -559,4 +525,5 @@ console.log(
 
 device.destroy?.();
 delete globalThis.navigator.gpu;
+emitSmokeReceipt('hello-multi-uv/smoke', framesObserved);
 process.exit(0);

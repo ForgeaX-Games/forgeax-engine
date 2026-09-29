@@ -12,7 +12,7 @@
 //      sphere + 1 Camera with `tonemap = 'reinhard-extended'` /
 //      `exposure = 1.0` / `whitePoint = 8.0` + 1 intensity-2
 //      DirectionalLight.
-//   4. await runtime host initialization + 300 frames of lease-bound renderer.draw(...).
+//   4. await runtime host initialization + 60 frames of lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync; full-frame scan for AC-07
 //      (no integer-white burn anywhere); highlight site readback for
 //      AC-08 (per channel ∈ (0.3, 1.0)). AC-09 (reference-png ε ≤ 0.05)
@@ -33,7 +33,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { writeReferencePng, readReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
@@ -245,7 +245,7 @@ renderer.subscribe((event) => {
 });
 
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

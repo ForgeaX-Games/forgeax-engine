@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DdcEntryStore } from './entry-store.js';
+import { type DdcEntry, DdcEntryStore } from './entry-store.js';
 import { DdcStoreError } from './errors.js';
 
 export type DdcLifecycleState = 'missing' | 'cooking' | 'current' | 'stale' | 'failed';
@@ -26,6 +26,11 @@ export interface DdcHead {
   readonly generation?: number;
   readonly activeLease?: DdcLease;
   readonly failure?: { readonly code: string; readonly detail: string };
+}
+
+export interface DdcCurrentEntry {
+  readonly head: DdcHead;
+  readonly entry: DdcEntry | null;
 }
 
 export interface DdcCommitResult {
@@ -296,6 +301,17 @@ export class DdcLifecycle {
     return this.projectHead(guid, desiredKey, record);
   }
 
+  /** Read the accepted entry for a GUID without making callers reconstruct head paths. */
+  public async readCurrentEntry(guid: string): Promise<DdcCurrentEntry> {
+    const record = await this.read(guid);
+    const head = await this.projectHead(guid, record?.desiredKey ?? '', record);
+    const entry =
+      head.currentKey === undefined || head.state !== 'current'
+        ? null
+        : await this.entries.read(head.currentKey);
+    return { head, entry };
+  }
+
   /** Begin a lease and capture the accepted rollback snapshot under one head lock. */
   public async beginWithSnapshot(guid: string, desiredKey: string): Promise<DdcBeginResult> {
     return withDdcLock(this.root, `head-${guid}`, async () => {
@@ -340,14 +356,18 @@ export class DdcLifecycle {
   public async commit(lease: DdcLease, validatedKey: string): Promise<DdcCommitResult> {
     return withDdcLock(this.root, `head-${lease.guid}`, async () => {
       const current = await this.read(lease.guid);
-      if (current?.active?.attempt !== lease.attempt) {
+      const active = current?.active;
+      if (current === null || active === undefined || active.attempt !== lease.attempt) {
         if (current?.supersededAttempts?.includes(lease.attempt)) {
           await this.write({ ...current, stale: true });
           return withRevision({ result: 'stale', key: validatedKey }, current.revision);
         }
         return withRevision({ result: 'lease-lost', key: validatedKey }, current?.revision ?? 0);
       }
-      if (Date.now() > lease.expiresAt) {
+      // The persisted active lease is the authority. The caller may still hold
+      // an older token while a session heartbeat has already refreshed the
+      // same attempt in the head.
+      if (Date.now() > active.expiresAt) {
         throw new DdcStoreError({
           code: 'ddc-lease-expired',
           detail: 'cook lease expired before commit fencing',

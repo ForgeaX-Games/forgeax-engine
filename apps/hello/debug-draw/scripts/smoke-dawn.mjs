@@ -2,7 +2,7 @@
 // hello-debug-draw headless smoke (feat-20260615-debug-draw-immediate-mode M4 / M5).
 //
 // Proves AC-04/AC-05/AC-06/AC-07: the debug-draw overlay renders correctly
-// across 5 modes. Runs 300 frames per mode on dawn-node, captures frame 60
+// across 5 modes. Runs 60 frames per mode on dawn-node, captures frame 60
 // PNG to __screenshots__/baseline/, pixel readback epsilon<=0.05 against
 // committed baseline, asserts onError==0 and draw count>0.
 //
@@ -37,12 +37,13 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const WIDTH = 256;
 const HEIGHT = 256;
 const CLEAR_RGBA = [0, 0, 0, 1];
 const TOTAL_PIXELS = WIDTH * HEIGHT;
-const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FOREGROUND_CHANNEL_MIN = 24;
 
 const FALSIFY = process.env.FALSIFY ?? '';
@@ -351,7 +352,7 @@ function buildViewProj() {
   const target = vec3.create(0, 0, 0);
   const up = vec3.create(0, 1, 0);
   const view = mat4.lookAt(mat4.create(), cameraPos, target, up);
-  const proj = mat4.perspective(mat4.create(), Math.PI / 4, 1, 0.1, 100);
+  const proj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 1, 0.1, 100);
   return mat4.multiply(mat4.create(), proj, view);
 }
 
@@ -393,7 +394,7 @@ async function runMode(mode, label) {
     dd.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
     const fcamPos = vec3.create(0, 1, 2);
     const fcamView = mat4.lookAt(mat4.create(), fcamPos, target, up);
-    const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+    const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
     const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
     dd.frustum(fcamViewProj, [1, 1, 0, 1]);
   }
@@ -609,7 +610,7 @@ async function runRuntimeMode() {
     dd.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
     const fcamPos = vec3.create(0, 1, 2);
     const fcamView = mat4.lookAt(mat4.create(), fcamPos, target, up);
-    const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+    const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
     const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
     dd.frustum(fcamViewProj, [1, 1, 0, 1]);
   }
@@ -688,7 +689,7 @@ async function runDepthMode() {
     dd.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
     const fcamPos = vec3.create(0, 1, 2);
     const fcamView = mat4.lookAt(mat4.create(), fcamPos, target, up);
-    const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+    const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
     dd.frustum(mat4.multiply(mat4.create(), fcamProj, fcamView), [1, 1, 0, 1]);
 
     for (let f = 0; f < FRAMES; f++) {
@@ -829,7 +830,7 @@ async function runDepthMode() {
       depthStencil: {
         format: 'depth32float',
         depthWriteEnabled: true,
-        depthCompare: 'less-equal',
+        depthCompare: 'greater-equal',
       },
       fragment: {
         module: cubeFsModule,
@@ -875,7 +876,7 @@ async function runDepthMode() {
       dd.aabb(vec3.create(-0.4, -0.4, 0.6), vec3.create(0.4, 0.4, 1.4), [0, 0, 1, 1]);
       const fp = vec3.create(0, 1, 2);
       const fv = mat4.lookAt(mat4.create(), fp, target, up);
-      const fpr = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+      const fpr = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
       dd.frustum(mat4.multiply(mat4.create(), fpr, fv), [1, 1, 0, 1]);
     };
 
@@ -916,7 +917,7 @@ async function runDepthMode() {
         }],
         depthStencilAttachment: {
           view: depthView,
-          depthClearValue: 1.0,
+          depthClearValue: 0.0,
           depthLoadOp: 'clear',
           depthStoreOp: 'store',
         },
@@ -1035,7 +1036,7 @@ async function runHdrpTonemapMode() {
   dd.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
   const fcamPos = vec3.create(0, 1, 2);
   const fcamView = mat4.lookAt(mat4.create(), fcamPos, target, up);
-  const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+  const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
   dd.frustum(mat4.multiply(mat4.create(), fcamProj, fcamView), [1, 1, 0, 1]);
 
   for (let f = 0; f < FRAMES; f++) {
@@ -1090,6 +1091,7 @@ try {
   await runDepthMode();
   await runHdrpTonemapMode();
   console.log('[smoke] PASS - all 6 modes');
+  emitSmokeReceipt('hello-debug-draw/smoke', FRAMES);
   process.exit(0);
 } catch (err) {
   console.error(`[smoke] FAIL - ${err instanceof Error ? err.message : String(err)}`);

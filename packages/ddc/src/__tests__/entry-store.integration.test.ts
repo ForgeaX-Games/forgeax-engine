@@ -80,4 +80,23 @@ describe('immutable DDC entry store', () => {
     await expect(store.write(entry())).resolves.toEqual({ result: 'published', key: KEY });
     await expect(store.write(entry())).resolves.toEqual({ result: 'existing', key: KEY });
   });
+
+  it('ignores publication generation metadata when comparing immutable content', async () => {
+    const root = join(tmpdir(), `forgeax-ddc-entry-${Date.now()}-${Math.random()}`);
+    roots.push(root);
+    const store = new DdcEntryStore(root);
+    const first = entry();
+    const second = {
+      ...first,
+      receipt: { ...first.receipt, publicationGeneration: 23 },
+    } satisfies DdcEntry;
+    const third = {
+      ...first,
+      receipt: { ...first.receipt, publicationGeneration: 47 },
+    } satisfies DdcEntry;
+
+    await expect(store.write(second)).resolves.toEqual({ result: 'published', key: KEY });
+    await expect(store.write(third)).resolves.toEqual({ result: 'existing', key: KEY });
+    await expect(store.read(KEY)).resolves.toEqual(second);
+  });
 });

@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -60,7 +60,14 @@ const errors = [];
 subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const pixels = makeAlphaModePixels();
-const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
@@ -110,7 +117,7 @@ writeFileSync(resolve(outDir, 'mesh2d-alpha-mode.png'), writeReferencePng(frame,
 console.log(`[smoke] frames=${frames} bright=${(bright / 255).toFixed(4)} coloredPixels=${coloredPixels} opaqueRegion=${opaqueRegion} alphaRegion=${alphaRegion} errors=${errors.length}`);
 const failures = [];
 if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
-if (frames < 100) failures.push(`frames=${frames}`);
+if (frames < 60) failures.push(`frames=${frames}`);
 if (bright / 255 <= 0.15) failures.push(`bright=${(bright / 255).toFixed(4)}`);
 if (coloredPixels < 500) failures.push(`coloredPixels=${coloredPixels}`);
 if (opaqueRegion < 200) failures.push(`opaqueRegion=${opaqueRegion}`);

@@ -1,0 +1,544 @@
+import type { World } from '@forgeax/engine-ecs';
+import type { RenderReadLease } from '@forgeax/engine-ecs/projection';
+import type { RhiDevice, Texture } from '@forgeax/engine-rhi';
+import type { Handle } from '@forgeax/engine-types';
+import { createRendererCaptureOwner } from '../capture/renderer-captures';
+import { Camera } from '../components/camera';
+import { CameraView, cameraViewExtent } from '../components/camera-view';
+import { CubeCamera } from '../components/cube-camera';
+import { CameraViewInvalidError } from '../errors/render';
+import type { CameraViewInspection } from '../inspection-types';
+import type { DeviceScope } from '../lifecycle';
+import type { PreparedRenderPublication, RenderPublicationReceiver } from '../publication/receiver';
+import type { GpuTimingCapture } from '../record/gpu-timing';
+import type { RenderSystemInternals } from '../record/render-context';
+import type { DrawOwnerOptions, FramePresentation } from '../render-contract';
+import { createRenderSystem, type RenderSystem } from '../render-system';
+import { selectCameraRoles } from '../render-system-extract';
+import type { RenderTarget } from '../targets/contracts';
+import { type FrameRecording, submitFrameRecordings } from './frame-recording';
+import { createViewCompositor } from './view-compositor';
+import { createViewPipelineState } from './view-pipeline-state';
+
+interface View {
+  readonly entity: number;
+  readonly device: RhiDevice;
+  readonly scope: DeviceScope;
+  readonly system: RenderSystem;
+  readonly composite: ReturnType<typeof createViewCompositor>;
+  output: { texture: Texture; width: number; height: number } | undefined;
+  viewport: ReturnType<typeof cameraViewExtent>;
+  target: RenderTarget | undefined;
+  renderedFrames: number;
+  lastFrame: number;
+}
+
+/** Renderer-owned views share one device, asset cache, frame encoder and submission. */
+export function createCameraViews(internals: RenderSystemInternals, primary: RenderSystem) {
+  const views = new Map<number, View>();
+  internals.rendererCaptureOwner ??= createRendererCaptureOwner((target) =>
+    internals.getRenderTargetPhysical?.(target),
+  );
+  let generation = internals.deviceScope.generation;
+  let ownerIdentity: string | undefined;
+  let frame = 0;
+  let active = false;
+  let capturePublicationSeeded = false;
+  let surfaceDynamicInput: Parameters<RenderSystem['setSurfaceDynamicInput']>[0];
+  let composite = createViewCompositor(internals);
+  const retire = (view: View) => {
+    const dispose = () => {
+      if (view.output !== undefined) view.device.destroyTexture(view.output.texture);
+      view.composite.dispose();
+      view.system.disposeFrameState();
+      view.scope.dispose();
+    };
+    void view.device.queue.onSubmittedWorkDone().then(dispose, dispose);
+  };
+  const clear = () => {
+    capturePublicationSeeded = false;
+    for (const view of views.values()) retire(view);
+    views.clear();
+  };
+  const value = <T>(r: { ok: true; value: T } | { ok: false; error: unknown }): T => {
+    if (!r.ok) throw r.error;
+    return r.value;
+  };
+  const systems = (): readonly RenderSystem[] =>
+    active ? [...views.values()].map((view) => view.system) : [primary];
+  const allSystems = (): readonly RenderSystem[] => [
+    primary,
+    ...[...views.values()].map((view) => view.system),
+  ];
+  return {
+    get currentSystem(): RenderSystem {
+      return active ? (views.values().next().value?.system ?? primary) : primary;
+    },
+    get perFramePassNames(): readonly string[] {
+      return internals.submittedPassNames ?? [];
+    },
+    bounds(...args: Parameters<RenderSystem['bounds']>) {
+      for (const system of systems()) {
+        const bounds = system.bounds(...args);
+        if (bounds !== undefined) return bounds;
+      }
+      return undefined;
+    },
+    configureStandard(...args: Parameters<RenderSystem['configureStandard']>) {
+      for (const system of allSystems()) system.configureStandard(...args);
+    },
+    setSurfaceDynamicInput(...args: Parameters<RenderSystem['setSurfaceDynamicInput']>) {
+      surfaceDynamicInput = args[0];
+      for (const system of allSystems()) system.setSurfaceDynamicInput(...args);
+    },
+    invalidateGeometryHistory() {
+      for (const system of systems()) system.invalidateGeometryHistory();
+    },
+    isDynamicGeometryConsumed(...args: Parameters<RenderSystem['isDynamicGeometryConsumed']>) {
+      return systems().some((system) => system.isDynamicGeometryConsumed(...args));
+    },
+    isCubeCapturePending(target: RenderTarget): boolean {
+      return systems().some((system) => system.isCubeCapturePending(target));
+    },
+    dynamicGeometryRecordStageLane(
+      ...args: Parameters<RenderSystem['dynamicGeometryRecordStageLane']>
+    ) {
+      for (const system of systems()) {
+        const lane = system.dynamicGeometryRecordStageLane(...args);
+        if (lane !== undefined) return lane;
+      }
+      return undefined;
+    },
+    get active() {
+      return active;
+    },
+    get presentation(): FramePresentation | undefined {
+      return active
+        ? [...views.values()].every((v) => v.system.presentation === 'ready')
+          ? 'ready'
+          : 'pending'
+        : undefined;
+    },
+    inspect(): readonly CameraViewInspection[] {
+      return [...views.values()].map((v) => ({
+        entityKey: v.entity,
+        viewport: [v.viewport.x, v.viewport.y, v.viewport.width, v.viewport.height],
+        width: v.output?.width ?? 0,
+        height: v.output?.height ?? 0,
+        renderedFrames: v.renderedFrames,
+        output: v.target === undefined ? 'screen' : 'texture',
+        passes: [...v.system.perFramePassNames],
+        bloom: v.system.bloom,
+        ssr: v.system.ssr,
+        dynamicResolution: v.system.dynamicResolution,
+        temporal: v.system.temporal,
+        frustum: { ...v.system.frustumStats },
+        visibility: { ...v.system.visibilityStats },
+      }));
+    },
+    dispose() {
+      active = false;
+      clear();
+      composite.dispose();
+    },
+    reset() {
+      clear();
+    },
+    detach(world: World) {
+      if (ownerIdentity === world.identity) {
+        active = false;
+        clear();
+      }
+    },
+    draw(
+      worlds: readonly World[],
+      opts: DrawOwnerOptions,
+      leases?: readonly RenderReadLease[],
+      timing?: GpuTimingCapture,
+      source?: {
+        readonly publication: PreparedRenderPublication;
+        readonly receiver: RenderPublicationReceiver;
+      },
+    ): boolean {
+      frame += 1;
+      internals.rendererFrameNumber = frame;
+      let frameSubmitted = false;
+      internals.gpuPassTimingCapture = undefined;
+      internals.gpuPassTimingSubmittedWork = undefined;
+      internals.gpuPassTimingBeginReason = undefined;
+      const timingIdentity = internals.gpuPassTimingFrameIdentity;
+      if (timingIdentity !== undefined) {
+        const started = internals.gpuPassTimingSession?.beginFrame({
+          ...timingIdentity,
+          graphGeneration: active
+            ? composite.generation
+            : (primary.perFrameGraphInfo?.generation ?? 0),
+        });
+        if (started?.ok === true) internals.gpuPassTimingCapture = started.value;
+        else if (started?.ok === false) internals.gpuPassTimingBeginReason = started.error;
+      }
+      try {
+        const publication = source?.publication;
+        if (publication !== undefined) {
+          // Asset residency is shared by all views. Invalidate once before any
+          // camera records, so a later view cannot destroy an earlier binding.
+          for (const handle of [
+            ...publication.packet.invalidatedAssets,
+            ...publication.packet.retiredAssets,
+          ]) {
+            internals.gpuStore.invalidateMesh(handle, publication.resources);
+            internals.gpuStore.evictTexture(
+              handle as Handle<'TextureAsset', 'shared'>,
+              publication.resources,
+            );
+          }
+        }
+        const world = worlds[opts.cameraOwner];
+        // The primary system owns extraction and diagnostic publication when no
+        // composed view is declared. This admission probe reads membership only.
+        const declaresViews =
+          publication === undefined &&
+          world !== undefined &&
+          world
+            .query({ with: [Camera, CameraView] })
+            .unwrap()
+            [Symbol.iterator]()
+            .next().done === false;
+        const cameras =
+          publication?.frame.cameras ??
+          (!declaresViews || world === undefined
+            ? []
+            : selectCameraRoles(world, opts.cameraEntityKey).display);
+        const rows = cameras.flatMap((camera) => {
+          if (camera.view === undefined) return [];
+          if (camera.entityKey === undefined)
+            throw new CameraViewInvalidError(
+              'entityKey',
+              camera.entityKey,
+              'a camera entity identity',
+            );
+          return [{ entity: camera.entityKey, config: camera.view, target: camera.target }];
+        });
+        if (rows.length === 0) {
+          const wasActive = active;
+          if (active) {
+            clear();
+            composite.dispose();
+          }
+          active = false;
+          frameSubmitted = primary.draw(
+            worlds,
+            opts,
+            leases,
+            timing,
+            wasActive && source !== undefined
+              ? source.receiver.snapshot(source.publication)
+              : publication,
+          );
+          return frameSubmitted;
+        }
+        active = true;
+        const identity = publication?.resources.identity ?? world?.identity;
+        if (generation !== internals.deviceScope.generation || ownerIdentity !== identity) {
+          clear();
+          ownerIdentity = identity;
+          generation = internals.deviceScope.generation;
+          composite.dispose();
+          composite = createViewCompositor(internals);
+        }
+        const base = internals.getPipelineState();
+        if (base === null) return false;
+        const selected = rows
+          .filter((row) => row.config.enabled)
+          .sort((a, b) => a.config.order - b.config.order || Number(a.entity) - Number(b.entity));
+        const keys = new Set(selected.map((row) => Number(row.entity)));
+        for (const [key, view] of views)
+          if (!keys.has(key)) {
+            retire(view);
+            views.delete(key);
+          }
+        const encoder = value(
+          internals.device.createCommandEncoder({
+            label: `multi-camera-frame:${internals.observationFrameId ?? frame}`,
+          }),
+        );
+        const recordings: FrameRecording[] = [];
+        const pictures: { texture: Texture; viewport: ReturnType<typeof cameraViewExtent> }[] = [];
+        const updated: View[] = [];
+        const replaced: { view: View; old: View['output']; texture: Texture }[] = [];
+        const device = internals.device;
+        let submitted = false;
+        try {
+          for (const row of selected) {
+            const entity = Number(row.entity);
+            const config = row.config;
+            const viewport = cameraViewExtent(
+              config,
+              internals.canvas.width,
+              internals.canvas.height,
+            );
+            const target = row.target;
+            let view = views.get(entity);
+            if (view !== undefined && view.target !== target) {
+              retire(view);
+              views.delete(entity);
+              view = undefined;
+            }
+            const created = view === undefined;
+            if (view === undefined) {
+              const scope = internals.deviceScope.createChild(`camera:${entity}`);
+              try {
+                const local = createViewPipelineState(base, internals, scope);
+                const property = (value: unknown) => ({
+                  configurable: true,
+                  enumerable: true,
+                  writable: true,
+                  value,
+                });
+                const recordInternals = Object.defineProperties({} as RenderSystemInternals, {
+                  ...Object.getOwnPropertyDescriptors(internals),
+                  canvas: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () =>
+                      view?.output ?? {
+                        width: viewport.renderWidth,
+                        height: viewport.renderHeight,
+                      },
+                  },
+                  viewOutput: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => view?.output,
+                  },
+                  deviceGeneration: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => scope.generation,
+                  },
+                  getPipelineState: property(() => local.state),
+                  deviceScope: property(scope),
+                  sharedFeatureGpuWork: property(primary.featureGpuWork),
+                  rendererFrameNumber: {
+                    configurable: true,
+                    get: () => internals.rendererFrameNumber,
+                  },
+                  growMeshSsbo: property(local.mesh.growMeshSsbo),
+                  meshSsboState: property(local.mesh.state),
+                  observationCaptureOwner: property(undefined),
+                  observationCaptureDomains: property(undefined),
+                  observationFrameId: property(undefined),
+                  observationGraphGeneration: property(undefined),
+                  gpuPassTimingSession: {
+                    configurable: true,
+                    get: () => internals.gpuPassTimingSession,
+                  },
+                  gpuPassTimingFrameIdentity: {
+                    configurable: true,
+                    get: () => internals.gpuPassTimingFrameIdentity,
+                  },
+                  gpuPassTimingCapture: {
+                    configurable: true,
+                    get: () => internals.gpuPassTimingCapture,
+                  },
+                  gpuPassTimingSubmittedWork: {
+                    configurable: true,
+                    get: () => internals.gpuPassTimingSubmittedWork,
+                    set: (completion: Promise<void> | undefined) => {
+                      internals.gpuPassTimingSubmittedWork = completion;
+                    },
+                  },
+                  gpuPassTimingViewId: property(entity),
+                  invalidateShaderModule: property(() => undefined),
+                  encodeRenderTargetReadbacks: property(() => undefined),
+                });
+                const system = createRenderSystem(recordInternals);
+                primary.copyConfigurationTo(system);
+                system.setSurfaceDynamicInput(surfaceDynamicInput);
+                view = {
+                  entity,
+                  device: internals.device,
+                  scope,
+                  system,
+                  composite: createViewCompositor(internals),
+                  viewport,
+                  target,
+                  output: undefined,
+                  renderedFrames: 0,
+                  lastFrame: -Infinity,
+                };
+                views.set(entity, view);
+              } catch (cause) {
+                scope.dispose();
+                throw cause;
+              }
+            }
+            view.viewport = viewport;
+            const physical =
+              target === undefined ? undefined : internals.getRenderTargetPhysical?.(target);
+            if (target !== undefined && physical === undefined) return false;
+            if (
+              physical !== undefined &&
+              (physical.descriptor.shape !== '2d' ||
+                physical.descriptor.sampleCount !== 1 ||
+                physical.descriptor.mipLevels !== 1)
+            ) {
+              throw new CameraViewInvalidError(
+                'target',
+                physical.descriptor,
+                'a 2d RenderTarget with sampleCount 1 and mipLevels 1',
+              );
+            }
+            const width = physical?.descriptor.width ?? viewport.renderWidth;
+            const height = physical?.descriptor.height ?? viewport.renderHeight;
+            const resized = view.output?.width !== width || view.output?.height !== height;
+            if (resized) {
+              const texture = value(
+                internals.device.createTexture({
+                  label: `camera:${entity}:output`,
+                  size: { width, height, depthOrArrayLayers: 1 },
+                  format: base.format,
+                  usage: 0x10 | 0x04 | 0x01,
+                  textureBindingViewDimension: '2d',
+                  viewFormats:
+                    base.format === base.colorAttachmentFormat ? [] : [base.colorAttachmentFormat],
+                }),
+              );
+              replaced.push({ view, old: view.output, texture });
+              view.output = { texture, width, height };
+            }
+            const render =
+              resized ||
+              opts.temporalReset === true ||
+              frame - view.lastFrame >= config.updateInterval;
+            // Every accepted source delta reaches every retained view, even when its
+            // picture is held. New/re-enabled views seed from the current scene.
+            recordings.push(
+              view.system.record(
+                worlds,
+                { ...opts, cameraEntityKey: entity },
+                leases,
+                undefined,
+                created && source !== undefined
+                  ? source.receiver.snapshot(source.publication)
+                  : publication,
+                encoder,
+                render,
+              ),
+            );
+            if (render) updated.push(view);
+            if (target === undefined && view.output !== undefined)
+              pictures.push({ texture: view.output.texture, viewport });
+          }
+          const captureCamera = selected[0] ?? rows[0];
+          const sharedCaptureDemand =
+            publication !== undefined
+              ? publication.frame.cubeCameras.length > 0 ||
+                publication.frame.auxiliaryCameras.some(
+                  (camera) => camera.planarReflection === undefined,
+                )
+              : world !== undefined &&
+                (world
+                  .query({ with: [CubeCamera] })
+                  .unwrap()
+                  [Symbol.iterator]()
+                  .next().done === false ||
+                  selectCameraRoles(world).auxiliary.some(
+                    (camera) => camera.planarReflection === undefined,
+                  ));
+          if (captureCamera !== undefined && (sharedCaptureDemand || capturePublicationSeeded)) {
+            recordings.push(
+              primary.record(
+                worlds,
+                { ...opts, cameraEntityKey: captureCamera.entity },
+                leases,
+                undefined,
+                !capturePublicationSeeded && source !== undefined
+                  ? source.receiver.snapshot(source.publication)
+                  : publication,
+                encoder,
+                'capture',
+              ),
+            );
+          }
+          // The composite is also a recorded view so an all-disabled frame still clears and submits.
+          const encodeComposite = () => {
+            // Material sources consume linear values; decode each completed picture
+            // into its logical target through the same graph/encoder owner.
+            for (const view of views.values()) {
+              if (view.target === undefined || view.output === undefined) continue;
+              const target = internals.getRenderTargetPhysical?.(view.target);
+              if (target === undefined) return false;
+              const { width, height } = view.output;
+              if (
+                !view.composite.encode(
+                  encoder,
+                  [
+                    {
+                      texture: view.output.texture,
+                      viewport: {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                        renderWidth: width,
+                        renderHeight: height,
+                      },
+                    },
+                  ],
+                  target.texture,
+                  target.descriptor,
+                )
+              )
+                return false;
+            }
+            if (internals.context === null) return false;
+            const output = value(internals.context.getCurrentTexture());
+            if (!composite.encode(encoder, pictures, output)) return false;
+            internals.encodeRenderTargetReadbacks?.(encoder);
+            return true;
+          };
+          const finalRecording = function* (): FrameRecording {
+            const submitted = yield {
+              encoder,
+              device,
+              beforeSubmit: internals.beforeSubmit,
+              reportError: (error: import('@forgeax/engine-rhi').RhiError) =>
+                internals.errorRegistry.fire(error),
+            };
+            return submitted.ok;
+          };
+          recordings.push(finalRecording());
+          submitted = submitFrameRecordings(recordings, encodeComposite, internals);
+          if (submitted)
+            for (const view of views.values()) {
+              if (view.target === undefined || view.output === undefined) continue;
+              const target = internals.getRenderTargetPhysical?.(view.target);
+              if (target !== undefined) internals.markRenderTargetSubmitted?.(view.target, target);
+            }
+          capturePublicationSeeded = sharedCaptureDemand && submitted;
+        } finally {
+          for (const replacement of replaced) {
+            const texture = submitted ? replacement.old?.texture : replacement.texture;
+            if (!submitted) replacement.view.output = replacement.old;
+            if (texture !== undefined) {
+              const dispose = () => {
+                device.destroyTexture(texture);
+              };
+              void device.queue.onSubmittedWorkDone().then(dispose, dispose);
+            }
+          }
+        }
+        if (submitted)
+          for (const view of updated) {
+            view.lastFrame = frame;
+            view.renderedFrames += 1;
+          }
+        frameSubmitted = submitted;
+        return submitted;
+      } finally {
+        if (!frameSubmitted) internals.gpuPassTimingCapture?.abort({ code: 'frame-aborted' });
+      }
+    },
+  };
+}

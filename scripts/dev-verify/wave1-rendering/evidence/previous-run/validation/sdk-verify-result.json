@@ -1,0 +1,574 @@
+{
+  "ok": true,
+  "archive": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-sdk/artifacts/sdk/forgeax-sdk-v0.0.0-dev.634c561d12a3.zip",
+  "sha256": "fd60694bdaa0e60ef0c0e582318eb626133c30210d5b45e8bae50e33b8f0f706",
+  "sdkVersion": "0.0.0-dev.634c561d12a3",
+  "engineCommit": "634c561d12a3132f5730de25fe5cf74f5a6e2ee5",
+  "capabilities": [
+    "app",
+    "render",
+    "assets",
+    "shader",
+    "physics",
+    "audio",
+    "vfx",
+    "ui",
+    "debug"
+  ],
+  "source": {
+    "root": "source/engine",
+    "format": "git-archive-public-snapshot",
+    "excluded": [
+      ".gitmodules",
+      "forgeax-engine-assets"
+    ],
+    "fileCount": 7901,
+    "byteCount": 78406379,
+    "prebuiltWasm": [
+      {
+        "package": "@forgeax/engine-wgpu-wasm",
+        "root": "packages/wgpu-wasm/pkg",
+        "files": [
+          "package.json",
+          "provenance.json",
+          "README.md",
+          "wgpu_wasm.d.ts",
+          "wgpu_wasm.js",
+          "wgpu_wasm_bg.wasm",
+          "wgpu_wasm_bg.wasm.d.ts"
+        ]
+      },
+      {
+        "package": "@forgeax/engine-fbx",
+        "root": "packages/fbx/pkg",
+        "files": [
+          "fbx-wasm.mjs",
+          "fbx-wasm.wasm"
+        ]
+      },
+      {
+        "package": "@forgeax/engine-codec",
+        "root": "packages/codec/pkg",
+        "files": [
+          "basis_transcoder.mjs",
+          "basis_transcoder.wasm",
+          "encode/basis_encoder.mjs",
+          "encode/basis_encoder.wasm"
+        ]
+      }
+    ]
+  },
+  "offlineProject": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/game",
+  "projectTargetProtection": {
+    "code": "project-target-inside-sdk",
+    "sdkRoot": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/forgeax-sdk",
+    "rejectedTarget": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/forgeax-sdk/game"
+  },
+  "projectLayout": {
+    "plugins": [],
+    "starterTest": "assets/__tests__/empty-project.test.ts",
+    "authoredScene": "assets/world/world.scene.pack.json",
+    "retiredRootPaths": [
+      "src",
+      "src/main.ts",
+      "src/__tests__"
+    ]
+  },
+  "commands": [
+    "project new",
+    "project skill verify",
+    "project check",
+    "project test",
+    "typecheck",
+    "project build",
+    "project package",
+    "dev start",
+    "project preview"
+  ],
+  "package": {
+    "output": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/empty-game-web.zip",
+    "documents": [
+      "README.md",
+      "docs/feedback.md"
+    ]
+  },
+  "scriptablePack": {
+    "defaultSceneGuid": "019fb7ce-1000-7000-8000-000000000001",
+    "build": {
+      "packageUrl": "./assets/019fb7ce-1000-7000-8000-000000000001.pack.json"
+    },
+    "dev": {
+      "url": "http://127.0.0.1:5173/",
+      "catalogUrl": "http://127.0.0.1:5173/__pack/scopes/game/1/catalog.json",
+      "defaultSceneGuid": "019fb7ce-1000-7000-8000-000000000001"
+    }
+  },
+  "selectedTemplate": {
+    "id": "game-3d",
+    "project": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/game-3d",
+    "commands": [
+      "project new",
+      "project skill verify",
+      "project check",
+      "project test",
+      "typecheck",
+      "project build",
+      "project package",
+      "dev start"
+    ],
+    "package": {
+      "output": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/game-3d-web.zip",
+      "documents": [
+        "README.md",
+        "docs/feedback.md"
+      ]
+    },
+    "browser": {
+      "url": "http://127.0.0.1:5173/",
+      "runtime": {
+        "canvas": {
+          "width": 1280,
+          "height": 720
+        },
+        "engineFrameId": 2
+      },
+      "movement": {
+        "before": {
+          "position": [
+            1.7234526694664964e-7,
+            0.9501000046730042,
+            7.400000095367432
+          ],
+          "fixedTick": 2
+        },
+        "after": {
+          "position": [
+            -3.24883330904413e-7,
+            0.951603353023529,
+            6.666666507720947
+          ],
+          "fixedTick": 17
+        },
+        "delta": [
+          -4.972285978510627e-7,
+          0.0015033483505249023,
+          -0.7333335876464844
+        ],
+        "distance": 0.7333351285919516
+      },
+      "renderer": {
+        "state": "alive",
+        "frameId": 9
+      },
+      "pageErrors": 0,
+      "consoleErrors": 0
+    }
+  },
+  "sourceTemplate": {
+    "status": "passed-with-omissions",
+    "templates": [
+      {
+        "slug": "empty",
+        "id": "template-empty",
+        "name": "最小工程",
+        "pageErrors": [],
+        "consoleErrors": [],
+        "consoleErrorEvents": [],
+        "expectedConsoleErrors": [],
+        "badResponses": [],
+        "phase": "template-load",
+        "sequence": 0,
+        "probe": {
+          "listed": {
+            "actions": [],
+            "reads": []
+          },
+          "state": {
+            "reason": "alive",
+            "recoverable": false,
+            "surface": "available",
+            "frame": {
+              "frameId": 8,
+              "deviceGeneration": 0
+            },
+            "features": []
+          },
+          "canvas": {
+            "width": 960,
+            "height": 540
+          }
+        },
+        "status": "passed"
+      },
+      {
+        "slug": "game-3d",
+        "id": "template-game-3d",
+        "name": "Game 3D",
+        "pageErrors": [],
+        "consoleErrors": [],
+        "consoleErrorEvents": [],
+        "expectedConsoleErrors": [],
+        "badResponses": [],
+        "phase": "journey-complete",
+        "sequence": 1,
+        "probe": {
+          "listed": {
+            "actions": [],
+            "reads": [
+              {
+                "id": "game-3d.player",
+                "title": "Third-person player state",
+                "description": "Resolved physics position, camera angles, facing, and grounded state."
+              }
+            ]
+          },
+          "state": {
+            "reason": "alive",
+            "recoverable": false,
+            "surface": "available",
+            "frame": {
+              "frameId": 4,
+              "deviceGeneration": 0
+            },
+            "features": []
+          },
+          "canvas": {
+            "width": 960,
+            "height": 540
+          }
+        },
+        "journeyCompleteSequence": 1,
+        "game3d": {
+          "render": {
+            "width": 960,
+            "height": 540,
+            "sampledPixels": 518400,
+            "nonBlackPixels": 518400,
+            "lumaMin": 33,
+            "lumaMax": 255,
+            "lumaRange": 222
+          },
+          "pointerLock": {
+            "mode": "simulated",
+            "nativeProbe": {
+              "status": "unavailable",
+              "errors": [
+                {
+                  "name": "WrongDocumentError",
+                  "message": "The root document of this element is not valid for pointer lock.",
+                  "code": 4
+                }
+              ],
+              "requests": 1
+            }
+          },
+          "ui": {
+            "rootChildren": 1,
+            "assetGuid": "019fb7ce-3600-7000-8000-000000000001",
+            "lockedClass": false,
+            "lockText": "Click the game to lock the camera",
+            "guideText": "3C starter Click the game to lock the camera Mouse look · WASD move · Space jump · Esc release",
+            "crosshairDisplay": "none"
+          },
+          "uiLocked": {
+            "rootChildren": 1,
+            "assetGuid": "019fb7ce-3600-7000-8000-000000000001",
+            "lockedClass": true,
+            "lockText": "Camera locked · mouse look active",
+            "guideText": "3C starter Camera locked · mouse look active Mouse look · WASD move · Space jump · Esc release",
+            "crosshairDisplay": "block"
+          },
+          "initial": {
+            "position": [
+              -1.0766137847895152e-7,
+              0.950900137424469,
+              7.400000095367432
+            ],
+            "facing": [
+              0,
+              -1
+            ],
+            "camera": {
+              "yaw": 0,
+              "pitch": 0.3490658402442932,
+              "pointerLocked": false
+            },
+            "grounded": true,
+            "simulation": {
+              "fixedTick": 10
+            },
+            "animation": {
+              "walkWeight": 0,
+              "walkTime": 0.24459999799728394
+            }
+          },
+          "locked": {
+            "position": [
+              2.0175480131001677e-7,
+              0.9541006684303284,
+              7.400000095367432
+            ],
+            "facing": [
+              0,
+              -1
+            ],
+            "camera": {
+              "yaw": 0,
+              "pitch": 0.3490658402442932,
+              "pointerLocked": true
+            },
+            "grounded": true,
+            "simulation": {
+              "fixedTick": 42
+            },
+            "animation": {
+              "walkWeight": 0,
+              "walkTime": 0.04460010677576065
+            }
+          },
+          "look": {
+            "origin": {
+              "position": [
+                2.0175480131001677e-7,
+                0.9541006684303284,
+                7.400000095367432
+              ],
+              "facing": [
+                0,
+                -1
+              ],
+              "camera": {
+                "yaw": 0,
+                "pitch": 0.3490658402442932,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 42
+              },
+              "animation": {
+                "walkWeight": 0,
+                "walkTime": 0.04460010677576065
+              }
+            },
+            "result": {
+              "position": [
+                2.4784367269603536e-7,
+                0.9545007348060608,
+                7.400000095367432
+              ],
+              "facing": [
+                0,
+                -1
+              ],
+              "camera": {
+                "yaw": 0.052799999713897705,
+                "pitch": 0.36226585507392883,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 46
+              },
+              "animation": {
+                "walkWeight": 0,
+                "walkTime": 0.14460010826587677
+              }
+            },
+            "delta": {
+              "yaw": 0.052799999713897705,
+              "pitch": 0.01320001482963562
+            },
+            "inputDispatches": 4
+          },
+          "movement": {
+            "origin": {
+              "position": [
+                2.4784367269603536e-7,
+                0.9545007348060608,
+                7.400000095367432
+              ],
+              "facing": [
+                0,
+                -1
+              ],
+              "camera": {
+                "yaw": 0.052799999713897705,
+                "pitch": 0.36226585507392883,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 46
+              },
+              "animation": {
+                "walkWeight": 0,
+                "walkTime": 0.14460010826587677
+              }
+            },
+            "walking": {
+              "position": [
+                0.019344447180628777,
+                0.9549031853675842,
+                7.125681400299072
+              ],
+              "facing": [
+                0.07034186273813248,
+                -0.9975229501724243
+              ],
+              "camera": {
+                "yaw": 0.07039999961853027,
+                "pitch": 0.36666586995124817,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 50
+              },
+              "animation": {
+                "walkWeight": 1,
+                "walkTime": 0.2446001023054123
+              }
+            },
+            "afterRelease": {
+              "position": [
+                0.019344443455338478,
+                0.9553032517433167,
+                7.125681400299072
+              ],
+              "facing": [
+                0.07034186273813248,
+                -0.9975229501724243
+              ],
+              "camera": {
+                "yaw": 0.07039999961853027,
+                "pitch": 0.36666586995124817,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 54
+              },
+              "animation": {
+                "walkWeight": 0,
+                "walkTime": 0.344600111246109
+              }
+            },
+            "projection": {
+              "forward": 0.27495730479747116,
+              "right": 0.004839943233754517,
+              "distance": 0.27499989911270045
+            }
+          },
+          "strafe": {
+            "origin": {
+              "position": [
+                0.019344443455338478,
+                0.9553032517433167,
+                7.125681400299072
+              ],
+              "facing": [
+                0.07034186273813248,
+                -0.9975229501724243
+              ],
+              "camera": {
+                "yaw": 0.07039999961853027,
+                "pitch": 0.36666586995124817,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 54
+              },
+              "animation": {
+                "walkWeight": 0,
+                "walkTime": 0.344600111246109
+              }
+            },
+            "result": {
+              "position": [
+                0.385102778673172,
+                0.9557048678398132,
+                7.151473522186279
+              ],
+              "facing": [
+                0.9975229501724243,
+                0.07034186273813248
+              ],
+              "camera": {
+                "yaw": 0.07039999961853027,
+                "pitch": 0.36666586995124817,
+                "pointerLocked": true
+              },
+              "grounded": true,
+              "simulation": {
+                "fixedTick": 58
+              },
+              "animation": {
+                "walkWeight": 1,
+                "walkTime": 0.44460010528564453
+              }
+            },
+            "projection": {
+              "forward": -1.1108967144790594e-7,
+              "right": 0.36666659696889936,
+              "distance": 0.36666659696891624
+            }
+          },
+          "unlocked": {
+            "position": [
+              0.38510268926620483,
+              0.9561049342155457,
+              7.151473522186279
+            ],
+            "facing": [
+              0.9975229501724243,
+              0.07034186273813248
+            ],
+            "camera": {
+              "yaw": 0.07039999961853027,
+              "pitch": 0.36666586995124817,
+              "pointerLocked": false
+            },
+            "grounded": true,
+            "simulation": {
+              "fixedTick": 62
+            },
+            "animation": {
+              "walkWeight": 0,
+              "walkTime": 0.5446001291275024
+            }
+          },
+          "rendererHealth": {
+            "reason": "alive",
+            "recoverable": false,
+            "surface": "available",
+            "frame": {
+              "frameId": 17,
+              "deviceGeneration": 0
+            },
+            "features": []
+          },
+          "collision": {
+            "status": "omitted",
+            "reason": "sdk-source-distribution"
+          },
+          "hostGpuInstanceLoss": {
+            "status": "not-observed",
+            "phase": "journey-complete",
+            "lastHealthyFrameId": 4,
+            "fixedTick": 62
+          }
+        },
+        "status": "passed-with-omissions"
+      }
+    ],
+    "serverOutput": "[stderr] fatal: not a git repository (or any of the parent directories): .git\n[stdout] \n  VITE v8.0.10  ready in 26194 ms\n\n  ➜  Local:   http://127.0.0.1:5287/\n[stdout] [forgeax-shader] manifest request.start url=/shaders/manifest.json\n[forgeax-shader] manifest prime.complete entries=48 materialShaders=25 elapsedMs=1\n[stdout] [forgeax-shader] manifest response.end bytes=30420479 elapsedMs=82\n[stdout] [forgeax-shader] manifest request.start url=/shaders/manifest.json\n[stdout] [forgeax-shader] manifest prime.complete entries=48 materialShaders=25 elapsedMs=0\n[stdout] [forgeax-shader] manifest response.end bytes=30420479 elapsedMs=73\n"
+  },
+  "staticBuild": {
+    "output": "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-sdk-verify-W5bykk/static-game",
+    "base": "/games/forgeax-sdk-game/",
+    "artifacts": 23
+  },
+  "previewUrl": "http://localhost:51071/"
+}

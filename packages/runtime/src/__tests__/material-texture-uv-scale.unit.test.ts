@@ -3,7 +3,6 @@ import { vec3 } from '@forgeax/engine-math';
 import { describe, expect, it } from 'vitest';
 import {
   applyMaterialTextureUvScales,
-  BUILTIN_USER_REGION_TEXTURE_FIELDS,
   buildPbrMaterialUboPayload,
   materialTextureUvScale,
   userRegionTextureFieldOrder,
@@ -11,7 +10,10 @@ import {
 
 describe('material texture UV scale [w37]', () => {
   it('maps a non-aligned BC7 logical edge below padded physical storage', () => {
-    const scale = materialTextureUvScale({ width: 2085, height: 1573, format: 'bc7-rgba-unorm' });
+    const scale = materialTextureUvScale({
+      shape: { viewDimension: '2d', extent: { width: 2085, height: 1573 } },
+      format: 'bc7-rgba-unorm',
+    });
     expect(scale).toEqual([2085 / 2088, 1573 / 1576]);
     expect(scale[0]).toBeLessThan(1);
     expect(scale[1]).toBeLessThan(1);
@@ -19,14 +21,17 @@ describe('material texture UV scale [w37]', () => {
 
   it('uses identity scale for uncompressed and fallback texture bindings', () => {
     expect(materialTextureUvScale(undefined)).toEqual([1, 1]);
-    expect(materialTextureUvScale({ width: 17, height: 9, format: 'rgba8unorm' })).toEqual([1, 1]);
+    expect(
+      materialTextureUvScale({
+        shape: { viewDimension: '2d', extent: { width: 17, height: 9 } },
+        format: 'rgba8unorm',
+      }),
+    ).toEqual([1, 1]);
   });
 
-  it('keeps builtin texture slots when compatibility param schemas are empty or numeric-only', () => {
-    expect(userRegionTextureFieldOrder([])).toEqual(BUILTIN_USER_REGION_TEXTURE_FIELDS);
-    expect(userRegionTextureFieldOrder([{ name: 'baseColor', type: 'color' }])).toEqual(
-      BUILTIN_USER_REGION_TEXTURE_FIELDS,
-    );
+  it('keeps compatibility param schemas compact when they have no textures', () => {
+    expect(userRegionTextureFieldOrder([])).toEqual([]);
+    expect(userRegionTextureFieldOrder([{ name: 'baseColor', type: 'color' }])).toEqual([]);
   });
 
   it('writes each slot set and transform into the builtin PBR payload', () => {
@@ -61,8 +66,8 @@ describe('material texture UV scale [w37]', () => {
       new World(),
     );
     const f32 = new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4);
-    expect(Array.from(f32.slice(24, 32))).toEqual([0.125, 0.25, 2, 3, 1, 0.5, 1, 1]);
-    expect(Array.from(f32.slice(40, 48))).toEqual([0.75, 0.25, 4, 5, 0, 0, 1, 1]);
+    expect(Array.from(f32.slice(36, 44))).toEqual([0.125, 0.25, 2, 3, 1, 0.5, 1, 1]);
+    expect(Array.from(f32.slice(52, 60))).toEqual([0.75, 0.25, 4, 5, 0, 0, 1, 1]);
   });
 
   it('keeps identity UV records for metadata-free standard and builtin schema materials', () => {
@@ -85,14 +90,11 @@ describe('material texture UV scale [w37]', () => {
     expect(
       Array.from(
         new Float32Array(standard.buffer, standard.byteOffset, standard.byteLength / 4).slice(
-          24,
-          72,
+          36,
+          100,
         ),
       ),
-    ).toEqual([
-      0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
-      1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
-    ]);
+    ).toEqual(Array.from({ length: 8 }, () => [0, 0, 1, 1, 0, 0, 1, 1]).flat());
 
     const unlit = buildPbrMaterialUboPayload({
       baseColor: vec3.create(1, 1, 1),

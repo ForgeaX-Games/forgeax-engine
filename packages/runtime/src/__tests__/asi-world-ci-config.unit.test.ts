@@ -43,7 +43,7 @@ interface MetricEntry {
 
 /** asi-world package.json#forgeax.metrics declaration shape. */
 const ASI_WORLD_METRICS: readonly MetricEntry[] = [
-  // gate = headless smoke (newly enabled by w19; w18 smoke 300 frames).
+  // gate = headless smoke (newly enabled by w19; w18 smoke 60 frames).
   { kind: 'gate', enabled: true, reasonRequiredWhenDisabled: false },
   // The other 4 categories follow hello-tilemap template: all disabled
   // with reason strings explaining why this demo workspace does not opt

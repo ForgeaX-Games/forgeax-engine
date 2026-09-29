@@ -6,9 +6,6 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "description": "CPU profile capture, bounded recording, and deterministic offline analysis for forgeax-engine.",
-  "bin": {
-    "forgeax-engine-profiler": "./bin/forgeax-engine-profiler.mjs"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -27,7 +24,6 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
-    "bin",
     "dist",
     "schema",
     "src",
@@ -37,7 +33,6 @@
   ],
   "scripts": {
     "build": "tsup",
-    "cli": "node bin/forgeax-engine-profiler.mjs",
     "test": "vitest run",
     "smoke:consumer": "node scripts/consume-smoke.mjs",
     "test:perf": "node ../../scripts/bench/profiler-overhead.mjs"

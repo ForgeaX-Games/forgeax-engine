@@ -6,6 +6,9 @@ import type {
   Result,
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
+import { packEnvelopeIssue } from './pack-envelope.js';
+import { jsonOf, readPackage } from './package-read.js';
+import { assetLoadCancelled, waitForAsset } from './wait-for-asset.js';
 
 export interface PackReaderOptions {
   readonly fetcher?: typeof globalThis.fetch;
@@ -23,7 +26,12 @@ function invalid(guid: string, reason: string): Result<never, AssetLoadError> {
 }
 
 function frozen<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !ArrayBuffer.isView(value) &&
+    !Object.isFrozen(value)
+  ) {
     Object.freeze(value);
     for (const child of Object.values(value as Record<string, unknown>)) frozen(child);
   }
@@ -41,6 +49,7 @@ function sameTuple(left: AssetPublicationTuple, right: AssetPublicationTuple): b
 
 export class PackReader {
   private readonly fetcher: typeof globalThis.fetch | undefined;
+  private readonly lifetime = new AbortController();
   private readonly verified = new Map<string, VerifiedPack>();
   private readonly pending = new Map<string, Promise<Result<VerifiedPack, AssetLoadError>>>();
 
@@ -55,54 +64,59 @@ export class PackReader {
     packageUrl: string,
     expected: AssetPublicationTuple,
     signal: AbortSignal,
+    fetcher?: typeof globalThis.fetch,
   ): Promise<Result<VerifiedPack, AssetLoadError>> {
-    if (signal.aborted) return err(this.cancelled(packageUrl));
+    if (signal.aborted || this.lifetime.signal.aborted) return err(assetLoadCancelled(packageUrl));
     const key = this.key(packageUrl, expected);
     const cached = this.verified.get(key);
     if (cached !== undefined) return ok(cached);
-    const active = this.pending.get(key);
-    if (active !== undefined) return active;
-    const request = this.fetchAndVerify(packageUrl, expected, signal);
-    this.pending.set(key, request);
-    const result = await request;
-    this.pending.delete(key);
-    if (result.ok) this.verified.set(key, result.value);
-    return result;
+    let request = this.pending.get(key);
+    if (request === undefined) {
+      const current = this.fetchAndVerify(packageUrl, expected, this.lifetime.signal, fetcher).then(
+        (result) => {
+          if (this.pending.get(key) === current) {
+            this.pending.delete(key);
+            if (result.ok) this.verified.set(key, result.value);
+          }
+          return result;
+        },
+      );
+      this.pending.set(key, current);
+      request = current;
+    }
+    return waitForAsset(request, AbortSignal.any([signal, this.lifetime.signal]), packageUrl);
+  }
+
+  dispose(): void {
+    this.lifetime.abort();
+    this.pending.clear();
+    this.verified.clear();
   }
 
   private async fetchAndVerify(
     packageUrl: string,
     expected: AssetPublicationTuple,
     signal: AbortSignal,
+    boundFetcher?: typeof globalThis.fetch,
   ): Promise<Result<VerifiedPack, AssetLoadError>> {
-    let response: Response;
-    try {
-      const fetcher = this.fetcher ?? globalThis.fetch.bind(globalThis);
-      response = await fetcher(packageUrl, { signal });
-    } catch (_cause) {
-      if (signal.aborted) return err(this.cancelled(packageUrl));
+    const fetcher = boundFetcher ?? this.fetcher ?? globalThis.fetch.bind(globalThis);
+    const read = await readPackage(fetcher, packageUrl, jsonOf, { signal });
+    if (!read.ok) {
+      if (read.error.malformed) return invalid(packageUrl, 'invalid JSON');
+      if (signal.aborted) return err(assetLoadCancelled(packageUrl));
       return err({
         code: 'asset-fetch-failed',
         expected: 'HTTP 200 for the current Pack URL',
-        hint: 'verify the package locator and republish the Pack',
+        hint: `${read.error.observed} after ${read.error.attempts} request(s); verify the package locator and republish the Pack`,
         detail: { guid: packageUrl, packageUrl },
       });
     }
-    if (!response.ok) {
-      return err({
-        code: 'asset-fetch-failed',
-        expected: 'HTTP 200 for the current Pack URL',
-        hint: 'verify the package locator and republish the Pack',
-        detail: { guid: packageUrl, packageUrl },
-      });
+    const value = read.value;
+    const verified = this.verify(value, expected);
+    if (!verified.ok && verified.error.code === 'asset-package-invalid') {
+      return invalid(packageUrl, verified.error.detail.reason);
     }
-    let value: unknown;
-    try {
-      value = await response.json();
-    } catch {
-      return invalid(packageUrl, 'invalid JSON');
-    }
-    return this.verify(value, expected);
+    return verified;
   }
 
   private key(packageUrl: string, tuple: AssetPublicationTuple): string {
@@ -127,6 +141,8 @@ export class PackReader {
     if (!Array.isArray(pack.assets)) return invalid('', 'assets');
     const guids = new Set<string>();
     for (const raw of pack.assets) {
+      const issue = packEnvelopeIssue(raw);
+      if (issue !== undefined) return invalid('', issue);
       const asset = raw as Partial<AssetEnvelopeV2<unknown>>;
       const guid = typeof asset.guid === 'string' ? asset.guid : '';
       if (guid.length === 0 || guids.has(guid.toLowerCase()))
@@ -170,14 +186,5 @@ export class PackReader {
       typeof (integrity as Record<string, unknown>).digest === 'string' &&
       /^sha256:[0-9a-f]{64}$/i.test(String((integrity as Record<string, unknown>).digest))
     );
-  }
-
-  private cancelled(guid: string): AssetLoadError {
-    return {
-      code: 'asset-load-cancelled',
-      expected: 'the request AbortSignal to remain live while reading the Pack',
-      hint: 'retry with a live AbortSignal when the request is still needed',
-      detail: { guid },
-    };
   }
 }

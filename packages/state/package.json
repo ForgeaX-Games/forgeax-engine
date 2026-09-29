@@ -6,9 +6,6 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "description": "Single-world typed-state machine with state-scoped entity lifecycle.",
-  "bin": {
-    "forgeax-engine-remote-state": "./dist/cli-state.mjs"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

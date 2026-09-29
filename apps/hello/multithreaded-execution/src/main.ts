@@ -1,4 +1,4 @@
-import { createApp } from '@forgeax/engine-app';
+import { createApp, type ExecutionWorkersOptions } from '@forgeax/engine-app';
 import type { ProfileCapture } from '@forgeax/engine-profiler';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -11,9 +11,14 @@ if (canvas === null || output === null || summary === null || rebuildButton === 
 }
 const params = new URL(location.href).searchParams;
 const tierParam = params.get('tier');
-const requestedTier = tierParam === 'main-serial' || tierParam === 'shared'
-  ? tierParam
-  : 'engine-worker';
+const scenarios: Record<string, ExecutionWorkersOptions> = {
+  'main-serial': { engine: false },
+  'engine-worker': { engine: true, render: false, kernels: false },
+  'render-worker': { engine: true, render: true, kernels: false },
+  shared: { engine: true, render: false, kernels: true },
+  auto: {},
+};
+const requestedWorkers = scenarios[tierParam ?? 'auto'] ?? {};
 type ExecutionTelemetry = {
   readonly registered: Array<{ readonly name: string; readonly worldIdentity: string }>;
   readonly cleanups: Array<{ readonly name: string; readonly worldIdentity: string }>;
@@ -86,12 +91,13 @@ const created = await createApp(
   canvas,
   {
     execution: {
-      tier: requestedTier,
+      workers: requestedWorkers,
       bootstrap,
       ...(telemetryChannel === undefined
         ? {}
         : { bootstrapData: { telemetry: true }, bootstrapPort: telemetryChannel.port2 }),
-      startupTimeoutMs: 15_000,
+      // The production demo carries the complete shader manifest in both realms.
+      startupTimeoutMs: 30_000,
       frameTimeoutMs: 5_000,
     },
     ...(profiler === undefined ? {} : { profiler }),
@@ -102,19 +108,20 @@ const created = await createApp(
 if (!created.ok) {
   output.dataset.status = 'failed';
   const detail = 'detail' in created.error ? created.error.detail : undefined;
+  const message =
+    created.error instanceof Error
+      ? created.error.message
+      : 'createApp failed';
   output.textContent = JSON.stringify({
     code: 'code' in created.error ? created.error.code : created.error.name,
-    message: created.error.message,
-    requestedTier,
-    actualTier: null,
+    message,
+    requestedWorkers,
     expected: 'expected' in created.error ? created.error.expected : undefined,
     hint: 'hint' in created.error ? created.error.hint : undefined,
     capabilityTruth:
       typeof detail === 'object' && detail !== null
         ? {
             missingCapabilities: 'missingCapabilities' in detail ? detail.missingCapabilities : [],
-            sharedEvidencePassed:
-              'sharedEvidencePassed' in detail ? detail.sharedEvidencePassed : undefined,
           }
         : null,
     ...('detail' in created.error ? { detail: created.error.detail } : {}),
@@ -177,7 +184,7 @@ const publish = (): void => {
   if (
     report.engine.health === 'running' &&
     (report.performance.engineUpdateMs !== null ||
-      (report.actualTier === 'main-serial' && publishedFrames >= 2))
+      (!report.workers.engine.enabled && publishedFrames >= 2))
   ) {
     (globalThis as { __forgeaxExecutionReady?: boolean }).__forgeaxExecutionReady = true;
   }

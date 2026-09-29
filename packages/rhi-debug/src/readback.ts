@@ -569,6 +569,7 @@ export interface TextureReadbackBatchSlice {
 
 /** A complete texture whose subresources are copied in one bounded batch. */
 export interface TextureReadbackBatchRequest {
+  readonly aspect?: 'all' | 'depth-only';
   readonly handleId: string;
   readonly texture: unknown;
   readonly bytesPerBlock: number;
@@ -668,6 +669,7 @@ export async function readbackTexturePixelsBatch(
           encoder.copyTextureToBuffer(
             {
               texture: request.texture,
+              ...(request.aspect === undefined ? {} : { aspect: request.aspect }),
               mipLevel: slice.mip,
               origin: { x: 0, y: 0, z: slice.layer },
             } as unknown as never,

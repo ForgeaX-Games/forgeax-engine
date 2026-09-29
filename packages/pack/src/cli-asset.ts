@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 
-// @forgeax/engine-pack/src/cli-asset — `forgeax-engine-remote-asset`
-// plugin bin (feat-20260516-console-dependency-inversion plan-strategy
-// section 2.9). Discovered by the base bin via the kubectl 4th-path
-// `forgeax-engine-remote-` prefix scanner; subcommands scan / lookup /
-// verify operate offline against the pack scanner.
+// @forgeax/engine-pack/src/cli-asset — Pack producer implementation used by
+// DevKit's unified `forgeax asset` command. It is not a package bin.
 //
 // stderr contract (plan-strategy section 2.3 weak-contract): every error
 // path emits a single JSON Lines record carrying `code` / `expected` /
@@ -26,16 +23,82 @@ import {
 import { readSourceInventory } from './evidence/source-inventory.js';
 import { isValidAssetGuidString } from './guid.js';
 import { parsePackV2 } from './index.js';
-import { scan } from './scanner.js';
-import { isRecord, projectScriptablePackMeta } from './scriptable-pack.js';
+import { parsePackSourceJson, projectScriptablePackMeta } from './pack-authoring.js';
+import { type ScanSourceDeclaration, scanInventory } from './scanner.js';
 import { loadScriptablePack } from './scriptable-pack-node.js';
+
+// The unified DevKit command tree reuses the producer implementation without
+// reviving the historical standalone executable as a second public surface.
+export { runAtlas } from './atlas/run-atlas.js';
 
 export interface PackEntry {
   readonly guid: string;
   readonly kind: string;
   readonly sourcePath: string;
   readonly name?: string;
+  readonly sourceKey?: string;
+  readonly sourceIndex?: number;
+  readonly sourceRevision?: string;
 }
+
+export interface AssetVerificationReport {
+  readonly schemaVersion: 'asset-verification-v1';
+  readonly root: string;
+  /** The bounded source scope used for this read-only report. */
+  readonly scope: {
+    readonly sourceCount: number;
+    readonly assetCount: number;
+    readonly sourcePaths: readonly string[];
+    readonly omittedSourceCount: number;
+    readonly assetLimit: number;
+    readonly truncated: boolean;
+    readonly scriptablePackSourceCount: number;
+    readonly scriptablePackSources: readonly {
+      readonly sourcePath: string;
+      readonly packageId: string;
+      readonly output: 'unproduced';
+      readonly reason: 'producer-not-run';
+    }[];
+    readonly omittedScriptablePackSourceCount: number;
+  };
+  readonly assets: readonly {
+    readonly guid: string;
+    readonly type: string;
+    readonly source: {
+      readonly path: string;
+      readonly format: 'meta.json' | 'pack.json' | 'pack.ts';
+      readonly revision?: string;
+      readonly role: 'author';
+    };
+    readonly output: {
+      readonly status: 'produced' | 'unproduced' | 'unknown';
+      readonly availability: 'available' | 'missing' | 'unknown';
+      readonly freshness: 'unknown';
+      readonly packagePath?: string;
+      readonly artifactPaths?: readonly string[];
+    };
+    readonly dependencies: readonly string[];
+    readonly producer: { readonly state: 'not-run' | 'published' | 'unknown' };
+    readonly name?: string;
+    readonly sourceKey?: string;
+    readonly sourceIndex?: number;
+  }[];
+  readonly summary: {
+    readonly assetCount: number;
+    readonly emittedAssetCount: number;
+    readonly materialCount: number;
+    readonly unproducedAssetCount: number;
+    readonly unknownAssetCount: number;
+    readonly unmaterializedScriptablePackCount: number;
+  };
+}
+
+const ASSET_VERIFY_LIMIT = 256;
+
+type VerificationFacts = Pick<
+  AssetVerificationReport['assets'][number],
+  'dependencies' | 'output' | 'producer'
+>;
 
 interface AssetCtx {
   readonly stdoutWrite: (line: string) => void;
@@ -49,6 +112,10 @@ interface ScanErrShape {
   expected: string;
   hint: string;
   detail?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function emitError(ctx: AssetCtx, err: ScanErrShape): number {
@@ -65,8 +132,11 @@ function emitError(ctx: AssetCtx, err: ScanErrShape): number {
 export async function scanEntries(
   roots: readonly string[],
   ctx: AssetCtx,
-): Promise<{ ok: true; value: PackEntry[] } | { ok: false }> {
-  const result = await scan(roots);
+): Promise<
+  | { ok: true; value: PackEntry[]; declarations: ReadonlyMap<string, ScanSourceDeclaration> }
+  | { ok: false }
+> {
+  const result = await scanInventory(roots);
   if (!result.ok) {
     emitError(ctx, {
       code: result.error.code,
@@ -77,109 +147,94 @@ export async function scanEntries(
     return { ok: false };
   }
   const entries: PackEntry[] = [];
-  // Two file kinds carry GUID-addressed entries (disk schema SSOT, AGENTS.md
-  // §Disk schema): `.pack.json` (`internal-text-package`) holds top-level
-  // `assets[]`, while every `*.meta.json` sidecar (including
-  // any `*.meta.json` regardless of source extension (top-level `importer`), all of
-  // kind `external-asset-package`) holds `subAssets[]`. The CLI surface
-  // must enumerate both so that `scan` / `lookup` mirror what the
-  // build-time catalog builder folds into `pack-index.json` (otherwise
-  // the same disk schema yields different entity counts on the two
-  // surfaces — observed regression in feat-20260517 sandbox T-2.B1).
-  const packPaths = result.value.filter((p) => p.endsWith('.pack.json'));
-  const metaPaths = result.value.filter((p) => p.endsWith('.meta.json'));
-  for (const packPath of packPaths) {
-    let parsed: unknown;
-    try {
-      const raw = await readFile(packPath, 'utf-8');
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    const packObj = parsed as { assets?: { guid?: unknown; kind?: unknown; name?: unknown }[] };
-    if (!Array.isArray(packObj.assets)) continue;
-    for (const asset of packObj.assets) {
-      if (typeof asset.guid === 'string' && typeof asset.kind === 'string') {
-        entries.push({
-          guid: asset.guid,
-          kind: asset.kind,
-          sourcePath: packPath,
-          ...(typeof asset.name === 'string' ? { name: asset.name } : {}),
-        });
+  // The scanner is the single identity projection for Pack JSON. ScriptablePack
+  // source modules deliberately contribute no rows until a build generation.
+  for (const declaration of result.value.declarations.values()) {
+    if (declaration.format !== 'meta.json') continue;
+    const sourcePath = declaration.sourcePath;
+    const assets = declaration.value.subAssets;
+    for (const asset of assets) {
+      if (!isRecord(asset) || typeof asset.guid !== 'string' || typeof asset.kind !== 'string') {
+        continue;
       }
-    }
-  }
-  for (const metaPath of metaPaths) {
-    let parsed: unknown;
-    try {
-      const raw = await readFile(metaPath, 'utf-8');
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    const metaObj = parsed as {
-      subAssets?: { guid?: unknown; kind?: unknown; name?: unknown; sourceKey?: unknown }[];
-    };
-    if (!Array.isArray(metaObj.subAssets)) continue;
-    for (const sub of metaObj.subAssets) {
-      if (typeof sub.guid === 'string' && typeof sub.kind === 'string') {
-        const name =
-          typeof sub.name === 'string'
-            ? sub.name
-            : typeof sub.sourceKey === 'string'
-              ? sub.sourceKey
-              : undefined;
-        entries.push({
-          guid: sub.guid,
-          kind: sub.kind,
-          sourcePath: metaPath,
-          ...(name === undefined ? {} : { name }),
-        });
-      }
-    }
-  }
-  for (const sourcePath of result.value.filter((path) => path.endsWith('.pack.ts'))) {
-    const loaded = await loadScriptablePack(sourcePath, { metadataOnly: true });
-    if (!loaded.ok) {
-      emitError(ctx, loaded.error);
-      return { ok: false };
-    }
-    const meta = projectScriptablePackMeta(loaded.value, sourcePath);
-    for (const sub of meta.subAssets) {
-      entries.push({ guid: sub.guid, kind: sub.kind, sourcePath });
-    }
-  }
-  const firstByGuid = new Map<string, PackEntry>();
-  for (const entry of entries) {
-    const guid = entry.guid.toLowerCase();
-    const first = firstByGuid.get(guid);
-    if (first !== undefined) {
-      emitError(ctx, {
-        code: 'pack-guid-collision',
-        expected:
-          'one author declaration per GUID across Meta, Pack v2, and ScriptablePack sources',
-        hint: 'allocate a new durable GUID through the asset authoring gateway, then rerun verify',
-        detail: { guid, paths: [first.sourcePath, entry.sourcePath] },
+      const name =
+        typeof asset.name === 'string'
+          ? asset.name
+          : typeof asset.sourceKey === 'string'
+            ? asset.sourceKey
+            : undefined;
+      entries.push({
+        guid: asset.guid,
+        kind: asset.kind,
+        sourcePath,
+        sourceIndex: asset.sourceIndex,
+        sourceRevision: declaration.sourceRevision,
+        ...(name === undefined ? {} : { name }),
       });
-      return { ok: false };
     }
-    firstByGuid.set(guid, entry);
   }
-  return { ok: true, value: entries };
+  const names = new Map<string, string>();
+  for (const declaration of result.value.declarations.values()) {
+    if (declaration.format !== 'pack.json') continue;
+    if (declaration.value.schemaVersion === '3.0.0') {
+      for (const [sourceKey, asset] of Object.entries(declaration.value.assets ?? {})) {
+        if (isRecord(asset) && typeof asset.name === 'string') {
+          names.set(`${declaration.sourcePath}:${sourceKey}`, asset.name);
+        }
+      }
+      continue;
+    }
+    for (const asset of declaration.value.assets) {
+      if (typeof asset.name === 'string') {
+        names.set(`${declaration.sourcePath}:${asset.guid.toLowerCase()}`, asset.name);
+      }
+    }
+  }
+  for (const inventoryEntry of result.value.inventory) {
+    const declaration = result.value.declarations.get(inventoryEntry.sourcePath) as
+      | ScanSourceDeclaration
+      | undefined;
+    const namedByKey =
+      inventoryEntry.sourceKey === undefined
+        ? names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.guid.toLowerCase()}`)
+        : names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.sourceKey}`);
+    const name =
+      namedByKey ?? names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.guid.toLowerCase()}`);
+    entries.push({
+      guid: inventoryEntry.guid,
+      kind: inventoryEntry.kind,
+      sourcePath: inventoryEntry.sourcePath,
+      sourceRevision: inventoryEntry.sourceRevision,
+      ...(inventoryEntry.sourceKey === undefined ? {} : { sourceKey: inventoryEntry.sourceKey }),
+      ...(inventoryEntry.sourceIndex === undefined
+        ? {}
+        : { sourceIndex: inventoryEntry.sourceIndex }),
+      ...(name === undefined ? {} : { name }),
+      ...(declaration?.format === 'pack.json' &&
+      declaration.value.schemaVersion === '3.0.0' &&
+      inventoryEntry.sourceKey !== undefined &&
+      name === undefined
+        ? { name: inventoryEntry.sourceKey }
+        : {}),
+    });
+  }
+  entries.sort((left, right) =>
+    `${left.sourcePath}:${left.guid}`.localeCompare(`${right.sourcePath}:${right.guid}`),
+  );
+  return { ok: true, value: entries, declarations: result.value.declarations };
 }
 
 function helpBody(): string {
   return [
-    'forgeax-engine-remote-asset — offline pack scanner / lookup / verifier / atlas builder',
+    'forgeax asset — offline pack scanner / lookup / verifier / atlas builder',
     '',
     'Usage:',
-    '  forgeax-engine-remote-asset scan [--roots <dir>]',
-    '  forgeax-engine-remote-asset lookup <guid>',
-    '  forgeax-engine-remote-asset verify',
-    '  forgeax-engine-remote-asset meta <source.pack.ts> --json',
-    '  forgeax-engine-remote-asset lookup --guid <guid> --project <dir> --catalog <path> --json',
-    '  forgeax-engine-remote-asset verify --guid <guid> --project <dir> --catalog <path> --json',
-    '  forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
+    '  forgeax asset list --root <project> --json',
+    '  forgeax asset inspect --subject <guid> --root <project> --json',
+    '  forgeax asset verify --root <project> --json',
+    '    output is bounded to 256 assets and includes the scanned source scope',
+    '  forgeax asset inspect --subject <source.pack.ts> --root <project> --json',
+    '  forgeax asset atlas --input <glob> --name <prefix> --root <project> [--output <dir>]',
     '',
     'AI recovery commands (host execution remains explicit):',
     '  inspect [--guid <guid>]      read subject, execution, lifecycle, authority, and sourceKey evidence',
@@ -222,7 +277,7 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
       return emitError(ctx, {
         code: 'unknown-subcommand',
         expected: 'subcommand in {scan, lookup, verify, atlas, meta}',
-        hint: "run 'forgeax-engine-remote-asset --help' for usage",
+        hint: "run 'forgeax help asset' for usage",
         detail: { subcommand: sub },
       });
   }
@@ -244,13 +299,15 @@ async function runMeta(rest: string[], ctx: AssetCtx): Promise<number> {
   } catch (error) {
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-asset meta <source.pack.ts> --json',
+      expected: 'forgeax asset inspect --subject <source.pack.ts> --root <project> --json',
       hint: 'pass one trusted ScriptablePack module path',
       detail: { message: error instanceof Error ? error.message : String(error) },
     });
   }
   const cwd = ctx.cwd ?? process.cwd();
-  const loaded = await loadScriptablePack(absolutePath(source, cwd), { metadataOnly: true });
+  const loaded = await loadScriptablePack(absolutePath(source, cwd), {
+    metadataOnly: true,
+  });
   if (!loaded.ok) return emitError(ctx, loaded.error);
   ctx.stdoutWrite(JSON.stringify(projectScriptablePackMeta(loaded.value, source)));
   return 0;
@@ -292,7 +349,7 @@ async function runRecoveryCommand(
     return emitError(ctx, {
       code: 'cli-parse-error',
       expected: `${operation} [--guid <guid>]`,
-      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      hint: "run 'forgeax help asset' for usage",
       detail: { message: error instanceof Error ? error.message : String(error) },
     });
   }
@@ -312,8 +369,8 @@ async function runScan(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-asset scan [--roots <dir>]',
-      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      expected: 'forgeax asset list --root <project> --json',
+      hint: "run 'forgeax help asset' for usage",
       detail: { message },
     });
   }
@@ -329,7 +386,7 @@ async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
   if (typeof guid !== 'string') {
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-asset lookup <36-char-uuid>',
+      expected: 'forgeax asset inspect --subject <guid> --root <project> --json',
       hint: 'pass a 36-char dash-form UUID positional argument',
     });
   }
@@ -358,6 +415,89 @@ async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
   return 0;
 }
 
+function artifactPaths(value: unknown): readonly string[] {
+  if (!isRecord(value)) return [];
+  return Object.values(value).flatMap((descriptor) =>
+    isRecord(descriptor) && typeof descriptor.path === 'string' ? [descriptor.path] : [],
+  );
+}
+
+function unknownVerificationFacts(): VerificationFacts {
+  return {
+    dependencies: [],
+    output: {
+      status: 'unknown',
+      availability: 'unknown',
+      freshness: 'unknown',
+    },
+    producer: { state: 'unknown' },
+  };
+}
+
+function sourceVerificationFacts(
+  entry: PackEntry,
+  declaration: ScanSourceDeclaration | undefined,
+): VerificationFacts {
+  if (declaration === undefined) return unknownVerificationFacts();
+  if (declaration.format === 'meta.json' || declaration.format === 'pack.ts') {
+    return {
+      dependencies: [],
+      output: {
+        status: 'unproduced',
+        availability: 'unknown',
+        freshness: 'unknown',
+      },
+      producer: { state: 'not-run' },
+    };
+  }
+
+  if (declaration.value.schemaVersion === '3.0.0') {
+    const parsed = parsePackSourceJson(declaration.value);
+    if (!parsed.ok || parsed.value.format !== 'direct' || entry.sourceKey === undefined) {
+      return {
+        dependencies: [],
+        output: {
+          status: 'unproduced',
+          availability: 'unknown',
+          freshness: 'unknown',
+        },
+        producer: { state: 'not-run' },
+      };
+    }
+    const asset = parsed.value.assets[entry.sourceKey];
+    return {
+      dependencies: asset?.refs ?? [],
+      output: {
+        status: 'unproduced',
+        availability: 'unknown',
+        freshness: 'unknown',
+      },
+      producer: { state: 'not-run' },
+    };
+  }
+
+  const asset = declaration.value.assets.find(
+    (candidate) => candidate.guid.toLowerCase() === entry.guid.toLowerCase(),
+  );
+  if (asset === undefined || (asset.execution !== 'direct' && asset.execution !== 'cooked')) {
+    return unknownVerificationFacts();
+  }
+  return {
+    dependencies: asset.refs,
+    output: {
+      // A validated legacy package row is the only published evidence this
+      // offline command reads. Artifact bytes and cook receipts remain
+      // producer-owned, so availability/freshness stay explicitly unknown.
+      status: 'produced',
+      availability: 'unknown',
+      freshness: 'unknown',
+      packagePath: entry.sourcePath,
+      ...(asset.artifacts === undefined ? {} : { artifactPaths: artifactPaths(asset.artifacts) }),
+    },
+    producer: { state: 'published' },
+  };
+}
+
 async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
   if (rest.some((value) => value === '--guid')) return runEvidence(rest, ctx);
   try {
@@ -371,18 +511,84 @@ async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-remote-asset verify',
-      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      expected: 'forgeax asset verify --root <project> --json',
+      hint: "run 'forgeax help asset' for usage",
       detail: { message },
     });
   }
   const cwd = ctx.cwd ?? process.cwd();
   const result = await scanEntries([cwd], ctx);
   if (!result.ok) return 1;
-
-  const materialCount = result.value.filter((e) => e.kind === 'material').length;
-  ctx.stdoutWrite(`material-validated: ${materialCount}`);
+  ctx.stdoutWrite(JSON.stringify(createAssetVerificationReport(cwd, result)));
   return 0;
+}
+
+/** Build the bounded provenance projection from one validated scanner pass. */
+export function createAssetVerificationReport(
+  root: string,
+  result: {
+    readonly value: readonly PackEntry[];
+    readonly declarations: ReadonlyMap<string, ScanSourceDeclaration>;
+  },
+): AssetVerificationReport {
+  const declarations = result.declarations;
+  const sourcePaths = [...declarations.keys()].sort();
+  const scriptablePackSources = [...declarations.values()]
+    .filter(
+      (declaration): declaration is Extract<ScanSourceDeclaration, { format: 'pack.ts' }> =>
+        declaration.format === 'pack.ts',
+    )
+    .sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+  const emittedEntries = result.value.slice(0, ASSET_VERIFY_LIMIT);
+  const facts = emittedEntries.map((entry) =>
+    sourceVerificationFacts(entry, declarations.get(entry.sourcePath)),
+  );
+  const materialCount = result.value.filter((e) => e.kind === 'material').length;
+  return {
+    schemaVersion: 'asset-verification-v1',
+    root,
+    scope: {
+      sourceCount: sourcePaths.length,
+      assetCount: result.value.length,
+      sourcePaths: sourcePaths.slice(0, ASSET_VERIFY_LIMIT),
+      omittedSourceCount: Math.max(0, sourcePaths.length - ASSET_VERIFY_LIMIT),
+      assetLimit: ASSET_VERIFY_LIMIT,
+      truncated: result.value.length > ASSET_VERIFY_LIMIT,
+      scriptablePackSourceCount: scriptablePackSources.length,
+      scriptablePackSources: scriptablePackSources.slice(0, ASSET_VERIFY_LIMIT).map((source) => ({
+        sourcePath: source.sourcePath,
+        packageId: source.value.packageId,
+        output: 'unproduced' as const,
+        reason: 'producer-not-run' as const,
+      })),
+      omittedScriptablePackSourceCount: Math.max(
+        0,
+        scriptablePackSources.length - ASSET_VERIFY_LIMIT,
+      ),
+    },
+    assets: emittedEntries.map((entry, index) => ({
+      guid: entry.guid,
+      type: entry.kind,
+      source: {
+        path: entry.sourcePath,
+        format: declarations.get(entry.sourcePath)?.format ?? 'pack.json',
+        role: 'author' as const,
+        ...(entry.sourceRevision === undefined ? {} : { revision: entry.sourceRevision }),
+      },
+      ...(facts[index] as VerificationFacts),
+      ...(entry.name === undefined ? {} : { name: entry.name }),
+      ...(entry.sourceKey === undefined ? {} : { sourceKey: entry.sourceKey }),
+      ...(entry.sourceIndex === undefined ? {} : { sourceIndex: entry.sourceIndex }),
+    })),
+    summary: {
+      assetCount: result.value.length,
+      emittedAssetCount: emittedEntries.length,
+      materialCount,
+      unproducedAssetCount: facts.filter((value) => value.output.status === 'unproduced').length,
+      unknownAssetCount: facts.filter((value) => value.output.status === 'unknown').length,
+      unmaterializedScriptablePackCount: scriptablePackSources.length,
+    },
+  };
 }
 
 interface EvidenceCliOptions {
@@ -412,7 +618,7 @@ function parseEvidenceOptions(rest: string[], ctx: AssetCtx): EvidenceCliOptions
       emitError(ctx, {
         code: 'cli-parse-error',
         expected: '--guid <guid> --project <dir> --catalog <path> --json',
-        hint: "run 'forgeax-engine-remote-asset --help' for usage",
+        hint: "run 'forgeax help asset' for usage",
       });
       return undefined;
     }
@@ -422,7 +628,7 @@ function parseEvidenceOptions(rest: string[], ctx: AssetCtx): EvidenceCliOptions
     emitError(ctx, {
       code: 'cli-parse-error',
       expected: '--guid <guid> --project <dir> --catalog <path> --json',
-      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      hint: "run 'forgeax help asset' for usage",
       detail: { message },
     });
     return undefined;

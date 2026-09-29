@@ -5,6 +5,7 @@ import { createAcceptedPublicationStore, scriptablePackOutputSetDigest } from '@
 import { buildCatalogResult } from '@forgeax/engine-import';
 import type { AssetPublicationEnvelope, AssetPublicationOutput } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
+import { sourceDeclarationForCatalogPath } from '../dev/source-path.js';
 
 const roots: string[] = [];
 
@@ -314,6 +315,51 @@ describe('producer-owned catalog contract', () => {
       sourceKey: 'result/main',
       revision: { digest: 'sha256:result', rootId: 'root-result' },
     });
+  });
+
+  it('projects catalog locators through a stable host identity without changing scan paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-source-identity-'));
+    roots.push(root);
+    await writeFile(
+      join(root, 'portable.pack.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid: '01890000-0000-7000-8000-eeeeeeeeeeee',
+            kind: 'mesh',
+            payload: {},
+            refs: [],
+          },
+        ],
+      }),
+    );
+
+    const sourceIdentityFor = (sourcePath: string) =>
+      sourcePath.endsWith('portable.pack.json') ? '@shared/portable.pack.json' : sourcePath;
+    const result = await buildCatalogResult(
+      [root],
+      '/',
+      new Set(),
+      {},
+      () => true,
+      sourceIdentityFor,
+    );
+
+    expect(result.authority).toBe('authoritative');
+    expect(result.entries[0]).toMatchObject({
+      sourcePath: '@shared/portable.pack.json',
+      packageUrl: '/@shared/portable.pack.json',
+    });
+    expect(result.sourceDeclarations.keys().next().value).toBe(join(root, 'portable.pack.json'));
+    expect(
+      sourceDeclarationForCatalogPath(
+        '@shared/portable.pack.json',
+        result.sourceDeclarations,
+        sourceIdentityFor,
+      )?.sourcePath,
+    ).toBe(join(root, 'portable.pack.json'));
   });
 
   it('keeps producer identity and revision facts when a locator moves', async () => {

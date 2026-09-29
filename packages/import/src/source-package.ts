@@ -1,4 +1,6 @@
+import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import type {
+  ImportError,
   ImportErrorDetail,
   ImportedAsset,
   ImportProduct,
@@ -43,6 +45,7 @@ export interface SourcePackageProducerInput {
   readonly meta: RunImportMeta;
   readonly registry: ImporterRegistry;
   readonly fs: ImportRunnerFs;
+  readonly cookers?: readonly NativeCooker[];
 }
 
 export interface SourcePackageClosureDetail {
@@ -73,18 +76,18 @@ type SourcePackageFinalizeError = Extract<
 >['error'];
 
 /** Apply an importer-owned transport finalizer without teaching the adapter its kind. */
-export function finalizeSourcePackage(
+export async function finalizeSourcePackage(
   product: ImportProduct<unknown>,
   finalizer:
     | ((
         product: ImportProduct<unknown>,
         options: ImportProductFinalizeOptions,
-      ) => ImportProductFinalizeResult)
+      ) => ImportProductFinalizeResult | Promise<ImportProductFinalizeResult>)
     | undefined,
   artifactUrl: ImportProductFinalizeOptions['artifactUrl'],
-): Result<ImportProduct<unknown>, SourcePackageFinalizeError> {
+): Promise<Result<ImportProduct<unknown>, SourcePackageFinalizeError>> {
   if (finalizer === undefined) return ok(product);
-  const result = finalizer(product, { artifactUrl });
+  const result = await finalizer(product, { artifactUrl });
   if (!result.ok) return err(result.error);
   return ok({
     ...product,
@@ -96,7 +99,7 @@ export function finalizeSourcePackage(
 
 export type SourcePackageProducerResult =
   | { readonly ok: true; readonly value: SourcePackageProduct }
-  | { readonly ok: false; readonly error: SourcePackageClosureError };
+  | { readonly ok: false; readonly error: SourcePackageClosureError | ImportError };
 
 function closureError(
   declaredGuids: readonly string[],
@@ -142,8 +145,18 @@ export async function produceSourcePackage(
   input: SourcePackageProducerInput,
 ): Promise<SourcePackageProducerResult> {
   const declaredGuids = input.meta.subAssets.map((asset) => asset.guid);
-  const result = await runImport(input.meta, input.registry, input.fs);
+  const cookers = new NativeCookerRegistry();
+  for (const cooker of input.cookers ?? []) cookers.register(cooker);
+  const result = await runImport(input.meta, input.registry, input.fs, cookers);
   if (!result.ok) {
+    // Only output-topology failures describe GUID closure. Preserve the owning
+    // import error for missing modules, unreadable sources and conversion failures.
+    if (
+      result.error.code !== 'guid-mismatch' &&
+      result.error.code !== 'import-produced-no-assets' &&
+      result.error.code !== 'source-validation-failed'
+    )
+      return result;
     const producedGuids = producedGuidsFromImportFailure(declaredGuids, result.error.detail);
     return {
       ok: false,

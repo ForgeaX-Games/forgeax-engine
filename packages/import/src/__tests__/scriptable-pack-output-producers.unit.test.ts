@@ -1,3 +1,4 @@
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetGuid as AssetGuidType, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -20,28 +21,7 @@ const SAMPLER_GUID = guid('019ffa97-3000-7000-8000-000000000004');
 describe('ScriptablePack standard output producers', () => {
   it('packs generated mesh bytes and derives default-material references', async () => {
     const mesh: MeshAsset = {
-      kind: 'mesh',
-      vertices: new Float32Array([
-        0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0,
-        1, 1, 0, 0, 1,
-      ]),
-      indices: new Uint16Array([0, 1, 2]),
-      attributes: {
-        position: new Float32Array(9),
-        normal: new Float32Array(9),
-        uv: new Float32Array(6),
-        tangent: new Float32Array(12),
-      },
-      aabb: new Float32Array([0, 0, 0, 1, 0, 1]),
-      submeshes: [
-        {
-          topology: 'triangle-list',
-          indexOffset: 0,
-          indexCount: 3,
-          vertexCount: 3,
-          materialSlot: 0,
-        },
-      ],
+      ...createBoxGeometry(1, 1, 1).unwrap(),
       materialSlots: [{ slotName: 'Shell', sourceKey: 'shell', defaultMaterial: MATERIAL_GUID }],
     };
 
@@ -62,18 +42,22 @@ describe('ScriptablePack standard output producers', () => {
     ]);
     expect(result.value.artifacts.body).toMatchObject({
       mediaType: 'application/x-forgeax-mesh',
-      assetCodec: { name: 'mesh-binary', version: '4' },
+      assetCodec: { name: 'mesh-binary', version: '5' },
     });
     expect(result.value.artifacts.body?.bytes.byteLength).toBeGreaterThan(28);
   });
 
-  it('projects material GUID fields into one deterministic refs graph', async () => {
+  it.each([
+    'baseColorTexture',
+    'metallicTexture',
+    'roughnessTexture',
+    'alphaTexture',
+  ])('projects %s GUIDs and coordinates into one deterministic refs graph', async (slot) => {
     const material: MaterialAsset = {
       kind: 'material',
       parent: PARENT_GUID,
-      parameters: [{ name: 'surface', type: 'texture' }],
       values: {
-        surface: {
+        [slot]: {
           texture: TEXTURE_GUID,
           sampler: SAMPLER_GUID,
           coordinates: { set: 1, transform: { scale: [2, 2] } },
@@ -93,18 +77,18 @@ describe('ScriptablePack standard output producers', () => {
       { guid: AssetGuid.format(PARENT_GUID), sourceField: { fieldName: 'parent' } },
       {
         guid: AssetGuid.format(TEXTURE_GUID),
-        sourceField: { componentName: '<material>', fieldName: 'surface' },
+        sourceField: { componentName: '<material>', fieldName: slot },
       },
       {
         guid: AssetGuid.format(SAMPLER_GUID),
-        sourceField: { componentName: '<material>', fieldName: 'surface.sampler' },
+        sourceField: { componentName: '<material>', fieldName: `${slot}.sampler` },
       },
     ]);
     expect(result.value.payload).toEqual({
       ...material,
       parent: 0,
       values: {
-        surface: {
+        [slot]: {
           texture: 1,
           sampler: 2,
           coordinates: { set: 1, transform: { scale: [2, 2] } },
@@ -136,17 +120,22 @@ describe('ScriptablePack standard output producers', () => {
       },
     ]);
     const payload = result.value.payload as { values?: Record<string, unknown> };
-    expect(payload.values).toEqual({ surface: 0 });
+    expect(payload.values).toEqual({ surface: { texture: 0 } });
     expect(payload.values?.surface).not.toEqual({
       texture: 0,
       coordinates: { set: 0, transform: { offset: [0, 0], scale: [1, 1], rotation: 0 } },
     });
   });
 
-  it('projects a string texture shorthand as a ref when parameters are omitted', async () => {
+  it.each([
+    'baseColorTexture',
+    'metallicTexture',
+    'roughnessTexture',
+    'alphaTexture',
+  ])('projects %s shorthand as a ref when parameters are omitted', async (slot) => {
     const material: MaterialAsset = {
       kind: 'material',
-      values: { baseColorTexture: AssetGuid.format(TEXTURE_GUID) },
+      values: { [slot]: AssetGuid.format(TEXTURE_GUID) },
     };
 
     const result = await materialAssetOutputProducer.produce({
@@ -160,11 +149,11 @@ describe('ScriptablePack standard output producers', () => {
     expect(result.value.refs).toEqual([
       {
         guid: AssetGuid.format(TEXTURE_GUID),
-        sourceField: { componentName: '<material>', fieldName: 'baseColorTexture' },
+        sourceField: { componentName: '<material>', fieldName: slot },
       },
     ]);
     expect((result.value.payload as { values?: Record<string, unknown> }).values).toEqual({
-      baseColorTexture: 0,
+      [slot]: { texture: 0 },
     });
   });
 

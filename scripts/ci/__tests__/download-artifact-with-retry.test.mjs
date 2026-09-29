@@ -9,6 +9,7 @@ import test from 'node:test';
 import {
   ARTIFACT_IDLE_TIMEOUT_MS,
   ARTIFACT_REQUEST_TIMEOUT_MS,
+  artifactDestination,
   artifactNamePattern,
   DOWNLOAD_IDLE_TIMEOUT_MS,
   discoverRunArtifacts,
@@ -57,6 +58,11 @@ test('creates nested artifact destinations before extraction', async () => {
   }
 });
 
+test('pattern downloads preserve artifact roots unless the caller requests one merged tree', () => {
+  assert.equal(artifactDestination('reports', 'smoke-shard-0'), join('reports', 'smoke-shard-0'));
+  assert.equal(artifactDestination('reports', 'smoke-shard-0', true), 'reports');
+});
+
 test('streams an artifact response to disk while preserving its digest', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forgeax-artifact-stream-'));
   const destination = join(root, 'archive.zip');
@@ -80,6 +86,29 @@ test('streams an artifact response to disk while preserving its digest', async (
     if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
     else process.env.GITHUB_TOKEN = previousToken;
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a different product before downloading its archive', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GITHUB_TOKEN;
+  const previousSha = process.env.FORGEAX_ARTIFACT_EXPECTED_SHA;
+  let requests = 0;
+  try {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.FORGEAX_ARTIFACT_EXPECTED_SHA = 'a'.repeat(40);
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ workflow_run: { head_sha: 'b'.repeat(40) } }));
+    };
+    await assert.rejects(downloadArtifact('owner/repo', '42', '/unused'), /product SHA mismatch/);
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousToken;
+    if (previousSha === undefined) delete process.env.FORGEAX_ARTIFACT_EXPECTED_SHA;
+    else process.env.FORGEAX_ARTIFACT_EXPECTED_SHA = previousSha;
   }
 });
 
@@ -244,6 +273,46 @@ test('fails closed when matrix artifact discovery is partial, duplicated, or uns
     () => selectRunArtifacts([{ id: 1, name: 'shard-../a1', expired: false }], 'shard-*', 1),
     /unsafe artifact name/,
   );
+});
+
+test('selects the newest immutable artifact for each matrix producer after a failed-job rerun', () => {
+  assert.deepEqual(
+    selectRunArtifacts(
+      [
+        { id: 10, name: 'smoke-shard-0', expired: false },
+        { id: 11, name: 'smoke-shard-1', expired: false },
+        { id: 12, name: 'smoke-shard-2', expired: false, created_at: '2026-09-28T05:35:55Z' },
+        { id: 13, name: 'smoke-shard-3', expired: false },
+        { id: 9, name: 'smoke-shard-2', expired: false, created_at: '2026-09-28T05:51:45Z' },
+        { id: 22, name: 'smoke-roster-a1', expired: false },
+      ],
+      'smoke-shard-*',
+      4,
+    ).map(({ id, name }) => ({ id, name })),
+    [
+      { id: 10, name: 'smoke-shard-0' },
+      { id: 11, name: 'smoke-shard-1' },
+      { id: 9, name: 'smoke-shard-2' },
+      { id: 13, name: 'smoke-shard-3' },
+    ],
+  );
+});
+
+test('rejects ambiguous same-name artifact ordering instead of guessing from IDs', () => {
+  const previous = { id: 12, name: 'smoke-shard-2', created_at: '2026-09-28T05:35:55Z' };
+  for (const created_at of [undefined, 'invalid', previous.created_at]) {
+    assert.throws(
+      () =>
+        selectRunArtifacts(
+          [previous, { id: 9, name: previous.name, created_at }],
+          'smoke-shard-*',
+          1,
+        ),
+      /ambiguous creation time/,
+    );
+  }
+  const newer = { id: 9, name: previous.name, created_at: '2026-09-28T05:51:45Z' };
+  assert.deepEqual(selectRunArtifacts([newer, previous], 'smoke-shard-*', 1), [newer]);
 });
 
 test('retries a simulated connection reset then returns the successful attempt', async () => {

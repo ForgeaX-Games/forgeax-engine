@@ -4,7 +4,7 @@ import {
   EXECUTION_CAPABILITY_NAMES,
   type ExecutionCapabilities,
   isExecutionReport,
-  selectExecutionTier,
+  selectExecutionWorkers,
 } from '../index';
 
 function capabilities(available = true): ExecutionCapabilities {
@@ -18,18 +18,23 @@ function capabilities(available = true): ExecutionCapabilities {
 
 describe('ExecutionReport contract', () => {
   it('is the closed requested/actual/capability/health/performance/fault snapshot', () => {
-    const selection = selectExecutionTier({
-      requestedTier: 'auto',
+    const selection = selectExecutionWorkers({
       capabilities: capabilities(),
-      sharedEvidencePassed: true,
     }).unwrap();
-    const report = createExecutionReport('auto', capabilities(), selection);
-    expect(report.requestedTier).toBe('auto');
-    expect(report.actualTier).toBe('shared');
+    const report = createExecutionReport(capabilities(), selection);
+    expect(report.workers.render.enabled).toBe(true);
+    expect(report.workers.kernels.enabled).toBe(true);
     expect(report.capabilities.worker.available).toBe(true);
     expect(report.engine.health).toBe('idle');
     expect(report.world.health).toBe('healthy');
     expect(report.kernelDispatch.reason).toBe('no-eligible-kernel');
+    expect(report.frame).toEqual({
+      submitted: 0,
+      completed: 0,
+      inFlight: 0,
+      highWater: 0,
+      throttledTicks: 0,
+    });
     expect(report.performance.kernelWaitMs).toBeNull();
     expect(report.audio).toEqual({
       owner: 'host',
@@ -42,9 +47,31 @@ describe('ExecutionReport contract', () => {
   });
 
   it('rejects missing and extra schema fields', () => {
-    const report = createExecutionReport('main-serial', capabilities(false));
+    const report = createExecutionReport(
+      capabilities(false),
+      selectExecutionWorkers({ capabilities: capabilities(false) }).unwrap(),
+    );
     const { world: _world, ...missing } = report;
     expect(isExecutionReport(missing)).toBe(false);
     expect(isExecutionReport({ ...report, workerId: 1 })).toBe(false);
+  });
+
+  it('rejects frame counters that break the submitted/completed invariant', () => {
+    const report = createExecutionReport(
+      capabilities(false),
+      selectExecutionWorkers({ capabilities: capabilities(false) }).unwrap(),
+    );
+    expect(
+      isExecutionReport({
+        ...report,
+        frame: { ...report.frame, inFlight: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      isExecutionReport({
+        ...report,
+        frame: { ...report.frame, completed: 1 },
+      }),
+    ).toBe(false);
   });
 });

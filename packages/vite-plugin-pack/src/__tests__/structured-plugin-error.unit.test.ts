@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { structuredPluginError } from '../structured-plugin-error.js';
 
 describe('structuredPluginError', () => {
+  it('retains the repairable source diagnostic when a bundler only prints message', () => {
+    const error = structuredPluginError({
+      code: 'import-internal-error',
+      expected: 'a valid source build',
+      hint: 'repair the authored source',
+      detail: { reason: 'architecture.ts:169:1: missing closing brace' },
+    });
+    expect(error.message).toContain('architecture.ts:169:1');
+    expect(error.message).toContain('repair the authored source');
+  });
   it('preserves recovery fields across the Vite Error boundary', () => {
     const detail = { sourcePath: 'broken.pack.ts', reason: 'domain-cook' };
     const error = structuredPluginError({
@@ -53,7 +63,7 @@ describe('structuredPluginError', () => {
       hint: 'discard the invalid entry and cold-cook the source package',
     });
 
-    expect(error.message).toBe('source-package-ddc-failed: a persistent DDC entry');
+    expect(error.message).toContain('source-package-ddc-failed: a persistent DDC entry');
     expect(error.detail).toBeUndefined();
     expect(error.code).toBe('source-package-ddc-failed');
   });

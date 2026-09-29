@@ -46,6 +46,7 @@ vi.mock('@forgeax/engine-runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@forgeax/engine-runtime')>();
   const lease = { dispose: vi.fn() };
   const rendererStub = {
+    state: () => 'alive' as const,
     attach(): { ok: true; value: object } {
       return { ok: true, value: lease };
     },

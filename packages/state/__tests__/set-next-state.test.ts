@@ -91,7 +91,13 @@ describe('setNextState', () => {
     expect(err.code).toBe('state-not-registered');
     expect(err.detail).toHaveProperty('name', 'MyState');
     expect(result.unwrapOr(undefined)).toBeUndefined();
-    expect(() => result.unwrap()).toThrow(err);
+    let thrown: unknown;
+    try {
+      result.unwrap();
+    } catch (cause) {
+      thrown = cause;
+    }
+    expect(thrown).toBe(err);
   });
 
   it('last write wins on multiple consecutive setNextState calls', () => {

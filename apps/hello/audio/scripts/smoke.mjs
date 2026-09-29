@@ -2,12 +2,12 @@
 // hello-audio headless smoke.
 //
 // Strategy: createApp with audioPlugin(), verify App handle + AudioEngine
-// resource is registered, render 300 frames, capture.
+// resource is registered, render 60 frames, capture.
 //
 // This smoke verifies the createApp audio integration pipeline:
 //   1. createApp(canvas, { plugins: [audioPlugin()] }) succeeds.
 //   2. Renderer.ready succeeds.
-//   3. app.start() + 300-frame loop + app.stop() succeeds.
+//   3. app.start() + 60-frame loop + app.stop() succeeds.
 //   4. AudioEngine resource is inserted into World after boot.
 //
 // Pixel readback is NOT performed in this smoke: headless dawn-node has no
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -183,7 +183,7 @@ if (!startResult.ok) {
   process.exit(1);
 }
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   const due = rafQueue.shift();

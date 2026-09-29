@@ -1,77 +1,43 @@
 # @forgeax/engine-project
 
-文件系统位置是 `packages/project/`，公共包身份仍是 `@forgeax/engine-project`。目录位置用于在仓库中定位 manifest 包；公共身份用于导入其 API，二者不会因目录迁移而互换。
-
-Game-project SSOT — zod schema + injectable loader + resolve layer for `forge.json`, the authoritative game manifest contract.
-
-`plugins[]` stores the project plugin Entry tree. Its `id`, `name`, `config`, `group`, `disabled`, and `inject` fields follow DeepSeek Harness `EntryOptions`; `realm: 'host' | 'engine' | 'build'` is the only ForgeaX build-placement extension. Entry ids are non-empty and unique across the tree.
+The realm-neutral schema and injected JSON reader for `forge.json`. Its strict schema is **3.0.0**; `roots` is required and may be empty. Each optional `build`, `host`, `frontend`, or `engine` key names one plugin asset GUID.
 
 ```json
 {
   "id": "my-game",
   "name": "My Game",
-  "schemaVersion": "1.0.0",
-  "entry": "main.ts",
-  "plugins": [
-    { "id": "gameplay", "name": "./main.ts", "realm": "engine" }
-  ]
+  "schemaVersion": "3.0.0",
+  "roots": { "engine": "00000000-0000-4000-8000-000000000001" }
 }
 ```
 
-The manifest is persistent authoring state. Devkit derives a static module Catalog from it; the player never scans packages.
-
-See [`AGENTS.md`](../../AGENTS.md) § "Project model" for the conceptual model.
-
-## Usage
-
-`loadGameProject` is the primary entry point. Inject a reader so the loader stays free of `node:fs` / `fetch` (the same loader runs in server, editor, and tests):
-
-```ts
-import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
-import { readFile } from 'node:fs/promises';
-
-const result = await loadGameProject((path) => readFile(`/games/my-game/${path}`, 'utf-8'));
-if (result.ok) {
-  const project = result.value;            // typed GameProject (z.infer)
-  console.log(project.name, project.defaultScene);
-} else {
-  // structured, actionable failure (charter P3)
-  console.error(result.error.code, result.error.hint);
-}
-```
-
-Synchronous consumers (e.g. a sync `ContextSlot`) use the companion `loadGameProjectSync` — identical injection contract with a sync reader `(path) => string`:
-
-```ts
-import { loadGameProjectSync } from '@forgeax/engine-project';
-import { readFileSync } from 'node:fs';
-
-const r = loadGameProjectSync((path) => readFileSync(`/games/my-game/${path}`, 'utf-8'));
-const name = r.ok ? r.value.name : null;
-```
-
-`resolveDefaultScene({ read, resolveGuid })` is the two-layer resolve path: it loads the project, then resolves `defaultScene` through an injected GUID resolver (asserting `kind === 'scene'`).
-
-## Error codes
-
-Every failure returns a `GameProjectError` with `.code` / `.expected` / `.hint` / `.detail`. Switch exhaustively on `.code` (closed union, no `default` needed):
-
-| code | when |
+| Root | Installation owner |
 |:--|:--|
-| `forge-missing` | reader threw / forge.json not found |
-| `forge-parse-failed` | invalid JSON |
-| `forge-schema-invalid` | valid JSON, fails schema (missing / wrong-typed required field) |
-| `forge-unknown-field` | `.strict()` rejected an unknown field (e.g. legacy `scenes[]`) |
-| `forge-guid-malformed` | `defaultScene` present but not a valid GUID |
-| `forge-scene-unresolved` | `resolveDefaultScene` could not resolve the GUID to a `kind: 'scene'` asset |
+| build | Isolated Node build process with producer registries |
+| engine | App's World realm, on the main thread or an Engine Worker |
+| host | DOM, audio and host transport realm |
 
-## Schema as contract
+Configuration belongs in the referenced Pack asset. Native plugin code composes children. A scene is instantiated and released by a scene-owner plugin. The project manifest remains outside the asset Catalog.
 
-`GameProjectSchema` is the authoritative field list (charter P2) — read it instead of prose, and derive types via `import type { GameProject } from '@forgeax/engine-project'`.
+## Read a project
 
-`entry` names the legacy combined game bootstrap. `executionEntry` opts a game
-into the realm-local `ExecutionBootstrapEntry` contract from
-`@forgeax/engine-app`; it is never inferred from filename conventions. A host
-may use `entry` for DOM-only presentation while the execution module owns the
-real World, Renderer, AssetRegistry, plugins, and render features. Games without
-`executionEntry` remain on the host assembly path.
+```ts
+import { loadGameProject } from '@forgeax/engine/project';
+import { readFile } from 'node:fs/promises';
+const result = await loadGameProject(path => readFile(`/games/my-game/${path}`, 'utf8'));
+if (result.ok) console.log(result.value.name, result.value.roots.engine);
+else console.error(result.error.code, result.error.hint);
+```
+
+`loadGameProjectSync` accepts the equivalent synchronous reader. `GameProjectSchema` and its inferred `GameProject` type are the field authority. Unknown fields and malformed GUIDs fail before any plugin is installed. Closed errors and their narrowed detail are defined in [errors.ts](src/errors.ts).
+
+## Migration
+
+Legacy project installation trees and implicit default scenes are rejected. DevKit's `project migrate` creates a separately validated candidate project from a schema 2.0 manifest and statically convertible composition. Dynamic configuration, children or update hooks report the owning source location for an explicit rewrite. See [DevKit](../devkit/README.md).
+
+| Root | Execution owner |
+|:--|:--|
+| `host` | Resident Node backend |
+| `frontend` | Browser DOM and UI |
+| `engine` | World in the selected execution realm |
+| `build` | Isolated import/cooking process |

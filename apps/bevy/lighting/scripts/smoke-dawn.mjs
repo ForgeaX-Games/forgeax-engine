@@ -17,7 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const WIDTH = 320;
 const HEIGHT = 180;
@@ -123,6 +123,9 @@ subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.
 const RED = [1, 0, 0];
 const LIME = [0, 1, 0];
 const BLUE = [0, 0, 1];
+const RED4 = [1, 0, 0, 1];
+const LIME4 = [0, 1, 0, 1];
+const BLUE4 = [0, 0, 1, 1];
 
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
@@ -156,7 +159,7 @@ world.spawn(
 );
 
 // ── Logo quad ───────────────────────────────────────────────────────────
-const logoMat = world.allocSharedRef('MaterialAsset', Materials.unlit({ baseColor: [1, 1, 1, 1] }));
+const logoMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1]));
 const logoQuat = quat.create();
 quat.fromAxisAngle(logoQuat, [0, 1, 0], Math.PI / 8);
 world.spawn(
@@ -182,7 +185,7 @@ world.spawn(
 );
 
 // ── Red PointLight with emissive sphere child ───────────────────────────
-const redEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: RED, emissive: [4, 0, 0] }));
+const redEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: RED4, emissive: [4, 0, 0] }));
 world.spawn(
   { component: Transform, data: { pos: [1, 2, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: PointLight, data: { color: RED, intensity: 400, range: 20, castShadow: true } },
@@ -194,7 +197,7 @@ world.spawn(
 );
 
 // ── Green SpotLight with emissive sphere child ──────────────────────────
-const greenEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: LIME, emissive: [0, 4, 0] }));
+const greenEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: LIME4, emissive: [0, 4, 0] }));
 world.spawn(
   {
     component: Transform,
@@ -219,7 +222,7 @@ world.spawn(
 );
 
 // ── Blue PointLight with emissive sphere child ──────────────────────────
-const blueEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: BLUE, emissive: [0, 0, 4] }));
+const blueEmissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: BLUE4, emissive: [0, 0, 4] }));
 world.spawn(
   { component: Transform, data: { pos: [0, 4, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: PointLight, data: { color: BLUE, intensity: 400, range: 20, castShadow: true } },

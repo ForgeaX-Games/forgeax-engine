@@ -1041,6 +1041,66 @@ test('t2: valid contract and workflow passes', async () => {
   }
 });
 
+test('t2: production app shards use credentialed source checkout and verified assets', () => {
+  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const { dir, fp } = tmpWorkflow(workflow);
+  try {
+    const result = runChecker(['--workflow', fp]);
+    assert.equal(result.exitCode, 0, `production workflow should pass: ${result.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t2: app-shard checkout auth drift fails the workflow contract', () => {
+  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const marker = '# Every app shard consumes forgeax-engine-assets.';
+  const markerIndex = workflow.indexOf(marker);
+  assert.notEqual(markerIndex, -1, 'app-shard-0 checkout marker must remain explicit');
+  const credential = 'token: $' + '{{ secrets.GHA }}';
+  const tokenIndex = workflow.indexOf(credential, markerIndex);
+  assert.notEqual(tokenIndex, -1, 'app-shard-0 must declare private checkout credentials');
+  const brokenWorkflow =
+    workflow.slice(0, tokenIndex) +
+    'token: missing' +
+    workflow.slice(tokenIndex + credential.length);
+  const { dir, fp } = tmpWorkflow(brokenWorkflow);
+  try {
+    const result = runChecker(['--workflow', fp]);
+    assert.notEqual(result.exitCode, 0, 'checkout auth drift must fail closed');
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.code, 'ci-artifact-contract-app-shard-checkout');
+    assert.equal(parsed.actual.job, 'app-shard-0');
+    assert.equal(parsed.actual.token, 'missing');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t2: missing app-shard asset preparation fails the workflow contract', () => {
+  const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const markerIndex = workflow.indexOf('# Every app shard consumes forgeax-engine-assets.');
+  assert.notEqual(markerIndex, -1);
+  const command = 'node scripts/ci/prepare-assets-checkout.mjs';
+  const prepareIndex = workflow.indexOf(command, markerIndex);
+  assert.notEqual(prepareIndex, -1);
+  const brokenWorkflow =
+    workflow.slice(0, prepareIndex) +
+    'echo omitted' +
+    workflow.slice(prepareIndex + command.length);
+  const { dir, fp } = tmpWorkflow(brokenWorkflow);
+  try {
+    const result = runChecker(['--workflow', fp]);
+    assert.notEqual(result.exitCode, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.code, 'ci-artifact-contract-app-shard-checkout');
+    assert.equal(parsed.actual.job, 'app-shard-0');
+    assert.equal(parsed.actual.prepared, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // -- Timing roster: jobIdentity not in workflow --
 test('t2: timing roster jobIdentity not in workflow produces structured error', async () => {
   const c = validContract();
@@ -1951,10 +2011,11 @@ test('M4-T1: producer evidence reaches merged provenance and bounded PR observat
     'APP_SHARD_0_PROVENANCE',
     'APP_SHARD_1_PROVENANCE',
     'APP_SHARD_2_PROVENANCE',
+    'SHARED_PROVENANCE',
   ]) {
     assert.match(buildArtifacts, new RegExp(payload));
   }
-  assert.match(buildArtifacts, /name: Download shared producer provenance/);
+  assert.doesNotMatch(buildArtifacts, /name: Download shared producer provenance/);
   assert.match(
     buildArtifacts,
     /name: Merge provenance records[\s\S]*--aggregate-attempt \$\{\{ github\.run_attempt \}\}/,

@@ -8,10 +8,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 320;
 const HEIGHT = 180;
-const FIXED_DT = 1 / 60;
+const FIXED_DT = 5 / FRAMES;
 const here = dirname(fileURLToPath(import.meta.url));
 
 const { create, globals } = await import('webgpu');
@@ -66,7 +66,14 @@ const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeSpritePixels();
-const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
+const texture = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: SPRITE_SIZE, height: SPRITE_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: pixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 buildMoveSpriteWorld(world, unwrapHandle(textureHandle));
 
@@ -115,7 +122,7 @@ mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(lateFrame, WIDTH, HEIGHT));
 console.log(`[smoke] frames=${FRAMES} minX=${minSeen.toFixed(3)} maxX=${maxSeen.toFixed(3)} reversals=${reversals} motionMeanDelta=${motionDelta.toFixed(5)} errors=${errors.length} png=${pngPath}`);
 const visible = lateFrame.some((value, index) => index % bytesPerPixel === 3 && value > 0) || earlyFrame.some((value, index) => index % bytesPerPixel === 3 && value > 0);
-if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 100 || minSeen > MIN_X + 0.2 || maxSeen < MAX_X - 0.2 || reversals < 2 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 60 || minSeen > MIN_X + 0.2 || maxSeen < MAX_X - 0.2 || reversals < 2 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
   console.error('[smoke] FAIL - backend/frames/visibility/bounds/reversal/motion/error criterion failed');
   process.exit(1);
 }

@@ -3,7 +3,7 @@ import type { AssetCompression, DecodedImage, ImageMeta } from '@forgeax/engine-
 /**
  * External-asset-package envelope shape mirroring the
  * `packages/pack/schema/meta.schema.json` $defs/ExternalAssetPackage.
- * Consumed by `forgeax-engine-remote-asset import` (CLI entry, M3b) +
+ * Consumed by `forgeax asset import` (unified CLI entry) +
  * the image importer in M2 build-time path. The internal-text-package
  * variant ($defs/InternalTextPackage) is owned by the gltf-loader feat.
  */

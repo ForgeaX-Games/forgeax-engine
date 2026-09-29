@@ -4,7 +4,6 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -29,6 +28,7 @@ const MATRIX_CONTEXTS = new Map([
   ['smoke-fleet-0', 'smoke-fleet'],
   ['smoke-fleet-1', 'smoke-fleet'],
   ['smoke-fleet-2', 'smoke-fleet'],
+  ['smoke-fleet-3', 'smoke-fleet'],
   ['bevy-smoke-fleet', 'bevy-smoke-fleet-required-context'],
   ['bevy-smoke-fleet-0', 'bevy-smoke-fleet'],
   ['bevy-smoke-fleet-1', 'bevy-smoke-fleet'],
@@ -40,6 +40,7 @@ const MATRIX_VALUE = /\$\{\{ matrix\.([a-zA-Z0-9_-]+) \}\}/g;
 const SHARED_ARTIFACT_ID_EXPRESSION = '$' + '{{ steps.upload-shared-inputs.outputs.artifact-id }}';
 const STEP_OUTPUT_EXPRESSION =
   /\$\{\{\s*steps\.([a-zA-Z0-9_-]+)\.outputs\.([a-zA-Z0-9_-]+)\s*\}\}/g;
+const RUNNER_TEMP_EXPRESSION = /\$\{\{\s*runner\.temp\s*\}\}/g;
 
 const SETUP_ONLY = [
   /^echo "value=\$\(cat \.pnpm-version\)" >> \$GITHUB_OUTPUT$/,
@@ -185,14 +186,6 @@ export function localGitHubRuntime(environment = {}) {
   };
 }
 
-export function isLocalSharedProvenanceDownload(command) {
-  return (
-    /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
-    /needs\.shared-app-inputs\.outputs\.provenance_artifact_id/.test(command) &&
-    /--path provenance-records\b/.test(command)
-  );
-}
-
 /**
  * The remote app-shard job downloads the catalog-only projection into the
  * consumer-owned `shared-app-inputs/` root. The local producer writes that
@@ -203,7 +196,7 @@ export function isLocalSharedInputsDownload(command) {
   return (
     /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
     /needs\.shared-app-inputs\.outputs\.shared_artifact_id/.test(command) &&
-    /--path shared-app-inputs\b/.test(command)
+    /--path shared-app-inputs-transfer\b/.test(command)
   );
 }
 
@@ -240,20 +233,16 @@ export function isLocalShardArtifactsDownload(command) {
   );
 }
 
-export function isLocalWebkitStatusDownload(command) {
+export function isLocalFallbackStatusDownload(command) {
   return (
     /needs\.webkit-fallback\.outputs\.webkit_status_artifact_id/.test(command) &&
     /--path report\/color-lighting-parity\b/.test(command)
   );
 }
 
-export function localSharedProvenancePaths(root, attempt) {
-  const name = `provenance-shared-app-inputs-a${attempt}.json`;
-  return {
-    source: resolve(root, name),
-    destination: resolve(root, 'provenance-records', name),
-  };
-}
+// Keep the old exported helper as a source-compatibility alias while the
+// protected GitHub context is migrated from its historical WebKit name.
+export const isLocalWebkitStatusDownload = isLocalFallbackStatusDownload;
 
 export function localShardReportPaths(root) {
   return {
@@ -264,15 +253,6 @@ export function localShardReportPaths(root) {
 
 export function localShardArtifactPath(directory, shard) {
   return resolve(directory, `app-shard-${shard}`);
-}
-
-function provideLocalSharedProvenance(attempt) {
-  const { source, destination } = localSharedProvenancePaths(ROOT, attempt);
-  if (!existsSync(source)) {
-    throw new Error(`ci-local-verify-shared-provenance-missing: ${source}`);
-  }
-  mkdirSync(resolve(ROOT, 'provenance-records'), { recursive: true });
-  copyFileSync(source, destination);
 }
 
 function provideLocalSharedInputsProjection() {
@@ -357,9 +337,8 @@ function staticUploadOutput(step, output, attempt, runtime) {
     'upload-app-ddc-1': 'app-shard-ddc-1',
     'upload-app-ddc-2': 'app-shard-ddc-2',
     'upload-shared-inputs': 'shared-app-inputs',
-    'upload-shared-provenance': 'shared-provenance',
     'upload-metrics-report': 'metrics-report',
-    'upload-webkit-status': 'webkit-status',
+    'upload-webkit-status': 'chromium-fallback-color-lighting-status',
   };
   const artifactName = artifactNames[step];
   if (artifactName === undefined) return undefined;
@@ -443,6 +422,10 @@ export function substituteLocalStepOutputs(value, runtime, stepOutputs = new Map
       staticUploadOutput(step, output, attempt, runtime) ??
       expression,
   );
+}
+
+export function substituteLocalRunnerTemp(value, runnerTemp) {
+  return value.replace(RUNNER_TEMP_EXPRESSION, runnerTemp);
 }
 
 export function contextJob(context) {
@@ -614,6 +597,7 @@ export function localizeDarwinXvfb(command, platform = process.platform) {
       /^([ \t]*)xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 /gm,
       '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ',
     )
+    .replace(/(\brun_browser[ \t]+)xvfb-run -a /gm, '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ')
     .replace(/^([ \t]*)xvfb-run -a /gm, '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ');
 }
 
@@ -788,6 +772,7 @@ function run(
   githubEnvironment,
   stepOutputs,
   codemodBaseline,
+  runnerTemp,
 ) {
   const runtime = localGitHubRuntime(process.env);
   const command = substituteLocalMatrix(
@@ -816,7 +801,7 @@ function run(
       '[ci] macOS local adaptation: replaced Linux Xvfb headed browser with Chromium headless',
     );
   }
-  console.log(`\n[ci:${dryRun ? 'dry-run' : 'run'}] ${command}`);
+  console.log(`\n[ci:${dryRun ? 'dry-run' : 'run'}] ${localStep.command}`);
   if (dryRun) return 0;
   const temporaryFiles =
     needsStepSummary(localStep.command) ||
@@ -835,20 +820,24 @@ function run(
     const env = {
       ...runtime,
       ...process.env,
+      RUNNER_TEMP: runnerTemp,
       ...githubEnvironment,
       ...Object.fromEntries(
         Object.entries({ ...environment, ...step.environment }).map(([name, value]) => [
           name,
-          substituteLocalMatrix(
-            substituteLocalNeedsOutputs(
-              substituteLocalNeedsResults(
-                substituteLocalStepOutputs(value, runtime, stepOutputs),
-                needsResults,
+          substituteLocalRunnerTemp(
+            substituteLocalMatrix(
+              substituteLocalNeedsOutputs(
+                substituteLocalNeedsResults(
+                  substituteLocalStepOutputs(value, runtime, stepOutputs),
+                  needsResults,
+                ),
+                runtime.GITHUB_RUN_ATTEMPT,
+                needsOutputs,
               ),
-              runtime.GITHUB_RUN_ATTEMPT,
-              needsOutputs,
+              matrix,
             ),
-            matrix,
+            runnerTemp,
           ),
         ]),
       ),
@@ -893,6 +882,9 @@ function run(
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  if (!/^[0-9a-f]{40}$/.test(process.env.EXPECTED_PRODUCT_SHA ?? '')) {
+    throw new Error('ci-local-verify-expected-product-sha-missing: provide a full external SHA');
+  }
   const workflow = readFileSync(WORKFLOW, 'utf8');
   const all = localTargets(workflow);
   if (args.group && !all.includes(args.group) && !requiredContexts().includes(args.group)) {
@@ -903,6 +895,7 @@ export function main(argv = process.argv.slice(2)) {
   const needsResults = new Map();
   const needsOutputs = new Map();
   const localArtifacts = mkdtempSync(resolve(tmpdir(), 'forgeax-ci-shards-'));
+  const runnerTemp = mkdtempSync(resolve(tmpdir(), 'forgeax-ci-runner-temp-'));
   try {
     for (const target of targets) {
       const selectedMatrix = matrixSelection(args.group, target);
@@ -915,13 +908,6 @@ export function main(argv = process.argv.slice(2)) {
         if (plan.requires.length) console.log(`[ci] prerequisites: ${plan.requires.join('; ')}`);
         for (const step of plan.steps) {
           const { command } = step;
-          if (isLocalSharedProvenanceDownload(command)) {
-            if (!args.dryRun) {
-              provideLocalSharedProvenance(localGitHubRuntime(process.env).GITHUB_RUN_ATTEMPT);
-            }
-            console.log(`[ci] local artifact substitute: ${command}`);
-            continue;
-          }
           if (isLocalSharedInputsDownload(command)) {
             if (!args.dryRun) provideLocalSharedInputsProjection();
             console.log(`[ci] local artifact substitute: ${command}`);
@@ -948,10 +934,10 @@ export function main(argv = process.argv.slice(2)) {
             console.log(`[ci] local artifact substitute: ${command}`);
             continue;
           }
-          if (isLocalWebkitStatusDownload(command)) {
-            const statusPath = resolve(ROOT, 'report/color-lighting-parity/webkit-status.json');
+          if (isLocalFallbackStatusDownload(command)) {
+            const statusPath = resolve(ROOT, 'report/color-lighting-parity/chromium-status.json');
             if (!args.dryRun && !existsSync(statusPath)) {
-              throw new Error(`ci-local-verify-webkit-status-missing: ${statusPath}`);
+              throw new Error(`ci-local-verify-fallback-status-missing: ${statusPath}`);
             }
             console.log(`[ci] local artifact substitute: ${command}`);
             continue;
@@ -983,6 +969,7 @@ export function main(argv = process.argv.slice(2)) {
             githubEnvironment,
             stepOutputs,
             codemodBaseline,
+            runnerTemp,
           );
           if (status !== 0) {
             needsResults.set(target, 'failure');
@@ -1008,11 +995,12 @@ export function main(argv = process.argv.slice(2)) {
       }
     }
     console.log(
-      `\n[ci] PASS: ${targets.length} PR CI job${targets.length === 1 ? '' : 's'} projected from ci.yml`,
+      `\n[ci] ${args.list || args.dryRun ? 'PLAN' : 'PASS'}: ${targets.length} PR CI job${targets.length === 1 ? '' : 's'} projected from ci.yml`,
     );
     return 0;
   } finally {
     rmSync(localArtifacts, { recursive: true, force: true });
+    rmSync(runnerTemp, { recursive: true, force: true });
   }
 }
 

@@ -12,10 +12,13 @@
 // by meshFromInterleaved / PROCEDURAL_FLOATS_PER_VERTEX.
 
 export type { VertexAttributePackDetail } from '@forgeax/engine-types';
-
+export { decodeMeshBinary, normalizeMeshPayload } from './assets/mesh-binary';
 export { meshAssetContribution, meshAssetDecoder, meshAssetKind } from './assets/mesh-decoder';
-export { createPrimitiveMesh, type PrimitiveMeshKind } from './assets/primitive-mesh';
-
+export {
+  createPrimitiveMesh,
+  createProceduralMesh,
+  type PrimitiveMeshKind,
+} from './assets/primitive-mesh';
 export {
   createBoxGeometry,
   meshFromInterleaved,
@@ -24,6 +27,7 @@ export {
 export { createCapsuleGeometry } from './capsule';
 export { createConeGeometry } from './cone';
 export { createCylinderGeometry } from './cylinder';
+export { createDecalGeometry, type DecalGeometryOptions } from './decal';
 export {
   compute2dBounds,
   create2dGeometry,
@@ -34,21 +38,80 @@ export {
   type Shape2dPose,
   type Vec2,
 } from './dim2';
+export type {
+  DistanceFieldError,
+  DistanceFieldPolicy,
+  FieldBounds,
+  FieldVec3,
+  GeometricDistanceField,
+  MeshDistanceField,
+} from './distance-field';
+export {
+  buildMeshDistanceField,
+  distanceFieldMeshDigest,
+  sampleMeshDistanceField,
+} from './distance-field';
+export {
+  decodeMeshDistanceField,
+  encodeMeshDistanceField,
+  validateMeshDistanceField,
+} from './distance-field-artifact';
+// Edge factories return Result<MeshAsset, AssetError>; threshold units are degrees.
+export { createEdgesGeometry, createWireframeGeometry } from './edges';
+export { withMeshAabb } from './mesh-aabb.js';
+export {
+  createMeshBuilder,
+  type MeshBuilder,
+  type MeshBuilderOptions,
+  type MeshBuilderSubmesh,
+} from './mesh-builder';
+export {
+  decodeMeshCardLayout,
+  encodeMeshCardLayout,
+  validateMeshCardLayout,
+} from './mesh-card-artifact';
+export {
+  buildMeshCardLayout,
+  type MeshCardLayout,
+  type MeshCardProjection,
+  meshCardSidednessDigest,
+} from './mesh-card-layout';
+export {
+  type MeshBinEncodeError,
+  packMeshBin,
+  prepareMeshData,
+} from './mesh-data.js';
 export { createPlaneGeometry } from './plane';
+export {
+  createExtrusionGeometry,
+  createRevolutionGeometry,
+  createSweepGeometry,
+  type Vec2Point,
+  type Vec3Point,
+} from './procedural';
 export { createSphereGeometry } from './sphere';
 export { computeTangentVec4 } from './tangent';
+export {
+  createTeapotGeometry,
+  type TeapotMeshAsset,
+  type TeapotProvenance,
+} from './teapot';
 export { createTorusGeometry } from './torus';
 export {
   buildMeshAttributeMapForUvSets,
+  DEFAULT_VERTEX_ATTRIBUTE_MAP,
   deriveVertexBufferLayout,
   deriveVertexBufferLayoutFromProjection,
+  deriveVertexCount,
   deriveVertexLayoutProjection,
   deriveVertexLayoutProjectionFromMask,
   type GpuVertexBufferLayoutEntry,
   type PackedVertexAttributes,
   packInterleavedVertexAttributes,
+  SKIN_VERTEX_ATTRIBUTE_MAP,
   VertexAttributePackError,
   type VertexLayoutProjection,
   type VertexLayoutProjectionAttribute,
   type VertexLayoutProjectionMaskError,
 } from './vertex-attribute-layout';
+export { buildVisibilityDistanceField } from './visibility-distance-field';

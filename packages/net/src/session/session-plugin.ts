@@ -58,7 +58,20 @@ export function netPlugin(config: NetPluginConfig): Plugin {
             name: 'net-publish',
             queries: [],
             after: [FixedUpdate],
-            fn: (world) => world.getResource<NetSession>('net-session').publish(),
+            fn: (world) => {
+              const published = world.getResource<NetSession>('net-session').publish();
+              // An authority can temporarily outrun a replica while its
+              // bounded ACK ledger is full. That is transport backpressure,
+              // not a World fault: keep the simulation healthy and retry on
+              // the next frame after the replica acknowledges a packet.
+              if (
+                !published.ok &&
+                published.error.code === 'recovery-rejected' &&
+                published.error.detail.reason === 'ACK ledger bound reached'
+              )
+                return;
+              return published;
+            },
           })
           .unwrap();
         return () => world.removeSystem(Update, 'net-publish');

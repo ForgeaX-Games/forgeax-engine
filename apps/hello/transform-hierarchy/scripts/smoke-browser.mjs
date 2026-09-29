@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// M23 real Chrome journey: inject malformed ChildOf edges, observe structured
-// diagnostics, repair them in the same World, and compare rendered frames.
+// M23 real Chrome journey: use the app's test-owned internal fixture to stage
+// malformed ChildOf edges, observe structured diagnostics, repair them in the
+// same World, and compare rendered frames. Public World.set remains closed to
+// malformed relationship writes.
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,6 +11,18 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import { createReceipt } from './dataflow-receipt.mjs';
+
+if (process.argv.includes('--receipt')) {
+  console.log(JSON.stringify(createReceipt({
+    workloadId: 'hierarchy-dynamic',
+    backend: 'unavailable',
+    reasonCode: 'browser-probe-not-run',
+    detail: 'Receipt-only mode does not start a dev server or browser.',
+    retryHint: 'Run this script without --receipt on a Chrome WebGPU runner.',
+  }), null, 2));
+  process.exit(0);
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');

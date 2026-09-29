@@ -42,13 +42,14 @@ test('CI publishes one catalog projection and leaves app publication to each app
   assert.doesNotMatch(producer, /--projection-out|shared-app-inputs-full/);
   assert.match(
     producer,
-    /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*?shared-app-inputs\/manifest\.json/,
+    /Pack shared app input projection[\s\S]*?shared-app-inputs-transfer\/shared-app-inputs\.tar\.gz[\s\S]*?name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*?compression-level: 0/,
   );
   const planner = readFileSync(plannerPath, 'utf8');
   assert.match(
     planner,
     /\['--shared-input-manifest', resolve\(root, options\.sharedInputManifest\)\]/,
   );
+  assert.doesNotMatch(planner, /catalog-only.*env|env: \{[\s\S]*process\.env/);
 });
 
 test('shared producer builds both plugin dependency closures before invoking Vite', () => {
@@ -82,21 +83,38 @@ test('shared producer provisions wgpu-wasm before plugin closure', () => {
     workflow.indexOf('  shared-app-inputs:'),
     workflow.indexOf('\n  app-shard-0:', workflow.indexOf('  shared-app-inputs:')),
   );
-  const cache = producer.indexOf('name: Cache wgpu-wasm pkg/ (content-keyed)');
-  const provision = producer.indexOf(
-    'name: Build wgpu-wasm (release/cache first, compile only if absent)',
-  );
+  const provision = producer.indexOf('uses: ./.github/actions/prepare-wgpu-wasm');
   const install = producer.indexOf('name: Install shared producer dependencies');
   const plugins = producer.indexOf('name: Build shared producer plugin dependencies');
-  assert.ok(cache >= 0, 'shared producer must cache wgpu-wasm');
-  assert.ok(provision > cache, 'wgpu-wasm build must follow its cache step');
-  assert.ok(provision >= 0, 'shared producer must provision wgpu-wasm');
+  assert.ok(provision >= 0, 'shared producer must provision verified wgpu-wasm');
   assert.ok(install > provision, 'dependencies must install after wgpu-wasm provisioning');
   assert.ok(plugins > provision, 'plugin closure must build after wgpu-wasm provisioning');
-  assert.match(producer.slice(cache, provision), /actions\/cache@v5/);
-  assert.match(producer.slice(provision, install), /ensure-wasm\.mjs/);
-  assert.match(producer.slice(provision, install), /bash packages\/wgpu-wasm\/build\.sh/);
   assert.match(producer.slice(provision, install), /GH_TOKEN: \$\{\{ secrets\.GHA \}\}/);
+});
+
+test('collectathon boot consumes the complete FBX WASM producer closure', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  assert.deepEqual(contract.consumers['collectathon-boot-e2e'].requiredArtifactClasses, [
+    'engine-dist',
+    'wasm-runtime',
+    'wasm-fbx',
+    'shared-engine-shaders',
+  ]);
+  assert.deepEqual(contract.artifactClasses['wasm-fbx'].fileClasses, ['packages/fbx/pkg']);
+
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const prerequisite = readFileSync(
+    join(repoRoot, 'scripts', 'ci', 'build-editor-prerequisite.mjs'),
+    'utf8',
+  );
+  const coreBuild = workflow.slice(
+    workflow.indexOf('  core-build:'),
+    workflow.indexOf('\n  shared-app-inputs:', workflow.indexOf('  core-build:')),
+  );
+  assert.match(coreBuild, /wasm-fbx\) source=packages\/fbx\/pkg/);
+  assert.match(prerequisite, /'fbx-wasm': \['fbx-wasm\.mjs', 'fbx-wasm\.wasm'\]/);
 });
 
 function fixture(appNames) {
@@ -133,6 +151,69 @@ function runPlanner(root, args = []) {
       stderr: error.stderr?.toString().trim() ?? '',
     };
   }
+}
+
+function writePackRoster(root, app, guid) {
+  mkdirSync(join(root, 'scripts', 'ci'), { recursive: true });
+  writeFileSync(
+    join(root, 'scripts', 'ci', 'dawn-smoke-roster.json'),
+    JSON.stringify({
+      schemaVersion: 2,
+      roots: ['apps'],
+      entries: [
+        {
+          package: `@fixture/${app}`,
+          path: `apps/${app}/package.json`,
+          classification: 'run',
+          gates: [
+            {
+              gateId: `${app}/smoke`,
+              commandId: 'smoke',
+              executionClass: 'sharded',
+              commandSource: 'manifest-smokeInvocation',
+              artifactRequirements: { packGuids: [guid] },
+              commands: [{ commandId: 'smoke', source: 'manifest-smokeInvocation' }],
+              oracle: { kind: 'frameReceipt', parserId: 'forgeax-smoke-receipt-v1' },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+}
+
+function writePackFixture(root, { packageUrl = null, bodyPath = null } = {}) {
+  const app = 'pbr';
+  const guid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+  const resolvedBodyPath = bodyPath ?? `${guid}-body.bin`;
+  const appDir = join(root, 'apps', app);
+  const dist = join(appDir, 'dist');
+  mkdirSync(join(dist, 'shaders'), { recursive: true });
+  mkdirSync(join(dist, 'assets'), { recursive: true });
+  writeFileSync(
+    join(appDir, 'package.json'),
+    JSON.stringify({
+      name: `@fixture/${app}`,
+      scripts: { build: 'true' },
+      forgeax: { smokeInvocation: `pnpm --filter @fixture/${app} smoke` },
+    }),
+  );
+  writeFileSync(join(dist, 'shaders', 'manifest.json'), 'shader');
+  const packName = `${guid}.pack-fixture.json`;
+  const resolvedPackageUrl = packageUrl ?? `/assets/${packName}`;
+  writeFileSync(
+    join(dist, 'pack-index.json'),
+    JSON.stringify([{ guid, packageUrl: resolvedPackageUrl }]),
+  );
+  writeFileSync(
+    join(dist, 'assets', packName),
+    JSON.stringify({
+      schemaVersion: '2.0.0',
+      assets: [{ guid, artifacts: { body: { path: resolvedBodyPath } } }],
+    }),
+  );
+  writeFileSync(join(dist, 'assets', resolvedBodyPath), 'body');
+  writePackRoster(root, app, guid);
 }
 
 function shardReport(root, index, count = 3) {
@@ -225,6 +306,104 @@ test('t12: dry-run prints the assigned apps without invoking builds', () => {
   }
 });
 
+test('repair: skipped consumer-built apps are omitted from the shard payload', () => {
+  const root = fixture(['alpha', 'beta']);
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--omit-transfer-app',
+      'alpha',
+      '--skip-build-app',
+      'alpha',
+      '--dry-run',
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.apps, ['alpha', 'beta']);
+    assert.deepEqual(report.buildApps, ['beta']);
+    assert.deepEqual(report.skippedBuildApps, ['alpha']);
+    assert.deepEqual(report.transferApps, ['beta']);
+    assert.deepEqual(report.artifactInventory, ['apps/beta/dist/shaders/manifest.json']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repair: skipping a build without omitting transfer fails closed', () => {
+  const root = fixture(['alpha']);
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--skip-build-app',
+      'alpha',
+      '--dry-run',
+    ]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-app-shard-skip-build-transfer-required');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('consumer-built exclusions follow app assignment when the roster grows', () => {
+  for (const names of [
+    ['beta', 'gamma'],
+    ['alpha', 'beta', 'gamma'],
+  ]) {
+    const root = fixture(names);
+    try {
+      const reports = [0, 1, 2].map((index) => {
+        const result = runPlanner(root, [
+          '--shard-count',
+          '3',
+          '--shard-index',
+          String(index),
+          '--omit-transfer-app',
+          'beta',
+          '--skip-build-app',
+          'beta',
+          '--dry-run',
+        ]);
+        assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+        return JSON.parse(result.stdout);
+      });
+      assert.deepEqual(
+        reports.flatMap((report) => report.skippedBuildApps),
+        ['beta'],
+      );
+      assert.deepEqual(
+        reports.flatMap((report) => report.omittedTransferApps),
+        ['beta'],
+      );
+      assert.deepEqual(
+        reports.flatMap((report) => report.buildApps).sort(),
+        names.filter((name) => name !== 'beta'),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('global consumer-built exclusions reject unknown apps', () => {
+  const root = fixture(['alpha']);
+  try {
+    for (const flag of ['--omit-transfer-app', '--skip-build-app']) {
+      const result = runPlanner(root, [flag, 'missing', '--dry-run']);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).app, 'missing');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('t12b: derives deterministic repo-relative manifest inventories from every shard roster', () => {
   const root = fixture(['alpha', 'beta', 'gamma', 'delta', 'epsilon']);
   try {
@@ -256,6 +435,57 @@ test('t12b: emits an empty inventory for an empty shard roster', () => {
   }
 });
 
+test('repair: projects only roster-declared Pack JSON and body closure from a fresh app dist', () => {
+  const root = fixture([]);
+  writePackFixture(root);
+  const output = join(root, 'shard-output');
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--output-dir',
+      output,
+      '--dry-run',
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.artifactInventory.sort(), [
+      'apps/pbr/dist/assets/019e4a26-3c29-7420-af5d-20f2724a16b0-body.bin',
+      'apps/pbr/dist/assets/019e4a26-3c29-7420-af5d-20f2724a16b0.pack-fixture.json',
+      'apps/pbr/dist/pack-index.json',
+      'apps/pbr/dist/shaders/manifest.json',
+    ]);
+    assert.equal(existsSync(join(output, 'artifacts', 'apps', 'pbr', 'dist', 'assets')), true);
+    assert.equal(
+      existsSync(join(output, 'artifacts', 'apps', 'pbr', 'dist', 'assets', 'unused.bin')),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repair: fails closed when a roster-declared Pack path is unsafe or absent', () => {
+  for (const options of [{ packageUrl: '../escape.json' }, { bodyPath: 'missing.bin' }]) {
+    const root = fixture([]);
+    writePackFixture(root, options);
+    if (options.bodyPath === 'missing.bin')
+      rmSync(join(root, 'apps', 'pbr', 'dist', 'assets', 'missing.bin'));
+    try {
+      const result = runPlanner(root, ['--shard-count', '1', '--shard-index', '0', '--dry-run']);
+      assert.notEqual(result.exitCode, 0);
+      assert.match(
+        JSON.parse(result.stdout).code,
+        /^(?:ci-app-shard-pack-unsafe-path|ci-app-shard-pack-body-missing)$/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('t15: writes only the assigned shard artifact paths to its report output', () => {
   const root = fixture(['alpha', 'beta', 'gamma']);
   const output = join(root, 'shard-output');
@@ -283,6 +513,66 @@ test('t15: writes only the assigned shard artifact paths to its report output', 
     assert.equal(existsSync(join(output, 'artifacts', 'apps', 'alpha', 'report')), false);
     assert.equal(existsSync(join(output, 'artifacts', 'apps', 'beta')), false);
     assert.equal(existsSync(join(output, 'artifacts', 'apps', 'gamma')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('t15: compacts shared engine rows before uploading shard artifacts', () => {
+  const root = fixture(['alpha']);
+  const shared = join(root, 'shared-app-inputs');
+  const sharedManifest = join(shared, 'shaders', 'manifest.json');
+  mkdirSync(join(shared, 'shaders'), { recursive: true });
+  writeFileSync(
+    join(shared, 'manifest.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      producer: 'shared-app-inputs',
+      payload: { engineShaderManifest: 'shared-app-inputs/shaders/manifest.json' },
+    }),
+  );
+  writeFileSync(
+    sharedManifest,
+    JSON.stringify({
+      entries: [{ hash: 'engine', wgsl: 'engine', bindings: '{}', glsl: '' }],
+      materialShaders: [],
+    }),
+  );
+  writeFileSync(
+    join(root, 'apps', 'alpha', 'dist', 'shaders', 'manifest.json'),
+    JSON.stringify({
+      entries: [
+        { hash: 'engine', wgsl: 'engine', bindings: '{}', glsl: '' },
+        { hash: 'custom', wgsl: 'custom', bindings: '{}', glsl: '' },
+      ],
+      materialShaders: [],
+    }),
+  );
+  const output = join(root, 'shard-output');
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--shared-input-manifest',
+      'shared-app-inputs/manifest.json',
+      '--output-dir',
+      output,
+      '--dry-run',
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    const compact = JSON.parse(
+      readFileSync(
+        join(output, 'artifacts', 'apps', 'alpha', 'dist', 'shaders', 'manifest.json'),
+        'utf8',
+      ),
+    );
+    assert.equal(compact.forgeaxTransport, 'forgeax-app-shader-manifest-delta-v1');
+    assert.deepEqual(
+      compact.entries.map((entry) => entry.hash),
+      ['custom'],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -364,11 +654,14 @@ test('repair: bounds each shard build with the shared machine-adaptive runner', 
   assert.match(planner, /sharedInputManifest/);
   assert.match(planner, /--shared-input-manifest/);
   assert.match(runner, /process\.argv\.indexOf\('--shared-input-manifest'\)/);
-  assert.match(
-    runner,
-    /workspaceConcurrency\(\{ cpus, memoryBytes, reserveGB: 2, workerGB: 2 \}\)/,
-  );
+  assert.match(runner, /appBuildConcurrency\(\{ cpus, memoryBytes \}\)/);
   assert.match(runner, /running\.size < maxConcurrent/);
+  assert.match(runner, /const sampler = createProcessSampler\(\)/);
+  assert.match(runner, /setInterval\(sample, 1_000\)/);
+  assert.doesNotMatch(runner, /setInterval\(sample, 250\)/);
+  assert.match(runner, /FORGEAX_VITE_REPORT_COMPRESSED_SIZE: '0'/);
+  assert.match(runner, /shaderManifestMode: appShardShaderDelta \? 'app-shard-delta' : 'full'/);
+  assert.match(planner, /'--app-shard-shader-delta'/);
   assert.match(runner, /createViteBuildInvocation/);
   assert.match(runner, /FORGEAX_SHARED_APP_INPUTS_MANIFEST: sharedInputManifest/);
   assert.match(runner, /runApp\([\s\S]*appBuildEnv/);
@@ -379,6 +672,34 @@ test('repair: bounds each shard build with the shared machine-adaptive runner', 
     const shard = workflow.slice(start, end === -1 ? undefined : end);
     assert.match(shard, new RegExp(`Build shard apps[\\s\\S]*?--shard-index ${shardIndex}`));
   }
+  for (const shardIndex of [0, 1, 2]) {
+    const shardStart = workflow.indexOf(`  app-shard-${shardIndex}:`);
+    const shardEnd = workflow.indexOf(`\n  app-shard-${shardIndex + 1}:`, shardStart);
+    const shard = workflow.slice(shardStart, shardEnd === -1 ? undefined : shardEnd);
+    assert.match(
+      shard,
+      /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
+      `app-shard-${shardIndex} must use the heavy runner pool`,
+    );
+    assert.match(
+      shard,
+      /Verify heavy runner capacity[\s\S]*--pool heavy/,
+      `app-shard-${shardIndex} must verify heavy runner capacity`,
+    );
+  }
+  for (const index of [0, 1, 2]) {
+    const start = workflow.indexOf(`  app-shard-${index}:`);
+    const shard = workflow.slice(start).split(/\n {2}[\w-]+:/)[0];
+    assert.match(shard, /--omit-transfer-app learn-render\/3\.model-loading\/1\.model-loading/);
+    assert.match(shard, /--skip-build-app learn-render\/3\.model-loading\/1\.model-loading/);
+  }
+  const smokeStart = workflow.indexOf('  smoke-fleet:');
+  const smoke = workflow.slice(smokeStart);
+  assert.doesNotMatch(smoke, /Build consumer-owned Sponza smoke app/);
+  assert.match(
+    smoke,
+    /Hello-learn-render-3-model-loading smoke[\s\S]*?pnpm --filter [^\n]*3-model-loading-1-model-loading[^\n]* build[\s\S]*?pnpm --filter [^\n]*3-model-loading-1-model-loading[^\n]* smoke/,
+  );
   assert.doesNotMatch(workflow, /FORGEAX_BUILD_CONCURRENCY/);
 });
 
@@ -398,16 +719,24 @@ test('repair: scrubs persistent runner auth before every shard checkout', () => 
   }
 });
 
-test('repair: asset-backed app shard checks out the private engine asset submodule', () => {
+test('repair: every app shard uses authenticated source checkout and pinned asset recovery', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
-  const start = workflow.indexOf('  app-shard-1:');
-  const end = workflow.indexOf('\n  app-shard-2:', start);
-  const shard = workflow.slice(start, end === -1 ? undefined : end);
-  assert.match(shard, /actions\/checkout@v5[\s\S]*?submodules: recursive/);
-  assert.match(shard, /token: \$\{\{ secrets\.GHA \}\}/);
+  for (const shardIndex of [0, 1, 2]) {
+    const start = workflow.indexOf(`  app-shard-${shardIndex}:`);
+    const end = workflow.indexOf(`\n  app-shard-${shardIndex + 1}:`, start);
+    const shard = workflow.slice(start, end === -1 ? undefined : end);
+    assert.match(shard, /actions\/checkout@v5[\s\S]*?submodules: false/);
+    assert.match(
+      shard,
+      /Restore pinned assets checkout[\s\S]*?node scripts\/ci\/prepare-assets-checkout\.mjs/,
+    );
+    assert.match(shard, /actions\/checkout@v5[\s\S]*?token: \$\{\{ secrets\.GHA \}\}/);
+    assert.doesNotMatch(shard, /Materialize pinned app asset sources/);
+    assert.doesNotMatch(shard, /git submodule update --init --recursive/);
+  }
 });
 
-test('repair: shards hydrate successful core artifact IDs with deterministic transport staggering', () => {
+test('repair: shards optionally restore exact producer IDs with bounded source recovery', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   assert.match(
     workflow,
@@ -419,14 +748,10 @@ test('repair: shards hydrate successful core artifact IDs with deterministic tra
     const shard = workflow.slice(start, end === -1 ? undefined : end);
     assert.match(
       shard,
-      /node scripts\/ci\/download-artifact-with-retry\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}"[\s\S]*?--stagger-seconds /,
+      /node scripts\/ci\/prepare-ci-inputs\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}"/,
       `app-shard-${shardIndex} must pass every successful core job output by exact ID`,
     );
-    assert.match(
-      shard,
-      new RegExp(`--stagger-seconds ${shardIndex * 10}`),
-      `app-shard-${shardIndex} must have its deterministic transfer start`,
-    );
+    assert.doesNotMatch(shard, /--stagger-seconds/);
     for (const artifact of ['engine-dist', 'wasm-runtime', 'wasm-fbx', 'wasm-codec']) {
       assert.doesNotMatch(
         shard,
@@ -456,11 +781,17 @@ test('repair: shards verify shared inputs against the producer output and build-
   assert.match(workflow, /--github-output "\$GITHUB_OUTPUT"/);
   assert.match(workflow, /id: upload-shared-inputs/);
   assert.equal(
-    (workflow.match(/name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/g) ?? []).length,
+    (workflow.match(/^ {10}name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/gm) ?? [])
+      .length,
     1,
   );
   assert.doesNotMatch(workflow, /shared-app-inputs-full/);
-  assert.match(workflow, /name: provenance-shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/);
+  assert.match(
+    workflow,
+    /provenance_payload: \$\{\{ steps\.write-shared-provenance\.outputs\.payload \}\}/,
+  );
+  assert.doesNotMatch(workflow, /name: Upload shared producer provenance record/);
+  assert.doesNotMatch(workflow, /provenance_artifact_id/);
   assert.match(
     workflow,
     /build-artifacts:[\s\S]*?needs: \[core-build, shared-app-inputs, app-shard-0, app-shard-1, app-shard-2\]/,
@@ -479,10 +810,9 @@ test('repair: shards verify shared inputs against the producer output and build-
     );
     assert.match(
       shard,
-      /download-artifact-with-retry\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.shared-app-inputs\.outputs\.shared_artifact_id \}\}"[\s\S]*?--path shared-app-inputs/,
+      /prepare-ci-inputs\.mjs[\s\S]*?--shared-artifact-id "\$\{\{ needs\.shared-app-inputs\.outputs\.shared_artifact_id \}\}"/,
     );
-    assert.match(shard, /Hydrate declared shared app inputs/);
-    assert.match(shard, /download-artifact-with-retry\.mjs/);
+    assert.match(shard, /Prepare verified CI inputs/);
     assert.doesNotMatch(
       shard,
       /name: shared-(?:asset-pack|engine-shaders)-a\$\{\{ github\.run_attempt \}\}/,
@@ -490,37 +820,42 @@ test('repair: shards verify shared inputs against the producer output and build-
   }
 });
 
-test('repair: every build-artifact consumer uses the verified retry transport', () => {
+test('each input consumer names the preparation owner and exact producer IDs', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
-  for (const [job, output] of [
-    ['primary-pnpm', 'artifact_ids_primary_pnpm'],
-    ['coverage-pnpm', 'artifact_ids_coverage_pnpm'],
-    ['coverage-perf', 'artifact_ids_coverage_perf'],
-    ['vitest-browser-shard', 'artifact_ids_vitest_browser'],
-    ['shared-inputs-browser', 'artifact_ids_shared_inputs_browser'],
-    ['multithread-browser-benchmark', 'artifact_ids_multithread_browser_benchmark'],
-    ['smoke-fleet', 'artifact_ids_smoke_fleet'],
-    ['bevy-smoke-fleet', 'artifact_ids_bevy_smoke_fleet'],
-    ['portability-bun', 'artifact_ids_portability_bun'],
-    ['collectathon-boot-e2e', 'artifact_ids_collectathon_boot_e2e'],
-  ]) {
-    const start = workflow.indexOf(`  ${job}:`);
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts/ci/build-artifact-contract.json')),
+  );
+  for (const row of contract.timingRoster.filter((row) => !row.notApplicable)) {
+    const start = workflow.indexOf(`  ${row.jobIdentity}:`);
     const remaining = workflow.slice(start);
-    const nextJob = remaining.search(/\n {2}[a-z][\w-]+:/);
-    const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob);
-    assert.match(
-      section,
-      new RegExp(
-        `node scripts/ci/download-artifact-with-retry\\.mjs[\\s\\S]*?--artifact-ids "\\$\\{\\{ needs\\.build-artifacts\\.outputs\\.${output} \\}\\}" --path \\.`,
-      ),
-      `${job} must hydrate exact build-artifact IDs through the verified retry transport`,
-    );
+    const next = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
+    const section = remaining.slice(0, next === -1 ? undefined : next + 1);
+    assert.match(section, /(?:prepare-ci-inputs|download-artifact-with-retry)\.mjs/);
+    assert.match(section, /--artifact-ids "\$\{\{ needs\./);
     assert.match(section, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
-    assert.match(section, /permissions:\n {6}actions: read\n {6}contents: read/);
   }
 });
 
-test('repair: split metrics producers consume only core output without the app aggregate barrier', () => {
+test('Bevy smoke fleet does not hydrate app-dist archives it rebuilds locally', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  assert.deepEqual(contract.consumers['bevy-smoke-fleet'].requiredArtifactClasses, [
+    'engine-dist',
+    'wasm-runtime',
+    'shared-engine-shaders',
+  ]);
+
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const start = workflow.indexOf('  bevy-smoke-fleet:\n');
+  const end = workflow.indexOf('\n  bevy-smoke-fleet-required-context:', start);
+  const bevy = workflow.slice(start, end);
+  assert.match(bevy, /needs\.core-build\.outputs\.core_artifact_id/);
+  assert.match(bevy, /pnpm bevy:smokes[\s\S]*--concurrency auto/);
+  assert.match(bevy, /app-dist-0\/1\/2[\s\S]*duplicate/);
+});
+
+test('metrics browser starts independently while runtime and the stable join preserve Smoke barriers', () => {
   const contract = JSON.parse(
     readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
   );
@@ -532,7 +867,9 @@ test('repair: split metrics producers consume only core output without the app a
     assert.deepEqual(contract.consumers[consumer].requiredArtifactClasses, [
       'engine-dist',
       'wasm-runtime',
+      'shared-engine-shaders',
     ]);
+    assert.ok(contract.sharedInputs.readOnlyConsumers.includes(consumer));
   }
 
   const workflow = readFileSync(workflowPath, 'utf8');
@@ -546,19 +883,41 @@ test('repair: split metrics producers consume only core output without the app a
   const browser = sectionFor('metrics-validate-browser', 'metrics-validate-runtime');
   const runtime = sectionFor('metrics-validate-runtime', 'metrics-validate');
   const stableJoin = sectionFor('metrics-validate', 'collectathon-boot-e2e');
-  assert.match(browser, /needs: \[core-build, post-merge-gate, webkit-fallback, smoke-fleet\]/);
-  assert.match(runtime, /needs: \[core-build, post-merge-gate, smoke-fleet\]/);
+  assert.match(
+    browser,
+    /needs: \[core-build, shared-app-inputs, post-merge-gate, webkit-fallback\]/,
+  );
+  assert.match(
+    runtime,
+    /needs: \[core-build, shared-app-inputs, post-merge-gate, smoke-fleet, bevy-smoke-fleet\]/,
+  );
+  assert.match(runtime, /needs\.bevy-smoke-fleet\.result == 'success'/);
+  assert.doesNotMatch(browser, /needs\.smoke-fleet\./);
+  assert.match(browser, /needs\.shared-app-inputs\.result == 'success'/);
+  assert.match(stableJoin, /needs\.smoke-fleet\.result == 'success'/);
   assert.match(
     stableJoin,
-    /needs: \[core-build, post-merge-gate, smoke-fleet, metrics-validate-browser, metrics-validate-runtime\]/,
+    /needs: \[core-build, shared-app-inputs, post-merge-gate, smoke-fleet, metrics-validate-browser, metrics-validate-runtime\]/,
   );
   for (const section of [browser, runtime, stableJoin]) {
     assert.match(
       section,
-      /--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}" --path \./,
+      /--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}"/,
     );
     assert.doesNotMatch(section, /needs\.build-artifacts\.outputs\./);
     assert.doesNotMatch(section, /needs: \[build-artifacts/);
+    assert.match(
+      section,
+      /--shared-artifact-id "\$\{\{ needs\.shared-app-inputs\.outputs\.shared_artifact_id \}\}"/,
+    );
+    assert.match(
+      section,
+      /--input-fingerprint "\$\{\{ needs\.shared-app-inputs\.outputs\.input_fingerprint \}\}"/,
+    );
+  }
+  for (const section of [browser, runtime]) {
+    assert.match(section, / {4}env:\n {6}FORGEAX_SHARED_APP_INPUTS_MANIFEST:/);
+    assert.doesNotMatch(section, /FORGEAX_ENGINE_SHADER_SOURCE_BUILD: ['"]?1/);
   }
   assert.match(browser, /--stage --producer browser/);
   assert.match(runtime, /--stage --producer runtime/);
@@ -568,12 +927,15 @@ test('repair: split metrics producers consume only core output without the app a
   );
   assert.match(
     stableJoin,
-    /name: Build VFX metric fixture\n\s+run: pnpm --filter @forgeax\/hello-boss-lightning build/,
+    /name: Build VFX metric fixture\n\s+env:\n\s+FORGEAX_SHARED_APP_INPUTS_MANIFEST:.*shared-app-inputs\/manifest.json\n\s+run: pnpm --filter @forgeax\/hello-boss-lightning build/,
   );
   assert.match(
     stableJoin,
     /name: Detect lavapipe ICD \(for generic Dawn metrics\)[\s\S]*?VK_ICD_FILENAMES=\$ICD_PATH[\s\S]*?VK_DRIVER_FILES=\$ICD_PATH[\s\S]*?name: Run metrics generic runner/,
   );
+  assert.match(browser, /name: metrics-validate-browser-evidence-a[\s\S]*?retention-days: 1/);
+  assert.match(runtime, /name: metrics-validate-runtime-evidence-a[\s\S]*?retention-days: 1/);
+  assert.match(stableJoin, /name: metrics-report[\s\S]*?retention-days: 1/);
   assert.match(stableJoin, /name: metrics-report/);
 });
 
@@ -584,6 +946,7 @@ test('repair: portability-bun owns only core artifact classes', () => {
   assert.deepEqual(contract.consumers['portability-bun'].requiredArtifactClasses, [
     'engine-dist',
     'wasm-runtime',
+    'shared-engine-shaders',
   ]);
 
   const workflow = readFileSync(workflowPath, 'utf8');
@@ -592,7 +955,7 @@ test('repair: portability-bun owns only core artifact classes', () => {
   const section = workflow.slice(start, end);
   assert.match(
     section,
-    /--artifact-ids "\$\{\{ needs\.build-artifacts\.outputs\.artifact_ids_portability_bun \}\}" --path \./,
+    /--artifact-ids "\$\{\{ needs\.build-artifacts\.outputs\.artifact_ids_portability_bun \}\}"/,
   );
   assert.doesNotMatch(section, /needs\.build-artifacts\.outputs\.artifact_ids"/);
 });
@@ -632,7 +995,7 @@ test('repair: trusted coverage owns the perf ratio gate outside instrumentation'
     const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
     return remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
   };
-  const coverage = sectionFor('coverage-pnpm');
+  const coverage = sectionFor('coverage-pnpm-shard');
   const perf = sectionFor('coverage-perf');
   assert.match(
     coverage,
@@ -640,15 +1003,16 @@ test('repair: trusted coverage owns the perf ratio gate outside instrumentation'
   );
   assert.doesNotMatch(coverage, /github\.event\.pull_request\.head\.repo/);
   assert.match(coverage, /node scripts\/ci\/run-split-vitest-coverage\.mjs/);
-  assert.match(coverage, /--group-size=4/);
+  assert.match(coverage, /--group-size=8/);
   assert.match(coverage, /--group-concurrency=auto/);
   assert.match(coverage, /--max-workers=1/);
+  assert.doesNotMatch(coverage, /--skip-typecheck/);
   assert.doesNotMatch(coverage, /--project=ecs-perf/);
   assert.match(perf, /name: ECS performance ratio gates \(uninstrumented\)/);
   assert.match(perf, /--project=ecs-perf/);
 });
 
-test('repair: core-only consumers hydrate exact IDs without the app aggregate barrier', () => {
+test('repair: core consumers hydrate exact IDs without the app aggregate barrier', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   for (const job of ['vitest-dawn', 'webkit-fallback']) {
     const start = workflow.indexOf(`  ${job}:`);
@@ -656,11 +1020,12 @@ test('repair: core-only consumers hydrate exact IDs without the app aggregate ba
     const remaining = workflow.slice(start);
     const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
     const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
-    assert.match(section, /needs: \[core-build, post-merge-gate\]/);
+    assert.match(section, /needs: \[core-build, shared-app-inputs, post-merge-gate\]/);
+    assert.match(section, /needs\.shared-app-inputs\.result == 'success'/);
     assert.match(section, /needs\.core-build\.result == 'success'/);
     assert.match(
       section,
-      /--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}" --path \./,
+      /--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}"/,
     );
     assert.doesNotMatch(section, /needs: \[build-artifacts/);
     assert.doesNotMatch(section, /needs\.build-artifacts\.outputs/);
@@ -882,4 +1247,17 @@ test('t14: merges snapshots, reports cold-path state, and skips an exact cache h
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// PR consumers can recover acceleration inputs from source. Main publication
+// requires the exact producer bytes, so a failed upload must fail its owner.
+test('core transfer is mandatory for main WASM publication', () => {
+  const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const upload = workflow
+    .split('- name: Upload core build transfer artifact')[1]
+    .split('- name:')[0];
+  assert.match(
+    upload,
+    /required: \$\{\{ github.event_name == 'push' && github.ref == 'refs\/heads\/main' && 'true' \|\| 'false' \}\}/,
+  );
 });

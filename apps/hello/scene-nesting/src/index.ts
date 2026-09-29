@@ -1,10 +1,17 @@
 import { configureRuntimeAssetCatalog, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
-import { World, type EntityHandle } from '@forgeax/engine-ecs';
+import { createWorldContext, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Camera, Materials, MeshFilter, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import {
-  type SceneInstantiateDiagnostic,
+  Camera,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  renderComponentsPlugin,
+  SceneInstance,
+} from '@forgeax/engine-render';
+import {
   Transform,
+  scenePlugin,
   worldDespawnScene,
   worldInstantiateScene,
   worldSetSceneAssetResolver,
@@ -13,22 +20,19 @@ import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/r
 import { err, ok, type Handle, type MaterialAsset, type MeshAsset, type SceneAsset } from '@forgeax/engine-types';
 
 type MutableSceneEntity = {
-  localId: number;
   components: Record<string, Record<string, unknown>>;
+  instance?: {
+    source: string;
+    overrides?: Array<{
+      target: string[];
+      components: Record<string, Record<string, unknown>>;
+    }>;
+  };
 };
 
 type MutableSceneAsset = {
   kind: 'scene';
-  entities: MutableSceneEntity[];
-  mounts?: Array<{
-    localId: number;
-    source: number | string;
-    memberFirst: number;
-    memberCount: number;
-    parent?: number;
-    components?: Record<string, Record<string, unknown>>;
-    overrides?: Array<Record<string, unknown>>;
-  }>;
+  entities: Record<string, MutableSceneEntity>;
 };
 
 type ScenePair = {
@@ -58,19 +62,19 @@ function sceneSnapshot(asset: MutableSceneAsset): string {
   return JSON.stringify(asset);
 }
 
-function entityAt(scene: MutableSceneAsset, localId: number): MutableSceneEntity {
-  const entity = scene.entities.find((candidate) => candidate.localId === localId);
-  if (entity === undefined) throw new Error(`scene entity localId=${localId} missing`);
+function entityAt(scene: MutableSceneAsset, key: string): MutableSceneEntity {
+  const entity = scene.entities[key];
+  if (entity === undefined) throw new Error(`scene entity key=${key} missing`);
   return entity;
 }
 
 function componentAt(
   scene: MutableSceneAsset,
-  localId: number,
+  key: string,
   component: string,
 ): Record<string, unknown> {
-  const data = entityAt(scene, localId).components[component];
-  if (data === undefined) throw new Error(`scene component ${component} on localId=${localId} missing`);
+  const data = entityAt(scene, key).components[component];
+  if (data === undefined) throw new Error(`scene component ${component} on key=${key} missing`);
   return data;
 }
 
@@ -84,13 +88,13 @@ function bindRenderableScene(
 ): { inner: MutableSceneAsset; outer: MutableSceneAsset } {
   const inner = cloneScene(innerSource);
   const outer = cloneScene(outerSource);
-  const innerEntity = entityAt(inner, 0);
+  const innerEntity = entityAt(inner, 'cube');
   innerEntity.components.MeshFilter = { assetHandle: meshHandle as unknown as number };
   innerEntity.components.MeshRenderer = {
     materials: [materialHandle as unknown as number],
   };
 
-  const outerEntity = entityAt(outer, 1);
+  const outerEntity = entityAt(outer, 'sibling');
   outerEntity.components.Transform = {
     ...outerEntity.components.Transform,
     pos: [-1, 0, 0],
@@ -141,6 +145,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     const loadedInnerSnapshot = sceneSnapshot(cloneScene(innerResult.value));
     const loadedOuterSnapshot = sceneSnapshot(cloneScene(outerResult.value));
     const world = new World();
+    const worldContext = await createWorldContext(world, [renderComponentsPlugin(), scenePlugin()]);
+    void worldContext;
     const attachment = renderer.attach(world);
     if (!attachment.ok) throw attachment.error;
     const lease = attachment.value;
@@ -189,7 +195,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       return instance.value.mapping;
     };
     const baselineMapping = mappingFor(baselinePair.root);
-    const baselineSibling = baselineMapping[1] as unknown as EntityHandle;
+    const baselineSibling = baselineMapping[0] as unknown as EntityHandle;
     const baselineMountedMember = baselineMapping[2] as unknown as EntityHandle;
     const baselineSiblingRenderable = world.get(baselineSibling, MeshFilter).ok && world.get(baselineSibling, MeshRenderer).ok;
     const baselineMountedRenderable = world.get(baselineMountedMember, MeshFilter).ok && world.get(baselineMountedMember, MeshRenderer).ok;
@@ -243,31 +249,37 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       recoveryButton.disabled = true;
       try {
         const pair = makePair(innerResult.value, outerResult.value);
-        componentAt(pair.inner, 0, 'Transform').unknownField = 'M30-unknown-field';
+        componentAt(pair.inner, 'cube', 'Transform').unknownField = 'M30-unknown-field';
         const faultyInputSnapshot = sceneSnapshot(pair.inner);
         const faulty = worldInstantiateScene(world, pair.outerHandle);
-        if (!faulty.ok) throw new Error(`faulty instantiate failed: ${faulty.error.code}`);
-        const faultyRoot = faulty.value.root;
-        pair.root = faultyRoot;
-        const faultyMapping = mappingFor(faultyRoot);
-        const faultyMember = faultyMapping[2] as unknown as EntityHandle;
-        const faultyDiagnostics: readonly SceneInstantiateDiagnostic[] = faulty.value.diagnostics;
-        const knownFieldValue = Array.from(world.get(faultyMember, Transform).unwrap().pos);
         const faultyEntityCount = world.inspect().entityCount;
         const inputUnchanged = sceneSnapshot(pair.inner) === faultyInputSnapshot;
-        const exactDiagnostic = faultyDiagnostics.length === 1
-          && faultyDiagnostics[0]?.component === 'Transform'
-          && faultyDiagnostics[0]?.field === 'unknownField'
-          && faultyDiagnostics[0]?.localId === 0;
-
-        const faultyCleanup = cleanupPair(pair);
+        const faultyError = faulty.ok
+          ? undefined
+          : (faulty.error as unknown as {
+              readonly code?: string;
+              readonly detail?: unknown;
+            });
+        const faultyDetail = faultyError?.detail as {
+          readonly reason?: unknown;
+          readonly component?: unknown;
+          readonly field?: unknown;
+          readonly entity?: unknown;
+        } | undefined;
+        const rejectedBeforeSpawn = faultyError?.code === 'asset-package-invalid'
+          && faultyDetail?.reason === 'unknown component field'
+          && faultyDetail.component === 'Transform'
+          && faultyDetail.field === 'unknownField'
+          && faultyDetail.entity === 'cube';
+        const faultyCleanup = faulty.ok ? cleanupPair(pair) : { changed: false, count: 0 };
         const noOrphanAfterFault = world.inspect().entityCount === baselineCount;
         const healthyRetainedAfterFault = world.get(baselinePair.root as EntityHandle, sceneInstanceToken).ok;
+        sceneChildren.delete(Number(pair.outerHandle));
         world.sharedRefs.release(pair.innerHandle);
         world.sharedRefs.release(pair.outerHandle);
 
         const correctedInner = cloneScene(pair.inner);
-        delete componentAt(correctedInner, 0, 'Transform').unknownField;
+        delete componentAt(correctedInner, 'cube', 'Transform').unknownField;
         const correctedOuter = cloneScene(pair.outer);
         const correctedInputSnapshot = sceneSnapshot(correctedInner);
         const correctedPair = makePair(correctedInner, correctedOuter);
@@ -278,8 +290,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
         const correctedMember = correctedMapping[2] as unknown as EntityHandle;
         const correctedEntityCount = world.inspect().entityCount;
         const correctionInputUnchanged = sceneSnapshot(correctedInner) === correctedInputSnapshot;
-        const freshIdentity = Number(correctedPair.root) !== Number(faultyRoot)
-          && Number(correctedMember) !== Number(faultyMember);
+        const freshIdentity = Number(correctedPair.root) !== Number(baselinePair.root)
+          && Number(correctedMember) !== Number(baselineMountedMember);
         const correctedEmpty = corrected.value.diagnostics.length === 0;
         const healthyRetained = world.get(baselinePair.root as EntityHandle, sceneInstanceToken).ok;
         const loadedInputsUnchanged = sceneSnapshot(cloneScene(innerResult.value)) === loadedInnerSnapshot
@@ -293,9 +305,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
             healthyRetained,
           },
           recovery: {
-            diagnostics: faultyDiagnostics,
-            exactDiagnostic,
-            knownFieldValue,
+            rejectedBeforeSpawn,
+            error: faultyError,
             faultyEntityCount,
             noOrphanAfterFault,
             healthyRetainedAfterFault,

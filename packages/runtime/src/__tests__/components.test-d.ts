@@ -16,18 +16,20 @@
 
 import type { InputShapeOf, SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
 import type { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import type { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { ChildOf, GlobalTransform, Transform } from '@forgeax/engine-scene';
 import type { Handle } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 
 describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeOf', () => {
-  it('Transform data shape has 3 local inline-array fields + world array<f32,16>', () => {
+  it('Transform data shape has 3 local inline-array fields', () => {
     type Data = ShapeOf<SchemaOf<typeof Transform>>;
-    expectTypeOf<keyof Data>().toEqualTypeOf<'pos' | 'quat' | 'scale' | 'world'>();
+    expectTypeOf<keyof Data>().toEqualTypeOf<'pos' | 'quat' | 'scale'>();
     expectTypeOf<Data['pos']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['quat']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['scale']>().toEqualTypeOf<Float32Array>();
-    expectTypeOf<Data['world']>().toEqualTypeOf<Float32Array>();
+    type GlobalData = ShapeOf<SchemaOf<typeof GlobalTransform>>;
+    expectTypeOf<keyof GlobalData>().toEqualTypeOf<'world'>();
+    expectTypeOf<GlobalData['world']>().toEqualTypeOf<Float32Array>();
     // Write side widens `array<f32, N>` to also accept plain number[] literals
     // (InputShapeOf asymmetry): `pos: [1, 2, 3]` spawns without a
     // Float32Array wrapper at the call site.
@@ -67,7 +69,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<{ materials: readonly [0] }>().not.toMatchTypeOf<SpawnData>();
   });
 
-  it('Camera data shape has 20 fields (18 number + clearColor array + autoAspect boolean)', () => {
+  it('Camera data shape includes output exposure and color-grading fields', () => {
     type Data = ShapeOf<SchemaOf<typeof Camera>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'fov'
@@ -81,15 +83,26 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'top'
       | 'tonemap'
       | 'exposure'
+      | 'exposureMode'
+      | 'compensationEv'
+      | 'rangeEv'
+      | 'rates'
       | 'whitePoint'
+      | 'temperature'
+      | 'tint'
+      | 'colorLut'
+      | 'colorLutStrength'
       | 'antialias'
+      | 'transparency'
       | 'historyVersion'
       | 'bloom'
       | 'bloomThreshold'
       | 'bloomIntensity'
-      | 'bloomBlurRadius'
+      | 'bloomSoftKnee'
+      | 'bloomScatter'
       | 'clearColor'
       | 'autoAspect'
+      | 'target'
     >();
     expectTypeOf<Data['fov']>().toEqualTypeOf<number>();
     expectTypeOf<Data['far']>().toEqualTypeOf<number>();
@@ -99,7 +112,16 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     // plan-strategy section 2.3 D-1 (f32 enum encoding).
     expectTypeOf<Data['tonemap']>().toEqualTypeOf<number>();
     expectTypeOf<Data['exposure']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['exposureMode']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['compensationEv']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['rangeEv']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<Data['rates']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['whitePoint']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['temperature']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['tint']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['colorLut']>().toEqualTypeOf<Handle<'TextureAsset', 'shared'>>();
+    expectTypeOf<Data['colorLutStrength']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['transparency']>().toEqualTypeOf<number>();
     expectTypeOf<Data['historyVersion']>().toEqualTypeOf<number>();
     // feat-20260709 M3: clear-color quartet collapsed into one inline
     // array<f32,4> column; read side resolves to Float32Array (mirrors the
@@ -107,9 +129,10 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['clearColor']>().toEqualTypeOf<Float32Array>();
     // feat-20260617 / M3: AC-09 -- bool column narrows to boolean, not number.
     expectTypeOf<Data['autoAspect']>().toEqualTypeOf<boolean>();
+    expectTypeOf<Data['target']>().toEqualTypeOf<Handle<'RenderTarget', 'shared'>>();
   });
 
-  it('DirectionalLight data shape: 3 light fields + castShadow bool + 8 merged shadow fields', () => {
+  it('DirectionalLight data shape includes closed shadow quality fields', () => {
     // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
     // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
     // feat-20260709 M2: direction/color collapsed to array<f32,3> columns.
@@ -126,13 +149,20 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'depthBias'
       | 'normalBias'
       | 'shadowDistance'
-      | 'pcfKernelSize'
+      | 'shadowFilter'
+      | 'shadowAngularRadius'
+      | 'maxPenumbraTexels'
+      | 'contactShadowLength'
     >();
     expectTypeOf<Data['direction']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['color']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['intensity']>().toEqualTypeOf<number>();
     // bool column narrows to boolean, not number.
     expectTypeOf<Data['castShadow']>().toEqualTypeOf<boolean>();
+    expectTypeOf<Data['shadowFilter']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['shadowAngularRadius']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['contactShadowLength']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['maxPenumbraTexels']>().toEqualTypeOf<number>();
   });
 });
 
@@ -183,12 +213,13 @@ describe('w7 type-level - component name literal types are preserved', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', () => {
-  it("ShapeOf<SchemaOf<typeof Transform>> yields Float32Array views (all 'array<f32, N>' -> Float32Array)", () => {
+  it('ShapeOf<SchemaOf<typeof Transform>> yields local Float32Array views', () => {
     type T = ShapeOf<SchemaOf<typeof Transform>>;
     expectTypeOf<T['pos']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<T['quat']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<T['scale']>().toEqualTypeOf<Float32Array>();
-    expectTypeOf<T['world']>().toEqualTypeOf<Float32Array>();
+    type GlobalData = ShapeOf<SchemaOf<typeof GlobalTransform>>;
+    expectTypeOf<GlobalData['world']>().toEqualTypeOf<Float32Array>();
   });
 
   it("ShapeOf<SchemaOf<typeof Camera>> yields 21 number fields ('f32' -> number) + autoAspect boolean ('bool' -> boolean)", () => {
@@ -199,7 +230,8 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
     expectTypeOf<T['bloom']>().toEqualTypeOf<number>();
     expectTypeOf<T['bloomThreshold']>().toEqualTypeOf<number>();
     expectTypeOf<T['bloomIntensity']>().toEqualTypeOf<number>();
-    expectTypeOf<T['bloomBlurRadius']>().toEqualTypeOf<number>();
+    expectTypeOf<T['bloomSoftKnee']>().toEqualTypeOf<number>();
+    expectTypeOf<T['bloomScatter']>().toEqualTypeOf<number>();
     // feat-20260617 / M3: AC-09 -- the bool column narrows to boolean.
     expectTypeOf<T['autoAspect']>().toEqualTypeOf<boolean>();
   });

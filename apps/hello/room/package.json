@@ -22,7 +22,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "hello-triangle baseline anchor only; hello-room smoke covers 300-frame multi-mesh GPU path (AC-05)"
+        "reason": "hello-triangle baseline anchor only; hello-room smoke covers 60-frame multi-mesh GPU path (AC-05)"
       },
       "bench": {
         "enabled": false,
@@ -50,7 +50,7 @@
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0",
     "@webgpu/types": "^0.1.71"
   }

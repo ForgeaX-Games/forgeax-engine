@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 const width = 320;
 const height = 180;
-const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const errors = [];
 const { create, globals } = await import('webgpu');
@@ -50,7 +50,8 @@ globalThis.requestAnimationFrame = (callback) => { rafQueue.push(callback); retu
 globalThis.cancelAnimationFrame = () => {};
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
-const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(await buildEngineShaderManifest()))}`;
+const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(await buildEngineShaderManifest())], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(manifestUrl));
 const { createApp } = await import('@forgeax/engine-app');
 const { Time, Update } = await import('@forgeax/engine-ecs');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');

@@ -2,7 +2,7 @@
 // AC-03 / AC-10 grep gate (feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path):
 // CSM is the single shadow path. The cascadeCount=1 case degenerates through
 // the same WGSL kernel as cascadeCount=4 -- there is no separate single-cascade
-// fallback variant. This gate locks four legacy-path symbols out of source:
+// fallback variant. This gate locks three legacy-path symbols out of source:
 //
 //   1. `cascadeCount === 1` (or equivalent strict-equality fallback branch)
 //      anywhere in packages/runtime/src or packages/shader/src. Catches the
@@ -14,10 +14,9 @@
 //   3. `fragPosLightSpace` -- the single-cascade WGSL varying replaced by
 //      per-fragment cascade selection (M5 w18). Survives only in the
 //      .forgeax-harness/ history (not scanned).
-//   4. `'2d-array'` / `"2d-array"` texture creation -- cascades live in a
-//      single 2D atlas (mapSize x cascadeCount stride x mapSize), NOT a
-//      WebGPU 2d-array texture (D-2 / plan-strategy §2.4). Catches the
-//      attempted "switch atlas to 2d-array" architecture pivot.
+//
+// Cascades are layers of one depth array so each view clears and caches
+// independently; array dimensions are therefore not a legacy-path signal.
 //
 // Self-exempt: this gate file (the regex literals must appear here).
 //
@@ -56,14 +55,6 @@ const PATTERNS = [
     hint:
       'fragPosLightSpace is the single-cascade varying. Per-fragment cascade selection ' +
       '(M5 w18) computes the light-space position inside evalDirectional; remove the varying.',
-  },
-  {
-    name: 'texture-2d-array',
-    // WebGPU GPUTextureViewDimension / GPUTextureDimension string literal
-    re: /['"]2d-array['"]/,
-    hint:
-      "'2d-array' texture dimension is banned for the shadow atlas (D-2). Cascades live " +
-      'in a single 2D texture (mapSize x cascadeCount wide); use viewport offsets, not array layers.',
   },
 ];
 
@@ -127,5 +118,5 @@ if (hits.length > 0) {
 
 process.stdout.write(
   'CSM unique-shadow-path grep gate OK: 0 hits in packages/runtime/src + packages/shader/src ' +
-    '(banned: cascadeCount===1, orthoHalfExtent, fragPosLightSpace, "2d-array" texture)\n',
+    '(banned: cascadeCount===1, orthoHalfExtent, fragPosLightSpace)\n',
 );

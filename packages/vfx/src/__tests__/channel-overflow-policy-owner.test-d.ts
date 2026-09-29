@@ -4,14 +4,14 @@ import type {
   ParticleChannelOverflowPolicy,
   ParticleChannelSource,
   ParticleRendererOverflowPolicy,
-  ParticleRendererSource,
 } from '../code-source.js';
+import type { ParticleRendererSourceV3 } from '../code-source-v3.js';
 import type {
   ParticleChannelOverflowPolicy as PublicParticleChannelOverflowPolicy,
   ParticleRendererOverflowPolicy as PublicParticleRendererOverflowPolicy,
 } from '../index.js';
 
-type BillboardRenderer = Extract<ParticleRendererSource, { readonly kind: 'billboard' }>;
+type BillboardRenderer = Extract<ParticleRendererSourceV3, { readonly kind: 'billboard' }>;
 type RendererOverflow = BillboardRenderer['overflow'];
 type ChannelOverflow = ParticleChannelSource['overflow'];
 type RendererOverflowSlot = Pick<BillboardRenderer, 'overflow'>;

@@ -11,7 +11,7 @@ import { PNG } from 'pngjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const ARTIFACT_DIR = resolve(
-  process.env.FORGEAX_ASSET_LOOP_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/asset-loop'),
+  process.env.FORGEAX_ASSET_LOOP_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/asset-loop'),
 );
 const PORT = Number.parseInt(process.env.FORGEAX_ASSET_LOOP_PORT ?? '5194', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });

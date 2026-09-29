@@ -3,11 +3,11 @@ import { inspectVfxSubject } from '../domains/vfx.js';
 
 const asset = {
   kind: 'particle-effect',
-  schemaVersion: 2,
+  schemaVersion: 3,
   programFingerprint: 'sha256:program',
   emitters: [{ id: 'sparks', capacity: 32 }],
   program: {
-    format: 'forgeax-vfx-program-2',
+    format: 'forgeax-vfx-program-4',
     fingerprint: 'sha256:program',
     emitters: [
       {

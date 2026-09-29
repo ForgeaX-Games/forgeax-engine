@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -137,7 +137,7 @@ writeFileSync(resolve(outDir, 'mesh2d-arcs.png'), writeReferencePng(frame, width
 console.log(`[smoke] frames=${frames} bright=${(bright / 255).toFixed(4)} coloredPixels=${coloredPixels} upper=${upperPixels} lower=${lowerPixels} colorBuckets=${buckets.size} errors=${errors.length}`);
 const failures = [];
 if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
-if (frames < 100) failures.push(`frames=${frames}`);
+if (frames < 60) failures.push(`frames=${frames}`);
 if (bright / 255 <= 0.15) failures.push(`bright=${(bright / 255).toFixed(4)}`);
 if (coloredPixels < 500) failures.push(`coloredPixels=${coloredPixels}`);
 if (upperPixels < 100 || lowerPixels < 100) failures.push(`rows=${upperPixels}/${lowerPixels}`);

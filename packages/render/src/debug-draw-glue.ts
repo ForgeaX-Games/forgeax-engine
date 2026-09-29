@@ -16,20 +16,24 @@ export function addTypedDebugOverlayPass(
   return graph.addRasterPass('debug-overlay', {
     accesses: [{ resource: output.view, usage: 'color-attachment' }],
     colorAttachments: [{ view: output.view, loadOp: 'load', storeOp: 'store' }],
+    executeIf: (frame) => {
+      const overlay = frame.runtime.debugOverlay;
+      return overlay !== undefined && (overlay.hasWork?.() ?? true);
+    },
     encode: ({ pass, frame }) => {
       const projection = mat4.create();
       if (frame.camera.projection === 'orthographic') {
-        mat4.orthographic(
+        mat4.orthographicReverseZ(
           projection,
           frame.camera.orthoLeft,
           frame.camera.orthoRight,
-          frame.camera.orthoBottom,
           frame.camera.orthoTop,
+          frame.camera.orthoBottom,
           frame.camera.near,
           frame.camera.far,
         );
       } else {
-        mat4.perspective(
+        mat4.perspectiveReverseZ(
           projection,
           frame.camera.fov,
           frame.camera.aspect,

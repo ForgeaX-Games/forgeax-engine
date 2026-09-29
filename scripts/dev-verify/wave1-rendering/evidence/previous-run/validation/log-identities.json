@@ -1,0 +1,140 @@
+[
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-render-unit-final-owner.log.gz",
+    "decodedBytes": 609,
+    "decodedSha256": "2789b0f5e7d8e09dae9e55b7755252f67bd9d63f8aa5ddfe98e472da9b1d1763",
+    "archiveSha256": "ecb8d677a185537f7d31b4ca67d21426b47c1c4ab685d0451b2961b0527ee33a"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-runtime-unit-complete.log.gz",
+    "decodedBytes": 445,
+    "decodedSha256": "dcfff63c85d2c6efe7484cd91ccdaf040f4dd7d9293af0cf2573a31c085f9c2d",
+    "archiveSha256": "9036292230463d3e136c9e7bdd9fa575f536f4788cd52cf8edea32fc08f16e94"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-owner-unit.log.gz",
+    "decodedBytes": 580,
+    "decodedSha256": "1e3df45660d2df5813fa8fa53e5014815aa88b9d8276be742cf84b9bd30b1345",
+    "archiveSha256": "2c4b2049733545cb12f1fa0e10825549d1e4ab36e2f418e4a8c1e5a4707b3947"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-test-dawn-final.log.gz",
+    "decodedBytes": 32305499,
+    "decodedSha256": "46917052a3da95c4e3375c7bc5f970f2f24feed2353a8914955d533225cdbabe",
+    "archiveSha256": "9d4ef2679ace8fa61e67090f9a008674e5594ef0a04e171eee4b91b1f660a210"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-test-browser-final-owner.log.gz",
+    "decodedBytes": 48590,
+    "decodedSha256": "b8c2d2d2a3b991f998f1f45cf6f3432ee52466dc3eb5f8aacb43f931de273d90",
+    "archiveSha256": "51410355d847e476b503fcd5bbee96a4cb97692acb1c31f9d8d8ab7445f6a612"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-final-build.log.gz",
+    "decodedBytes": 4615,
+    "decodedSha256": "5778c962dfbe15db36e25fb5bd0a7bbd274875215f3bb06d30992ba5f5b65fbf",
+    "archiveSha256": "029407efe5e2759ba1f115eda00277f37cec99d7b3caca98b6d8f8870409b007"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-final-owner-types.log.gz",
+    "decodedBytes": 0,
+    "decodedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archiveSha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-sdk-build.log.gz",
+    "decodedBytes": 733,
+    "decodedSha256": "fd65b5f3324f8a5183d159a85ae440fdd50541ce5a2ab998de4e47f464d2286c",
+    "archiveSha256": "08fa73c067827f3d64c613fc4d3b37c5afef25c99df7607c08f18c53d59026c3"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-sdk-verify.log.gz",
+    "decodedBytes": 9905,
+    "decodedSha256": "9f5aa5524357ef9de414a4cdc7edbbb92d2707cc9732c8d4437e9f3000d1b036",
+    "archiveSha256": "57e5f71b3742d51cc6e6ef49ed675342357c4c0dc1c6af3e507b785b1e2cb15f"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-sdk-p0-browser.log.gz",
+    "decodedBytes": 4075,
+    "decodedSha256": "39b6059a9f0bd9d91870505a2f36455b6a7e53d4590e84f483bdb0214df92283",
+    "archiveSha256": "9d59a7093c99069bc122576a6500ab9225d2b63be9bb16e339ff7856ee6d17c0"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-focused-dawn.log.gz",
+    "decodedBytes": 408,
+    "decodedSha256": "9c1fa79896c72b3df031cf1fbd00f4137f0dca4cbe70760ec5c0073457732d3f",
+    "archiveSha256": "cb3c53dedf16f0bc13611b3361726e8e170c71e188bda32d84b8e10c97bc1d8f"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-gpu-driven-dawn.log.gz",
+    "decodedBytes": 409,
+    "decodedSha256": "6c0208e71ea3ee9e911da143b582c7f1f7975dcfc952de109ba4db80641fb83f",
+    "archiveSha256": "e042915c0e11e0d69a1b5aa4f59cd54b01f458e6dffc7da59b8ebde4d1a31476"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-p0-browser.log.gz",
+    "decodedBytes": 210044,
+    "decodedSha256": "0c6c41de9c259db0dae09047c0fe14cc88c6a82e024176c2e571d725a4fd4e47",
+    "archiveSha256": "6b3c4ce2fafdf35648c779b152de83e8b0ab0117716c56b81cd4fd63197169ed"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-delivery-helper-lint.log.gz",
+    "decodedBytes": 42,
+    "decodedSha256": "ece3897e7855a7596b64279dea8bd8f8eefd2af1af361b9179ca22460aefa17f",
+    "archiveSha256": "284d5d5965c3f13167c2a5d5c7eb1e1f7774cc74cc46b917684dbc5f7546b689"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-types.log.gz",
+    "decodedBytes": 0,
+    "decodedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archiveSha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-coordinate-diagnostic.log.gz",
+    "decodedBytes": 25157,
+    "decodedSha256": "b8471752d96af46ea11ebbc9266cedcd2fdda2043cf3eb85b696c356204f57e4",
+    "archiveSha256": "573d0c904410651db4d442c1485ca68dee881c7e6ac3d7cd97a209127bb1cd7b"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-coordinate-inspection.log.gz",
+    "decodedBytes": 37636,
+    "decodedSha256": "2261c91b0b6456a3a95534b5101374935d45a5a801e6bb6902fc4d12a25e24df",
+    "archiveSha256": "92dcfb5a78651326cf1aaa2d96f4300e31c1c92568bafdbb6001d4eb2e2547e7"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-coordinate-internal-stack2.log.gz",
+    "decodedBytes": 569837,
+    "decodedSha256": "d99e34b9e3bd01bc09c1490fcf153962198abaaa07ad003f926093f718f4df1e",
+    "archiveSha256": "329274a1be64429cd887c70d6e81cdbf595543895da15d2d35d854685db9dee0"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-coordinate-fixed.log.gz",
+    "decodedBytes": 793,
+    "decodedSha256": "66bb2d600c53748747a57c3377e8b5a212ed8b652221d74258dee430e96feb7f",
+    "archiveSha256": "323fbe00d8ede72488dd334dbceb0ab51fea7ad7fe8feec966127426bc561aae"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-smoke-owner-lint.log.gz",
+    "decodedBytes": 679,
+    "decodedSha256": "49422a506783799525641d68f36eb3ed72f3f05f0d87e24050a2f584fe98b9a1",
+    "archiveSha256": "a99f4eb161d6093e374d580d0cc37d2bf1e6719cbcd048937a779a5105c95dda"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-final-test-types.log.gz",
+    "decodedBytes": 0,
+    "decodedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archiveSha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-final-code-lines.log.gz",
+    "decodedBytes": 84,
+    "decodedSha256": "2080b51e1e0603c8fd6b8e2ba96c115cb4421acfabd3a487153e92711fecc6df",
+    "archiveSha256": "f2d784fdeeba2a67da4fe6b542502bcfcec2ccc5661fb65335425542c823d87f"
+  },
+  {
+    "path": "artifacts/wave1-rendering/validation/wave1-final-verification-lint.log.gz",
+    "decodedBytes": 43,
+    "decodedSha256": "70bfdd2a5aa0109524128332ce28a8150cad3d5667634b8da363f38938865a29",
+    "archiveSha256": "cef9114026121f5dccff5b06a0bbc3443026102da2c243b6d232773533d3c636"
+  }
+]

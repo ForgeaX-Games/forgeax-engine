@@ -239,7 +239,7 @@ async function start(): Promise<void> {
     canvas,
     {
       execution: {
-        tier: 'engine-worker',
+        workers: { engine: true, render: false, kernels: false },
         bootstrap,
         bootstrapData: { falsify },
         bootstrapPort: channel.port2,

@@ -34,13 +34,26 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { smokeFrameBudget } from '../../../shared/scripts/smoke-receipt.mjs';
+import {
+  DARK_GRADIENT_FIXTURE,
+  DARK_GRADIENT_RESOLUTION,
+  createDarkGradientFixtureReport,
+} from './dark-gradient-fixture.mjs';
+import { createDarkGradientTexture, darkGradientQuad } from './dark-gradient-scene.mjs';
 
-const WIDTH = 800;
-const HEIGHT = 600;
-const CLEAR_RGBA = [0, 0, 0, 1];
+const WIDTH = DARK_GRADIENT_RESOLUTION.width;
+const HEIGHT = DARK_GRADIENT_RESOLUTION.height;
+const CLEAR_RGBA = DARK_GRADIENT_FIXTURE.scene.clearColor;
 const TOTAL_PIXELS = WIDTH * HEIGHT;
 // AC-08: >0.1% of total pixels. floor(800*600*0.001) = 480.
 const DIFF_THRESHOLD = Math.floor(TOTAL_PIXELS * 0.001);
+const VALIDATION_FRAME_COUNT = smokeFrameBudget();
+const lane = process.env.FORGEAX_DARK_GRADIENT_LANE ?? 'direct';
+if (lane !== 'direct' && lane !== 'clustered') {
+  console.error(`[smoke] FAIL - unsupported dark-gradient lane=${lane}`);
+  process.exit(2);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -137,16 +150,16 @@ const {
   ANTIALIAS_FXAA,
   Camera,
   DirectionalLight,
+  Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
+  ShadowParticipation,
+  TONEMAP_LINEAR,
 } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
-  HANDLE_CUBE,
   HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
 } = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -154,7 +167,11 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: MANIFEST_URL },
+  );
   if (!constructed.ok) throw constructed.error;
   renderer = constructed.value.renderer;
 } catch (err) {
@@ -167,25 +184,7 @@ try {
 }
 
 console.log(`[hello-fxaa] backend=${renderer.inspect().capabilities.backendKind}`);
-
-// Standard PBR material POD (same as demo main.ts). Minted into each pass's
-// World below: allocSharedRef is per-World, and the two comparison passes use
-// independent Worlds, so the material must be minted in each.
-const MATERIAL_POD = {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      program: { module: 'forgeax::default-standard-pbr' },
-      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-    },
-  ],
-  values: {
-    baseColor: [0.7, 0.7, 0.7],
-    metallic: 0.0,
-    roughness: 0.4,
-  },
-};
+console.log(`[dark-gradient] fixture=${DARK_GRADIENT_FIXTURE.id} lane=${lane}`);
 
 const device = sharedDevice;
 if (!device) {
@@ -195,48 +194,41 @@ if (!device) {
 
 // --- 4. Scene spawn helper ---------------------------------------------------
 
-// 4-geometry static layout matching demo main.ts (w6):
-// triangle @ -1.05, cube @ -0.35, quad @ 0.35, sphere @ 1.05; all scale=0.5.
-// DirectionalLight direction ~(-0.4, -0.6, -0.7), intensity=1.5.
-// Camera pos z=6, fov=PI/4, aspect=16/9, antialias set by caller.
-
-const GEOMETRY_LAYOUT = [
-  { handle: HANDLE_TRIANGLE, pos: [-1.05, 0, 0]},
-  { handle: HANDLE_CUBE, pos: [-0.35, 0, 0]},
-  { handle: HANDLE_QUAD, pos: [0.35, 0, 0]},
-  { handle: HANDLE_SPHERE, pos: [1.05, 0, 0]},
-];
-
 /**
- * Spawn a static 4-geometry scene into `world` with the given `antialias` value
+ * Spawn the dedicated dark-gradient scene into `world` with the given `antialias` value
  * for the Camera. Returns immediately; the caller is responsible for
  * registering components on the World before calling this.
  */
 function spawnScene(world, antialias) {
-  // 4 static geometries sharing a per-World material handle.
-  const materialHandle = world.allocSharedRef('MaterialAsset', MATERIAL_POD);
-  for (const slot of GEOMETRY_LAYOUT) {
-    world.spawn(
-      {
-        component: Transform,
-        data: {
-          pos: slot.pos,
-          quat: [0, 0, 0, 1],
-          scale: [0.5, 0.5, 0.5],
-        },
+  const gradientTexture = world.allocSharedRef('TextureAsset', createDarkGradientTexture());
+  const gradientMaterial = world.allocSharedRef('MaterialAsset', Materials.standard({
+    baseColor: [1, 1, 1, 1],
+    baseColorTexture: gradientTexture,
+    metallic: 0,
+    roughness: 1,
+    renderState: { cullMode: 'none' },
+  }));
+  const gradientQuad = darkGradientQuad();
+  world.spawn(
+    {
+      component: Transform,
+      data: {
+        pos: gradientQuad.position,
+        scale: gradientQuad.scale,
       },
-      { component: MeshFilter, data: { assetHandle: slot.handle } },
-      { component: MeshRenderer, data: { materials: [materialHandle] } },
-    );
-  }
+    },
+    { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+    { component: MeshRenderer, data: { materials: [gradientMaterial] } },
+    { component: ShadowParticipation, data: { cast: false, receive: true } },
+  );
 
   // Directional light.
   world.spawn({
     component: DirectionalLight,
     data: {
-      direction: [-0.4, -0.6, -0.7],
+      direction: DARK_GRADIENT_FIXTURE.scene.lightDirection,
       color: [1, 1, 1],
-      intensity: 1.5,
+      intensity: DARK_GRADIENT_FIXTURE.scene.lightIntensity,
     },
   });
 
@@ -244,12 +236,13 @@ function spawnScene(world, antialias) {
   world.spawn(
     {
       component: Transform,
-      data: { pos: [0, 0, 6]},
+      data: { pos: DARK_GRADIENT_FIXTURE.camera.position},
     },
     {
       component: Camera,
       data: {
-        ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }),
+        ...perspective({ fov: DARK_GRADIENT_FIXTURE.camera.fovRadians, aspect: DARK_GRADIENT_FIXTURE.camera.aspect }),
+        tonemap: TONEMAP_LINEAR,
         antialias,
       },
     },
@@ -313,24 +306,38 @@ renderer.subscribe((event) => {
 
 // --- 7. Dual-pass render ---------------------------------------------------
 
+async function renderAndRead(world, lease) {
+  world.update().unwrap();
+  const drawResult = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!drawResult.ok) throw drawResult.error;
+  (await drawResult.value.completed).unwrap();
+  await device.queue.onSubmittedWorkDone();
+  return doReadPixels();
+}
+
 // Pass 1: ANTIALIAS_NONE baseline.
 const worldNone = new World();
 const worldAttachment1 = renderer.attach(worldNone);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 spawnScene(worldNone, ANTIALIAS_NONE);
-
-worldNone.update().unwrap();
-const drawNoneRes = renderer.draw({
-  leases: [worldAttachment1.value],
-  camera: { lease: worldAttachment1.value },
-  environment: { lease: worldAttachment1.value },
-});
-if (!drawNoneRes.ok) {
-  console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
-  process.exit(1);
+let pixelsNone;
+let framesNone = 0;
+for (let frame = 0; frame < VALIDATION_FRAME_COUNT; frame += 1) {
+  try {
+    pixelsNone = await renderAndRead(worldNone, worldAttachment1.value);
+    framesNone += 1;
+  } catch (error) {
+    console.error(
+      `[smoke] FAIL - draw (none) frame=${frame + 1}/${VALIDATION_FRAME_COUNT} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
 }
-await device.queue.onSubmittedWorkDone();
-const pixelsNone = await doReadPixels();
+const noneInspection = renderer.inspect();
 
 // Pass 2: ANTIALIAS_FXAA -- reuses the same renderer / device / renderTarget.
 // The second draw overwrites the renderTarget in place (same paradigm as
@@ -342,19 +349,21 @@ const worldFxaa = new World();
 const worldAttachment2 = renderer.attach(worldFxaa);
 if (!worldAttachment2.ok) throw worldAttachment2.error;
 spawnScene(worldFxaa, ANTIALIAS_FXAA);
-
-worldFxaa.update().unwrap();
-const drawFxaaRes = renderer.draw({
-  leases: [worldAttachment2.value],
-  camera: { lease: worldAttachment2.value },
-  environment: { lease: worldAttachment2.value },
-});
-if (!drawFxaaRes.ok) {
-  console.error(`[smoke] FAIL - draw (fxaa) failed: ${drawFxaaRes.error.code}`);
-  process.exit(1);
+let pixelsFxaa;
+let framesFxaa = 0;
+for (let frame = 0; frame < VALIDATION_FRAME_COUNT; frame += 1) {
+  try {
+    pixelsFxaa = await renderAndRead(worldFxaa, worldAttachment2.value);
+    framesFxaa += 1;
+  } catch (error) {
+    console.error(
+      `[smoke] FAIL - draw (fxaa) frame=${frame + 1}/${VALIDATION_FRAME_COUNT} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
 }
-await device.queue.onSubmittedWorkDone();
-const pixelsFxaa = await doReadPixels();
+console.log(`[smoke] frames observed=${Math.min(framesNone, framesFxaa)}`);
+const fxaaInspection = renderer.inspect();
 
 // --- 8. Verdict ------------------------------------------------------------
 
@@ -424,6 +433,10 @@ console.log(
     pct: diffPct,
     nonBlackNone,
     nonBlackFxaa,
+    validationFrames: Math.min(framesNone, framesFxaa),
+    framesNone,
+    framesFxaa,
+    validationErrors: errors.length,
   })}`,
 );
 
@@ -443,8 +456,50 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+const inspection = renderer.inspect();
+const observationIdentity = (inspection) => ({
+  observationId: inspection.observation.observationId,
+  frameId: inspection.observation.frameId,
+  rendererInspectionRef: `${inspection.observation.observationId}:frame-${inspection.observation.frameId}`,
+  ...(inspection.observation.antialias === undefined ? {} : { antialias: inspection.observation.antialias }),
+  ...(inspection.observation.surfaceProfile === undefined ? {} : { surfaceProfile: inspection.observation.surfaceProfile }),
+  rgba16floatRenderable: inspection.observation.rgba16floatRenderable === true,
+  passNames: inspection.observation.passNames ?? [],
+  ...(inspection.observation.standardOutputColor === undefined
+    ? {}
+    : { standardOutputColor: inspection.observation.standardOutputColor }),
+});
+const fixtureReport = createDarkGradientFixtureReport({
+  backendId: 'dawn',
+  lane,
+  bytes: pixelsFxaa,
+  referenceBytes: pixelsNone,
+  surface: {
+    storageFormat: inspection.output.surfaceStorage,
+    displayFormat: inspection.output.surfaceDisplay,
+    intermediateFormat: fxaaInspection.output.intermediateFormat ?? '',
+    domain: fxaaInspection.output.displayEncoded ? 'display-encoded' : 'linear',
+    endpoint: fxaaInspection.output.endpoint,
+  },
+  presentationProof: fxaaInspection.output.presentationProof,
+  identity: observationIdentity(fxaaInspection),
+  referenceIdentity: observationIdentity(noneInspection),
+  sampleFrameCount: Math.min(framesNone, framesFxaa),
+});
+console.log(`[dark-gradient] report=${JSON.stringify(fixtureReport)}`);
+
+if (fixtureReport.status !== 'complete') {
+  console.error(
+    `[smoke] FAIL - dark-gradient fixture report is ${fixtureReport.status}; ` +
+      'the real readback did not satisfy the frozen ROI and scanline thresholds',
+  );
+  device.destroy?.();
+  delete globalThis.navigator.gpu;
+  process.exit(2);
+}
+
 console.log(
-  `[smoke] PASS - criteria GREEN: backend=webgpu, RhiError count=${errors.length}, ` +
+  `[smoke] PASS - criteria GREEN: backend=webgpu, lane=${lane}, RhiError count=${errors.length}, ` +
     `nonBlackNone=${nonBlackNone}, nonBlackFxaa=${nonBlackFxaa}, ` +
     `dualPassDiff=${diffCount} > threshold=${DIFF_THRESHOLD} (${diffPct}%)`,
 );

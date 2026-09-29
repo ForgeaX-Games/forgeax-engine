@@ -71,7 +71,10 @@ function mockDispatchEntry(opts: {
     defines: undefined,
     vertexEntry: undefined,
     fragmentEntry: undefined,
-    materialShaderId: undefined,
+    // Fold admission is intentionally limited to the transparent sprite
+    // owners; these fixtures model sprite/tilemap draws rather than generic
+    // transparent Standard PBR geometry.
+    materialShaderId: 'forgeax::sprite',
     paramSnapshot: undefined,
   };
 }
@@ -130,7 +133,7 @@ describe('fold operator dawn integration (w7) — drawIndexed count drops to buc
   it('AC-02 (tilemap chunk multi-material): 2 materials interleaved by chunk -> 2 buckets per chunk run', () => {
     // Simulate a single tilemap chunk: 32 cells, 2 materials.
     // Layer-stable sort co-locates cells by (layer, posZ, material), so the
-    // upstream sortTransparentDispatch ensures runs are contiguous by material.
+    // upstream TransparentSortCache ensures runs are contiguous by material.
     // The fold operator must NOT merge runs of different materials into one
     // bucket (AC-10 cross-material guard).
     const PER_MATERIAL = 16;

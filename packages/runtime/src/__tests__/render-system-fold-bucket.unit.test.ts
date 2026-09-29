@@ -28,6 +28,7 @@ function mockEntry(opts: {
   renderableIndex: number;
   materialHandle: number;
   layer: number;
+  materialShaderId?: string;
 }): DispatchEntry {
   return {
     entityIndex: opts.renderableIndex,
@@ -41,7 +42,7 @@ function mockEntry(opts: {
     defines: undefined,
     vertexEntry: undefined,
     fragmentEntry: undefined,
-    materialShaderId: undefined,
+    materialShaderId: opts.materialShaderId ?? 'forgeax::sprite',
     paramSnapshot: undefined,
   };
 }
@@ -185,6 +186,37 @@ describe('foldDispatchBuckets — mode 0 basic paths (w1)', () => {
 // 'sprite'` to `transparent === true` (the M3 ablation collapsed the
 // sprite discriminator into the generic transparent flag).
 describe('foldDispatchBuckets — transparent-only gate (PR #502 fix + feat-20260625 R2 fix-up)', () => {
+  it('transparent Standard PBR entries remain singleton while sprite shaders fold', () => {
+    const standardEntries = [0, 1].map((renderableIndex) =>
+      mockEntry({
+        renderableIndex,
+        materialHandle: 13,
+        layer: 0,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      }),
+    );
+    const standardRenderables = standardEntries.map(() => mockRenderable(1.0, true));
+    const standardBuckets = foldDispatchBuckets(
+      standardEntries,
+      TRANSPARENT_SORT_MODE_LAYER_Z,
+      standardRenderables,
+    );
+    expect(standardBuckets.map((bucket) => bucket.bucketSize)).toEqual([1, 1]);
+
+    for (const materialShaderId of ['forgeax::sprite', 'forgeax::sprite-lit']) {
+      const spriteEntries = [0, 1].map((renderableIndex) =>
+        mockEntry({ renderableIndex, materialHandle: 13, layer: 0, materialShaderId }),
+      );
+      const spriteBuckets = foldDispatchBuckets(
+        spriteEntries,
+        TRANSPARENT_SORT_MODE_LAYER_Z,
+        standardRenderables,
+      );
+      expect(spriteBuckets).toHaveLength(1);
+      expect(spriteBuckets[0]?.bucketSize).toBe(2);
+    }
+  });
+
   it('non-transparent (unlit-shading) entries never form multi-entry buckets', () => {
     // 4 entries sharing (layer, posZ, materialHandle) — pre-fix would have
     // folded into a single bucketSize=4 bucket. With the transparent-only

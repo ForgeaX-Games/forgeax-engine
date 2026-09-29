@@ -16,13 +16,17 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { sdkLauncherSource } from './sdk-launcher.mjs';
 import {
   artifact,
   assertNoRetiredPackageFiles,
   fetchWithRetry,
   filesUnder,
+  mapConcurrent,
+  normalizeLicenseReport,
   normalizePackageArchive,
   normalizePnpmStore,
+  prepareWasmPackageForPack,
   SDK_CAPABILITIES,
   SDK_MANIFEST_VERSION,
   SDK_RESOURCE_ALLOWLIST,
@@ -37,12 +41,20 @@ import {
   sha256,
   stable,
   streamFile,
+  writePackageArchive,
 } from './sdk-lib.mjs';
+import { archiveEngineSource } from './sdk-source.mjs';
+import { sdkStage } from './sdk-stage.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(new URL(import.meta.url).pathname), '../..');
 const args = process.argv.slice(2);
 const rootPackage = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+const devkitPackage = JSON.parse(
+  await readFile(resolve(root, 'packages/devkit/package.json'), 'utf8'),
+);
+const sdkVitestVersion = devkitPackage.dependencies?.vitest;
+if (typeof sdkVitestVersion !== 'string') throw new Error('sdk-vitest-version-missing');
 const packageManager = rootPackage.packageManager;
 const packageManagerMatch = /^pnpm@(\d+)\.(\d+)\.(\d+)$/.exec(
   typeof packageManager === 'string' ? packageManager : '',
@@ -73,20 +85,14 @@ function value(name) {
 
 async function run(file, commandArgs, options = {}) {
   const { env, ...rest } = options;
-  try {
-    return await execFileAsync(file, commandArgs, {
+  return sdkStage([file, ...commandArgs].join(' ').slice(0, 240), () =>
+    execFileAsync(file, commandArgs, {
       cwd: root,
       maxBuffer: 64 * 1024 * 1024,
       ...rest,
       env: { ...process.env, CI: process.env.CI ?? 'true', ...env },
-    });
-  } catch (error) {
-    // Node truncates large captured strings when inspecting an uncaught error.
-    // Emit the original compiler diagnostics before preserving the failed command.
-    if (typeof error.stdout === 'string') process.stdout.write(error.stdout);
-    if (typeof error.stderr === 'string') process.stderr.write(error.stderr);
-    throw error;
-  }
+    }),
+  );
 }
 
 async function git(commandArgs) {
@@ -100,16 +106,6 @@ async function zipWithInputs(commandArgs, cwd, inputs) {
     child.once('exit', (code) => (code === 0 ? accept() : reject(new Error(`zip exited ${code}`))));
     child.stdin.end(inputs);
   });
-}
-
-async function archiveEngineSource(destination) {
-  const sourceArchive = resolve(outputRoot, '.sdk-engine-source.tar');
-  await run('git', ['archive', '--format=tar', `--output=${sourceArchive}`, 'HEAD']);
-  try {
-    await run('tar', ['-xf', sourceArchive, '-C', destination]);
-  } finally {
-    await rm(sourceArchive, { force: true });
-  }
 }
 
 async function copySdkResources(destination, sourceOverrides = new Map()) {
@@ -170,12 +166,16 @@ if (status !== '' && !args.includes('--allow-dirty')) {
 }
 await run('node', ['scripts/forgeax/check-engine-skills.mjs']);
 const licenseReport = stable(
-  // Fail before the expensive Engine/template build when the contributor
-  // workspace or its pnpm store cannot produce the authoritative notice set.
-  // Cross-platform optional children can lack pnpm store index rows for the
-  // current host; their parent package license remains in this notice set.
-  JSON.parse(
-    (await run('corepack', [packageManager, 'licenses', 'list', '--json', '--no-optional'])).stdout,
+  normalizeLicenseReport(
+    // Fail before the expensive Engine/template build when the contributor
+    // workspace or its pnpm store cannot produce the authoritative notice set.
+    // Cross-platform optional children can lack pnpm store index rows for the
+    // current host; their parent package license remains in this notice set.
+    JSON.parse(
+      (await run('corepack', [packageManager, 'licenses', 'list', '--json', '--no-optional']))
+        .stdout,
+    ),
+    root,
   ),
 );
 const engineCommit = await git(['rev-parse', 'HEAD']);
@@ -216,30 +216,14 @@ await run(
 );
 const shaderReleaseRoot = resolve(root, 'shared-build-inputs-release');
 await rm(shaderReleaseRoot, { recursive: true, force: true });
-for (const profile of [
-  ['base-base'],
-  ['point-base', '--point-shadows'],
-  ['base-ssao', '--hdrp-ssao'],
-  ['point-ssao', '--point-shadows', '--hdrp-ssao'],
-]) {
-  const [name, ...flags] = profile;
-  await run(
-    'node',
-    ['scripts/build-shared-inputs.mjs', '--out', `shared-build-inputs-release/${name}`, ...flags],
-    { env: { ...process.env, FORGEAX_ENGINE_SHADER_SOURCE_BUILD: '1' } },
-  );
-}
-await run('node', ['scripts/forgeax/prepare-shader-release-inputs.mjs']);
-await rm(shaderReleaseRoot, { recursive: true, force: true });
-await run('pnpm', [
-  'exec',
-  'tsc',
-  '-b',
-  '--force',
-  'packages/tool-runtime',
-  'packages/devkit',
-  'packages/project',
+await run('node', [
+  'scripts/forgeax/prepare-shader-release-inputs.mjs',
+  '--build',
+  '--shared-input-manifest',
+  'shared-build-inputs/manifest.json',
 ]);
+await rm(shaderReleaseRoot, { recursive: true, force: true });
+// build:engine already emits the complete declaration graph, including DevKit.
 const { createMigrationRoster } = await import(
   pathToFileURL(resolve(root, 'packages/devkit/dist/index.mjs')).href
 );
@@ -274,6 +258,16 @@ for (const entry of await readdir(resolve(root, 'packages'), { withFileTypes: tr
 }
 publicPackages.sort((a, b) => a.name.localeCompare(b.name));
 
+const wasmPackageConfig = new Map(
+  SDK_SOURCE_WASM.map(({ package: packageName, files }) => [
+    packageName,
+    {
+      postinstallScripts: ['scripts/ensure-wasm.mjs'],
+      wasmFiles: files.map((file) => `pkg/${file}`),
+    },
+  ]),
+);
+
 // wasm-pack emits pkg/.gitignore; npm pack applies nested ignores even when
 // pkg is declared in files, so remove this generated control file first.
 await Promise.all(
@@ -286,8 +280,32 @@ await cp(canonicalKitPackageRoot, canonicalKitBackup, { recursive: true });
 try {
   await rm(canonicalKitPackageRoot, { recursive: true, force: true });
   await cp(canonicalKitRoot, canonicalKitPackageRoot, { recursive: true });
+  // Resolve the workspace once. Serial recursive packing preserves the package
+  // work and hooks without starting a fresh workspace scan for every tarball.
+  const ordinaryPackages = publicPackages.filter((entry) => !wasmPackageConfig.has(entry.name));
+  await run('pnpm', [
+    '--recursive',
+    '--workspace-concurrency=1',
+    ...ordinaryPackages.flatMap((entry) => ['--filter', entry.name]),
+    'pack',
+    '--pack-destination',
+    packageArchives,
+  ]);
   for (const entry of publicPackages) {
-    await run('pnpm', ['--filter', entry.name, 'pack', '--pack-destination', packageArchives]);
+    const wasm = wasmPackageConfig.get(entry.name);
+    if (wasm === undefined) continue;
+    const staged = await prepareWasmPackageForPack({
+      packageRoot: entry.root,
+      helperSource: resolve(root, 'scripts/lib/ensure-wasm-lib.mjs'),
+      ...wasm,
+    });
+    try {
+      await run('pnpm', ['pack', '--pack-destination', packageArchives], {
+        cwd: staged.packageRoot,
+      });
+    } finally {
+      await rm(staged.root, { recursive: true, force: true });
+    }
   }
 } finally {
   await rm(canonicalKitPackageRoot, { recursive: true, force: true });
@@ -299,7 +317,9 @@ for (const path of (await filesUnder(packageArchives)).filter((entry) => entry.e
   const manifest = JSON.parse(stdout);
   const { stdout: archiveList } = await run('tar', ['-tzf', path]);
   assertNoRetiredPackageFiles(manifest.name, archiveList.trim().split('\n'));
-  await normalizePackageArchive(path, execFileAsync, { releaseVersion: version });
+  await sdkStage(`normalize package ${manifest.name}`, () =>
+    normalizePackageArchive(path, execFileAsync, { releaseVersion: version }),
+  );
   const releaseName = `${manifest.name.slice(1).replace('/', '-')}-${version}.tgz`;
   await rename(path, resolve(packageArchives, releaseName));
 }
@@ -430,13 +450,14 @@ try {
       license: sourceTemplateManifest.license,
       packageManager,
       scripts: {
-        dev: 'forgeax dev',
-        build: 'forgeax build',
-        package: 'forgeax package',
-        serve: 'forgeax serve',
-        preview: 'forgeax preview',
-        doctor: 'forgeax doctor',
-        test: 'forgeax test',
+        dev: 'forgeax dev start',
+        build: 'forgeax project build',
+        package: 'forgeax project package',
+        serve: 'forgeax project preview',
+        preview: 'forgeax project preview',
+        doctor: 'forgeax project check',
+        test: 'forgeax project test',
+        typecheck: 'pnpm exec tsc --noEmit',
       },
       forgeax: sourceTemplateManifest.forgeax,
       dependencies,
@@ -445,7 +466,7 @@ try {
         '@webgpu/types': '0.1.71',
         tsx: '4.23.1',
         typescript: '6.0.3',
-        vitest: '4.1.11',
+        vitest: sdkVitestVersion,
       },
     };
     await writeFile(
@@ -486,12 +507,16 @@ await rm(resolve(stage, 'store', 'pnpm', pnpmStoreFormat, 'projects'), {
   recursive: true,
   force: true,
 });
-await normalizePnpmStore(resolve(stage, 'store', 'pnpm'), pnpmStoreFormat);
-await mkdir(resolve(stage, 'bin'), { recursive: true });
-await cp(
-  resolve(root, 'packages', 'devkit', 'dist', 'sdk-cli.mjs'),
-  resolve(stage, 'bin', 'forgeax.mjs'),
+await sdkStage('normalize offline store', () =>
+  normalizePnpmStore(resolve(stage, 'store', 'pnpm'), pnpmStoreFormat),
 );
+await mkdir(resolve(stage, 'bin'), { recursive: true });
+// The SDK archive intentionally has no root node_modules. Bootstrap a small
+// private CLI runtime from the shipped template lockfile/store on first use,
+// then enter the exact Engine umbrella bin so all package dependencies resolve
+// through one published graph. The generated runtime is disposable SDK state,
+// not an additional user-facing entrypoint.
+await writeFile(resolve(stage, 'bin', 'forgeax.mjs'), sdkLauncherSource(packageManager));
 await writeFile(
   resolve(stage, 'bin', 'forgeax'),
   '#!/bin/sh\nexec node "$(dirname "$0")/forgeax.mjs" "$@"\n',
@@ -508,11 +533,11 @@ await writeFile(
 
 await Promise.all([
   cp(
-    resolve(root, 'sdk-manifest.schema.json'),
+    resolve(root, 'schemas/sdk-manifest.schema.json'),
     resolve(stage, 'schemas', 'sdk-manifest.schema.json'),
   ),
   cp(
-    resolve(root, 'forgeax-dist.schema.json'),
+    resolve(root, 'schemas/forgeax-dist.schema.json'),
     resolve(stage, 'schemas', 'forgeax-dist.schema.json'),
   ),
   cp(resolve(root, 'packages', 'devkit', 'README.md'), resolve(stage, 'docs', 'DEVKIT.md')),
@@ -546,7 +571,28 @@ for (const id of sdkSkillIds) {
   }
   await cp(resolve(root, 'skills', id), resolve(stage, 'skills', id), { recursive: true });
 }
-await archiveEngineSource(sourceRoot);
+// The unified `forgeax dev ...` surface owns live inspection. The historical
+// standalone relay scripts remain repository-only fixtures for old smoke lanes
+// but must not be shipped as runnable SDK skill entries.
+for (const relative of [
+  'skills/forgeax-engine-cli/scripts/remote-live.mjs',
+  'skills/forgeax-engine-cli/scripts/remote-cli-common.mjs',
+  'skills/forgeax-engine-cli/scripts/remote-bridge-server.mjs',
+  'scripts/dev-live.mjs',
+]) {
+  await rm(resolve(stage, relative), { force: true });
+}
+const gitDependencies = await sdkStage('archive Engine and pinned source dependencies', () =>
+  archiveEngineSource({ root, destination: sourceRoot, commit: engineCommit }),
+);
+for (const relative of [
+  'skills/forgeax-engine-cli/scripts/remote-live.mjs',
+  'skills/forgeax-engine-cli/scripts/remote-cli-common.mjs',
+  'skills/forgeax-engine-cli/scripts/remote-bridge-server.mjs',
+  'scripts/dev-live.mjs',
+]) {
+  await rm(resolve(sourceRoot, relative), { force: true });
+}
 await copySdkTemplateResources(sourceRoot);
 await Promise.all(
   SDK_SOURCE_WASM.flatMap((entry) =>
@@ -559,11 +605,6 @@ await Promise.all(
   ),
 );
 await copySdkResources(sourceRoot, new Map([['preview-canonical-kit', canonicalKitRoot]]));
-await Promise.all(
-  SDK_SOURCE_EXCLUDED_PATHS.map((path) =>
-    rm(resolve(sourceRoot, path), { recursive: true, force: true }),
-  ),
-);
 await writeFile(
   resolve(sourceRoot, '.forgeax-public-distribution'),
   'This marker selects the public SDK source install and build path.\n',
@@ -591,52 +632,39 @@ await writeFile(
   resolve(stage, 'licenses', 'THIRD_PARTY_NOTICES.json'),
   `${JSON.stringify(licenseReport, null, 2)}\n`,
 );
-const packageRows = [];
-for (const item of publicPackages) {
-  const packageRoot = resolve(stage, 'packages', item.directory);
-  const packageFiles = await filesUnder(packageRoot);
-  packageRows.push({
-    name: item.name,
-    version: item.version,
-    root: `packages/${item.directory}`,
-    fileCount: packageFiles.length,
-    byteCount: (
-      await Promise.all(packageFiles.map(async (path) => (await readFile(path)).byteLength))
-    ).reduce((sum, bytes) => sum + bytes, 0),
-  });
+const artifacts = await sdkStage('hash archive inventory', async () => {
+  const paths = (await filesUnder(stage)).filter((path) => !path.endsWith('/sdk-manifest.json'));
+  return mapConcurrent(paths, (path) => artifact(stage, path));
+});
+// Counts and digests describe the same final bytes; do not reread each tree
+// once for sizes and then again for the authoritative artifact inventory.
+function artifactSummary(prefix) {
+  const rows = artifacts.filter((row) => row.path.startsWith(`${prefix}/`));
+  return { fileCount: rows.length, byteCount: rows.reduce((sum, row) => sum + row.bytes, 0) };
 }
-const skillRows = [];
-for (const id of sdkSkillIds) {
-  const skillRoot = resolve(stage, 'skills', id);
-  const skillFiles = await filesUnder(skillRoot);
-  skillRows.push({
-    id,
-    root: `skills/${id}`,
-    fileCount: skillFiles.length,
-    byteCount: (
-      await Promise.all(skillFiles.map(async (path) => (await readFile(path)).byteLength))
-    ).reduce((sum, bytes) => sum + bytes, 0),
-  });
-}
-const sourceRows = await Promise.all(
-  (await filesUnder(sourceRoot)).map((path) => artifact(stage, path)),
-);
+const packageRows = publicPackages.map((item) => ({
+  name: item.name,
+  version: item.version,
+  root: `packages/${item.directory}`,
+  ...artifactSummary(`packages/${item.directory}`),
+}));
+const skillRows = sdkSkillIds.map((id) => ({
+  id,
+  root: `skills/${id}`,
+  ...artifactSummary(`skills/${id}`),
+}));
 const source = {
   root: SDK_SOURCE_ROOT,
   format: SDK_SOURCE_FORMAT,
   excluded: [...SDK_SOURCE_EXCLUDED_PATHS],
-  fileCount: sourceRows.length,
-  byteCount: sourceRows.reduce((sum, row) => sum + row.bytes, 0),
+  gitDependencies,
+  ...artifactSummary(SDK_SOURCE_ROOT),
   prebuiltWasm: SDK_SOURCE_WASM.map(({ package: packageName, root: packageRoot, files }) => ({
     package: packageName,
     root: packageRoot,
     files: [...files],
   })),
 };
-const artifactPaths = (await filesUnder(stage)).filter(
-  (path) => !path.endsWith('/sdk-manifest.json'),
-);
-const artifacts = await Promise.all(artifactPaths.map((path) => artifact(stage, path)));
 const sdkManifest = {
   schemaVersion: SDK_MANIFEST_VERSION,
   sdkVersion: version,
@@ -644,10 +672,9 @@ const sdkManifest = {
   requirements: { node: '>=22.13.0', pnpm: pnpmVersion, pnpmStoreFormat },
   capabilities: SDK_CAPABILITIES,
   packages: packageRows,
-  templates: SDK_TEMPLATES.map(({ id, sourceRoot: templateRoot, default: isDefault }) => ({
+  templates: SDK_TEMPLATES.map(({ id, sourceRoot: templateRoot }) => ({
     id,
     root: templateRoot,
-    default: isDefault,
   })),
   skills: skillRows,
   resources: sdkResourceManifest(),
@@ -684,11 +711,13 @@ const carrierArchive = resolve(npmRoot, `forgeax-engine-sdk-${version}.tgz`);
 try {
   await mkdir(carrierPackage, { recursive: true });
   const carrierSdkRoot = resolve(carrierPackage, 'sdk');
-  await cp(stage, carrierSdkRoot, { recursive: true });
+  await cp(stage, carrierSdkRoot, {
+    recursive: true,
+    filter: (source) => source !== resolve(stage, 'store'),
+  });
   // The ZIP is the offline product and keeps the normalized pnpm store. The
   // npm carrier is the smaller online bootstrap surface; games install the
   // exact locked packages from the registry when this store is absent.
-  await rm(resolve(carrierSdkRoot, 'store'), { recursive: true, force: true });
   const carrierManifestPath = resolve(carrierSdkRoot, 'sdk-manifest.json');
   const carrierManifest = JSON.parse(await readFile(carrierManifestPath, 'utf8'));
   carrierManifest.artifacts = carrierManifest.artifacts.filter(
@@ -718,8 +747,9 @@ try {
     )}\n`,
   );
   await cp(resolve(stage, 'README.md'), resolve(carrierPackage, 'README.md'));
-  await run('tar', ['-czf', carrierArchive, '-C', carrierWorktree, 'package']);
-  await normalizePackageArchive(carrierArchive, execFileAsync, { releaseVersion: version });
+  await sdkStage('pack npm carrier', () =>
+    writePackageArchive(carrierWorktree, carrierArchive, { releaseVersion: version }),
+  );
 } finally {
   await rm(carrierWorktree, { recursive: true, force: true });
 }
@@ -731,7 +761,9 @@ const zipEntries = (await filesUnder(stage))
   .map((path) => relative(outputRoot, path).split(sep).join('/'))
   .sort();
 await writeFile(resolve(outputRoot, '.sdk-zip-inputs'), `${zipEntries.join('\n')}\n`);
-await zipWithInputs(['-X', '-q', archive, '-@'], outputRoot, `${zipEntries.join('\n')}\n`);
+await sdkStage('zip archive', () =>
+  zipWithInputs(['-X', '-q', archive, '-@'], outputRoot, `${zipEntries.join('\n')}\n`),
+);
 const archiveBytes = await readFile(archive);
 const digest = sha256(archiveBytes);
 await writeFile(resolve(outputRoot, 'SHA256SUMS'), `${digest}  ${basename(archive)}\n`);

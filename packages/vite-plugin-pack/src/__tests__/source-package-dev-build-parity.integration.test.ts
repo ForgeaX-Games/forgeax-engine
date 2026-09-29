@@ -136,6 +136,58 @@ describe('source package dev/build parity', () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
+  it('retains warm DDC entries when a source revision changes without changing cooked bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-publication-key-'));
+    roots.push(root);
+    const assets = join(root, 'assets');
+    await mkdir(assets);
+    await writeFile(join(assets, 'scene.fixture.meta.json'), meta());
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const binding = createStandaloneRuntimeAssetBinding('publication-key');
+      const publish = async (source: string) => {
+        // This importer deliberately produces the same semantic assets for both
+        // inputs. Source revision still belongs to the publication identity.
+        await writeFile(join(assets, source), 'unchanged source bytes');
+        await writeFile(
+          join(assets, 'scene.fixture.meta.json'),
+          JSON.stringify({ ...JSON.parse(meta()), source }),
+        );
+        const plugin = pluginPack({ roots: [assets], importers: [fixtureImporter] });
+        const server = createServer();
+        plugin.configureServer(server);
+        try {
+          await plugin.rebind(binding, [assets]);
+          const catalog = JSON.parse(String((await request(server, binding.catalogUrl)).body));
+          expect(catalog.error).toBeUndefined();
+          const row = catalog.entries.find((entry: { guid: string }) => entry.guid === MAIN_GUID);
+          const pack = JSON.parse(String((await request(server, row.packageUrl)).body));
+          return { publication: row.publication, pack };
+        } finally {
+          await plugin.closeBundle();
+        }
+      };
+      const first = await publish('scene.fixture');
+      const second = await publish('relocated.fixture');
+      expect(second.pack.assets).toEqual(first.pack.assets);
+      expect(second.publication.sourceRevision).not.toBe(first.publication.sourceRevision);
+      expect(second.pack.generation).not.toBe(first.pack.generation);
+      expect(second.publication.receipt.inputFingerprint).not.toBe(
+        first.publication.receipt.inputFingerprint,
+      );
+      const repeated = await publish('relocated.fixture');
+      expect(repeated.pack).toEqual(second.pack);
+      expect(repeated.publication.receipt.inputFingerprint).toBe(
+        second.publication.receipt.inputFingerprint,
+      );
+      const restored = await publish('scene.fixture');
+      expect(restored.pack).toEqual(first.pack);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
   it('keeps semantic product facts equal while sink locators differ', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-parity-'));
     roots.push(root);
@@ -153,11 +205,17 @@ describe('source package dev/build parity', () => {
       await dev.rebind(binding, [assets]);
       const catalog = (
         JSON.parse(String((await request(server, binding.catalogUrl)).body)) as {
-          entries: Array<{ guid: string; packageUrl: string }>;
+          entries: Array<{
+            guid: string;
+            packageUrl: string;
+            sourcePath?: string;
+            publication?: { sourcePath?: string };
+          }>;
         }
       ).entries;
       const devRow = catalog.find((entry) => entry.guid.toLowerCase() === MAIN_GUID);
       expect(devRow).toBeDefined();
+      expect(devRow?.publication?.sourcePath).toBe(devRow?.sourcePath);
       const devPack = JSON.parse(
         String(await request(server, devRow?.packageUrl ?? '').then((result) => result.body)),
       ) as Parameters<typeof semanticPack>[0];

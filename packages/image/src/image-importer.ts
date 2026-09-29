@@ -32,7 +32,13 @@
 // (a single 2D rgba16float image); the cube-to-cube IBL projection is a runtime
 // GPU pass, not a build-time fold (feat-20260630).
 
-import { type BasisSourceInspection, ktx2ColorSpace, parseKtx2 } from '@forgeax/engine-codec';
+import {
+  type BasisSourceInspection,
+  initBasisTranscoder,
+  inspectBasisSource,
+  ktx2ColorSpace,
+  parseKtx2,
+} from '@forgeax/engine-codec';
 import type {
   EquirectAsset,
   ImageColorSpace,
@@ -41,11 +47,14 @@ import type {
   Importer,
   ImportResult,
   TextureAsset,
+  TextureMipPolicy,
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
-import type { CompressionMode } from './ktx2-encode.js';
+import type { CompressionMode, EncodedTexture, EncodeSourceInfo } from './ktx2-encode.js';
 import { encodeTextureToKtx2, resolveEncodeMode } from './ktx2-encode.js';
+import { importCubeSource } from './lut/cube-producer.js';
 import { parseImage } from './parse-image.js';
+import { importTextureSource } from './texture/importer.js';
 
 /** Map a source path / mime hint to the parseImage mime literal. */
 function mimeFromSource(source: string): 'image/png' | 'image/jpeg' | undefined {
@@ -60,7 +69,12 @@ type RequiredImageOutputKind = 'texture' | 'equirect';
 function requiredImageOutputKind(source: string): RequiredImageOutputKind | undefined {
   const lower = source.toLowerCase();
   if (lower.endsWith('.hdr')) return 'equirect';
-  if (mimeFromSource(source) !== undefined || lower.endsWith('.basis') || lower.endsWith('.ktx2')) {
+  if (
+    mimeFromSource(source) !== undefined ||
+    lower.endsWith('.basis') ||
+    lower.endsWith('.ktx2') ||
+    lower.endsWith('.cube')
+  ) {
     return 'texture';
   }
   return undefined;
@@ -218,7 +232,6 @@ async function inspectKtx2Source(
       're-encode the source as one 2D Basis texture',
     );
   }
-  const { initBasisTranscoder } = await import('@forgeax/engine-codec');
   const module = await initBasisTranscoder();
   let file: InstanceType<typeof module.KTX2File>;
   try {
@@ -319,13 +332,17 @@ async function importKtx2Source(ctx: ImportContext, bytes: Uint8Array): Promise<
       kind: 'texture',
       payload: {
         kind: 'texture',
-        width: inspection.width,
-        height: inspection.height,
+        shape: {
+          viewDimension: '2d',
+          extent: { width: inspection.width, height: inspection.height },
+        },
         format: colorSpaceToFormat(inspection.colorSpace),
         data: bytes,
         colorSpace: inspection.colorSpace,
-        mipmap: inspection.levelCount > 1,
-        mipLevelCount: inspection.levelCount,
+        mips:
+          inspection.levelCount > 1
+            ? { kind: 'packed', levelCount: inspection.levelCount }
+            : { kind: 'none' },
       },
       refs: [],
       artifacts: {
@@ -366,7 +383,6 @@ function basisMetaColorSpace(ctx: ImportContext): ImageColorSpace | ImportError 
 async function importBasisSource(ctx: ImportContext, bytes: Uint8Array): Promise<ImportResult> {
   const colorSpace = basisMetaColorSpace(ctx);
   if (colorSpace instanceof ImportError) return { ok: false, error: colorSpace };
-  const { initBasisTranscoder, inspectBasisSource } = await import('@forgeax/engine-codec');
   const module = await initBasisTranscoder();
   if (module.BasisFile === undefined) {
     throw new Error('basis-source-inspection-unavailable: transcoder lacks BasisFile');
@@ -481,13 +497,17 @@ async function importBasisSource(ctx: ImportContext, bytes: Uint8Array): Promise
       kind: 'texture',
       payload: {
         kind: 'texture',
-        width: inspection.width,
-        height: inspection.height,
+        shape: {
+          viewDimension: '2d',
+          extent: { width: inspection.width, height: inspection.height },
+        },
         format: colorSpaceToFormat(colorSpace),
         data: bytes,
         colorSpace,
-        mipmap: inspection.levelCount > 1,
-        mipLevelCount: inspection.levelCount,
+        mips:
+          inspection.levelCount > 1
+            ? { kind: 'packed', levelCount: inspection.levelCount }
+            : { kind: 'none' },
       },
       refs: [],
       artifacts: {
@@ -524,12 +544,12 @@ function compressionModeToken(token: unknown): CompressionMode {
 /**
  * Basis encode arm (D-5 / M3 w18; HDR arm feat-20260707): when the sidecar
  * requests a compressed delivery (mode resolves to non-'none'), encode the
- * decoded pixels into a Basis KTX2 and return those bytes; the catalog
+ * decoded pixels into a Basis KTX2 and return it with its level count; the catalog
  * `compression` discriminant is set by the vite-plugin-pack wiring (w20).
  * Returns `null` for the 'none' path so the caller keeps the uncompressed
  * `.bin` bytes unchanged (rgba8 for LDR, rgba16float for HDR).
  *
- * `pixels` is tight-packed RGBA: 8-bit RGBA for LDR (`isHdr: false`),
+ * `pixels` is tight-packed RGBA: 8-bit RGBA for LDR (`source.isHdr: false`),
  * rgba16float bytes for HDR (`isHdr: true`). The `isHdr` signal drives both the
  * 'auto' derivation (-> 'uastc-hdr') and the encoder's HDR source path.
  */
@@ -539,19 +559,15 @@ async function maybeEncodeTextureBytes(
   width: number,
   height: number,
   compressionMode: CompressionMode,
-  colorSpace: ImageColorSpace,
-  isHdr: boolean,
+  source: EncodeSourceInfo,
 ): Promise<
-  | { readonly ok: true; readonly value: Uint8Array | null }
+  | { readonly ok: true; readonly value: EncodedTexture | null }
   | { readonly ok: false; readonly error: ImportError }
 > {
-  if (resolveEncodeMode(compressionMode, { colorSpace, isHdr }) === 'none') {
+  if (resolveEncodeMode(compressionMode, source) === 'none') {
     return { ok: true, value: null };
   }
-  const result = await encodeTextureToKtx2(pixels, width, height, compressionMode, {
-    colorSpace,
-    isHdr,
-  });
+  const result = await encodeTextureToKtx2(pixels, width, height, compressionMode, source);
   if (!result.ok) {
     return {
       ok: false,
@@ -570,10 +586,25 @@ async function maybeEncodeTextureBytes(
       ),
     };
   }
-  return { ok: true, value: result.value.ktx2 };
+  return { ok: true, value: result.value };
+}
+
+/**
+ * A KTX2 body carries its own chain (block-compressed formats cannot be
+ * mip-generated on the GPU); only uncompressed pixels defer to runtime generation.
+ */
+function cookedMipPolicy(ktx2: EncodedTexture | null, mipmap: boolean): TextureMipPolicy {
+  if (ktx2 !== null) return { kind: 'packed', levelCount: ktx2.levelCount };
+  return mipmap ? { kind: 'generate' } : { kind: 'none' };
 }
 
 async function importImage(ctx: ImportContext): Promise<ImportResult> {
+  if (ctx.source.toLowerCase().endsWith('.texture.json')) {
+    return importTextureSource(ctx);
+  }
+  if (ctx.source.toLowerCase().endsWith('.cube')) {
+    return importCubeSource(ctx);
+  }
   const requiredKind = requiredImageOutputKind(ctx.source);
   if (requiredKind !== undefined) {
     const topologyError = validateImageOutputTopology(ctx, requiredKind);
@@ -717,11 +748,10 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
     dec.width,
     dec.height,
     compressionMode,
-    colorSpace,
-    false,
+    { colorSpace, isHdr: false, mipmap },
   );
   if (!encoded.ok) return encoded;
-  const encodedBytes = encoded.value;
+  const encodedBytes = encoded.value?.ktx2 ?? null;
 
   const out: ImportedAsset[] = [];
   for (const sub of ctx.subAssets) {
@@ -730,12 +760,11 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
     if (sub.kind !== 'texture') continue;
     const payload: TextureAsset = {
       kind: 'texture',
-      width: dec.width,
-      height: dec.height,
+      shape: { viewDimension: '2d', extent: { width: dec.width, height: dec.height } },
       format: colorSpaceToFormat(colorSpace),
       data: encodedBytes ?? dec.bytes,
       colorSpace,
-      mipmap,
+      mips: cookedMipPolicy(encoded.value, mipmap),
     };
     out.push({
       guid: sub.guid,
@@ -797,6 +826,7 @@ export const decodeImageForImport: ImportContext['decodeImage'] = async (
     isHdr: false,
   });
   let cookedBytes = tex.bytes;
+  let cookedKtx2: EncodedTexture | null = null;
   let mediaType: string = mimeType;
   let assetCodec: { name: string; profile?: string; version?: string } = {
     name: 'rgba8',
@@ -808,7 +838,7 @@ export const decodeImageForImport: ImportContext['decodeImage'] = async (
       tex.width,
       tex.height,
       requestedCompression,
-      { colorSpace, isHdr: false },
+      { colorSpace, isHdr: false, mipmap },
     );
     if (!encoded.ok) {
       throw new Error(
@@ -816,6 +846,7 @@ export const decodeImageForImport: ImportContext['decodeImage'] = async (
       );
     }
     cookedBytes = encoded.value.ktx2;
+    cookedKtx2 = encoded.value;
     mediaType = 'image/ktx2';
     assetCodec = { name: 'basis', profile: encoded.value.mode };
   }
@@ -825,11 +856,10 @@ export const decodeImageForImport: ImportContext['decodeImage'] = async (
       texture: {
         kind: 'texture' as const,
         data: cookedBytes,
-        width: tex.width,
-        height: tex.height,
+        shape: { viewDimension: '2d', extent: { width: tex.width, height: tex.height } },
         format: colorSpaceToFormat(colorSpace),
         colorSpace,
-        mipmap,
+        mips: cookedMipPolicy(cookedKtx2, mipmap),
       },
       bytes: cookedBytes,
       mediaType,
@@ -856,3 +886,6 @@ export const imageImporter: Importer = {
   import: importImage,
   capabilities: { decodeImage: decodeImageForImport },
 };
+
+export { cubeLutBytes, parseCubeLut } from './lut/cube-parser.js';
+export { importCubeSource, produceCubeTexture } from './lut/cube-producer.js';

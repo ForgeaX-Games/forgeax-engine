@@ -2,9 +2,8 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import type { SourceDeclarationEvidence } from '@forgeax/engine-types';
+import { parsePackSourceJson, projectDirectPackJson } from '../pack-authoring.js';
 import { SCANNER_BLACKLIST, scan } from '../scanner.js';
-import { projectScriptablePackMeta } from '../scriptable-pack.js';
-import { loadScriptablePack } from '../scriptable-pack-node.js';
 
 /** Project root and GUID used to locate an authoritative source declaration. */
 export interface SourceInventoryRequest {
@@ -150,34 +149,43 @@ export async function readSourceInventory(
   let authored: SourceDeclarationEvidence | undefined;
   for (const path of paths) {
     if (path.endsWith('.pack.ts')) {
-      const loaded = await loadScriptablePack(path, { metadataOnly: true });
-      if (!loaded.ok) continue;
-      const meta = projectScriptablePackMeta(loaded.value, path);
-      if (meta.subAssets.some((asset) => asset.guid.toLowerCase() === guid)) {
-        return { origin: 'sourceMeta', sourcePath: path };
-      }
+      // ScriptablePack source identity is a build result, not a declaration
+      // table. The source index therefore records the source only after the
+      // producer publishes its materialized Pack output.
       continue;
     }
     const raw = await readFile(path, 'utf8').catch(() => undefined);
     if (raw === undefined) continue;
-    let parsed: {
-      readonly assets?: readonly { readonly guid?: unknown }[];
-      readonly source?: unknown;
-      readonly inputFingerprint?: unknown;
-      readonly importSettings?: unknown;
-      readonly subAssets?: readonly { readonly guid?: unknown }[];
-    };
+    let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(raw) as typeof parsed;
+      const value: unknown = JSON.parse(raw);
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+      parsed = value as Record<string, unknown>;
     } catch {
       continue;
     }
     if (path.endsWith('.pack.json')) {
-      if (
-        parsed.assets?.some(
+      if (parsed.schemaVersion === '3.0.0') {
+        const direct = parsePackSourceJson(parsed);
+        if (direct.ok && direct.value.format === 'direct') {
+          const projected = projectDirectPackJson(direct.value);
+          if (
+            projected.ok &&
+            projected.value.assets.some((asset) => asset.guid.toLowerCase() === guid)
+          ) {
+            authored = { origin: 'authoredPack', sourcePath: path };
+          }
+        }
+      } else if (
+        Array.isArray(parsed.assets) &&
+        parsed.assets.some(
           (asset) =>
-            typeof asset.guid === 'string' &&
-            (asset.guid === request.guid || asset.guid.toLowerCase() === guid),
+            asset !== null &&
+            typeof asset === 'object' &&
+            !Array.isArray(asset) &&
+            typeof (asset as { readonly guid?: unknown }).guid === 'string' &&
+            ((asset as { readonly guid: string }).guid === request.guid ||
+              (asset as { readonly guid: string }).guid.toLowerCase() === guid),
         )
       ) {
         authored = { origin: 'authoredPack', sourcePath: path };
@@ -185,7 +193,12 @@ export async function readSourceInventory(
       continue;
     }
     if (path.endsWith('.meta.json')) {
-      const source = sourceFromMeta(path, parsed, request.guid, raw);
+      const source = sourceFromMeta(
+        path,
+        parsed as Parameters<typeof sourceFromMeta>[1],
+        request.guid,
+        raw,
+      );
       if (source !== undefined) return source;
     }
   }

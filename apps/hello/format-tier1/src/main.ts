@@ -276,7 +276,6 @@ async function runBrowserMorphStandard(canvas: HTMLCanvasElement): Promise<Brows
     const materialGuid = AssetGuid.parse('33333333-3333-4333-8333-333333333334');
     if (!materialGuid.ok) throw new Error('Morph material GUID is invalid');
     const material = Materials.unlit([0.2, 0.8, 0.45, 1], {
-      castShadow: false,
       renderState: { cullMode: 'none' },
     });
     const materialCatalog = assets.catalog(materialGuid.value, material);
@@ -437,7 +436,7 @@ async function runBrowserMeshoptConsumer(
     if (meshGuid === undefined) throw new Error('Meshopt mesh GUID is invalid');
     const materialGuid = AssetGuid.parse('33333333-3333-4333-8333-333333333333');
     if (!materialGuid.ok) throw new Error('Meshopt material GUID is invalid');
-    const material = Materials.unlit([0.2, 0.75, 1, 1], { castShadow: false });
+    const material = Materials.unlit([0.2, 0.75, 1, 1]);
     const meshCatalog = assets.catalog(meshGuid, canonical.mesh);
     if (!meshCatalog.ok) throw new Error(`Meshopt GPU catalog failed: ${meshCatalog.error.code}`);
     const materialCatalog = assets.catalog(materialGuid.value, material);

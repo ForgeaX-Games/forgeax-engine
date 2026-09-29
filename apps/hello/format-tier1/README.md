@@ -4,7 +4,7 @@
 ![Evidence: fail closed](https://img.shields.io/badge/evidence-fail--closed-6f42c1)
 
 > [!IMPORTANT]
-> The producer runs importer, runtime, recovery, type, layout, Meshopt Dawn/reference, KTX2/Basis 20-cell Dawn, imported Morph, and 300-frame Dawn/browser gates. The Morph route is the standard ECS `MorphWeights` + `MeshFilter`/`MeshRenderer` lane with receipt-bound observation and screenshot-owned browser pixels. Evidence remains fail-closed for the independently blocked KTX2/Basis normalized comparison and the static/no-animation FBX boundary, so row-level format release remains blocked.
+> The producer runs importer, runtime, recovery, type, layout, Meshopt Dawn/reference, KTX2/Basis 20-cell Dawn, imported Morph, and 60-frame Dawn/browser gates. The Morph route is the standard ECS `MorphWeights` + `MeshFilter`/`MeshRenderer` lane with receipt-bound observation and screenshot-owned browser pixels. Evidence remains fail-closed for the independently blocked KTX2/Basis normalized comparison and the static/no-animation FBX boundary, so row-level format release remains blocked.
 
 ## Start here
 
@@ -16,7 +16,7 @@
 | Judgment input | [`judgment-input.md`](../../../.forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/judgment-input.md) | Release decision, acceptance mapping, and remaining blockers. |
 | Browser dogfood producer | [`apps/hello/format-tier1`](.) | Vite page at `http://127.0.0.1:5173/`; the glTF fixture is built by `gltfImporter` into Pack/Catalog and loaded through the renderer-owned `loadByGuid` route. |
 | Browser visual evidence | [`browser-visual-evidence.json`](evidence/browser-visual-evidence.json) | Headed Chromium reaches the imported Morph mesh/animation through the standard `MorphWeights` + `MeshFilter`/`MeshRenderer` consumer; receipt observation and stable screenshot pixels are recorded. KTX2/Basis is separately blocked. |
-| Morph GPU evidence | [`morph-visual-evidence.json`](evidence/morph-visual-evidence.json) | Imported glTF producer, renderer-owned `loadByGuid`, 300 Dawn frames, standard/base/zero/animated phases, receipt-bound observation, and source-bound browser screenshot evidence; FBX animation remains explicitly unavailable. |
+| Morph GPU evidence | [`morph-visual-evidence.json`](evidence/morph-visual-evidence.json) | Imported glTF producer, renderer-owned `loadByGuid`, archived 300-frame run (current producer: 60), standard/base/zero/animated phases, receipt-bound observation, and source-bound browser screenshot evidence; FBX animation remains explicitly unavailable. |
 | Recovery evidence | [`run-format-tier1-recovery.mjs`](../../../scripts/forgeax/run-format-tier1-recovery.mjs) | Inspect, producer failure, rebuild/cold-cook, same-identity verify for all three formats. |
 | AI index | [`ai-discovery.md`](../../../.forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/ai-discovery.md) | Short route from a format, error, GUID, or evidence cell to its owner. |
 
@@ -59,7 +59,7 @@ Every failure is machine-readable as `.code`, `.expected`, `.hint`, and `.detail
 ## Current gates
 
 - [x] CSV provenance and first-tier rows 8, 18, and 26 are pinned.
-- [x] Imported glTF Morph producer reaches `AssetRegistry.catalog` and `loadByGuid`; Dawn runs 300 frames with final readback pass. FBX remains static/no-animation importer evidence.
+- [x] Imported glTF Morph producer reaches `AssetRegistry.catalog` and `loadByGuid`; Dawn runs 60 frames with final readback pass. FBX remains static/no-animation importer evidence.
 - [x] Meshopt, KTX2/Basis, and Morph recovery contamination scenarios are supported.
 - [x] Available M7 executable checks run from one implementation revision; final-gates remains blocked when matrix, normalized comparison, or browser consumer evidence is incomplete.
 - [x] Whole-fleet Dawn regression passes; the Morph browser producer has receipt-bound Standard-lane observation plus stable screenshot pixels.

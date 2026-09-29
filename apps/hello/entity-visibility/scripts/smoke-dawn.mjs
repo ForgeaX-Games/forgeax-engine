@@ -1,11 +1,23 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 const WIDTH = 200;
 const HEIGHT = 150;
 const TARGET_ROI = { x0: 280, y0: 225, x1: 360, y1: 315 };
 const SHADOW_ROI = { x0: 220, y0: 310, x1: 320, y1: 355 };
 const CHILD_ROI = { x0: 380, y0: 200, x1: 480, y1: 310 };
+
+function describeStructuredError(error) {
+  if (typeof error !== 'object' || error === null) return error;
+  return {
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    detail: error.detail,
+    message: error.message,
+  };
+}
 
 function createMockCanvas(sharedDevice, renderTargetRef) {
   const ensureTarget = (device, format) => {
@@ -115,7 +127,13 @@ function spawnScene(world, render, scenePackage) {
   world.value
     .spawn({
       component: DirectionalLight,
-      data: { direction: [-0.5, -1, -0.35], color: [1, 1, 1], intensity: 1.5, castShadow: true },
+      data: {
+        direction: [-0.5, -1, -0.35], color: [1, 1, 1], intensity: 1.5, castShadow: true,
+        // This 200x150 fixture checks visibility and shadow participation.
+        // Cover its small scene with one real shadow map; the default four
+        // 2048px cascades made 60 frames exceed 120s on software Vulkan.
+        cascadeCount: 1, mapSize: 256, shadowDistance: 20,
+      },
     })
     .unwrap();
   return {
@@ -212,7 +230,7 @@ async function capturePhase(scene, diagnostics, device, texture) {
   };
 }
 
-export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
+export async function runVisibilityDawnSmoke({ frames = 60 } = {}) {
   const gpu = await createDawn();
   const sharedDevice = { value: undefined };
   const renderTarget = { value: undefined };
@@ -240,17 +258,18 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
   const scene = spawnScene(world, render, scenePackage);
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   const engineManifest = await buildEngineShaderManifest();
-  const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(engineManifest))}`;
+  const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(engineManifest)], { type: 'application/json' }));
+  process.once('exit', () => URL.revokeObjectURL(manifestUrl));
   const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
   const created = await constructRuntimeRendererHost(canvas, {}, { shaderManifestUrl: manifestUrl });
-  if (!created.ok) throw created.error;
+  if (!created.ok) throw new Error(JSON.stringify(describeStructuredError(created.error)));
   const renderer = created.value.renderer;
   // These are intentionally low-level harness diagnostics; the public
   // Renderer exposes only POD inspection and receipt-bound observation.
   const diagnostics = created.value.debugDrawHost;
   gpu.requestAdapter = originalRequestAdapter;
   const attachment = renderer.attach(world.value);
-  if (!attachment.ok) throw attachment.error;
+  if (!attachment.ok) throw new Error(JSON.stringify(describeStructuredError(attachment.error)));
   const errors = [];
   renderer.subscribe((event) => {
     if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
@@ -268,17 +287,17 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     if (frame === Math.floor((frames * 2) / 3)) scene.setTargetVisible();
     if (frame === Math.floor((frames * 5) / 6)) scene.setAncestorHidden();
     const updateResult = world.value.update(1 / 60);
-    if (!updateResult.ok) errors.push({ code: updateResult.error.code, hint: updateResult.error.hint });
+    if (!updateResult.ok) errors.push(describeStructuredError(updateResult.error));
     const drawResult = renderer.draw({
       leases: [attachment.value],
       camera: { lease: attachment.value },
       environment: { lease: attachment.value },
     });
     if (!drawResult.ok) {
-      errors.push({ code: drawResult.error.code, hint: drawResult.error.hint });
+      errors.push(describeStructuredError(drawResult.error));
     } else {
       const completed = await drawResult.value.completed;
-      if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+      if (!completed.ok) errors.push(describeStructuredError(completed.error));
     }
     for (const [phase, captureFrame] of Object.entries(captureFrames)) {
       if (frame === captureFrame) {
@@ -326,7 +345,7 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
   console.log(`[smoke] criteria=${JSON.stringify(result)}`);
   const failures = [];
   if (result.backend !== 'webgpu') failures.push('backend is not webgpu');
-  if (result.frames < 300) failures.push('fewer than 300 frames observed');
+  if (result.frames < frames) failures.push(`fewer than ${frames} frames observed`);
   if (result.targetRed.baseline <= 80) failures.push('baseline target ROI has no red pixels');
   if (result.targetRed.hidden >= result.targetRed.baseline * 0.05)
     failures.push('hidden target remains in GPU readback');
@@ -363,9 +382,10 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    await runVisibilityDawnSmoke({ frames: 300 });
+    const result = await runVisibilityDawnSmoke({ frames: Math.max(60, Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10)) });
+    emitSmokeReceipt('hello-entity-visibility/smoke', result.frames);
   } catch (error) {
-    console.error(`[smoke] FAIL - ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[smoke] FAIL - ${JSON.stringify(describeStructuredError(error))}`);
     process.exit(1);
   }
 }

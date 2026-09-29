@@ -2,24 +2,27 @@
 
 import type { Component } from '../component';
 import * as componentOwner from '../component';
-import { Entity } from '../entity';
 import { type EntityHandle, entityIndex } from '../entity-handle';
-
-export { WorldChangeJournal, type WorldChangeRead } from '../world-change-journal';
 
 import type { ArchetypeGraph } from './archetype-graph';
 import { getOrCreateSparseTagSet } from './archetype-graph';
-import type { Table } from './table';
+
+export const PROJECTION_BLOCK_SIZE = 256;
 
 const INITIAL_SPARSE_CAPACITY = 64;
 
 export interface ComponentEpochColumns {
   added: Float64Array;
   changed: Float64Array;
+  blocks: Float64Array;
 }
 
 export function createComponentEpochColumns(capacity: number): ComponentEpochColumns {
-  return { added: new Float64Array(capacity), changed: new Float64Array(capacity) };
+  return {
+    added: new Float64Array(capacity),
+    changed: new Float64Array(capacity),
+    blocks: new Float64Array(Math.ceil(capacity / PROJECTION_BLOCK_SIZE)),
+  };
 }
 
 export function growComponentEpochColumns(
@@ -30,7 +33,9 @@ export function growComponentEpochColumns(
   const changed = new Float64Array(capacity);
   added.set(columns.added);
   changed.set(columns.changed);
-  return { added, changed };
+  const blocks = new Float64Array(Math.ceil(capacity / PROJECTION_BLOCK_SIZE));
+  blocks.set(columns.blocks);
+  return { added, changed, blocks };
 }
 
 export function copyComponentEpoch(
@@ -41,6 +46,8 @@ export function copyComponentEpoch(
 ): void {
   target.added[targetRow] = source.added[sourceRow] ?? 0;
   target.changed[targetRow] = source.changed[sourceRow] ?? 0;
+  const block = Math.floor(targetRow / PROJECTION_BLOCK_SIZE);
+  target.blocks[block] = Math.max(target.blocks[block] ?? 0, target.changed[targetRow] ?? 0);
 }
 
 export interface SparseTagSet {
@@ -194,7 +201,7 @@ export function markComponentsAdded(
     const epochs = table?.storage.get(componentId)?.epochs;
     if (epochs === undefined) continue;
     epochs.added[tableRow] = epoch;
-    epochs.changed[tableRow] = epoch;
+    publishComponentRange(epochs, tableRow, 1, epoch);
   }
 }
 
@@ -216,16 +223,26 @@ export function markComponentChanged(
   const epochs = graph.tables[archetype.tableId]?.storage.get(componentId)?.epochs;
   if (epochs === undefined) return;
   const tableRow = archetype.rows[location.archetypeRow] ?? -1;
-  epochs.changed[tableRow] = epoch();
+  publishComponentRange(epochs, tableRow, 1, epoch());
 }
 
-export function readTableEntityRange(
-  table: Table,
-  rowStart: number,
-  rowCount: number,
-): readonly EntityHandle[] {
-  const entities = table.storage.get(componentOwner.componentId(Entity))?.fields.get('self')
-    ?.view as Uint32Array | undefined;
-  if (entities === undefined) return [];
-  return entities.subarray(rowStart, rowStart + rowCount) as unknown as readonly EntityHandle[];
+/** Row evidence and its conservative block summary share the World epoch. */
+export function publishComponentRange(
+  columns: ComponentEpochColumns,
+  start: number,
+  count: number,
+  epoch: number,
+): void {
+  if (count === 0) return;
+  if (count === 1) {
+    columns.changed[start] = epoch;
+    columns.blocks[Math.floor(start / PROJECTION_BLOCK_SIZE)] = epoch;
+    return;
+  }
+  columns.changed.fill(epoch, start, start + count);
+  columns.blocks.fill(
+    epoch,
+    Math.floor(start / PROJECTION_BLOCK_SIZE),
+    Math.ceil((start + count) / PROJECTION_BLOCK_SIZE),
+  );
 }

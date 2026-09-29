@@ -1,6 +1,8 @@
 #define_import_path forgeax_pbr::temporal
 
-#import forgeax_view::common::{sampleMaterialTexture, packSceneTemporal}
+#import forgeax_view::common::{sampleMaterialTexture}
+#import forgeax_scene_temporal::{packSceneTemporalV1WithValidity}
+#import forgeax_material::alpha_hash::{applyAlphaHash}
 
 fn transformedPbrTemporalUv(
   transform : vec4<f32>,
@@ -29,16 +31,41 @@ fn transformedPbrTemporalUv(
   return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + transform.xy;
 }
 
+fn resolvePbrTemporalReactive(
+  reactive : f32,
+  baseColorAlpha : f32,
+  sampledAlpha : f32,
+) -> f32 {
+  let coverage = clamp(baseColorAlpha * sampledAlpha, 0.0, 1.0);
+  let coverageReactive = 1.0 - coverage;
+  return max(clamp(reactive, 0.0, 1.0), coverageReactive);
+}
+
 fn projectPbrSceneTemporal(
   baseColorAlpha : f32,
   alphaCutoff : f32,
+  alphaHash : f32,
+  positionOS : vec3<f32>,
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
+  baseColorTextureEnabled : bool,
   baseColorTexture : texture_2d<f32>,
   baseColorSampler : sampler,
   transform : vec4<f32>,
   metadata : vec4<f32>,
+#endif
+#ifdef ALPHA_TEXTURE_AVAILABLE
+  alphaTextureEnabled : bool,
+  alphaTexture : texture_2d<f32>,
+  alphaSampler : sampler,
+  alphaTransform : vec4<f32>,
+  alphaMetadata : vec4<f32>,
+  alphaChannel : f32,
+#endif
   currentClip : vec4<f32>,
   previousClip : vec4<f32>,
+  temporalProjection : vec4<f32>,
   reactive : f32,
+  motionValid : bool,
   uv0 : vec2<f32>,
   uv1 : vec2<f32>,
   uv2 : vec2<f32>,
@@ -48,6 +75,9 @@ fn projectPbrSceneTemporal(
   uv6 : vec2<f32>,
   uv7 : vec2<f32>,
 ) -> vec4<f32> {
+  var baseSample = vec4<f32>(1.0);
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
+  if (baseColorTextureEnabled) {
   let baseUv = transformedPbrTemporalUv(
     transform,
     metadata,
@@ -60,14 +90,40 @@ fn projectPbrSceneTemporal(
     uv6,
     uv7,
   );
-  let baseSample = sampleMaterialTexture(
+  baseSample = sampleMaterialTexture(
     baseColorTexture,
     baseColorSampler,
     baseUv,
     metadata.zw,
   );
-  if (alphaCutoff > 0.0 && baseColorAlpha * baseSample.a <= alphaCutoff) {
+  }
+#endif
+  var alphaSample = 1.0;
+#ifdef ALPHA_TEXTURE_AVAILABLE
+  if (alphaTextureEnabled) {
+    let alphaUv = transformedPbrTemporalUv(
+      alphaTransform, alphaMetadata, uv0, uv1, uv2, uv3, uv4, uv5, uv6, uv7,
+    );
+    let texel = sampleMaterialTexture(alphaTexture, alphaSampler, alphaUv, alphaMetadata.zw);
+    switch (u32(alphaChannel)) {
+      case 0u: { alphaSample = texel.r; }
+      case 1u: { alphaSample = texel.g; }
+      case 2u: { alphaSample = texel.b; }
+      default: { alphaSample = texel.a; }
+    }
+  }
+#endif
+  let coverage = baseColorAlpha * baseSample.a * alphaSample;
+  applyAlphaHash(coverage, positionOS, alphaHash);
+  if (alphaCutoff > 0.0 && coverage <= alphaCutoff) {
     discard;
   }
-  return packSceneTemporal(currentClip, previousClip, reactive);
+  let reactiveCoverage = select(resolvePbrTemporalReactive(reactive, coverage, 1.0), reactive, alphaHash > 0.5);
+  return packSceneTemporalV1WithValidity(
+    currentClip,
+    previousClip,
+    temporalProjection,
+    reactiveCoverage,
+    motionValid,
+  );
 }

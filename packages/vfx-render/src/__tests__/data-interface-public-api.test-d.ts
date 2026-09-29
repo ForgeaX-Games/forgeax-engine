@@ -51,6 +51,7 @@ describe('VFX Data Interface public types', () => {
           kind: 'scene-depth',
           bindingType: 'sampled-depth',
           generation: 1,
+          resource: { kind: 'texture-view', value: {} },
         }),
     };
     expectTypeOf(invalid).toMatchTypeOf<VfxDataInterfaceProvider>();

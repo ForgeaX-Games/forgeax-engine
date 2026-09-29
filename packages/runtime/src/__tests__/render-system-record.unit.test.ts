@@ -41,7 +41,7 @@ import {
   interleaveSpriteInstanceBuffer,
   type SpriteInstancesSnapshot,
   spriteInstancesCacheHit,
-} from '../../../render/src/record/main-pass-sprite-draws';
+} from '../../../render/src/record/sprite-instance-buffer';
 
 const SPEC_BASE: PipelineSpec = {
   shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },

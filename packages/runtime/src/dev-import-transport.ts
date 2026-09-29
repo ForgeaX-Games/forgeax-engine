@@ -68,12 +68,13 @@ export function createDevImportTransport(binding?: DevImportTransportBinding): I
           try {
             const fail = (await response.json()) as {
               code?: string;
+              error?: string;
               reason?: string;
               hint?: string;
             };
             console.warn(
               `[forgeax] import failed for ${guid} (HTTP ${response.status}): ` +
-                `${fail.code ?? 'import-failed'} - ${fail.reason ?? ''}` +
+                `${fail.code ?? fail.error ?? 'import-failed'} - ${fail.reason ?? ''}` +
                 (fail.hint ? ` | hint: ${fail.hint}` : ''),
             );
           } catch {

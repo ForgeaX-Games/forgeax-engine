@@ -151,7 +151,7 @@ async function captureAndUpload(page, capturePrepareHook) {
     const response = await fetch(`${location.origin}${route}?runId=${runId}`, {
       method: 'POST',
       headers: { 'content-type': mime },
-      body: capture.value.bytes,
+      body: new Blob([capture.value.bytes]),
     });
     const artifact = await response.json();
     if (!response.ok) throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
@@ -171,7 +171,7 @@ function captureExpression(capturePrepareHook) {
     const response = await fetch(location.origin + '${RAW_TAPE_ROUTE}?runId=' + runId, {
       method: 'POST',
       headers: { 'content-type': '${RHITAPE_MIME}' },
-      body: capture.value.bytes,
+      body: new Blob([capture.value.bytes]),
     });
     const artifact = await response.json();
     if (!response.ok) throw new Error(JSON.stringify(artifact));

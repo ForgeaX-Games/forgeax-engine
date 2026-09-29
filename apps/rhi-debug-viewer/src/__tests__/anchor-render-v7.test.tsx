@@ -22,6 +22,7 @@ function makeModel(): ViewerModel {
     commands: [],
     resources: [],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [work],
     passes: [
       {
@@ -32,6 +33,7 @@ function makeModel(): ViewerModel {
         workIndices: [0],
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
+        colorAttachmentResolveViewHandleIds: [],
         depthStencilViewHandleId: null,
       },
     ],

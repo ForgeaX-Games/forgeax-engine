@@ -15,7 +15,7 @@
 // world identity path (worldId 0) is preserved (AC-03 regression guarantee).
 
 import { Update, World } from '@forgeax/engine-ecs';
-import type { Renderer, RenderWorldLease } from '@forgeax/engine-render';
+import type { FrameReceipt, Renderer, RenderWorldLease } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 import { createFrameLoop } from '../internal/frame-loop';
 
@@ -34,19 +34,35 @@ function lease(onDispose: () => void = () => {}): RenderWorldLease {
   } as unknown as RenderWorldLease;
 }
 
+function completeReceipt(frameId: number): FrameReceipt {
+  const completed = {
+    // biome-ignore lint/suspicious/noThenProperty: synchronous test completion keeps pump() deterministic.
+    then(onFulfilled: (value: { ok: true; value: undefined }) => void): void {
+      onFulfilled({ ok: true, value: undefined });
+    },
+  } as unknown as FrameReceipt['completed'];
+  return {
+    frameId,
+    deviceGeneration: 0,
+    presentation: 'ready',
+    completed,
+  };
+}
+
 function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const calls: DrawCall[] = [];
   const renderer = {
+    state: () => 'alive' as const,
     backend: 'webgpu' as const,
     attach(): { ok: true; value: RenderWorldLease } {
       return { ok: true, value: lease() };
     },
     draw(request: unknown): {
       ok: true;
-      value: { frameId: number; deviceGeneration: number; completed: true };
+      value: FrameReceipt;
     } {
       calls.push({ request });
-      return { ok: true, value: { frameId: calls.length, deviceGeneration: 0, completed: true } };
+      return { ok: true, value: completeReceipt(calls.length) };
     },
     onError(): () => void {
       return () => {
@@ -102,14 +118,15 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       })
       .unwrap();
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach(): { ok: true; value: RenderWorldLease } {
         events.push('attach');
         return { ok: true, value: lease() };
       },
-      draw(): { ok: true; value: { frameId: number; deviceGeneration: number; completed: true } } {
+      draw(): { ok: true; value: FrameReceipt } {
         events.push('draw');
-        return { ok: true, value: { frameId: 1, deviceGeneration: 0, completed: true } };
+        return { ok: true, value: completeReceipt(1) };
       },
       onError: () => () => {},
       dispose: () => {},
@@ -208,6 +225,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const calls: DrawCall[] = [];
     const rhiErr = { code: 'rhi-not-available' } as const;
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach: () => ({ ok: true as const, value: lease() }),
       draw(request: unknown): { ok: false; error: typeof rhiErr } {
@@ -244,11 +262,12 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const world = new World();
     const calls: unknown[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach: () => ({ ok: true as const, value: lease() }),
-      draw(): { ok: true; value: { frameId: number; deviceGeneration: number; completed: true } } {
+      draw(): { ok: true; value: FrameReceipt } {
         calls.push(undefined);
-        return { ok: true, value: { frameId: calls.length, deviceGeneration: 0, completed: true } };
+        return { ok: true, value: completeReceipt(calls.length) };
       },
       onError(): () => void {
         return () => {};
@@ -325,6 +344,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const attached: World[] = [];
     const detached: World[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach(candidate: World) {
         attached.push(candidate);
@@ -332,7 +352,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       },
       draw: () => ({
         ok: true as const,
-        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+        value: completeReceipt(1),
       }),
       onError: () => () => {},
       dispose: () => {},
@@ -363,6 +383,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const overlay = new World();
     const detached: World[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach: (candidate: World) => ({
         ok: true as const,
@@ -370,7 +391,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       }),
       draw: () => ({
         ok: true as const,
-        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+        value: completeReceipt(1),
       }),
       onError: () => () => {},
       dispose: () => {},
@@ -396,6 +417,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const world = new World();
     const detached: World[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach: (candidate: World) => ({
         ok: true as const,
@@ -403,7 +425,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       }),
       draw: () => ({
         ok: true as const,
-        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+        value: completeReceipt(1),
       }),
       onError: () => () => {},
       dispose: () => {},
@@ -424,6 +446,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const world = new World();
     const detached: World[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       backend: 'webgpu' as const,
       attach: (candidate: World) => ({
         ok: true as const,
@@ -431,7 +454,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       }),
       draw: () => ({
         ok: true as const,
-        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+        value: completeReceipt(1),
       }),
       onError: () => () => {},
       dispose: () => {},

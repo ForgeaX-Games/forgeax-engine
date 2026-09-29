@@ -2,8 +2,9 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = (compute: boolean): Readonly<RhiCaps> => ({ compute }) as unknown as RhiCaps;
 
@@ -18,12 +19,12 @@ describe('render feature retry rules', () => {
         if (attempts === 1) {
           return err(new RenderFeatureStageFailedError('synthetic.retry', 0, 'plan', 'next-frame'));
         }
-        return ok({ resources: [], passes: [] });
+        return ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] });
       },
     };
     const host = createRenderFeatureHost([feature], caps(true)).unwrap();
 
-    const failed = runRenderFeatureFrame(host, {
+    const failed = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
@@ -39,7 +40,7 @@ describe('render feature retry rules', () => {
       });
     }
 
-    const retried = runRenderFeatureFrame(host, {
+    const retried = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 2,
@@ -55,18 +56,34 @@ describe('render feature retry rules', () => {
       identity: 'synthetic.capability-retry',
       requiredCapabilities: ['compute'],
       extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-      plan: () => ok({ resources: [], passes: [] }),
+      plan: () =>
+        ok({
+          work: [
+            {
+              scope: { view: 'main' },
+              resources: [
+                {
+                  kind: 'fullscreen-program' as const,
+                  name: 'synthetic.capability-retry.program',
+                  source: 'synthetic',
+                },
+              ],
+              passes: [],
+            },
+          ],
+        }),
     };
     const host = createRenderFeatureHost([feature], caps(false)).unwrap();
 
-    runRenderFeatureFrame(host, {
+    runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
       caps: caps(false),
     });
+    expect(host.diagnostics()[0]?.status).toBe('disabled');
     expect(
-      runRenderFeatureFrame(host, {
+      runSingleViewFeatureFrame(host, {
         worlds: [],
         owner: 0,
         frameNumber: 2,
@@ -76,7 +93,7 @@ describe('render feature retry rules', () => {
 
     expect(host.recover({ frameNumber: 3, caps: caps(true) })).toEqual(ok(undefined));
     expect(
-      runRenderFeatureFrame(host, {
+      runSingleViewFeatureFrame(host, {
         worlds: [],
         owner: 0,
         frameNumber: 3,

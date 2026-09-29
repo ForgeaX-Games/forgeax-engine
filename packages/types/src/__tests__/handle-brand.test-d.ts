@@ -42,6 +42,7 @@ import type {
   AudioClipAsset,
   EquirectAsset,
   FontAsset,
+  IesProfileAsset,
   MaterialAsset,
   MeshAsset,
   RenderPipelineAsset,
@@ -138,6 +139,10 @@ describe('AssetTagMap — 11-member closed map aligned with Asset.kind tags', ()
   it('particle-effect -> ParticleEffectAsset', () => {
     expectTypeOf<AssetTagMap['particle-effect']>().toEqualTypeOf<'ParticleEffectAsset'>();
   });
+
+  it('ies-profile -> IesProfileAsset', () => {
+    expectTypeOf<AssetTagMap['ies-profile']>().toEqualTypeOf<'IesProfileAsset'>();
+  });
 });
 
 describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)', () => {
@@ -189,8 +194,13 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<RenderPipelineAsset>>().toEqualTypeOf<'RenderPipelineAsset'>();
   });
 
+  it('TagOf<IesProfileAsset> = IesProfileAsset', () => {
+    expectTypeOf<TagOf<IesProfileAsset>>().toEqualTypeOf<'IesProfileAsset'>();
+  });
+
   it('TagOf<Asset> distributes over the 16 members', () => {
     expectTypeOf<TagOf<Asset>>().toEqualTypeOf<
+      | 'PluginAsset'
       | 'MeshAsset'
       | 'TextureAsset'
       | 'EquirectAsset'
@@ -198,6 +208,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
       | 'MaterialAsset'
       | 'SceneAsset'
       | 'AudioClipAsset'
+      | 'IesProfileAsset'
       | 'SkinAsset'
       | 'SkeletonAsset'
       | 'AnimationClip'

@@ -39,7 +39,7 @@ function makeFeature(identity: string, state: FaultState): RenderFeature<undefin
       if (!state.repaired) {
         throw new Error(`${identity} declarative plan is intentionally unavailable`);
       }
-      return ok({ resources: [], passes: [] });
+      return ok({ work: [] });
     },
   };
 }
@@ -94,8 +94,11 @@ const firstDraw = renderer.draw(frame);
 const firstErrors = errors.slice();
 for (const state of states.values()) state.repaired = true;
 const secondDraw = renderer.draw(frame);
-if (firstDraw.ok) await firstDraw.value.completed;
-if (secondDraw.ok) await secondDraw.value.completed;
+for (const draw of [firstDraw, secondDraw]) {
+  if (!draw.ok) continue;
+  const completed = await draw.value.completed;
+  if (!completed.ok) throw completed.error;
+}
 
 for (const identity of states.keys()) {
   const failure = firstErrors.find((entry) => hasFeaturePlanFailure(entry, identity));

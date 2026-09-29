@@ -28,6 +28,8 @@ type CanvasInputOwner = ReturnType<CanvasInputBoundary['owner']>;
 export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoundary {
   let active: CanvasInputOwner = 'editor';
   let gamePointerLockAllowed = false;
+  let editorInputAllowed = true;
+  let gameInputAllowed = true;
   source.setPointerLockAllowed?.(false);
 
   const empty = (): InputBackendSample => createEmptyInputBackendSample();
@@ -47,6 +49,11 @@ export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoun
         source.setPointerLockAllowed?.(false);
       }
     },
+    setInputAllowed: (allowed) => {
+      if (consumer === 'game') gameInputAllowed = allowed;
+      else editorInputAllowed = allowed;
+      source.setInputAllowed?.(active === 'game' ? gameInputAllowed : editorInputAllowed);
+    },
     clear: () => {
       if (consumer === active) clear();
     },
@@ -58,11 +65,13 @@ export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoun
     clear();
     active = 'game';
     source.setPointerLockAllowed?.(gamePointerLockAllowed);
+    source.setInputAllowed?.(gameInputAllowed);
   };
 
   const revokeGame = (): void => {
     clear();
     active = 'editor';
+    source.setInputAllowed?.(editorInputAllowed);
   };
 
   return {

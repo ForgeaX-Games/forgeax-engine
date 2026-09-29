@@ -118,7 +118,7 @@ async function main() {
         '--enable-unsafe-webgpu',
         '--enable-features=Vulkan',
         '--use-vulkan=swiftshader',
-        '--disable-vulkan-surface',
+        '--use-angle=swiftshader',
         '--ignore-gpu-blocklist',
         '--disable-gpu-driver-bug-workarounds',
       ],

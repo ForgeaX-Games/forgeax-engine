@@ -1,4 +1,5 @@
 import type { RenderSceneResyncReason } from '../inspection-types';
+import type { InstanceBoundsCacheInspection } from '../instances-derived-bounds';
 import type { PointsLinesRetainedSnapshot } from '../points-lines/snapshot';
 import type { RenderableSnapshot } from '../render-system-extract';
 
@@ -9,11 +10,15 @@ export interface RenderSceneIdentity {
   readonly entityKey: number;
 }
 
+/** One entity update merges the changed producer fields before publication. */
 export type RenderSceneOperation =
-  | { readonly kind: 'create'; readonly snapshot: RenderableSnapshot }
   | (RenderSceneIdentity & {
-      readonly kind: 'update-transform';
-      readonly world: Float32Array;
+      readonly kind: 'update';
+      /** Complete source projection for membership, geometry or material edits. */
+      readonly snapshot?: RenderableSnapshot;
+      /** Detached instance payload; can accompany a root-transform update. */
+      readonly instances?: NonNullable<RenderableSnapshot['instances']>;
+      readonly world?: Float32Array;
     })
   | (RenderSceneIdentity & { readonly kind: 'remove' });
 
@@ -36,16 +41,13 @@ export interface RenderSceneApplyResult {
   readonly ignoredLateUpdates: number;
   readonly createdSlots: readonly RenderSceneSlot[];
   readonly updatedSlots: readonly RenderSceneSlot[];
+  /** Full retained-snapshot updates; transform spans stay in updatedSlots only. */
+  readonly contentUpdatedSlots: readonly RenderSceneSlot[];
+  /** Retained snapshots with changed instance payloads; root transforms may change too. */
+  readonly instanceUpdatedSlots: readonly RenderSceneSlot[];
   readonly removedSlots: readonly RenderSceneRecord[];
   readonly recreatedSlots: readonly RenderSceneSlot[];
   readonly resynced: number;
-}
-
-export interface RenderSceneDelta {
-  readonly operations: readonly RenderSceneOperation[];
-  readonly overflowed?: boolean;
-  readonly resync?: readonly RenderableSnapshot[];
-  readonly reason?: RenderSceneResyncReason;
 }
 
 export interface RenderSceneInspection {
@@ -59,6 +61,8 @@ export interface RenderSceneInspection {
   readonly fullRebuilds: number;
   readonly resyncs: number;
   readonly lastResyncReason: RenderSceneResyncReason | undefined;
+  /** Allocation/cache evidence for instance bounds derivation. */
+  readonly instanceBoundsCache?: InstanceBoundsCacheInspection;
 }
 
 export interface RenderSceneBounds {

@@ -2,7 +2,7 @@
 //
 // The `{ key: 'font', import }` Importer the @forgeax/engine-import runner
 // dispatches a `*.meta.json` with `importer: 'font'` to. It absorbs the MSDF
-// bake that previously lived only behind the `forgeax-engine-remote-font
+// bake that previously lived only behind the `forgeax asset import
 // bake` CLI: read the `.ttf` source -> @zappar/msdf-generator atlas ->
 // (a) one atlas `TextureAsset` ImportedAsset (the RGBA MSDF atlas, kind
 // 'texture') under the declared `kind: 'texture'` sub-asset GUID, (b) one
@@ -77,13 +77,15 @@ function atlasGlyphsToMetrics(atlas: BakeAtlas): Record<number, GlyphMetric> {
 function makeAtlasTexture(atlas: BakeAtlas): TextureAsset {
   return {
     kind: 'texture',
-    width: atlas.texture.width,
-    height: atlas.texture.height,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: atlas.texture.width, height: atlas.texture.height },
+    },
     // MSDF atlas is linear-space RGBA8 (signed-distance channels, never gamma).
     format: 'rgba8unorm',
     data: atlas.texture.data,
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 

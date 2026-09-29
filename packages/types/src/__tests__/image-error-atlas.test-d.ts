@@ -120,6 +120,11 @@ describe('ImageErrorDetail exhaustive switch narrows the new atlas-* variants', 
           expectTypeOf(detail.regionsTotalPixels).toEqualTypeOf<number>();
           expectTypeOf(detail.atlasPixels).toEqualTypeOf<number>();
           return `atlas-region:${detail.name}:${detail.regionsTotalPixels}>${detail.atlasPixels}`;
+        case 'image-surface-invalid':
+          expectTypeOf(detail.operation).toEqualTypeOf<
+            'create' | 'set-pixel' | 'fill-rect' | 'fill-circle' | 'blit' | 'noise' | 'to-asset'
+          >();
+          return `surface:${detail.operation}:${detail.field}`;
         default: {
           const _exhaustive: never = detail;
           throw new Error(`unreachable: ${String(_exhaustive)}`);

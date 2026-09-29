@@ -52,7 +52,6 @@
 //
 // Release path (D-1 codes):
 //   - resolve(h): err(SharedRefReleasedError)        if payload absent.
-//   - markChanged(h): publish an in-place payload mutation to subscribers.
 //   - retain(h):  err(SharedRefReleasedError)        if payload absent.
 //   - release(h): err(SharedRefDoubleReleaseError, rc=0) on rc=0 input.
 //   - any(builtin slot): err(BuiltinSlotNotOwnedError) (D-15).
@@ -82,14 +81,7 @@ import {
   SharedRefPayloadInvalidError,
   SharedRefReleasedError,
   SharedRefStaleError,
-} from './errors';
-
-const SHARED_REF_MUTATION_JOURNAL_CAPACITY = 4096;
-
-export interface SharedRefMutation {
-  readonly epoch: number;
-  readonly handle: number;
-}
+} from './errors.js';
 
 export interface SharedRefReleaseEvidence {
   readonly payload: unknown;
@@ -97,18 +89,6 @@ export interface SharedRefReleaseEvidence {
   readonly generation: number;
   readonly evidence: 'released';
 }
-
-export type SharedRefMutationRead =
-  | {
-      readonly status: 'ok';
-      readonly cursor: number;
-      readonly records: readonly SharedRefMutation[];
-    }
-  | {
-      readonly status: 'overflow';
-      readonly cursor: number;
-      readonly oldestAvailable: number;
-    };
 
 // MAX_SLOT is now imported from @forgeax/engine-types (codec SSOT, D-1).
 // The local constant is removed to avoid drift (AC-15).
@@ -129,8 +109,6 @@ export type SharedRefMutationRead =
  *   - alloc(target, payload)        -> Handle<T, 'shared'> (rc=1)
  *   - intern(target, payload)        -> stable producer handle per target + object identity
  *   - resolve(handle)             -> Result<T, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
- *   - markChanged(handle)         -> Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
- *   - getMutationEpoch()          -> monotonic payload-mutation cursor
  *   - retain(handle)              -> Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
  *   - release(handle)             -> Result<release evidence | undefined, ...>
  *   - refcount(handle)            -> number (0 == released; debug + tests)
@@ -146,9 +124,7 @@ export class SharedRefStore {
     { readonly target: string; readonly payload: object }
   >();
   private nextSlot = BUILTIN_BASE;
-  private mutationEpoch = 0;
-  private readonly mutationJournal: SharedRefMutation[] = [];
-  private readonly releaseJournal: SharedRefReleaseEvidence[] = [];
+  /** Latest published mutation epoch per live handle; not an event journal. */
 
   /**
    * Generation table indexed by slot (D-6). Each entry tracks the current
@@ -225,6 +201,17 @@ export class SharedRefStore {
     return handle;
   }
 
+  /** Acquire one caller-owned grant, sharing the existing object/target identity. */
+  acquire<Target extends string, T extends object>(
+    target: Target,
+    payload: T,
+  ): Handle<Target, 'shared'> {
+    const previous = this.internedByTarget.get(target)?.get(payload);
+    const handle = this.intern(target, payload);
+    if (previous === unwrapHandle(handle)) this.retain(handle).unwrap();
+    return handle;
+  }
+
   /**
    * Look up `payload` by handle. Returns `err(shared-ref-released)` when
    * the handle's slot has no live payload (rc reached 0, no re-alloc has
@@ -262,39 +249,6 @@ export class SharedRefStore {
    * projections of shared payload data compare the monotonic epoch and
    * explicitly refresh instead of rescanning every payload each frame.
    */
-  markChanged<Target extends string>(
-    handle: Handle<Target, 'shared'>,
-  ): Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError> {
-    const resolved = this.resolve(handle);
-    if (!resolved.ok) return resolved;
-    if (this.mutationEpoch >= Number.MAX_SAFE_INTEGER) {
-      throw new RangeError('SharedRefStore mutation epoch exhausted');
-    }
-    this.mutationEpoch += 1;
-    this.mutationJournal.push({ epoch: this.mutationEpoch, handle: unwrapHandle(handle) });
-    if (this.mutationJournal.length > SHARED_REF_MUTATION_JOURNAL_CAPACITY) {
-      this.mutationJournal.shift();
-    }
-    return ok(undefined);
-  }
-
-  /** Current upper bound for explicitly published payload mutations. */
-  getMutationEpoch(): number {
-    return this.mutationEpoch;
-  }
-
-  /** Read exact changed handles after `cursor`; overflow requires consumer resync. */
-  readChangesSince(cursor: number): SharedRefMutationRead {
-    const oldestAvailable = this.mutationJournal[0]?.epoch ?? this.mutationEpoch + 1;
-    if (cursor < oldestAvailable - 1) {
-      return { status: 'overflow', cursor: this.mutationEpoch, oldestAvailable };
-    }
-    return {
-      status: 'ok',
-      cursor: this.mutationEpoch,
-      records: this.mutationJournal.filter((record) => record.epoch > cursor),
-    };
-  }
 
   /**
    * Increment the refcount of a live shared handle. Returns
@@ -388,16 +342,7 @@ export class SharedRefStore {
       generation,
       evidence: 'released' as const,
     });
-    this.releaseJournal.push(evidence);
-    if (this.releaseJournal.length > SHARED_REF_MUTATION_JOURNAL_CAPACITY) {
-      this.releaseJournal.shift();
-    }
     return ok(evidence);
-  }
-
-  /** Read the bounded release evidence owned by this store. */
-  readReleaseEvidence(): readonly SharedRefReleaseEvidence[] {
-    return this.releaseJournal;
   }
 
   /**

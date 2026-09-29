@@ -12,7 +12,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       standardProfile: {
         ...DEFAULT_STANDARD_PROFILE,
-        lighting: 'clustered',
+        renderPath: 'deferred',
         ssao: true,
       },
     },

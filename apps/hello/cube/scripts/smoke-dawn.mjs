@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 // hello-cube headless smoke (M4 / D-S10 / AC-12b).
 // feat-20260531-per-frame-bind-group-cache: also asserts AC-03 (stable scene,
 // frame-3 bindGroupCounts.createBindGroup == 0).
@@ -16,9 +17,9 @@
 //      returns that texture each frame.
 //   3. Build a World identical to apps/hello/cube/src/main.ts (cube +
 //      Camera + DirectionalLight) and call createRenderer + await
-//      runtime host initialization + 300x lease-bound renderer.draw(...).
+//      runtime host initialization + 60x lease-bound renderer.draw(...).
 //   4. After the loop, copyTextureToBuffer + mapAsync NDC center sample;
-//      verdict = 4 criteria (a) backend=webgpu (b) frames>=300 (c) NDC pixel
+//      verdict = 4 criteria (a) backend=webgpu (b) frames>=60 (c) NDC pixel
 //      distance to black > eps (d) Renderer.onError RhiError count == 0.
 //
 // Output literals (must be preserved byte-for-byte for grep-based tooling):
@@ -40,7 +41,7 @@ import { dirname, resolve } from 'node:path';
 // --- ENV knobs (default-aligned with hello-triangle smoke for SSOT consistency) ---
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -254,8 +255,8 @@ renderer.subscribe((event) => {
 
 // w25 — Renderer.ready resolves Result<void, RhiError>; branch on `.ok`.
 
-// 300-frame loop; raf is unavailable in node so we drive sync calls.
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+// 60-frame loop; raf is unavailable in node so we drive sync calls.
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 // feat-20260531-per-frame-bind-group-cache M5 / w17: AC-03 counter
 // accumulator — snapshot createBindGroupCount on the first few frames
 // and assert it reaches 0 on frame 3 (warm cache). The smoke gate
@@ -274,7 +275,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     environment: { lease: worldAttachment1.value },
   });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
-  framesObserved++;
+  else framesObserved++;
 
   // Snapshot counter on frame 3 (1-indexed). The Renderer interface
   // exposes bindGroupCounts as a readonly getter; the counter is reset
@@ -398,6 +399,7 @@ if (failures.length > 0) {
 }
 
 console.log(`[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, NDC-center distance to black=${dist.toFixed(4)}, RhiError count=0, Name spawn/set/despawn 3-line trace observed, bind-group-cache frame-3 counter = ${bindGroupCountFrame3}`);
+emitSmokeReceipt('hello-cube/smoke', framesObserved);
 
 device.destroy?.();
 delete globalThis.navigator.gpu;

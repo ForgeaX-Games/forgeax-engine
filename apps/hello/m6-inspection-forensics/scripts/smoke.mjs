@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:net';
 import {
   copyFileSync,
   existsSync,
@@ -20,6 +21,31 @@ const here = resolve(new URL('.', import.meta.url).pathname);
 const root = resolve(here, '..', '..', '..', '..');
 const remoteLive = resolve(root, 'skills/forgeax-engine-cli/scripts/remote-live.mjs');
 const childEnv = { ...process.env, INIT_CWD: root };
+
+function findFreePort(excluded = new Set()) {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close((error) => {
+        if (error !== undefined) {
+          reject(error);
+          return;
+        }
+        if (typeof address !== 'object' || address === null || typeof address.port !== 'number') {
+          reject(new Error('free-port probe did not return a TCP port'));
+          return;
+        }
+        if (excluded.has(address.port)) {
+          findFreePort(excluded).then(resolvePort, reject);
+          return;
+        }
+        resolvePort(address.port);
+      });
+    });
+  });
+}
 
 function run(label, args, extraEnv = {}) {
   const result = spawnSync('pnpm', args, {
@@ -45,6 +71,9 @@ function runNode(label, args, extraEnv = {}) {
   process.stdout.write(result.stdout ?? '');
   process.stderr.write(result.stderr ?? '');
   if (result.status !== 0) throw new Error(`${label} failed with status ${result.status ?? 'unknown'}`);
+  if (/^validation:/m.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)) {
+    throw new Error(`${label} emitted a Dawn validation error; inspect the replay output above`);
+  }
   return result.stdout ?? '';
 }
 
@@ -67,8 +96,8 @@ function runDevKitOperation(label, operation, artifactPath, extraArgs = []) {
   const cli = resolve(root, 'packages/devkit/dist/cli.mjs');
   const output = runNode(label, [
     cli,
-    'run',
-    operation,
+    'debug',
+    ...operation.split('.'),
     '--artifact',
     artifactPath,
     '--digest',
@@ -81,7 +110,7 @@ function runDevKitOperation(label, operation, artifactPath, extraArgs = []) {
   return envelope.value;
 }
 
-async function waitForPage(url) {
+async function waitForPage(url, dev) {
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     if (dev.exitCode !== null || dev.signalCode !== null) {
@@ -142,6 +171,19 @@ async function captureArtifact(page, label) {
   return { ...captured.value, path: artifactPath };
 }
 
+/**
+ * Capture the first frame as a state-settling observation, then use the next
+ * frame as the evidence artifact. A World mutation can legitimately rebuild
+ * directional shadows in the first frame; keeping that warmup tape preserves
+ * the work evidence while the compared artifacts are both post-settle frames.
+ * No wall-clock wait or work-count exception is involved.
+ */
+async function captureSettledArtifact(page, label) {
+  const warmup = await captureArtifact(page, `${label}-warmup`);
+  const settled = await captureArtifact(page, label);
+  return { ...settled, warmup };
+}
+
 function liveEval(env, script) {
   const result = spawnSync(process.execPath, [remoteLive, script], {
     cwd: root,
@@ -200,7 +242,7 @@ async function runRemoteLiveBrowser() {
     if (before !== 1 || after !== 7) {
       throw new Error(`live resource mutation did not read back: before=${before} after=${after}`);
     }
-    const baselineArtifact = await captureArtifact(page, 'before');
+    const baselineArtifact = await captureSettledArtifact(page, 'before');
     const baselineCapture = liveEval(
       env,
       `(async () => { const m = await _import('@forgeax/engine-scene'); const t = world.get(${JSON.stringify(handle)}, m.Transform); return { available: rhiCapture !== undefined, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null }; })()`,
@@ -223,7 +265,7 @@ async function runRemoteLiveBrowser() {
       throw new Error(`visible Transform mutation did not read back: ${JSON.stringify(moved)}`);
     }
 
-    const mutatedArtifact = await captureArtifact(page, 'after');
+    const mutatedArtifact = await captureSettledArtifact(page, 'after');
     const mutatedCapture = liveEval(
       env,
       `(async () => { const m = await _import('@forgeax/engine-scene'); const t = world.get(${JSON.stringify(handle)}, m.Transform); return { available: rhiCapture !== undefined, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null }; })()`,
@@ -300,11 +342,11 @@ async function main() {
       runNode('RHI fixture', ['apps/rhi-debug-viewer/fixtures/generate-fixture.mjs', fixtureDir]);
       const fixturePath = resolve(fixtureDir, 'frame-0.rhitape');
       const summary = runDevKitOperation('RHI frame model', 'rhi.summary', fixturePath);
-      if (!Array.isArray(summary.model?.works) || summary.model.works.length < 1 || !Array.isArray(summary.model.commands) || summary.model.commands.length < 1) {
+      if (!Array.isArray(summary.summary?.works) || summary.summary.works.length < 1 || !Number.isInteger(summary.summary.commandCount) || summary.summary.commandCount < 1) {
         throw new Error(`frame model lacks work/command evidence: ${JSON.stringify(summary)}`);
       }
-      console.log(`[m6-forensics] RHI frame model: PASS (works=${summary.model.works.length}, commands=${summary.model.commands.length})`);
-      const fixtureWorkIndex = summary.model.works.findIndex((work) => work.kind.startsWith('draw'));
+      console.log(`[m6-forensics] RHI frame model: PASS (works=${summary.summary.works.length}, commands=${summary.summary.commandCount})`);
+      const fixtureWorkIndex = summary.summary.works.findIndex((work) => work.kind.startsWith('draw'));
       const inspected = runDevKitOperation('RHI inspect/replay', 'rhi.inspect', fixturePath, ['--work-index', String(Math.max(0, fixtureWorkIndex))]);
       if (inspected.inspection?.workIndex !== fixtureWorkIndex || inspected.inspection?.eventIndex === undefined) {
         throw new Error(`inspect lacks replay evidence: ${JSON.stringify(inspected)}`);
@@ -314,20 +356,20 @@ async function main() {
       const beforeSummary = runDevKitOperation('same-scene baseline RHI frame model', 'rhi.summary', liveCapture.beforeArtifactPath);
       const liveSummary = runDevKitOperation('same-scene mutated RHI frame model', 'rhi.summary', liveCapture.afterArtifactPath);
       if (
-        !Array.isArray(beforeSummary.model?.works) ||
-        beforeSummary.model.works.length < 1 ||
-        !Array.isArray(liveSummary.model?.works) ||
-        liveSummary.model.works.length < 1 ||
-        !Array.isArray(liveSummary.model.commands) ||
-        liveSummary.model.commands.length < 1 ||
-        beforeSummary.model.works.length !== liveSummary.model.works.length
+        !Array.isArray(beforeSummary.summary?.works) ||
+        beforeSummary.summary.works.length < 1 ||
+        !Array.isArray(liveSummary.summary?.works) ||
+        liveSummary.summary.works.length < 1 ||
+        !Number.isInteger(liveSummary.summary.commandCount) ||
+        liveSummary.summary.commandCount < 1 ||
+        beforeSummary.summary.works.length !== liveSummary.summary.works.length
       ) {
         throw new Error('same-scene before/after tapes lack stable work evidence');
       }
       console.log(
-        `[m6-forensics] same-scene live RHI frame model: PASS (before=${liveCapture.beforeRunId}, after=${liveCapture.afterRunId}, works=${liveSummary.model.works.length}, commands=${liveSummary.model.commands.length})`,
+        `[m6-forensics] same-scene live RHI frame model: PASS (before=${liveCapture.beforeRunId}, after=${liveCapture.afterRunId}, works=${liveSummary.summary.works.length}, commands=${liveSummary.summary.commandCount})`,
       );
-      const liveWorkIndex = liveSummary.model.works.findIndex((work) => work.kind.startsWith('draw'));
+      const liveWorkIndex = liveSummary.summary.works.findIndex((work) => work.kind.startsWith('draw'));
       const beforeInspected = runDevKitOperation('same-scene baseline RHI inspect/replay', 'rhi.inspect', liveCapture.beforeArtifactPath, ['--work-index', String(Math.max(0, liveWorkIndex))]);
       const liveInspected = runDevKitOperation('same-scene live RHI inspect/replay', 'rhi.inspect', liveCapture.afterArtifactPath, ['--work-index', String(Math.max(0, liveWorkIndex))]);
       if (
@@ -341,20 +383,23 @@ async function main() {
       console.log(`[m6-forensics] semantic-to-structural correlation: PASS (Transform.pos.x ${liveCapture.beforePosX} -> ${liveCapture.afterPosX})`);
 
       const m21Summary = runDevKitOperation('capture retry RHI frame model', 'rhi.summary', liveCapture.m21.retry.path);
-      const retryWorkIndex = m21Summary.model.works.findIndex((work) => work.kind.startsWith('draw'));
+      const retryWorkIndex = m21Summary.summary.works.findIndex((work) => work.kind.startsWith('draw'));
       const m21Inspect = runDevKitOperation('capture retry inspect', 'rhi.inspect', liveCapture.m21.retry.path, ['--work-index', String(Math.max(0, retryWorkIndex))]);
       if (m21Inspect.inspection?.workIndex !== retryWorkIndex || m21Inspect.inspection?.eventIndex === undefined) {
         throw new Error(`capture retry inspect lacks evidence: ${JSON.stringify(m21Inspect)}`);
       }
       writeFileSync(resolve(liveCapture.m21.retry.path, '..', 'retry-summary.json'), `${JSON.stringify(m21Summary, null, 2)}\n`);
       writeFileSync(resolve(liveCapture.m21.retry.path, '..', 'retry-inspect.json'), `${JSON.stringify(m21Inspect, null, 2)}\n`);
-      console.log(`[m6-forensics] capture retry inspect: PASS (workIndex=${m21Inspect.inspection.workIndex}, works=${m21Summary.model.works.length}, commands=${m21Summary.model.commands.length})`);
+      console.log(`[m6-forensics] capture retry inspect: PASS (workIndex=${m21Inspect.inspection.workIndex}, works=${m21Summary.summary.works.length}, commands=${m21Summary.summary.commandCount})`);
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
     }
 
     run('RHI viewer', ['--filter', '@forgeax/engine-rhi-debug-viewer', 'smoke:browser']);
-    run('RHI falsifier', ['--filter', '@forgeax/engine-rhi-debug-viewer', 'smoke:browser'], { FALSIFY_NO_SHADER_MODULE: '1' });
+    const falsifier = run('RHI falsifier', ['--filter', '@forgeax/engine-rhi-debug-viewer', 'smoke:browser'], { FORGEAX_FALSIFY_TEXTURE_ATTACHMENT: '1' });
+    if (!falsifier.includes('FALSIFIER_CONFIRMED')) {
+      throw new Error('RHI attachment falsifier did not confirm missing resources and pixels');
+    }
     console.log('[m6-forensics] PASS - M6 inspection/forensics gates GREEN');
     console.log('[m6-forensics] deferred: renderer device-loss recovery remains open.');
   } catch (error) {

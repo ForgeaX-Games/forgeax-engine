@@ -16,6 +16,11 @@ describe('mountUi lifecycle', () => {
     expect(instance.ok).toBe(true);
     if (!instance.ok) return;
     expect(instance.value.host.shadowRoot).toBeTruthy();
+    expect(instance.value.host.style.pointerEvents).toBe('none');
+    expect(
+      (instance.value.host.shadowRoot?.lastElementChild as HTMLElement | undefined)?.style
+        .pointerEvents,
+    ).toBe('none');
     instance.value.host.shadowRoot
       ?.querySelector('button')
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));

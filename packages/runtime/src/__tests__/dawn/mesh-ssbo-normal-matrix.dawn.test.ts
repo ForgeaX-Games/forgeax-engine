@@ -1,106 +1,139 @@
-// mesh-ssbo-normal-matrix.dawn.test.ts - feat-20260518-pbr-direct-lighting-mvp
-// M3 / w11 (TDD red): per-instance Mesh SSBO byte layout (mat4 worldFromLocal
-// in [0,64) + mat3 normalMatrix in [64,112) padded as 3 vec4 to 16-byte
-// boundaries, total 112 B inside the 256 B PER_ENTITY_STRIDE slot).
-//
-// Plan-strategy D-5 + AC-08: the Mesh struct in common.wgsl now carries
-// `normalMatrix: mat3x3<f32>` alongside `worldFromLocal: mat4x4<f32>`. The
-// host (render-system-record.ts) computes
-//   normalMatrix = transpose(invert(mat3(worldFromLocal)))
-// once per renderable per frame and writes it to the mesh SSBO slot at
-// byte offset 64 (the mat3 occupies three vec4 columns, each 16 B = 48 B
-// total, ending at offset 112). The remaining 256 - 112 = 144 B in the
-// PER_ENTITY_STRIDE slot is slack reserved for future extensions.
-//
-// Tier: dawn-node (real GPU + queue.submit guarded by skipIf). The full
-// readback gate is covered by `pnpm --filter @forgeax/hello-room smoke` (300 frames
-// pixel-parity); this dawn-tier gate asserts the host-side numeric
-// derivation that feeds the mesh SSBO write path: given a known mat4 of a
-// rotated + non-uniformly scaled entity, the host-derived normalMatrix
-// matches `transpose(invert(mat3(worldFromLocal)))` to epsilon <= 1e-5
-// (the binary judgment that AC-08 motivates).
-
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mat3, mat4, quat, vec3 } from '@forgeax/engine-math';
-import { describe, expect, it } from 'vitest';
+import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
+import { ok } from '@forgeax/engine-types';
+import { expect, it } from 'vitest';
+import type { ValidatedRenderable } from '../../../../render/src/record/frame-snapshot';
+import {
+  MESH_SSBO_BYTES,
+  MESH_UBO_FULL_ARRAY_BYTES,
+  uploadMeshSsboBatch,
+} from '../../../../render/src/record/mesh-ssbo';
 
-const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
-
-describe('w11 mesh SSBO normalMatrix host derivation (AC-08, dawn)', () => {
-  it.skipIf(!dawnReady)(
-    'rotated + non-uniformly scaled entity: normalMatrix matches transpose(invert(mat3(worldFromLocal))) within 1e-5',
-    () => {
-      // Build a non-identity transform: yaw 45 deg + non-uniform scale.
-      const m4 = mat4.create();
-      const q = quat.create();
-      q[0] = 0;
-      q[1] = Math.sin(Math.PI / 8);
-      q[2] = 0;
-      q[3] = Math.cos(Math.PI / 8);
-      mat4.compose(m4, vec3.create(0, 0, 0), q, vec3.create(1.5, 0.5, 1));
-      const expectedNormal = mat3.normalMatrix(mat3.create(), m4);
-
-      // Per AC-08 the host writes 9 floats with 16-byte stride (mat3 = 3 vec4)
-      // into the mesh SSBO at offset [64, 112). Construct the host-side
-      // packed payload that render-system-record.ts produces and assert the
-      // mat3 columns land at the canonical std140 offsets.
-      // Float-typed payload mirroring the Mesh struct slot:
-      //   [0..16) mat4 (16 floats), [16..28) mat3 padded (12 floats: 3 vec4)
-      const slot = new Float32Array(28); // 112 bytes
-      for (let i = 0; i < 16; i++) slot[i] = m4[i] ?? 0;
-      // mat3 column 0 -> slot[16..19] (xyz + 1 padding float)
-      slot[16] = expectedNormal[0] ?? 0;
-      slot[17] = expectedNormal[1] ?? 0;
-      slot[18] = expectedNormal[2] ?? 0;
-      // mat3 column 1 -> slot[20..23]
-      slot[20] = expectedNormal[3] ?? 0;
-      slot[21] = expectedNormal[4] ?? 0;
-      slot[22] = expectedNormal[5] ?? 0;
-      // mat3 column 2 -> slot[24..27]
-      slot[24] = expectedNormal[6] ?? 0;
-      slot[25] = expectedNormal[7] ?? 0;
-      slot[26] = expectedNormal[8] ?? 0;
-
-      // Byte-offset checks: mat4 in [0,64), mat3 in [64,112).
-      expect(slot.byteLength).toBe(112);
-
-      // Numeric check: derived normalMatrix must differ from upper-left
-      // mat3 of m4 (the latter is the *wrong* transform; AC-08 motivates
-      // computing transpose(inverse(mat3(...))) explicitly because
-      // non-uniform scale breaks the upper-left mat3 normal transform).
-      const upperLeft = mat3.fromMat4(mat3.create(), m4);
-      let differs = false;
-      for (let i = 0; i < 9; i++) {
-        if (Math.abs((upperLeft[i] ?? 0) - (expectedNormal[i] ?? 0)) > 1e-5) {
-          differs = true;
-          break;
-        }
-      }
-      expect(differs).toBe(true);
-
-      // Numerical: every element finite + matches the closed-form
-      // transpose(invert) of the upper-left mat3 within the AC-08 1e-5 cap.
-      const ref = mat3.transpose(
-        mat3.create(),
-        mat3.invert(mat3.create(), mat3.fromMat4(mat3.create(), m4)),
-      );
-      for (let i = 0; i < 9; i++) {
-        expect(expectedNormal[i] ?? 0).toBeCloseTo(ref[i] ?? 0, 5);
-      }
+it.each([
+  true,
+  false,
+])('reads the migrated Mesh layout and derives normals on GPU (storage=%s)', async (storage) => {
+  const compiler = await import(
+    /* @vite-ignore */ new URL('../../../../shader-compiler/dist/index.mjs', import.meta.url).href
+  );
+  const compiled = await compiler.compileShader(
+    `#define_import_path test::mesh-normal
+#import forgeax_view::common::{Mesh, transformNormal}
+@group(0) @binding(0) var<${storage ? 'storage, read' : 'uniform'}> rows: array<Mesh, 128>;
+@group(0) @binding(1) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1) fn probe() {
+  let row = rows[0];
+  result[0] = vec4<f32>(normalize(transformNormal(row.worldFromLocal, vec3<f32>(0.3, 0.7, -0.2))), 1.0);
+  ${storage ? 'result[1] = row.previousWorldFromLocal[3]; result[2] = row.temporal;' : 'result[1] = row.worldFromLocal[3];'}
+}`,
+    {
+      id: 'test::mesh-normal',
+      defines: { STORAGE_BUFFER_AVAILABLE: storage },
+      imports: {
+        'forgeax_view::common': readFileSync(resolve('packages/shader/src/common.wgsl'), 'utf8'),
+      },
     },
   );
-
-  it.skipIf(!dawnReady)('identity transform: normalMatrix = identity', () => {
-    const m4 = mat4.create();
-    mat4.identity(m4);
-    const n = mat3.normalMatrix(mat3.create(), m4);
-    expect(n[0]).toBeCloseTo(1, 6);
-    expect(n[4]).toBeCloseTo(1, 6);
-    expect(n[8]).toBeCloseTo(1, 6);
-    expect(n[1]).toBeCloseTo(0, 6);
-    expect(n[2]).toBeCloseTo(0, 6);
-    expect(n[3]).toBeCloseTo(0, 6);
-    expect(n[5]).toBeCloseTo(0, 6);
-    expect(n[6]).toBeCloseTo(0, 6);
-    expect(n[7]).toBeCloseTo(0, 6);
+  if (!compiled.ok) throw compiled.error;
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) throw new Error('GPU adapter unavailable');
+  const device = await adapter.requestDevice();
+  device.pushErrorScope('validation');
+  const bytes = storage ? MESH_SSBO_BYTES * 128 : MESH_UBO_FULL_ARRAY_BYTES;
+  const input = device.createBuffer({
+    size: bytes,
+    usage: GPUBufferUsage.COPY_DST | (storage ? GPUBufferUsage.STORAGE : GPUBufferUsage.UNIFORM),
   });
-});
+  const output = device.createBuffer({
+    size: 48,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const readback = device.createBuffer({
+    size: 48,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  try {
+    const module = device.createShaderModule({ code: compiled.value.wgsl });
+    const pipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module, entryPoint: 'probe' },
+    });
+    const group = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: input, size: bytes } },
+        { binding: 1, resource: { buffer: output } },
+      ],
+    });
+    const rotated = mat4.compose(
+      mat4.create(),
+      vec3.create(3, 4, 5),
+      quat.fromEuler(quat.create(), 0.2, 0.6, -0.3),
+      vec3.create(1.5, 0.5, 2),
+    );
+    const shear = Float32Array.from([1, 0, 0, 0, 0.4, 2, 0, 0, -0.2, 0.3, -3, 0, 3, 4, 5, 1]);
+    const singular = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3, 4, 5, 1]);
+    const small = Float32Array.from([0.004, 0, 0, 0, 0, 0.005, 0, 0, 0, 0, 0.006, 0, 3, 4, 5, 1]);
+    for (const world of [mat4.create(), rotated, shear, singular, small]) {
+      const previous = mat4.create();
+      previous[12] = 17;
+      previous[13] = -9;
+      const entry = {
+        source: {
+          transform: { world },
+          materials: [],
+          temporal: { previousTransform: { world: previous }, reactive: true, motionValid: false },
+        },
+      } as unknown as ValidatedRenderable;
+      const queue = {
+        writeBuffer: (
+          _buffer: Buffer,
+          offset: number,
+          data: Uint8Array,
+          dataOffset: number,
+          size: number,
+        ) => {
+          device.queue.writeBuffer(
+            input,
+            offset,
+            data as Uint8Array<ArrayBuffer>,
+            dataOffset,
+            size,
+          );
+          return ok(undefined);
+        },
+      } as unknown as RhiQueue;
+      uploadMeshSsboBatch(queue, { buffer: {} as Buffer }, [entry], null);
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, group);
+      pass.dispatchWorkgroups(1);
+      pass.end();
+      encoder.copyBufferToBuffer(output, 0, readback, 0, 48);
+      device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ);
+      const actual = new Float32Array(readback.getMappedRange().slice(0));
+      readback.unmap();
+      const n = mat3.normalMatrix(mat3.create(), world);
+      const expected = [0, 1, 2].map(
+        (i) => (n[i] as number) * 0.3 + (n[i + 3] as number) * 0.7 - (n[i + 6] as number) * 0.2,
+      );
+      const length = Math.hypot(...expected);
+      for (let i = 0; i < 3; i++)
+        expect(actual[i]).toBeCloseTo((expected[i] as number) / length, 5);
+      expect(Array.from(actual.slice(4, 8))).toEqual(
+        Array.from((storage ? previous : world).slice(12, 16)),
+      );
+      if (storage) expect(Array.from(actual.slice(8, 12))).toEqual([1, 0, 0, 0]);
+    }
+    expect(await device.popErrorScope()).toBeNull();
+  } finally {
+    input.destroy();
+    output.destroy();
+    readback.destroy();
+    device.destroy();
+  }
+}, 60_000);

@@ -18,4 +18,24 @@ describe('material artifact deduplication', () => {
     });
     expect(registry.get('key-a')).toBe(first);
   });
+
+  it('rejects an ABI receipt change when artifact bytes and parameters are unchanged', () => {
+    const registry = new MaterialArtifactRegistry();
+    const first = {
+      key: 'key-receipt',
+      bytes: new Uint8Array([1]),
+      metadata: { paramSchema: [], receipt: { receiptIdentity: 'plain' } },
+    };
+    expect(registry.register(first)).toMatchObject({ ok: true });
+    expect(
+      registry.register({
+        key: first.key,
+        bytes: new Uint8Array([1]),
+        metadata: { paramSchema: [], receipt: { receiptIdentity: 'colored' } },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { detail: { dimension: 'receipt' } },
+    });
+  });
 });

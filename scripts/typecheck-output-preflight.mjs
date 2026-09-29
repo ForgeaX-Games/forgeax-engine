@@ -89,8 +89,8 @@ const args =
   missing.length > 3
     ? ['exec', 'tsc', '-b', '--force']
     : ['exec', 'tsc', '-b', ...missing.map((item) => relative(root, item.project)), '--force'];
-function buildDeclarations() {
-  return spawnSync('pnpm', args, {
+function buildDeclarations(buildArgs) {
+  return spawnSync('pnpm', buildArgs, {
     cwd: root,
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -98,18 +98,10 @@ function buildDeclarations() {
   });
 }
 
-const first = buildDeclarations();
-if (first.status === 0) process.exit(0);
-
-// A source-only archive begins without any package declaration outputs. With
-// package exports resolving through dist/, one cold solution build can emit
-// dependency declarations yet report transient consumer inference errors from
-// the pre-emit view. Retry only when that failed pass materially closed the
-// missing-output inventory; the second pass still reports every real error.
-const remaining = missingDeclarations();
-if (remaining.length >= missing.length) process.exit(first.status ?? 1);
-console.error(
-  `[types-preflight] cold build produced ${missing.length - remaining.length} declaration project(s); retrying with complete dependency outputs`,
-);
-const second = buildDeclarations();
-process.exit(second.status ?? 1);
+// A cold solution build can cache a missing declaration through a workspace
+// symlink before its producer emits the real path. Populate declarations first;
+// the separate forced checked build must still reject every semantic error.
+const emit = buildDeclarations([...args, '--noCheck']);
+if (emit.status !== 0) process.exit(emit.status ?? 1);
+const checked = buildDeclarations(args);
+process.exit(checked.status ?? 1);

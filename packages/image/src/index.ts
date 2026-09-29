@@ -23,6 +23,14 @@ export { decodeHdr } from './hdr-decoder.js';
 export { decodeImageInBrowser } from './image-decoder-browser.js';
 export type { JpegModule, UpngModule } from './image-decoder-node.js';
 export { loadJpeg, loadUpng } from './image-decoder-node.js';
+export {
+  createPixelSurface,
+  type PixelColor,
+  type PixelSurface,
+  type PixelSurfaceNoiseOptions,
+  type PixelSurfaceOptions,
+  type PixelSurfaceRect,
+} from './pixel-surface.js';
 export type {
   EmittedSubAsset,
   ExistingExternalAssetPackage,

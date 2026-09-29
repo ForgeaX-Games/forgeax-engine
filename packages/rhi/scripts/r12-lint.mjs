@@ -56,6 +56,8 @@ const SPEC_MAPPING = {
   PipelineLayoutDescriptor: 'GPUPipelineLayoutDescriptor',
   RenderPipelineDescriptor: 'GPURenderPipelineDescriptor',
   CommandEncoderDescriptor: 'GPUCommandEncoderDescriptor',
+  RenderBundleEncoderDescriptor: 'GPURenderBundleEncoderDescriptor',
+  RenderBundleDescriptor: 'GPURenderBundleDescriptor',
   RenderPassDescriptor: 'GPURenderPassDescriptor',
   RenderPassColorAttachment: 'GPURenderPassColorAttachment',
   RenderPassDepthStencilAttachment: 'GPURenderPassDepthStencilAttachment',

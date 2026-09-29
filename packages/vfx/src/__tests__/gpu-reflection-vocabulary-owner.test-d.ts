@@ -1,10 +1,10 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
   ParticleRendererOverflowPolicy,
-  ParticleRendererSorting,
   ParticleStageDomain,
   ParticleStageResourceAccess,
 } from '../code-source.js';
+import type { ParticleRendererSortingV3 } from '../code-source-v3.js';
 import type { VfxGpuRendererReflection, VfxGpuStageReflection } from '../gpu-program.js';
 
 describe('VFX GPU reflection vocabulary owner', () => {
@@ -14,7 +14,7 @@ describe('VFX GPU reflection vocabulary owner', () => {
     >().toEqualTypeOf<ParticleRendererOverflowPolicy>();
     expectTypeOf<
       NonNullable<VfxGpuRendererReflection['sorting']>
-    >().toEqualTypeOf<ParticleRendererSorting>();
+    >().toEqualTypeOf<ParticleRendererSortingV3>();
     expectTypeOf<VfxGpuStageReflection['domain']>().toEqualTypeOf<ParticleStageDomain>();
     expectTypeOf<
       VfxGpuStageReflection['resources'][number]['access']

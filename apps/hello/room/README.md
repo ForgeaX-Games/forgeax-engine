@@ -8,7 +8,7 @@
 pnpm install
 pnpm --filter @forgeax/hello-room dev    # http://localhost:5173
 pnpm --filter @forgeax/hello-room build
-pnpm --filter @forgeax/hello-room smoke  # dawn-node 300 frame + multi-mesh readback
+pnpm --filter @forgeax/hello-room smoke  # dawn-node 60 frame + multi-mesh readback
 ```
 
 ## Scene
@@ -23,7 +23,7 @@ Plus one `Camera` + one `DirectionalLight`. Visual distinction between the three
 
 ## Smoke gate (AC-05 / AC-25)
 
-`pnpm --filter @forgeax/hello-room smoke` runs the dawn-node headless path: 300 frames + 5-site pixel readback + per-site distance to clear color. Four criteria: (a) backend=webgpu (b) frames >= 300 (c) at least one meshed site exceeds `SMOKE_PIXEL_THRESHOLD` (default 0.05) distance from the clear color (0.05, 0.05, 0.08) (d) `Renderer.onError` fire count = 0.
+`pnpm --filter @forgeax/hello-room smoke` runs the dawn-node headless path: 60 frames + 5-site pixel readback + per-site distance to clear color. Four criteria: (a) backend=webgpu (b) frames >= 60 (c) at least one meshed site exceeds `SMOKE_PIXEL_THRESHOLD` (default 0.05) distance from the clear color (0.05, 0.05, 0.08) (d) `Renderer.onError` fire count = 0.
 
 Output log literals are preserved byte-for-byte with `apps/hello/cube/scripts/smoke-dawn.mjs` for grep-based tooling reuse:
 - `[hello-room] backend=webgpu`

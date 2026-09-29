@@ -20,7 +20,9 @@ describe('vite-plugin-pack public type surface', () => {
       | 'importers'
       | 'cookers'
       | 'refresh'
+      | 'watch'
       | 'ignorePath'
+      | 'sourceIdentityFor'
       | 'runtimeBinding'
       | 'ddc'
     >();

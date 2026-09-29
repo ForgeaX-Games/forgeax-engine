@@ -1,0 +1,16 @@
+{
+  "carrier": "apps/bevy/fog",
+  "source": "apps/bevy/fog/src/main.ts",
+  "featureId": "feat-20260827-render-temporal-environment-bloom-syntax-corrected",
+  "schema": "apps/bevy/fog/evidence/schema.json",
+  "provenance": {
+    "design": "packages/render/docs/specs/2026-08-27-render-temporal-environment-recovery-and-bloom-zero-overhead-design.md",
+    "implementation": "packages/render/src/extract/environment.ts",
+    "manifestOwner": "apps/bevy/fog"
+  },
+  "build": "vite build",
+  "requiredBackends": ["browser-webgpu", "dawn-node"],
+  "frames": 300,
+  "scenarios": ["uniform", "height", "owner-switch", "recovery"],
+  "unavailableIsNotPass": true
+}

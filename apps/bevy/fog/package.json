@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Bevy fog reproduction using a camera-depth fullscreen distance-fog post-process.",
+  "description": "Bevy fog reproduction using the Engine Fog component.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -56,7 +56,7 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

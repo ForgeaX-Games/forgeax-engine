@@ -26,7 +26,7 @@ describe('staged status derivation', () => {
         size: { width: 1, height: 1 },
         rawHash: 'display',
         frameId: 1,
-        pipelineId: 'forgeax::urp',
+        pipelineId: 'forgeax::standard',
         backendId: 'webgpu',
       },
     });
@@ -41,7 +41,7 @@ describe('staged status derivation', () => {
       capabilityStatus: 'unsupported' as const,
       executionStatus: 'notExecuted' as const,
       verdict: 'notRun' as const,
-      missingPipelineIds: ['forgeax::hdrp'],
+      missingPipelineIds: ['forgeax::standard'],
     };
     expect(deriveAttachmentReportStatus(base)).toBe('failed');
   });

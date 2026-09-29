@@ -74,7 +74,7 @@ try {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
       '--disable-dawn-features=disallow_unsafe_apis',

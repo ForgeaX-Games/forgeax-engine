@@ -43,6 +43,7 @@ export {
 export {
   type DdcBeginResult,
   type DdcCommitResult,
+  type DdcCurrentEntry,
   type DdcHead,
   type DdcLease,
   DdcLifecycle,

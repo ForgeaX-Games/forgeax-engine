@@ -15,7 +15,7 @@ import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
 import { REMOTE_ERROR_MESSAGES } from './error-messages';
 import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError } from './errors';
-import { executeScript } from './execute';
+import { type ExecuteContext, executeScript } from './execute';
 import {
   buildIntrospectDoc,
   type ComponentIntrospectionDescriptor,
@@ -40,14 +40,18 @@ export type StartServerOptions = {
   readonly world: unknown;
   readonly renderer?: unknown;
   readonly assets?: unknown;
+  /** Resolve modules in the owning Host realm, using the existing eval seam. */
+  readonly importModule?: ExecuteContext['importModule'];
   /** JSON-safe host reflection; the remote package does not know component owners. */
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
   /** Explicit CPU profiler capability; omitted unless the host opts in. */
   readonly profiler?: unknown;
   /** Structural report provider; remote never imports the App owner. */
   readonly execution?: unknown;
-  /** Read-only World-owned simulation inspection root. */
+  /** Host-owned simulation operations and realm Context; Remote owns neither. */
   readonly simulation?: unknown;
+  /** Read-only DevKit plugin projection; Remote never owns plugin state. */
+  readonly plugins?: unknown;
   /**
    * Host-owned RHI capture capability for eval-scope injection (plan-strategy D-4).
    * It is exposed as the single `rhiCapture` eval root.
@@ -117,11 +121,13 @@ async function handleEnvelope(
     world: unknown;
     renderer: unknown;
     assets: unknown;
+    importModule: ExecuteContext['importModule'];
     rhiCapture: unknown | undefined;
     introspection: readonly ComponentIntrospectionDescriptor[];
     profiler: unknown | undefined;
     execution: unknown | undefined;
     simulation: unknown | undefined;
+    plugins: unknown | undefined;
     host: string;
     port: number;
   },
@@ -151,6 +157,7 @@ async function handleEnvelope(
         ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
         ...(ctx.execution !== undefined ? { execution: ctx.execution } : {}),
         ...(ctx.simulation !== undefined ? { simulation: ctx.simulation } : {}),
+        ...(ctx.plugins !== undefined ? { plugins: ctx.plugins } : {}),
         ...(ctx.introspection.length > 0 ? { introspection: ctx.introspection } : {}),
       }),
     );
@@ -164,10 +171,12 @@ async function handleEnvelope(
         world: ctx.world,
         renderer: ctx.renderer,
         assets: ctx.assets,
+        ...(ctx.importModule === undefined ? {} : { importModule: ctx.importModule }),
         rhiCapture: ctx.rhiCapture,
         profiler: ctx.profiler,
         execution: ctx.execution,
         simulation: ctx.simulation,
+        plugins: ctx.plugins,
       });
       if (result.ok) {
         response = respondOk(id, result.value);
@@ -209,6 +218,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
     const execution = isExecutionRoot(opts.execution) ? opts.execution : undefined;
     const simulation = opts.simulation;
+    const plugins = opts.plugins;
     let settled = false;
     let boundPort = opts.port;
 
@@ -240,11 +250,13 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
           world,
           renderer,
           assets,
+          importModule: opts.importModule,
           rhiCapture,
           introspection,
           profiler,
           execution,
           simulation,
+          plugins,
           host,
           port: boundPort,
         })

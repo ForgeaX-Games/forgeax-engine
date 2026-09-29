@@ -36,8 +36,8 @@ export type {
   CatalogReconcileError,
   CatalogReconcileResult,
   MeshAsset,
-} from './asset-registry';
-export { AssetRegistry } from './asset-registry';
+} from './asset-registry.js';
+export { AssetRegistry } from './asset-registry.js';
 // ─── Process-static builtin payload registry + vertex-layout SSOT ───────────
 export {
   BUILTIN_BASE,
@@ -48,16 +48,23 @@ export {
   BUILTIN_SPHERE,
   BUILTIN_TRIANGLE,
   BuiltinAssetRegistry,
-} from './builtin-asset-registry';
-export { type CatalogListener, type CatalogSource, createCatalogSource } from './catalog-source';
+} from './builtin-asset-registry.js';
+export { captureAssetPublication } from './capture-publication.js';
+export {
+  type CatalogHotChannel,
+  type CatalogListener,
+  type CatalogSource,
+  createCatalogHotSubscription,
+  createCatalogSource,
+} from './catalog-source.js';
 // ─── Runtime image byte decoder (tweak-20260714 M1) ──────────────────────────
-export { decodeImageBytes } from './decode-image-bytes';
+export { decodeImageBytes } from './decode-image-bytes.js';
 // ─── Dynamic per-frame texture store ────────────────────────────────────────
 export {
   adaptDynamicTextureDevice,
   type DynamicTextureDevice,
   DynamicTextureStore,
-} from './dynamic-texture-store';
+} from './dynamic-texture-store.js';
 // ─── Asset cluster error model (closed union + classes) ─────────────────────
 export type {
   AssetRuntimeError,
@@ -65,7 +72,7 @@ export type {
   MaterialResolvedEmptyPassesDetail,
   SceneCollectAssetGuidUnresolvedDetail,
   SceneCollectEntityRefOutOfClosureDetail,
-} from './errors/asset';
+} from './errors/asset.js';
 export {
   MaterialResolvedEmptyPassesError,
   MeshBinAssetError,
@@ -73,7 +80,7 @@ export {
   MeshSsboCeilingReachedError,
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
-} from './errors/asset';
+} from './errors/asset.js';
 // ─── Builtin mesh handles (re-exported by asset-registry from ./handles) ─────
 export {
   builtinMeshGuid,
@@ -83,7 +90,7 @@ export {
   HANDLE_QUAD,
   HANDLE_SPHERE,
   HANDLE_TRIANGLE,
-} from './handles';
+} from './handles.js';
 // The five-action runtime registry is distinct from the legacy authoring
 // AssetRegistry class above. Keep its resolver on the public package boundary
 // so render/VFX hosts never reach through `/internal` to inspect loaded assets.
@@ -94,7 +101,7 @@ export {
   getAssetRegistryResolver,
 } from './internal/load-asset.js';
 // ─── Loader-injection surface ───────────────────────────────────────────────
-export { LoaderRegistry } from './loader-registry';
+export { LoaderRegistry } from './loader-registry.js';
 // ─── Default loader tables + individual loaders (pre-w14 consumer face) ──────
 export {
   animationClipLoader,
@@ -109,12 +116,12 @@ export {
   skeletonLoader,
   skinLoader,
   tilesetLoader,
-} from './loaders/inline-pack';
+} from './loaders/inline-pack.js';
 // ─── Mesh binary container decode ───────────────────────────────────────────
 export {
   type UnpackedMeshBin,
-  unpackMeshBinV4,
-} from './loaders/mesh-bin';
+  unpackMeshBin,
+} from './loaders/mesh-bin.js';
 export {
   equirectLoader,
   fontLoader,
@@ -122,9 +129,20 @@ export {
   renderPipelineLoader as renderPipelineArtifactLoader,
   textureLoader,
   tilesetLoader as tilesetArtifactLoader,
-} from './loaders/pack-artifact';
-export { MaterialGenerationCache } from './material/generation-cache';
-export { inspectMaterialRuntime, type MaterialRuntimeInfo } from './material/inspection';
+} from './loaders/pack-artifact.js';
+export { MaterialGenerationCache } from './material/generation-cache.js';
+export {
+  inspectMaterialRuntime,
+  type MaterialRuntimeFailureInfo,
+  type MaterialRuntimeInfo,
+  type MaterialRuntimeInput,
+  type MaterialRuntimeInspection,
+  type MaterialRuntimeLastKnownGoodInfo,
+  type MaterialRuntimeLastKnownGoodInput,
+  type MaterialRuntimePendingInfo,
+  type MaterialRuntimePendingInput,
+  type MaterialRuntimeStandardInfo,
+} from './material/inspection.js';
 export {
   createMaterialLoader,
   type MaterialLoadError,
@@ -134,33 +152,44 @@ export {
   type MaterialLoadRequest,
   type MaterialPublication,
   type MaterialReady,
-} from './material/loader';
+} from './material/loader.js';
 export {
   installMaterialReadyShaders,
+  type MaterialRenderPassProjection,
+  type MaterialRenderProjection,
   materialParametersToParamSchema,
+  projectMaterialRecord,
   runtimeMaterialShaderId,
-} from './material/runtime-shader';
+  selectMaterialPassProgram,
+} from './material/runtime-shader.js';
 // ─── Mipmap generation helpers ──────────────────────────────────────────────
 export {
   blitMipmapsSync,
+  encodeMipmapLevel,
   getOrCreateMipmapPipeline,
   type MipmapBlitDevice,
+  type MipmapEncoderWork,
   type MipmapShaderModuleFactory,
   mipmapCacheSize,
   numMipLevels,
-} from './mipmap-generator';
+  prepareMipmaps,
+} from './mipmap-generator.js';
 // ─── Register-time payload validation ───────────────────────────────────────
-export { type TilesetValidateOptions, validateTilesetPayload } from './payload-validate';
-export { assetLoaderPlugin, assetsPlugin, packLoaderPlugin } from './plugin';
+export { type TilesetValidateOptions, validateTilesetPayload } from './payload-validate.js';
+export { assetLoaderPlugin, assetsPlugin, packLoaderPlugin } from './plugin.js';
 export {
   createRuntimeAssetEvidenceAdapter,
   type RuntimeEvidenceSource,
-} from './registry/asset-evidence';
-export { CatalogReplica, type CatalogReplicaSnapshot } from './registry/catalog-state';
-export type { PostSpawnHook, SkinJointResolver } from './registry/instantiate';
+} from './registry/asset-evidence.js';
+export { CatalogReplica, type CatalogReplicaSnapshot } from './registry/catalog-state.js';
 // ─── Scene instantiate collaboration contract types (D-1 injected hook) ─────
-export { buildSceneChildContext } from './registry/instantiate';
-export { loadMaterialReadyByGuid } from './registry/load-by-guid';
+export {
+  buildSceneChildContext,
+  type PostSpawnHook,
+  type SkinJointResolver,
+  scenePublicationFenceFromRegistry,
+} from './registry/instantiate.js';
+export { loadMaterialReadyByGuid } from './registry/load-by-guid.js';
 export {
   compareScenePublicationFences,
   createScenePublicationFence,
@@ -173,17 +202,25 @@ export {
   type ScenePublicationFencePhase,
   type ScenePublicationObservation,
   scenePublicationFenceFromCatalog,
-} from './registry/scene-publication-fence';
+} from './registry/scene-publication-fence.js';
 // ─── Handle-to-payload resolution ───────────────────────────────────────────
-export { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
+export {
+  type AssetReader,
+  type AssetReadSource,
+  resolveAssetHandle,
+  walkMaterialPassesOverSharedRefs,
+} from './resolve-asset-handle.js';
 export {
   type ResolvedTilesetRuntime,
   resolveTilesetRuntime,
   type TilesetAtlasLookup,
   type TilesetRuntimeError,
   type TilesetRuntimeErrorCode,
-} from './resolve-tileset-runtime';
+} from './resolve-tileset-runtime.js';
+export { retainAssetPublications } from './retain-publication.js';
+export { RuntimeMaterialValue, RuntimeMeshVertices } from './runtime-content';
 // Public scene-pack boundary: editor/play hosts reuse the engine's canonical
 // refs-index -> SceneAsset reconstruction when refreshing a saved SceneAsset.
-export { parseScenePayload } from './scene-payload';
-export { createDefaultLoaderRegistry, wireDefaultLoaders } from './wire-default-loaders';
+export { parseScenePayload } from './scene-payload.js';
+export { validateAssetPublication } from './validate-publication.js';
+export { createDefaultLoaderRegistry, wireDefaultLoaders } from './wire-default-loaders.js';

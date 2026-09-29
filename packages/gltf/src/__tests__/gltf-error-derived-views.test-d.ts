@@ -13,7 +13,10 @@ import {
   type GltfImageExtractFailedDetail,
   type GltfImageMimeUnsupportedDetail,
   type GltfInstancingCountMismatchDetail,
+  type GltfLodInvalidDetail,
   type GltfMalformedHeaderDetail,
+  type GltfMaterialPhysicalInvalidDetail,
+  type GltfMaterialTransmissionInvalidDetail,
   type GltfMeshBridgeInvalidDetail,
   type GltfMeshoptDecodeFailedDetail,
   type GltfMeshoptDecoderRequiredDetail,
@@ -51,6 +54,9 @@ type ExpectedDetails = {
   readonly 'gltf-color-accessor-unsupported': GltfColorAccessorUnsupportedDetail;
   readonly 'gltf-color-accessor-malformed': GltfColorAccessorMalformedDetail;
   readonly 'gltf-mesh-bridge-invalid': GltfMeshBridgeInvalidDetail;
+  readonly 'gltf-lod-invalid': GltfLodInvalidDetail;
+  readonly 'gltf-material-transmission-invalid': GltfMaterialTransmissionInvalidDetail;
+  readonly 'gltf-material-physical-invalid': GltfMaterialPhysicalInvalidDetail;
 };
 
 type ExpectedCodes = keyof ExpectedDetails;
@@ -73,6 +79,8 @@ function exhaustive(error: GltfError): string {
       return `${error.detail.accessor}:${error.detail.bufferIndex}`;
     case 'gltf-extension-unsupported':
       return error.detail.extension;
+    case 'gltf-lod-invalid':
+      return String(error.detail.rootNode);
     case 'gltf-accessor-type-mismatch':
       return error.detail.reason;
     case 'gltf-texture-load-failed':
@@ -109,6 +117,10 @@ function exhaustive(error: GltfError): string {
       return `${error.detail.semantic}:${error.detail.accessorIndex}:${error.detail.reason}`;
     case 'gltf-mesh-bridge-invalid':
       return error.detail.reason;
+    case 'gltf-material-transmission-invalid':
+      return `${error.detail.extension}:${error.detail.field}:${error.detail.reason}`;
+    case 'gltf-material-physical-invalid':
+      return `${error.detail.extension}:${error.detail.field}:${error.detail.reason}`;
   }
   return error;
 }

@@ -7,11 +7,13 @@ import {
   type FbxErrorCode,
   type FbxErrorDetail,
   type FbxMeshTypeUnsupportedDetail,
+  type FbxLodDisplayModeUnsupportedDetail,
 } from '../src/errors.js';
 
 type ExpectedDetails = {
   readonly 'fbx-mesh-type-unsupported': FbxMeshTypeUnsupportedDetail;
   readonly 'fbx-animation-target-invalid': FbxAnimationTargetInvalidDetail;
+  readonly 'fbx-lod-display-mode-unsupported': FbxLodDisplayModeUnsupportedDetail;
 };
 
 type ExpectedCodes = keyof ExpectedDetails;
@@ -27,6 +29,7 @@ type ExpectedError = {
 const expectedCodes = [
   'fbx-mesh-type-unsupported',
   'fbx-animation-target-invalid',
+  'fbx-lod-display-mode-unsupported',
 ] as const satisfies readonly FbxErrorCode[];
 
 const animationDetails = [
@@ -44,13 +47,15 @@ function exhaustiveSwitch(error: FbxError): string {
       return `${error.detail.meshType}:${error.detail.meshName}`;
     case 'fbx-animation-target-invalid':
       return error.detail.reason;
+    case 'fbx-lod-display-mode-unsupported':
+      return error.detail.displayMode;
   }
 }
 
 describe('FbxErrorCode', () => {
   it('keeps the exact two-code vocabulary and correlated union', () => {
-    expect(expectedCodes).toHaveLength(2);
-    expect(new Set(expectedCodes)).toHaveLength(2);
+    expect(expectedCodes).toHaveLength(3);
+    expect(new Set(expectedCodes)).toHaveLength(3);
     expect(Object.keys(FBX_ERROR_HINTS)).toEqual([...expectedCodes]);
     expectTypeOf<FbxErrorCode>().toEqualTypeOf<ExpectedCodes>();
     expectTypeOf<FbxError>().toEqualTypeOf<ExpectedError>();

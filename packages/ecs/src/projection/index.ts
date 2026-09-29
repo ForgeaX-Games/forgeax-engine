@@ -2,8 +2,7 @@ import type { Result } from '@forgeax/engine-types';
 import type { Component } from '../component';
 import { componentId } from '../component';
 import type { EntityHandle } from '../entity-handle';
-import type { SharedRefMutationRead } from '../shared-ref-store';
-import type { WorldChangeRead } from '../storage/change-detection';
+import type { ArrayRangesChange } from '../storage/array-range-log';
 import type { EcsError, World } from '../world';
 import { worldInternal } from '../world-internal';
 
@@ -23,43 +22,7 @@ export {
   SpriteInstancesRequiresSpriteShaderError,
   StaleEntityError,
 } from '../errors';
-
-export type ProjectionChangeKind =
-  | 'component-added'
-  | 'component-changed'
-  | 'component-removed'
-  | 'derived-component-changed'
-  | 'entity-removed';
-
-export interface ProjectionChange {
-  readonly entity: EntityHandle;
-  readonly kind: ProjectionChangeKind;
-  /** Token identity is the owner-facing component discriminator. */
-  readonly component?: Component;
-  /** Numeric id remains journal evidence for ECS-internal consumers. */
-  readonly componentId?: number;
-}
-
-export type ProjectionRead =
-  | {
-      readonly status: 'delta';
-      readonly cursor: number;
-      readonly changes: readonly ProjectionChange[];
-    }
-  | {
-      readonly status: 'rebuild';
-      readonly cursor: number;
-      readonly reason: 'journal-overflow';
-    };
-
-export interface WorldProjection {
-  readonly cursor: number;
-  poll(): ProjectionRead;
-}
-
-export interface WorldProjectionOptions {
-  readonly components?: readonly Component[];
-}
+export type { ArrayRange, ArrayRangesChange } from '../storage/array-range-log';
 
 export interface RenderProjectionComponentRequest {
   readonly component: Component;
@@ -77,34 +40,26 @@ export interface RenderProjectionSpan {
 
 export interface RenderProjectionSpans {
   readonly generation: number;
-  readonly sharedRefEpoch: number;
   readonly spans: readonly RenderProjectionSpan[];
 }
 
-export interface RenderChangeBatchOk {
-  readonly status: 'ok';
-  readonly cursor: number;
-  readonly world: Extract<WorldChangeRead, { readonly status: 'ok' }>;
-  readonly sharedRefs: Extract<SharedRefMutationRead, { readonly status: 'ok' }>;
+export interface RenderChangeBatch {
+  readonly version: RenderReadVersion;
+  readonly world: RenderWorldChanges;
 }
 
-export interface RenderChangeBatchOverflow {
-  readonly status: 'overflow';
-  readonly cursor: number;
-  readonly resync: true;
-  readonly oldestAvailable: number;
-  readonly world: WorldChangeRead;
-  readonly sharedRefs: SharedRefMutationRead;
+export interface RenderWorldChanges {
+  readonly fromEpoch: number;
+  readonly toEpoch: number;
+  readonly changedComponentIds: readonly number[];
 }
-
-export type RenderChangeBatch = RenderChangeBatchOk | RenderChangeBatchOverflow;
 
 export interface RenderReadLease {
   readonly worldIdentity: string;
   readonly generation: number;
-  readChanges(cursor: number): RenderChangeBatch;
+  readChanges(version: RenderReadVersion): RenderChangeBatch;
   querySpans(request: RenderProjectionRequest): RenderProjectionSpans;
-  inspectCursor(): number;
+  captureVersion(): RenderReadVersion;
   dispose(): void;
 }
 
@@ -124,9 +79,29 @@ export function readRenderArrayView(
     | undefined;
 }
 
-interface ProjectionCursor {
-  readonly world: number;
-  readonly sharedRefs: number;
+/**
+ * Element ranges of one array field written through `World.setArrayRange`
+ * after mutation epoch `since`. `[]` means unchanged; `'whole'` means another
+ * write (or an evicted history) makes the whole array suspect.
+ */
+export function readArrayRangesChangedSince(
+  world: World,
+  entity: EntityHandle,
+  component: Component,
+  fieldName: string,
+  since: number,
+): ArrayRangesChange {
+  return world[worldInternal].getArrayRangesChangedSince(entity, component, fieldName, since);
+}
+
+/** Current World mutation epoch; the `since` baseline for range queries. */
+export function readMutationEpoch(world: World): number {
+  return world[worldInternal].getMutationEpoch();
+}
+
+export interface RenderReadVersion {
+  readonly mutationEpoch: number;
+  readonly structureEpoch: number;
 }
 
 function readProjectionSpans(
@@ -158,7 +133,6 @@ function readProjectionSpans(
   }
   return {
     generation,
-    sharedRefEpoch: world[worldInternal].getSharedRefs().getMutationEpoch(),
     spans: Object.freeze(spans),
   };
 }
@@ -166,81 +140,65 @@ function readProjectionSpans(
 /** Create the render-owned lease from the ECS projection boundary. */
 export function createRenderReadLease(world: World, token: object = {}): RenderReadLease {
   void token;
-  const sharedRefs = world[worldInternal].getSharedRefs();
-  const generation = Math.max(1, world[worldInternal].getStructureEpoch());
   let disposed = false;
-  let nextCursor = 1;
-  const cursors = new Map<number, ProjectionCursor>([
-    [
-      0,
-      { world: world[worldInternal].getChangeCursor(), sharedRefs: sharedRefs.getMutationEpoch() },
-    ],
-  ]);
 
   const assertLive = (): void => {
     if (disposed) throw new Error('RenderReadLease is disposed.');
   };
 
-  const captureCursor = (): number => {
-    const cursor = nextCursor++;
-    cursors.set(cursor, {
-      world: world[worldInternal].getChangeCursor(),
-      sharedRefs: sharedRefs.getMutationEpoch(),
-    });
-    if (cursors.size > 8) {
-      const oldest = cursors.keys().next().value;
-      if (typeof oldest === 'number' && oldest !== cursor) cursors.delete(oldest);
-    }
-    return cursor;
+  const captureVersion = (): RenderReadVersion => {
+    return {
+      mutationEpoch: world[worldInternal].getMutationEpoch(),
+      structureEpoch: world[worldInternal].getStructureEpoch(),
+    };
   };
 
   return {
     worldIdentity: world.identity,
-    generation,
-    inspectCursor(): number {
-      assertLive();
-      return captureCursor();
+    get generation(): number {
+      return Math.max(1, world[worldInternal].getStructureEpoch());
     },
-    readChanges(cursor: number): RenderChangeBatch {
+    captureVersion(): RenderReadVersion {
       assertLive();
-      const start = cursors.get(cursor);
-      if (start === undefined) throw new RangeError(`Unknown RenderReadLease cursor ${cursor}.`);
-      const worldRead = world[worldInternal].readChangesSince(start.world) as WorldChangeRead;
-      const sharedRead = sharedRefs.readChangesSince(start.sharedRefs);
-      const next = captureCursor();
-      if (worldRead.status === 'overflow' || sharedRead.status === 'overflow') {
-        const oldestAvailable = Math.min(
-          worldRead.status === 'overflow' ? worldRead.oldestAvailable : Number.MAX_SAFE_INTEGER,
-          sharedRead.status === 'overflow' ? sharedRead.oldestAvailable : Number.MAX_SAFE_INTEGER,
-        );
-        return {
-          status: 'overflow',
-          cursor: next,
-          resync: true,
-          oldestAvailable,
-          world: worldRead,
-          sharedRefs: sharedRead,
-        };
+      return captureVersion();
+    },
+    readChanges(start: RenderReadVersion): RenderChangeBatch {
+      assertLive();
+      const toEpoch = world[worldInternal].getMutationEpoch() as number;
+      const componentEpochs = world[
+        worldInternal
+      ].getComponentMutationEpochs() as readonly number[];
+      const changedComponentIds: number[] = [];
+      for (let componentId = 0; componentId < componentEpochs.length; componentId += 1) {
+        const epoch = componentEpochs[componentId] ?? 0;
+        if (epoch > start.mutationEpoch && epoch <= toEpoch) changedComponentIds.push(componentId);
       }
-      return { status: 'ok', cursor: next, world: worldRead, sharedRefs: sharedRead };
+      const worldRead: RenderWorldChanges = {
+        fromEpoch: start.mutationEpoch,
+        toEpoch,
+        changedComponentIds,
+      };
+      const version = captureVersion();
+      return { version, world: worldRead };
     },
     querySpans(request: RenderProjectionRequest): RenderProjectionSpans {
       assertLive();
-      return readProjectionSpans(world, generation, request);
+      return readProjectionSpans(
+        world,
+        Math.max(1, world[worldInternal].getStructureEpoch()),
+        request,
+      );
     },
     dispose(): void {
       disposed = true;
-      cursors.clear();
     },
   };
 }
 
 /**
- * Publish one owner-derived component value without confusing it with an
- * authored mutation. Owner packages use this narrow seam for fields such as
- * `Transform.world`: the write still passes through ECS validation and managed
- * storage, while the journal records a `derived-component-changed` fact for
- * incremental projections.
+ * Publish one owner-derived component value through the component's ordinary
+ * version. Numeric consumers observe the same row epoch regardless of which
+ * owner computed the value; there is no parallel derived-change vocabulary.
  */
 export function setDerivedComponent(
   world: World,
@@ -250,7 +208,7 @@ export function setDerivedComponent(
 ): Result<void, EcsError> {
   const result = world[worldInternal].setQueryRow(entity, component, value);
   if (!result.ok) return result;
-  world[worldInternal].markDerivedComponentChanges(componentId(component), [entity]);
+  world[worldInternal].markComponentChanged(entity, componentId(component));
   return result;
 }
 
@@ -263,56 +221,9 @@ export function routeWorldError(
   world[worldInternal].routeError(error, context);
 }
 
-/**
- * Create the narrow incremental evidence surface for an owner projection.
- * Rebuilds intentionally return a reason; complete data always comes from
- * the owner's regular Query/QuerySpan path.
- */
-export function createWorldProjection(
-  world: World,
-  options: WorldProjectionOptions = {},
-): WorldProjection {
-  const componentById =
-    options.components === undefined
-      ? undefined
-      : new Map(options.components.map((component) => [componentId(component), component]));
-  const componentIds = componentById === undefined ? undefined : new Set(componentById.keys());
-  let cursor = world[worldInternal].getChangeCursor();
-
-  const pollSince = (requestedCursor: number): ProjectionRead => {
-    const result = world[worldInternal].readChangesSince(requestedCursor);
-    if (result.status === 'overflow') {
-      cursor = result.cursor;
-      return { status: 'rebuild', cursor, reason: 'journal-overflow' };
-    }
-    cursor = result.cursor;
-    const changes: ProjectionChange[] = [];
-    for (const record of result.records) {
-      if (
-        componentIds !== undefined &&
-        record.kind !== 'entity-removed' &&
-        (record.componentId === undefined || !componentIds.has(record.componentId))
-      ) {
-        continue;
-      }
-      const component =
-        record.componentId === undefined ? undefined : componentById?.get(record.componentId);
-      changes.push({
-        entity: record.entity,
-        kind: record.kind,
-        ...(component === undefined ? {} : { component }),
-        ...(record.componentId === undefined ? {} : { componentId: record.componentId }),
-      });
-    }
-    return { status: 'delta', cursor, changes };
-  };
-
-  return {
-    get cursor(): number {
-      return cursor;
-    },
-    poll(): ProjectionRead {
-      return pollSince(cursor);
-    },
-  };
-}
+export {
+  createStateProjection,
+  type StateProjection,
+  type StateProjectionBatch,
+  StateProjectionExpiredError,
+} from './state-projection';

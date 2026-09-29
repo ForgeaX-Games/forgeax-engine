@@ -75,6 +75,37 @@ describe('DDC generation session integration', () => {
     }
   });
 
+  it('rejects a conflicting immutable entry before advancing the lifecycle head', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-session-'));
+    roots.push(root);
+    const store = new DdcEntryStore(root);
+    await store.write(entry());
+    const lifecycle = new DdcLifecycle(root);
+    const accepted = await lifecycle.begin(GUID, KEY);
+    await lifecycle.commit(accepted, KEY);
+    const session = new DdcGenerationSession(root, { generation: 1 });
+    const candidate = await session.stageEntry({
+      ...entry(),
+      payload: { kind: 'fixture', key: 'conflicting' },
+      receipt: {
+        ...entry().receipt,
+        outputDigest: ddcOutputDigest({
+          ...entry(),
+          payload: { kind: 'fixture', key: 'conflicting' },
+        }),
+      },
+    });
+
+    await expect(session.commitEntry(candidate, KEY)).rejects.toMatchObject({
+      code: 'ddc-entry-conflict',
+    });
+    await expect(session.inspect(GUID, KEY)).resolves.toMatchObject({
+      state: 'failed',
+      currentKey: KEY,
+    });
+    await session.close();
+  });
+
   it('does not let a stale rollback restore over a newer active lease', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-session-'));
     roots.push(root);

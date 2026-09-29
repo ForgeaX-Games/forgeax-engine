@@ -59,10 +59,8 @@ import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shade
 import type {
   AssetError,
   ImageError,
-  LocalEntityId,
   Result,
   SceneAsset,
-  SceneEntity,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -133,7 +131,15 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
     kind: 'mesh',
     vertices,
     indices: mesh.indices,
-    attributes: { position: mesh.positions },
+    // The interleaved buffer uses the canonical 12-float layout, so the
+    // attribute map must carry the same position/normal/uv/tangent presence
+    // that the geometry layout SSOT projects to a 48-byte stride.
+    attributes: {
+      position: mesh.positions,
+      normal: mesh.normals ?? new Float32Array(vertexCount * 3).fill(0),
+      uv: mesh.texcoord0 ?? new Float32Array(vertexCount * 2).fill(0),
+      tangent: mesh.tangents ?? new Float32Array(vertexCount * 4).fill(0),
+    },
     submeshes: [
       {
         indexOffset: 0,
@@ -161,7 +167,7 @@ function gltfDocToSceneAsset(
 ): SceneAsset {
   const sceneIr: GltfSceneIr | undefined = doc.scenes[doc.defaultSceneIndex];
   if (sceneIr === undefined) throw new Error('GltfDoc.scenes[default] missing');
-  const nodes: SceneEntity[] = [];
+  const entities: Record<string, { components: Record<string, Record<string, unknown>> }> = {};
   for (const rootIdx of sceneIr.nodes) {
     const ir: GltfNodeIr | undefined = doc.nodes[rootIdx];
     if (ir === undefined) continue;
@@ -173,18 +179,20 @@ function gltfDocToSceneAsset(
       components.MeshFilter = { assetHandle: 1 };
       components.MeshRenderer = { materials: [matHandle] };
     }
-    nodes.push({ localId: nodes.length as LocalEntityId, components });
+    entities[`node-${Object.keys(entities).length}`] = { components };
   }
   // BoxTextured fork: gltf nodes[1] is the perspective camera. The IR
   // does not currently expose camera reference; mirror the same byte
   // ordering main.ts uses so the spine matches.
   const camNode: GltfNodeIr | undefined = doc.nodes[1];
   if (camNode !== undefined) {
-    nodes.push({
-      localId: nodes.length as LocalEntityId,
+    entities[`node-${Object.keys(entities).length}`] = {
       components: {
         Transform: {
-          pos: [camNode.transform.translation[0], camNode.transform.translation[1], camNode.transform.translation[2]], quat: [camNode.transform.rotation[0], camNode.transform.rotation[1], camNode.transform.rotation[2], camNode.transform.rotation[3]], scale: [camNode.transform.scale[0], camNode.transform.scale[1], camNode.transform.scale[2]],},
+          pos: [camNode.transform.translation[0], camNode.transform.translation[1], camNode.transform.translation[2]],
+          quat: [camNode.transform.rotation[0], camNode.transform.rotation[1], camNode.transform.rotation[2], camNode.transform.rotation[3]],
+          scale: [camNode.transform.scale[0], camNode.transform.scale[1], camNode.transform.scale[2]],
+        },
         Camera: {
           fov: 0.7853981633974483,
           aspect: 1.7777777777777777,
@@ -192,9 +200,9 @@ function gltfDocToSceneAsset(
           far: 100,
         },
       },
-    });
+    };
   }
-  return { kind: 'scene', entities: nodes };
+  return { kind: 'scene', entities };
 }
 
 function registerSceneVocabulary(world: World): void {

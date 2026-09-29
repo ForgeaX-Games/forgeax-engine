@@ -102,7 +102,7 @@ const TIMESTAMP_QUERY: &[RequiredFeature] = &[
 
 const METAL_EXAMPLE_ISSUE: KnownIssue = KnownIssue {
     url: "https://github.com/gfx-rs/wgpu/issues/9100",
-    affected_version: "30.0.0",
+    affected_version: "30.0.1",
     removal_condition: "remove after the pinned wgpu version passes all Ray Tracing examples across supported Metal hardware",
 };
 

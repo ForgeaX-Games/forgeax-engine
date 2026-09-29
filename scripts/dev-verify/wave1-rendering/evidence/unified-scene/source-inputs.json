@@ -1,0 +1,785 @@
+{
+  "checkedOutHead": "cfa85c611c1dfa7619febc3f1089d7051e21523a",
+  "mergeParent": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+  "preCommit": true,
+  "changedNonMarkdownFilesSha256": "2502c212fbd7007945edcd1a5371963b0df90d0327e87464a7ba1d8ae0ca1f14",
+  "files": [
+    {
+      "path": "apps/hello/format-tier1/scripts/smoke-dawn.mjs",
+      "sha256": "8ba5948f2c30c266432968f55717de9b36b429ddf067db963985e064aa7d4e6d"
+    },
+    {
+      "path": "apps/hello/gltf/src/__tests__/load-by-guid.browser.test.ts",
+      "sha256": "b4a81dfd671c2db4b191b90f3b92e979dcfaaebd3d30de838a530e84d17e95bc"
+    },
+    {
+      "path": "apps/hello/ssr/scripts/inspect-taa-tape.mjs",
+      "sha256": "1b6f7f106daf8ac03f1938a28e137f3e8385a4b8ecc1e7d02e7f5a04e4ec1c81"
+    },
+    {
+      "path": "apps/learn-render/1.getting-started/6.coordinate-systems/scripts/smoke-dawn.mjs",
+      "sha256": "31226ce0f5192824dc022e52d94c724f4aeec75520731164851f24fe59ec88d7"
+    },
+    {
+      "path": "apps/learn-render/4.advanced-opengl/10.anti-aliasing-msaa/scripts/smoke-dawn.mjs",
+      "sha256": "74b9ade0dbc38e7357f89df0a59f9f4e32e68060c6ee1f5f64b9c31e47fe9bfb"
+    },
+    {
+      "path": "apps/learn-render/6.pbr/4.transmission-refraction/scripts/smoke-dawn.mjs",
+      "sha256": "7c625b54a2d132c4c7aa7a85a116b01c2d010428ca1dd65ccab129bc1fa6b61c"
+    },
+    {
+      "path": "apps/shadertoy/happy-blob/scripts/smoke-dawn.mjs",
+      "sha256": "0fe3b665efafe8a50c6bd52b52027dfe39c06ce2d871d87e0b40e09a0899044f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/fixed-wave1-shadow-diagnostic.capture.json.gz",
+      "sha256": "6cecc1033cce785b9f4bbf8f861e4b0e2fd7a97d15acad8c4a7951f511929476"
+    },
+    {
+      "path": "artifacts/wave1-rendering/fixed-wave1-shadow-diagnostic.rhitape.gz",
+      "sha256": "d9458f7002bde3fc86c2f3abe17b5055ca33f44bb4fe5a065c6ccb86f7ca27e6"
+    },
+    {
+      "path": "artifacts/wave1-rendering/ibl-baseline-974757dc/build-identity.json",
+      "sha256": "d0344fb12510beb38a8efd67a248223ff03a2181ef065a9f0f60e738c18f1c19"
+    },
+    {
+      "path": "artifacts/wave1-rendering/ibl-baseline-974757dc/summary.json",
+      "sha256": "be0e3a61b6c02d920364a6ef8a1300ccbd1cbd6704de2cc0216c7369fa94714a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/none-baseline-a.json.gz",
+      "sha256": "acccae26747d30444c7547a885403128d0677141834c29392ebbba5b9a3f6fb8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/performance-summary.json",
+      "sha256": "4ef414ea1b34e8cf69adcefccde73bf4df0d9017651e3cbd98d2a37a173f2ec6"
+    },
+    {
+      "path": "artifacts/wave1-rendering/raw-verification-evidence.json",
+      "sha256": "9e222159fcf5ae47eb6793cc46fd6b51720fb9bc3f4af267e1990de585332d0c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/raw-verification-evidence.tar.gz",
+      "sha256": "2ff35606394214758908ca35e66923f0a9ed291ace00b32aa7d9b03ddfc18c87"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-canonical-box.png",
+      "sha256": "efe382b90604cf0e7ea71dc768c51a85c779ea1db4e7b00551d81174da041fbd"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-cast-shadow-off.png",
+      "sha256": "de502642e994f484780827a1f1cf61935236de6258381d2b74555ef0f6a4f1b6"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-diagnostic.capture.json.gz",
+      "sha256": "70c7c146ad818b3c3da84da8db0252f2f91fa1434f69c26340de7ea846d689c8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-diagnostic.rhitape.gz",
+      "sha256": "66112e196222f7a552efbf94db52e0e14145de08e8547c3f1e058aa442e2a727"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-full.png",
+      "sha256": "19200dc0cd4664b0f2463bab8c42bff5ba6fe3d0a01ab4ed6f23a6358cfcd27c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/red-wave1-shadow-wall-floor-only.png",
+      "sha256": "c59ce7c22f14b6d4764a704582009f99e88fafc3cb877c8dd29f965abb77951a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-base-974757dc-null.json",
+      "sha256": "f877c0dd468bf96698b7512ba07c976e02b12b39e37c8afde63f4d365a0cabb6"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-base-974757dc-r1.json",
+      "sha256": "9431600ad60154ac49871a8559b30af66d69fd2bb570ed821ab74dd3e0be5b2c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-base-974757dc-r2.json",
+      "sha256": "e62c948c9f0673e93d9daa4a3133c07540e04488d2b39890de989b75e7920c4a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-base-974757dc-r3.json",
+      "sha256": "636b89def251ce19d0b5751cb8701368112c8d21bc33eba7cbb5fa8bcdcaa80f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-base-974757dc-r4.json",
+      "sha256": "ada49b3df3a6451d38c2efb6c2fe5df25c49c7738759f48e3b721a7a66c20e72"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-current-974757dc-null.json",
+      "sha256": "495f4fc6d455580190aba47b0a7bd6e2e0df65db5bc3873ef191ddefd278df14"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-current-974757dc-r1.json",
+      "sha256": "88ae7c151fdc92b3364029540906594381a89187b83cf2ddc0c1cc4df38dbb56"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-current-974757dc-r2.json",
+      "sha256": "06c4c9c8b1eb5a31c6123427971afd738db3a06cd4c812493f8b0673e272d864"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-current-974757dc-r3.json",
+      "sha256": "5e8d49ece4737596010d3a190b9d6c2fd4b62fa83c1c6ab212092bb4fb6de4e2"
+    },
+    {
+      "path": "artifacts/wave1-rendering/scene-benchmark-current-974757dc-r4.json",
+      "sha256": "fd96dd2bc03345e3469f9899510a9f9928e2cde6e04af03c777f1072d03c3756"
+    },
+    {
+      "path": "artifacts/wave1-rendering/shadow-layout-comparison.json",
+      "sha256": "92343312eeb322281f863e896dc2e651ed1bd1547163529e5525fea469358997"
+    },
+    {
+      "path": "artifacts/wave1-rendering/smoke-execution-overview.json",
+      "sha256": "5bb4d68278e3394d776ae57475c3cbdeadf29cd83ae7a425e7f39617a1152d7f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-baseline-a.json.gz",
+      "sha256": "231a44244ec7855d220646bdce2d93face3563db8fdb108b60e87ac708b552b8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-baseline-b.json.gz",
+      "sha256": "546a891c833bdcd7394c490f2ae32730f7b60aa89a47c631a7f9eacfdd15fe1d"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-baseline.wgsl",
+      "sha256": "4a7a7c7def9cb860da2a92ad960aa6be1d41d6c6551e0e77093cd5d2cc99ea9d"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-candidate-a.json.gz",
+      "sha256": "36952a7dbbff3ccb7db55cb832963fc339b489e6dad74e17c6d70dfd1f0c1ecd"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-candidate-b.json.gz",
+      "sha256": "2fe0a916fba0f0fd1fc4e55be15f0376e63715ee2359603c6fb0b13bd19b7f4b"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-candidate.wgsl",
+      "sha256": "7e77af35c20e3fe7e6a4d63dbbfee0c17d312c1752f53f83ffbb6b884d8878c9"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-final-a.json.gz",
+      "sha256": "dfb742729cb7e5ad02addde529a07d82cb06e0d9698a0fcb4bf58e1d97d85c7c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-final-b.json.gz",
+      "sha256": "ecc0697793d805af754d2d167fac1bb4ffa7a7b39c7b951549b23e7a3a347a8e"
+    },
+    {
+      "path": "artifacts/wave1-rendering/taa-source-identities.json",
+      "sha256": "b768570b404c64934399e851297f79ff641fa5d9f712a80bfaff7292d2aea5f2"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/log-identities.json",
+      "sha256": "468d80e1e58e48735e453bdf018cdced0291c4fb6daaf53cc0f0ed85daf7077c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/sdk-build-result.json",
+      "sha256": "b05598b2e4cd8ccbaf1e4ed8d1ab81c610269c00448c9d8dcffb2dcf9e80a824"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/sdk-verify-result.json",
+      "sha256": "b80ba2650968ef17b5fe5413ef3602b2a692fd77520b3d56139a0a81e0ff4163"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-coordinate-diagnostic.log.gz",
+      "sha256": "573d0c904410651db4d442c1485ca68dee881c7e6ac3d7cd97a209127bb1cd7b"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-coordinate-fixed.log.gz",
+      "sha256": "323fbe00d8ede72488dd334dbceb0ab51fea7ad7fe8feec966127426bc561aae"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-coordinate-inspection.log.gz",
+      "sha256": "92dcfb5a78651326cf1aaa2d96f4300e31c1c92568bafdbb6001d4eb2e2547e7"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-coordinate-internal-stack2.log.gz",
+      "sha256": "329274a1be64429cd887c70d6e81cdbf595543895da15d2d35d854685db9dee0"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-delivery-helper-lint.log.gz",
+      "sha256": "284d5d5965c3f13167c2a5d5c7eb1e1f7774cc74cc46b917684dbc5f7546b689"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-final-code-lines.log.gz",
+      "sha256": "f2d784fdeeba2a67da4fe6b542502bcfcec2ccc5661fb65335425542c823d87f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-final-owner-types.log.gz",
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-final-test-types.log.gz",
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-final-verification-lint.log.gz",
+      "sha256": "cef9114026121f5dccff5b06a0bbc3443026102da2c243b6d232773533d3c636"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-final-build.log.gz",
+      "sha256": "029407efe5e2759ba1f115eda00277f37cec99d7b3caca98b6d8f8870409b007"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-focused-dawn.log.gz",
+      "sha256": "cb3c53dedf16f0bc13611b3361726e8e170c71e188bda32d84b8e10c97bc1d8f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-gpu-driven-dawn.log.gz",
+      "sha256": "e042915c0e11e0d69a1b5aa4f59cd54b01f458e6dffc7da59b8ebde4d1a31476"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-owner-unit.log.gz",
+      "sha256": "2c4b2049733545cb12f1fa0e10825549d1e4ab36e2f418e4a8c1e5a4707b3947"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-p0-browser.log.gz",
+      "sha256": "6b3c4ce2fafdf35648c779b152de83e8b0ab0117716c56b81cd4fd63197169ed"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-commit-types.log.gz",
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-fixed-sdk-p0-browser.log.gz",
+      "sha256": "9d59a7093c99069bc122576a6500ab9225d2b63be9bb16e339ff7856ee6d17c0"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-render-unit-final-owner.log.gz",
+      "sha256": "ecb8d677a185537f7d31b4ca67d21426b47c1c4ab685d0451b2961b0527ee33a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-runtime-unit-complete.log.gz",
+      "sha256": "9036292230463d3e136c9e7bdd9fa575f536f4788cd52cf8edea32fc08f16e94"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-sdk-build.log.gz",
+      "sha256": "08fa73c067827f3d64c613fc4d3b37c5afef25c99df7607c08f18c53d59026c3"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-sdk-verify.log.gz",
+      "sha256": "57e5f71b3742d51cc6e6ef49ed675342357c4c0dc1c6af3e507b785b1e2cb15f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-smoke-owner-lint.log.gz",
+      "sha256": "a99f4eb161d6093e374d580d0cc37d2bf1e6719cbcd048937a779a5105c95dda"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-test-browser-final-owner.log.gz",
+      "sha256": "51410355d847e476b503fcd5bbee96a4cb97692acb1c31f9d8d8ab7445f6a612"
+    },
+    {
+      "path": "artifacts/wave1-rendering/validation/wave1-test-dawn-final.log.gz",
+      "sha256": "9d4ef2679ace8fa61e67090f9a008674e5594ef0a04e171eee4b91b1f660a210"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-air-atmosphere-off.png",
+      "sha256": "e6e2a1feb451f78a5b41ea182189c7cc63f5460e76b9b0187571ab013ed5efcb"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-air-atmosphere-only.png",
+      "sha256": "a325c4c1edb5374ba1b77c05e1fa95bde0222e983aeaea94f629fdd49b93d612"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-air-both-on.png",
+      "sha256": "58767ce2d6e5b800ca4841c68b41581bb1bcc58c5f63527b9ba44019ea139d25"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-air-volume-off.png",
+      "sha256": "7453a40e19754f4529a80be3f39aa1c3d665351a1d1c4a9b5133288716af4325"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-box-no-color.png",
+      "sha256": "e3e53fdfac70954a26a8f336e809b90bd5b9e18b96ffdf4d1d63e07aea2595ec"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-box-white-color.png",
+      "sha256": "e3e53fdfac70954a26a8f336e809b90bd5b9e18b96ffdf4d1d63e07aea2595ec"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-emissive-high.png",
+      "sha256": "f605f4b4c3ed03e9199e7c2bf293c49a671c58836955b5e749d82eee3ecf4143"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-emissive-low.png",
+      "sha256": "5f38acc230a8b75a6a4acc8f14d15483b8c5030146e9cd5a327b524b97729c06"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-emissive-pattern-rotated.png",
+      "sha256": "2632e7db5b9288b214fc3bdca65e433467b182f2237cda03c5d9938b3f56b722"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-materials-emissive-pattern.png",
+      "sha256": "1019f240e9f3dd1a15a17b2e8361b7b5f562e145dd5cc0f24c17e40c3164736f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-aperture.png",
+      "sha256": "c37efc8ec4219b73b279a144b2c0e1f5d3db36a644db7c575c69ab104b754dcc"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-atmosphere-off.png",
+      "sha256": "7453a40e19754f4529a80be3f39aa1c3d665351a1d1c4a9b5133288716af4325"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-atmosphere-on.png",
+      "sha256": "a325c4c1edb5374ba1b77c05e1fa95bde0222e983aeaea94f629fdd49b93d612"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-final-taa.png",
+      "sha256": "a1adfdaff948d0856dcea6c70833412dcbb1d624536b094614e170bdf982a008"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-successors.png",
+      "sha256": "73fb47cb35c87ffa05f80d4da8993db9bb5f397342c42d2e1ed631f806b9ce48"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-sun-occluded.png",
+      "sha256": "af70c937be1ba3b7a23d3248529871b01e837593b46616a76727ab8d599b5d4c"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-p0-sun-visible.png",
+      "sha256": "aa74a584d603ce3614390232495b17492bde2f048f870ac423e44b115210eda9"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-baseline.png",
+      "sha256": "eab81203d189465c1cf46200a1ba78a3a9752d3552ac7add4ebab02b728bbba8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-after-unload.png",
+      "sha256": "0f49570051513e08b638845b8122650045fe04582c5b364a07e90935a1d3191a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-atmosphere-off.png",
+      "sha256": "15cc426540a5f4c12b79fde631bc3c78de243fbef9a4f0a5a5775c1c661c0e11"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-atmosphere-on.png",
+      "sha256": "322e0d97d8fdf059d7f8ba8280e3252e3a72e20d21fa736ba969b3ba2de7bb33"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-dynamic-closed.png",
+      "sha256": "eab81203d189465c1cf46200a1ba78a3a9752d3552ac7add4ebab02b728bbba8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-recovered-first.png",
+      "sha256": "322e0d97d8fdf059d7f8ba8280e3252e3a72e20d21fa736ba969b3ba2de7bb33"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-1-recovered-steady.png",
+      "sha256": "45ed0e938c85a9373a46e742deaa67b6d5990a8820838036a53bdee282436f57"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-after-unload.png",
+      "sha256": "0f49570051513e08b638845b8122650045fe04582c5b364a07e90935a1d3191a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-atmosphere-off.png",
+      "sha256": "15cc426540a5f4c12b79fde631bc3c78de243fbef9a4f0a5a5775c1c661c0e11"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-atmosphere-on.png",
+      "sha256": "322e0d97d8fdf059d7f8ba8280e3252e3a72e20d21fa736ba969b3ba2de7bb33"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-dynamic-closed.png",
+      "sha256": "eab81203d189465c1cf46200a1ba78a3a9752d3552ac7add4ebab02b728bbba8"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-recovered-first.png",
+      "sha256": "322e0d97d8fdf059d7f8ba8280e3252e3a72e20d21fa736ba969b3ba2de7bb33"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-cycle-2-recovered-steady.png",
+      "sha256": "45ed0e938c85a9373a46e742deaa67b6d5990a8820838036a53bdee282436f57"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-recovery-initial-aperture.png",
+      "sha256": "ef00268b8f1508b1768fb299dfe193ab88194b2f2c9d63c583f815511b0f01d3"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-shadow-canonical-box.png",
+      "sha256": "a9a19fa2c5ad91ae97b687413a2eacfb16c36838b8199fed8ae1207cc484c331"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-shadow-cast-shadow-off.png",
+      "sha256": "ca2ffe48c40a6fea2c9595b05ec1b0f40421dc4384a81ed4ece02be95edbb529"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-shadow-full.png",
+      "sha256": "54b74f9bfe8801fd836080b4c4c65e406403876987273e44b0236601f97c4b32"
+    },
+    {
+      "path": "artifacts/wave1-rendering/wave1-shadow-wall-floor-only.png",
+      "sha256": "d50e347aa729f1b8117b2fa4efc07343828f094275c67a396e5c5d99a7ba1d7f"
+    },
+    {
+      "path": "packages/assets-runtime/src/__tests__/asset-registry.unit.test.ts",
+      "sha256": "fa797ab8235707937420dc9aaedb1cadff6b725e639bc6b9a9dc9b1943302f16"
+    },
+    {
+      "path": "packages/assets-runtime/src/__tests__/payload-validate.unit.test.ts",
+      "sha256": "67a56ccd4049c640c95928e373fc9798cb04fc979a468a3fdba63d1be73838bc"
+    },
+    {
+      "path": "packages/assets-runtime/src/payload-validate.ts",
+      "sha256": "3157964a8db2088ede9695a560d8b0090db383a165486df83ef7be332034c3de"
+    },
+    {
+      "path": "packages/geometry/src/__tests__/vertex-attribute-layout-owner.unit.test.ts",
+      "sha256": "98a64de8abadab402aacf39ff85edbc73f7775404dddd54dc9516cd6cb100c6d"
+    },
+    {
+      "path": "packages/geometry/src/index.ts",
+      "sha256": "db355afb7e78b198838dc8cf191f57c0054c2f18efbd9d023a19eb0fa4fdc69c"
+    },
+    {
+      "path": "packages/geometry/src/vertex-attribute-layout.ts",
+      "sha256": "ca909ba6e3b72fd7881cd1e2a6cf593f9e3f9f4c67a9f40f019260719ecbeff0"
+    },
+    {
+      "path": "packages/render/src/__tests__/fixtures/taa-resolve-pinned-baseline.wgsl",
+      "sha256": "07b8e911f4db2fbe49dc7bae8eb055bbf41f20bfd01df7c937a015b28db47f05"
+    },
+    {
+      "path": "packages/render/src/__tests__/frame-camera-selection.unit.test.ts",
+      "sha256": "83247a1612a406329b2e480112d4deb89ebedfe6f7679b12597e411e4a8b99fb"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-batch-topology-pbr.unit.test.ts",
+      "sha256": "4047c9cf5792fd4debfde3161b41867dd387b9c2b804a8ae9973d4e091f0fc2e"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-indirect-raster-evidence.ts",
+      "sha256": "9f3094f68dfea971b47abbac89922bededca4ddb451bec4056102ef67f3ef22f"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-lod-cache.unit.test.ts",
+      "sha256": "6668c618a3f5cb33f2613102e6f0d7ec2f6d263b3753d07ce4742600756f5b24"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-mesh-world-identity.unit.test.ts",
+      "sha256": "d3bc51b3930174cafaf7156caeba52b24ecebaa5bddd23721d4a7dddc84ec857"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-pbr.dawn.test.ts",
+      "sha256": "314398112e5703d09d0a718a216447491ebf34a88ac15202414de55d927ae2cd"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-production-fixture.ts",
+      "sha256": "9a641ffac2ed025de70f5b9b5cff10ece4db7411c1ef3f1e370f950875e6e098"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-production.integration.test.ts",
+      "sha256": "edd3805ff454207a8e80e9e1ebb220bc101a2914be5cceaeb84e85d749282634"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-scaling.unit.test.ts",
+      "sha256": "88c1e6850d506e5c88d3658a71b6205565c3d4baf856e74fd8d995dead83cd9b"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-shadow-views.dawn.test.ts",
+      "sha256": "bfeb4074e9afa582bd8308e74807e62d49d2d9572f94ca91e824dba7c81f36af"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-shadow-views.unit.test.ts",
+      "sha256": "a8ac2e345f65af64d13ad657a85762bacab6d43ba84dcb9ef6f68503d57cc489"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-view-gpu-evidence.ts",
+      "sha256": "63f96ec149fca5675e2d8f596a56e22f01c4491936ce559d88ed7136d38bc9cf"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-view-graph.integration.test.ts",
+      "sha256": "591d3609401ca3e43c41b92cad47bb5e1ec29637918ec836b2e9ff6847ea3a48"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-driven-view.unit.test.ts",
+      "sha256": "e922b84b295cd621c5a0166015fcd12c98d43a1b96afe10c6aa288a5bac5e5b2"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-resource-store-stride.unit.test.ts",
+      "sha256": "0887ce1c9e4f1b6870eacc031824a24db0f9a54934554b646b42d4c74f1963cd"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-scene-render-graph-gpu.ts",
+      "sha256": "f9ee6389d34eb33cfff89b2ac96005fa134846c2505c0ff83badee2d43623307"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-scene.dawn.test.ts",
+      "sha256": "c95f8d419073f597e1dd4063303e7464fdba9f92b1e83d3213f3088610bfacd0"
+    },
+    {
+      "path": "packages/render/src/__tests__/gpu-scene.unit.test.ts",
+      "sha256": "92627c44a81ec86ca3b5ad77c8e5ff9d8cdab6f6e514858bc6bfbb2a95240d24"
+    },
+    {
+      "path": "packages/render/src/__tests__/recovery-candidate-prepare.contract.test.ts",
+      "sha256": "b9db259549fc4c3c96da76d26a760c87af8a804c032ab34a1bc4815df8aa3636"
+    },
+    {
+      "path": "packages/render/src/__tests__/render-scene-mixed-updates.integration.test.ts",
+      "sha256": "a5e88e096728229450a6bd19b23cd9b034d9e6a8de031aa7025a038bac3ad0f1"
+    },
+    {
+      "path": "packages/render/src/__tests__/render-scene-projection.unit.test.ts",
+      "sha256": "9675183c95e7921bf852f6e252d9b190ea730543a1bd59b79beb82fcc63a8ef7"
+    },
+    {
+      "path": "packages/render/src/__tests__/render-scene-resource-updates.integration.test.ts",
+      "sha256": "ea08438890313c606bb2c782f0d3979599cea967365e99c64a168993aeda1bb0"
+    },
+    {
+      "path": "packages/render/src/__tests__/render-scene-skin-lifecycle.integration.test.ts",
+      "sha256": "6f0dcc45b85e62fc6a30d74f615c88ddea8b9668cd70f83d1336617fd7f8e637"
+    },
+    {
+      "path": "packages/render/src/__tests__/render-scene-temporal-retry.unit.test.ts",
+      "sha256": "fa79275960b169cdcea7dcc8e89b8449afbe61c0f85e758edb39fd17f71d31ef"
+    },
+    {
+      "path": "packages/render/src/__tests__/skinned-shadow-caster.test.ts",
+      "sha256": "fbf75561c079bf43b4537be6ddae66847c5a80ac48d790bcd50899cc97d3b631"
+    },
+    {
+      "path": "packages/render/src/__tests__/standard-cluster-variant-resolution.unit.test.ts",
+      "sha256": "573ffe713eefcc5895d54b74fcba484b4a76dcac463ca9bc849d44ffca0eebf4"
+    },
+    {
+      "path": "packages/render/src/__tests__/taa-history-clipping.dawn.test.ts",
+      "sha256": "d2cf6a32862c33f4c7cfbb8248e9ca90b38cde166806f6d18ce44247e6af478d"
+    },
+    {
+      "path": "packages/render/src/__tests__/taa-neighborhood-equivalence.dawn.test.ts",
+      "sha256": "9fc5b9126e06e75e0ebdeb003b44561a8887caf8d17dbeae5c6d9047612d6d50"
+    },
+    {
+      "path": "packages/render/src/__tests__/vertex-layouts-ssot.unit.test.ts",
+      "sha256": "0c00b0333d4db3a108a4ae9edd7d2453d81843d04e42eaaa576c3047a43ef8a4"
+    },
+    {
+      "path": "packages/render/src/__tests__/visibility-extract.perf.test.ts",
+      "sha256": "2a05296121aa6ab1ca5e466ed0a2cd15d494729a9f4fcb8096994e2eaaddbfc8"
+    },
+    {
+      "path": "packages/render/src/assembly/atmosphere-shader-prewarm.ts",
+      "sha256": "99467fc04742eb6c360782b6fe31b0e4961730274fcd037473112e036960c63c"
+    },
+    {
+      "path": "packages/render/src/assembly/recovery/renderer-recover.ts",
+      "sha256": "45778bb4be2a9e66de11c853e801a011d9ef9a7d1c66d617e0064d155d7105e9"
+    },
+    {
+      "path": "packages/render/src/assembly/webgpu-ready.ts",
+      "sha256": "3b2a72ad72a3d7fe9c439fb3e7c86b7a6aabd8bf21ccb9229ef49be9848f6fbc"
+    },
+    {
+      "path": "packages/render/src/assembly/webgpu-renderer.ts",
+      "sha256": "810cd42f2b3b620e0f6bdb25e3433969d59fd4dbe8d9a18b64e8f0d2d02d5385"
+    },
+    {
+      "path": "packages/render/src/assembly/webgpu-vertex-layouts.ts",
+      "sha256": "220bd505ebecc25bda5087b4ad1a2f5b274e326972fdec3592a344eec27051c9"
+    },
+    {
+      "path": "packages/render/src/device/gpu-residency.ts",
+      "sha256": "64992a383a0cf0302e22a6473f05e31ebd00c48745f03e37affc8038f11a6d21"
+    },
+    {
+      "path": "packages/render/src/environment/background.ts",
+      "sha256": "ed2568fde249da39d086300e9e42ebb4c6caae1eef3e0a58832fdcdcfa2dfb53"
+    },
+    {
+      "path": "packages/render/src/gpu-driven/batch-topology.ts",
+      "sha256": "0c0b0fcc153545ac8f0f74e27dc043c7eeb238f3c0f8871bfeab347ee848c829"
+    },
+    {
+      "path": "packages/render/src/gpu-driven/production-raster.ts",
+      "sha256": "577ab9aa570cbfcfb35c04d6b492a4e1fb05762b5f6fcddc07a8bf96033aae2d"
+    },
+    {
+      "path": "packages/render/src/gpu-scene.ts",
+      "sha256": "947ee5e7584a0584c0f6c8a3675dc5de6b895308a399437a5f51af2fe2b2df6b"
+    },
+    {
+      "path": "packages/render/src/pipeline-spec.ts",
+      "sha256": "4e5f8826d6154d64ca36215756abc58c91dd030fcbb671f46194dd328e41dad1"
+    },
+    {
+      "path": "packages/render/src/pipeline/standard-forward-lane.ts",
+      "sha256": "187c5c7c64a18c2b72532eab8eb5ad96c002ad31d03e04f909ed735526370b2c"
+    },
+    {
+      "path": "packages/render/src/pipeline/standard-pipeline.ts",
+      "sha256": "516833f8d4e2f1c19133c02d0c32cd79674bf2cc9bf53cdf0bd0c92aea89a761"
+    },
+    {
+      "path": "packages/render/src/points-lines/standard-owner.ts",
+      "sha256": "4a70fcfa3691244bcb8507d1052a2ecf741c10e2479d89086270b153f479248e"
+    },
+    {
+      "path": "packages/render/src/record/__tests__/recovery-pipeline.unit.test.ts",
+      "sha256": "b8e3cc217ec5bac102d44d18a91c21dfaf8318f949f7df7df9097bef8ef7d4f9"
+    },
+    {
+      "path": "packages/render/src/record/frame-snapshot.ts",
+      "sha256": "d784c1fcd7e5c530f1fe6feed5cac8f8b6eeb8563b82a3d39e5181c012bea6d3"
+    },
+    {
+      "path": "packages/render/src/record/frame.ts",
+      "sha256": "48883d3605a2bca98686dab290586fdd24c91451f609c67fa2a3717fd767d172"
+    },
+    {
+      "path": "packages/render/src/record/main-pass-geometry.ts",
+      "sha256": "823e24dfe98a25c8e617b39c7347e950882a16c12d66475c20ba9f686f951971"
+    },
+    {
+      "path": "packages/render/src/record/recovery-pipeline.ts",
+      "sha256": "c61f953709f7183e8aa3f2b974c4093b5d02013b4e59338adddff23ca07d81dc"
+    },
+    {
+      "path": "packages/render/src/record/render-context.ts",
+      "sha256": "088cab0733a87228e3fa1f274e46f6190cd3d940f993909f9357e66af4642af5"
+    },
+    {
+      "path": "packages/render/src/record/shadow-pass.ts",
+      "sha256": "12ea908eca5b00a58a65de160f8860dfe586bee14d58fce476e47bb143aeb988"
+    },
+    {
+      "path": "packages/render/src/record/typed-frame-graph.ts",
+      "sha256": "e1d81ac837687fb03556472c07a009c9d68779f3a7ac981d81d201da97a64122"
+    },
+    {
+      "path": "packages/render/src/recovery/render-system-candidate.ts",
+      "sha256": "6f24b165694f84ceb10195ab289c1d2dfab39191bb99fa92c9fe46c2f9098de6"
+    },
+    {
+      "path": "packages/render/src/render-contract.ts",
+      "sha256": "966f1a89499d5212531d4e0af48d121dcbe257eda33d1a216e0db360432929c5"
+    },
+    {
+      "path": "packages/render/src/render-pipeline.ts",
+      "sha256": "b8742ce795db743f9c90a5e2d52e6d1f2521828a5f7e611cb560da0355fc999b"
+    },
+    {
+      "path": "packages/render/src/render-system-extract-tail.ts",
+      "sha256": "c8c8174dcb4486b419e79f2e9730c0b97b6820f77a873759bc6c59370591e98f"
+    },
+    {
+      "path": "packages/render/src/render-system-extract.ts",
+      "sha256": "fce8f4637c2d4794b971af24241c14549ce2bcaf354e0be358491dd608735635"
+    },
+    {
+      "path": "packages/render/src/render-system.ts",
+      "sha256": "067d48b5ec22b26f09483409422a8011f80acb52c80b8c4ebbb8b9367966f25e"
+    },
+    {
+      "path": "packages/render/src/scene/render-scene-types.ts",
+      "sha256": "a41a662f71ff47c74cef5e23877ec1b21c4e070947f463c082122d059f6e3fdd"
+    },
+    {
+      "path": "packages/render/src/scene/render-scene.ts",
+      "sha256": "cd3aee5f6744bc93c1e2e8504ef7c0a287591a1f248a3b0dbbb6a162876c62d6"
+    },
+    {
+      "path": "packages/render/src/temporal/gpu.ts",
+      "sha256": "bf9cbc97426c9f40d6de30f02c3a03760dd0d915a646dfb02d42ed1b7b5b2674"
+    },
+    {
+      "path": "packages/render/src/transmission/__tests__/standard-transmission.dawn.test.ts",
+      "sha256": "98d08476cbc08edba9152615e8a42cf28eaf6c74b9b393c06b182def4f036b3e"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/asset-registry-aabb.cases.unit.test.ts",
+      "sha256": "a9b490a8969d0bfe36cd361aa6031d5555ad925f946fb35ecb470c15c6cc4fa0"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/geometry.unit.test.ts",
+      "sha256": "12d5d158a0d818f8f102f475379bb03509b9e746b4e33ecc1106bd7268cd3f44"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/handle-migration.test.ts",
+      "sha256": "62db03343c7576be85e9a3ef3a60438d9348efa2d3bbc8487868a95c47d8309c"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/skin-m2-extract-happy.cases.unit.test.ts",
+      "sha256": "66a7a68a298acf602698f7bf63a674352cac79db8b88ddd343412ef7f461966d"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/skin-m2-extract-joint-error.cases.unit.test.ts",
+      "sha256": "ef53cba8303f98847539a6eec34a4924486754f5a683be004f2e3f8a6c3aaa10"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/skin-m2-extract-null-assets.cases.unit.test.ts",
+      "sha256": "36417bd976541c6e147282d6fd853947a9aa24f425c5f80131134a1382aa4fc7"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/skin-m2-extract-skeleton-error.cases.unit.test.ts",
+      "sha256": "3a6b0323d06b466faa6fceb776d83539ebc7f9ee639aeff814727a93e92f178d"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/skinned-shadow-mixed.dawn.test.ts",
+      "sha256": "339685523a7eda11dce75f273a366faa874f0a50d36820a2e234871284bc28f7"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/wave1-rendering-materials.browser.test.ts",
+      "sha256": "f2c0a42aae9b2b7022fc4aeb44a98fff9aa628e495d94760a9a418ae44d20a44"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/wave1-rendering-p0.browser.test.ts",
+      "sha256": "86f769419154ab10bfa65ebf698334156d167d21053ccb7c676dbf45f6dcdfb0"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/wave1-rendering-recovery.browser.test.ts",
+      "sha256": "b929d4ce22dafe5abcde86f9e775259efb97bdbcacac8e0ad52b81f43f13401d"
+    },
+    {
+      "path": "packages/runtime/src/__tests__/wave1-shadow-diagnostic.browser.test.ts",
+      "sha256": "dfde96c0090a12c71d4d5a6b0bd5bf9acf629d4fff8577f5c3baf82d4ca4dd65"
+    },
+    {
+      "path": "packages/scene/src/collect-subtree.ts",
+      "sha256": "db3962cd2603704337ae40cdf576c54a76000e12db4e8d1b67a5342fa8860f2b"
+    },
+    {
+      "path": "packages/shader/src/atmosphere-background.wgsl",
+      "sha256": "b9faaf0e35d842cf0ff1e60004de3b58a7ceb62c753ff4f5f0c9ea29180dedf7"
+    },
+    {
+      "path": "packages/shader/src/taa-resolve.wgsl",
+      "sha256": "f2416c4078ad08cfd5b2057a255f04e355269077b6ad0d6cd19a96fe46a6dc8a"
+    },
+    {
+      "path": "packages/vite-plugin-shader/src/engine-inputs/load-engine-shader-entries.ts",
+      "sha256": "2707ede4b9920d76d90fe6a7ca7e36d2b89219ed5a798bfbf0105820e7a3024a"
+    },
+    {
+      "path": "packages/vite-plugin-shader/src/index.ts",
+      "sha256": "ad467b15b41da0ad7c1b9f385d25462f2e474b13ad2efaca18da1dcb903f8906"
+    },
+    {
+      "path": "scripts/dev-verify/wave1-rendering/recipe.ts",
+      "sha256": "510592b5c634bd1cb273a03c5726eb6a099ab57c4f0f650240c2ddab94c82941"
+    },
+    {
+      "path": "scripts/dev-verify/wave1-rendering/run-additional-smokes.mjs",
+      "sha256": "87b472440f7b3951c0ddd206b81758fe3a3a3f1abb7ce2a8f7f5a987f0b75f2f"
+    },
+    {
+      "path": "scripts/dev-verify/wave1-rendering/run-smokes.mjs",
+      "sha256": "7758a28f185c8896bf0a7f016f7fb3fc6fde8bb56e7927fbc277354c60370bcc"
+    },
+    {
+      "path": "scripts/dev-verify/wave1-rendering/scene-benchmark.ts",
+      "sha256": "c427e87cf2aba7cdab5e15b1bdc2ae548db79286782024c018f9403dd41cb609"
+    },
+    {
+      "path": "scripts/dev-verify/wave1-rendering/summarize-performance.mjs",
+      "sha256": "2823666ecc1cbd56b689b3268d95b262d53db70f21ce9d5c2afcf54dd8dbb513"
+    }
+  ],
+  "equivalentCommittedTree": "05f597b2a9cb72cfbaeddb174cd5dc95ddcc6c2f"
+}

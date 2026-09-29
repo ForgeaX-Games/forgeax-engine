@@ -50,7 +50,7 @@ function parseGuid(s: string): AssetGuid {
   return r.value;
 }
 
-function localId(n: number): LocalEntityId {
+function _localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
@@ -90,16 +90,15 @@ function makeMaterialAsset(): MaterialAsset {
 function makeTestSceneAsset(subRefs: { meshGuid: string; materialGuids: string[] }): SceneAsset {
   return {
     kind: 'scene',
-    entities: [
-      {
-        localId: localId(0),
+    entities: {
+      'entity-0': {
         components: {
           Transform: { pos: [0, 0, 0] },
           MeshFilter: { assetHandle: subRefs.meshGuid },
           MeshRenderer: { materials: subRefs.materialGuids },
         },
       },
-    ],
+    },
   };
 }
 
@@ -256,16 +255,15 @@ describe('AC-07 — transitive failure attribution', () => {
           guid: SCENE_GUID,
           kind: 'scene',
           payload: {
-            entities: [
-              {
-                localId: 0,
+            entities: {
+              'entity-0': {
                 components: {
                   Transform: { pos: [0, 0, 0] },
                   MeshFilter: { assetHandle: 0 },
                   MeshRenderer: { materials: [1] },
                 },
               },
-            ],
+            },
           },
           refs: [MESH_GUID, MISSING_SUB_GUID],
         },
@@ -334,7 +332,7 @@ describe('AC-07 — transitive failure attribution', () => {
         // (4-segment chain: scene → entity → component.field → sub-asset).
         expect(err.hint).toContain(MISSING_SUB_GUID);
         expect(err.hint).toContain(SCENE_GUID);
-        expect(err.hint).toContain('entity 0');
+        expect(err.hint).toContain('entity entity-0');
         expect(err.hint).toContain('MeshRenderer.materials');
         // feat-20260622 verify r1: the breadcrumb provenance is ALSO exposed in
         // structured form on `.detail` so an AI user locates the broken edge by
@@ -345,7 +343,7 @@ describe('AC-07 — transitive failure attribution', () => {
           | {
               referencedByGuid?: string;
               subAssetGuid?: string;
-              sceneEntityId?: number;
+              sceneEntityKey?: string;
               sourceField?: { componentName?: string; fieldName?: string; arrayIndex?: number };
             }
           | undefined;
@@ -354,7 +352,7 @@ describe('AC-07 — transitive failure attribution', () => {
         // pass vacuously if the provenance silently regressed to hint-only.
         expect(detail?.referencedByGuid?.toLowerCase()).toBe(SCENE_GUID.toLowerCase());
         expect(detail?.subAssetGuid?.toLowerCase()).toBe(MISSING_SUB_GUID.toLowerCase());
-        expect(detail?.sceneEntityId).toBe(0);
+        expect(detail?.sceneEntityKey).toBe('entity-0');
         expect(detail?.sourceField?.componentName).toBe('MeshRenderer');
         expect(detail?.sourceField?.fieldName).toBe('materials');
       }
@@ -374,12 +372,11 @@ describe('mesh default material ready boundary', () => {
     if (refs.length > 0) {
       reg.catalog(parseGuid(WRONG_DEFAULT_KIND_GUID), {
         kind: 'texture' as const,
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm' as const,
         data: new Uint8Array([255, 255, 255, 255]),
         colorSpace: 'srgb' as const,
-        mipmap: false,
+        mips: { kind: 'none' as const },
       });
     }
     const omittedDefaultGuid = 'b0000000-0000-4000-b000-000000000099';
@@ -445,12 +442,11 @@ describe('mesh default material ready boundary', () => {
     const reg = makeRegistry();
     reg.catalog(parseGuid(WRONG_DEFAULT_KIND_GUID), {
       kind: 'texture' as const,
-      width: 1,
-      height: 1,
+      shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
       format: 'rgba8unorm' as const,
       data: new Uint8Array([255, 255, 255, 255]),
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     });
 
     const packIndex = [
@@ -658,15 +654,14 @@ describe('AC-08 — in-flight dedup + cycle', () => {
           guid: CYCLE_A_GUID,
           kind: 'scene',
           payload: {
-            entities: [
-              {
-                localId: 0,
+            entities: {
+              'entity-0': {
                 components: {
                   Transform: { pos: [0, 0, 0] },
                   SceneCycler: { refScene: 0 },
                 },
               },
-            ],
+            },
           },
           refs: [CYCLE_B_GUID],
         },
@@ -681,15 +676,14 @@ describe('AC-08 — in-flight dedup + cycle', () => {
           guid: CYCLE_B_GUID,
           kind: 'scene',
           payload: {
-            entities: [
-              {
-                localId: 0,
+            entities: {
+              'entity-0': {
                 components: {
                   Transform: { pos: [0, 0, 0] },
                   SceneCycler: { refScene: 0 },
                 },
               },
-            ],
+            },
           },
           refs: [CYCLE_A_GUID],
         },
@@ -740,21 +734,19 @@ describe('AC-02 — material recursive loadByGuid', () => {
     // Pre-register textures in dev mode (fast-path compatible)
     reg.catalog(parseGuid(TEXTURE_A_GUID), {
       kind: 'texture' as const,
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm' as const,
       data: new Uint8Array(64),
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     });
     reg.catalog(parseGuid(TEXTURE_B_GUID), {
       kind: 'texture' as const,
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm' as const,
       data: new Uint8Array(64),
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     });
 
     const packIndex = [
@@ -900,12 +892,11 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     // Pre-register texture in dev mode.
     reg.catalog(parseGuid(TEXTURE_C_GUID), {
       kind: 'texture' as const,
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm' as const,
       data: new Uint8Array(64),
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     });
 
     const packIndex = [
@@ -931,16 +922,15 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
           guid: SCENE_GLTF_GUID,
           kind: 'scene',
           payload: {
-            entities: [
-              {
-                localId: 0,
+            entities: {
+              'entity-0': {
                 components: {
                   Transform: { pos: [0, 0, 0] },
                   MeshFilter: { assetHandle: 0 },
                   MeshRenderer: { materials: [1] },
                 },
               },
-            ],
+            },
           },
           // feat-20260622 M4 / w14: refs[] is the recursion SSOT (D-5).
           // MESH_GUID -> refs[0], MATERIAL_A_GUID -> refs[1].
@@ -1103,12 +1093,11 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
     kind: 'texture',
     makeAsset: () => ({
       kind: 'texture' as const,
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm' as const,
       data: new Uint8Array(64),
       colorSpace: 'srgb' as const,
-      mipmap: false,
+      mips: { kind: 'none' as const },
     }),
   },
   {
@@ -1172,7 +1161,7 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
     kind: 'render-pipeline',
     makeAsset: () => ({
       kind: 'render-pipeline' as const,
-      pipelineId: 'forgeax::urp' as const,
+      pipelineId: 'forgeax::standard' as const,
     }),
   },
 ];
@@ -1300,15 +1289,14 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
           guid: SKIN_FIXUP_SCENE_GUID,
           kind: 'scene',
           payload: {
-            entities: [
-              {
-                localId: 0,
+            entities: {
+              'entity-0': {
                 components: {
                   Transform: { pos: [0, 0, 0] },
                   Skin: { skeleton: 0 },
                 },
               },
-            ],
+            },
             // refs[]-index form (browser JSON-roundtrip shape)
             skinGuids: [1],
           },
@@ -1383,7 +1371,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     // Build a SceneAsset POD with inline skinGuids (no refs[] indices).
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [0, 0, 0] } } } },
       skinGuids: [SKIN_FIXUP_SKIN_GUID],
     };
     reg.catalog(parseGuid(SKIN_FIXUP_SCENE_GUID), scene);

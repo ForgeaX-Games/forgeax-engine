@@ -1,11 +1,8 @@
-import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { execFileCommand } from './child-process.js';
 import { commandError } from './project.js';
 import type { CommandResult } from './types.js';
-
-const execFileAsync = promisify(execFile);
 
 export interface SdkInstallOptions {
   readonly root: string;
@@ -60,7 +57,7 @@ export async function sdkInstallCommand(
   try {
     staging = await mkdtemp(resolve(parent, `.${basename(root)}.forgeax-sdk-staging-`));
     download = await mkdtemp(resolve(parent, `.${basename(root)}.forgeax-sdk-download-`));
-    await execFileAsync(
+    await execFileCommand(
       process.env.FORGEAX_NPM_CLIENT ?? 'npm',
       [
         'install',
@@ -99,7 +96,7 @@ export async function sdkInstallCommand(
         root,
         sdkVersion: version,
         source: '@forgeax/engine-sdk',
-        next: { cwd: root, argv: ['node', './bin/forgeax.mjs', 'init'] },
+        next: { cwd: root, argv: ['node', './bin/forgeax.mjs', 'project', 'init'] },
       },
     };
   } catch (cause) {

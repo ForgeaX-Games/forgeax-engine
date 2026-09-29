@@ -69,6 +69,9 @@ function shadowOnlyMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
     metallic: 0,
     roughness: 0.55,
   });
+  if (asset.parent !== undefined) {
+    throw new Error('visibility material child cannot override the root pass');
+  }
   const shadowPass = asset.passes?.find((pass) => pass.name === 'shadow-caster');
   if (shadowPass === undefined) throw new Error('standard material has no shadow-caster pass');
   return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {

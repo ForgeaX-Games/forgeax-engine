@@ -344,9 +344,9 @@ describe('SPEC_CONST_TABLE', () => {
     }
   });
 
-  it('every entry has depthFormat in {depth24plus-stencil8, undefined}', () => {
+  it('every entry has float Reverse-Z depth or no depth', () => {
     for (const entry of SPEC_CONST_TABLE) {
-      expect(['depth24plus-stencil8', undefined]).toContain(entry.attachments.depthFormat);
+      expect(['depth32float-stencil8', undefined]).toContain(entry.attachments.depthFormat);
     }
   });
 
@@ -490,6 +490,20 @@ describe('buildPipelineDescriptor (M2-T3-TEST)', () => {
     };
   }
 
+  it('uses the entry selection carried by the pipeline spec', () => {
+    const base = makeForwardSpec();
+    const spec: PipelineSpec = {
+      ...base,
+      shader: { ...base.shader, vertexEntry: 'vs_custom', fragmentEntry: 'fs_readability' },
+    };
+    const descriptor = buildPipelineDescriptor(spec, {
+      vertex: mockVertexModule,
+      fragment: mockFragmentModule,
+    });
+    expect(descriptor.vertex.entryPoint).toBe('vs_custom');
+    expect(descriptor.fragment?.entryPoint).toBe('fs_readability');
+  });
+
   function makeShadowCasterSpec(sampleCount: 1 | 4 = 1): PipelineSpec {
     return {
       shader: { id: 'forgeax::shadow-caster', passKind: 'shadow-caster', variantSet: undefined },
@@ -563,8 +577,8 @@ describe('passKindPolicyTable (M4-T1)', () => {
       'point-shadow-caster',
       'skybox',
       'tonemap',
-      'bloom-bright',
-      'bloom-blur',
+      'bloom-downsample',
+      'bloom-upsample',
       'bloom-composite',
       'fxaa',
       'post-process',
@@ -585,8 +599,8 @@ describe('passKindPolicyTable (M4-T1)', () => {
     for (const k of [
       'skybox',
       'tonemap',
-      'bloom-bright',
-      'bloom-blur',
+      'bloom-downsample',
+      'bloom-upsample',
       'bloom-composite',
       'fxaa',
       'post-process',
@@ -650,7 +664,7 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
         view: depthView,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
-        depthClearValue: 1,
+        depthClearValue: 0,
         stencilClearValue: 0,
         stencilLoadOp: 'clear',
         stencilStoreOp: 'discard',
@@ -670,7 +684,7 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
         view: depthView,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
-        depthClearValue: 1,
+        depthClearValue: 0,
       },
     });
   });
@@ -690,7 +704,7 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
         view: depthView,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
-        depthClearValue: 1,
+        depthClearValue: 0,
         stencilClearValue: 0,
         stencilLoadOp: 'clear',
         stencilStoreOp: 'discard',
@@ -734,11 +748,11 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
     });
   });
 
-  it('Case 6: bloom-bright (color-only HDR intermediate, clear black)', () => {
+  it('Case 6: bloom-downsample (color-only HDR intermediate, clear black)', () => {
     const desc = buildBeginRenderPassDescriptor(
       { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
       { colorViews: [colorView] },
-      'bloom-bright',
+      'bloom-downsample',
     );
     expect(desc).toEqual({
       colorAttachments: [
@@ -752,11 +766,11 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
     });
   });
 
-  it('Case 7: bloom-blur (color-only, same shape as bloom-bright)', () => {
+  it('Case 7: bloom-upsample (color-only, same shape as bloom-downsample)', () => {
     const desc = buildBeginRenderPassDescriptor(
       { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
       { colorViews: [colorView] },
-      'bloom-blur',
+      'bloom-upsample',
     );
     expect(desc.colorAttachments).toEqual([
       {
@@ -818,7 +832,7 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
     const ds = desc.depthStencilAttachment as Record<string, unknown>;
     expect(ds.depthLoadOp).toBe('clear');
     expect(ds.depthStoreOp).toBe('store');
-    expect(ds.depthClearValue).toBe(1);
+    expect(ds.depthClearValue).toBe(0);
     expect(ds.stencilLoadOp).toBeUndefined();
     expect(ds.stencilStoreOp).toBeUndefined();
     expect(ds.stencilClearValue).toBeUndefined();
@@ -868,7 +882,7 @@ describe('buildBeginRenderPassDescriptor (M4-T1)', () => {
     expect(ca[0]?.clearValue).toBeUndefined();
     const ds = desc.depthStencilAttachment as Record<string, unknown>;
     expect(ds.depthLoadOp).toBe('clear');
-    expect(ds.depthClearValue).toBe(1);
+    expect(ds.depthClearValue).toBe(0);
   });
 
   it('Override C: clearColor override propagates to colorAttachments[0].clearValue', () => {

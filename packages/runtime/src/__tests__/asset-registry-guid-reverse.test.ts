@@ -80,7 +80,7 @@ function firstLiveMaterialHandle(world: World, root: Handle<string, 'shared'>): 
 function makeScene(entities?: SceneAsset['entities']): SceneAsset {
   return {
     kind: 'scene',
-    entities: entities ?? [{ localId: 0 as never, components: { Transform: {} } }],
+    entities: entities ?? { 'entity-0': { components: { Transform: {} } } },
   };
 }
 
@@ -167,15 +167,14 @@ describe('m1-t2 — uncatalogued scene MISS path', () => {
     const meshHandle = world.allocSharedRef('MeshAsset', mesh);
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        'entity-0': {
           components: {
             MeshFilter: { assetHandle: meshHandle as never },
             Transform: {},
           },
         },
-      ],
+      },
     };
 
     // Allocate shared ref for the scene and instantiate.
@@ -213,15 +212,14 @@ describe('builtin reverse lookup ownership', () => {
     prepareWorld(world);
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        'entity-0': {
           components: {
             Transform: {},
             MeshFilter: { assetHandle: HANDLE_CUBE as never },
           },
         },
-      ],
+      },
     };
     const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
     const instantiated = SceneOwner.worldInstantiateScene(world, sceneHandle);
@@ -231,7 +229,7 @@ describe('builtin reverse lookup ownership', () => {
     const collected = rootsToSceneAsset(registry, world, [instantiated.value.root]);
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
-    const meshEntity = collected.value.entities.find(
+    const meshEntity = Object.values(collected.value.entities).find(
       (entity) => entity.components.MeshFilter !== undefined,
     );
     expect(meshEntity?.components.MeshFilter?.assetHandle).toBe(GUID_A);
@@ -316,16 +314,15 @@ describe('w14 M4 probe — owned payload identity anchor', () => {
     const newHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', repeated.value);
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        'entity-0': {
           components: {
             Transform: {},
             MeshFilter: { assetHandle: newHandle as never },
             MeshRenderer: { materials: [] },
           },
         },
-      ],
+      },
     };
     const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
     const instantiated = SceneOwner.worldInstantiateScene(world, sceneHandle);
@@ -334,7 +331,7 @@ describe('w14 M4 probe — owned payload identity anchor', () => {
     const collected = rootsToSceneAsset(reg, world, [instantiated.value.root]);
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
-    expect(collected.value.entities).toContainEqual(
+    expect(Object.values(collected.value.entities)).toContainEqual(
       expect.objectContaining({
         components: expect.objectContaining({
           MeshFilter: expect.objectContaining({ assetHandle: MESH_GUID }),
@@ -357,25 +354,24 @@ describe('w14 M4 probe — owned payload identity anchor', () => {
     // GUID string (post-parse intermediate shape), catalogued with refs edges.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        'entity-0': {
           components: {
             Transform: {},
             MeshFilter: { assetHandle: MESH_GUID as never },
             MeshRenderer: { materials: [MAT_GUID] as never },
           },
         },
-      ],
+      },
     };
     reg.catalog(parseGuid(CHILD_GUID), child as Asset, [{ guid: MESH_GUID }, { guid: MAT_GUID }]);
 
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [
-        { localId: 1 as never, source: CHILD_GUID, memberFirst: 2 as never, memberCount: 1 },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: CHILD_GUID } },
+      },
     };
     reg.catalog(parseGuid(PARENT_GUID), parent as Asset);
 
@@ -583,16 +579,15 @@ describe('w16 M4 — AC-08 reverse-lookup hit across kinds', () => {
     );
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: 0 as never,
+      entities: {
+        'entity-0': {
           components: {
             Transform: {},
             MeshFilter: { assetHandle: meshHandle as never },
             MeshRenderer: { materials: [matHandle] as never },
           },
         },
-      ],
+      },
     };
     const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
     const instRes = SceneOwner.worldInstantiateScene(world, sceneHandle);

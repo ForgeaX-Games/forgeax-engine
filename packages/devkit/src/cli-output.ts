@@ -4,6 +4,7 @@ export function agentOnboardingLines(value: unknown): string[] {
   if (onboarding === null || typeof onboarding !== 'object' || Array.isArray(onboarding)) return [];
   const candidate = onboarding as {
     readonly read?: unknown;
+    readonly templateSelection?: unknown;
     readonly next?: { readonly cwd?: unknown; readonly argv?: unknown };
   };
   const lines = Array.isArray(candidate.read)
@@ -11,6 +12,14 @@ export function agentOnboardingLines(value: unknown): string[] {
         .filter((path): path is string => typeof path === 'string')
         .map((path) => `[forgeax] read: ${path}`)
     : [];
+  const selection = candidate.templateSelection;
+  if (selection !== null && typeof selection === 'object' && !Array.isArray(selection)) {
+    const available = (selection as { readonly available?: unknown }).available;
+    if (Array.isArray(available) && available.every((id) => typeof id === 'string')) {
+      lines.push(`[forgeax] template required: choose one of: ${available.join(', ')}`);
+      lines.push('[forgeax] create: forgeax project new <directory> --template <template-id>');
+    }
+  }
   if (
     typeof candidate.next?.cwd === 'string' &&
     Array.isArray(candidate.next.argv) &&
@@ -46,21 +55,18 @@ export function sdkUpdateLines(value: unknown): string[] {
   ];
 }
 
-export function renderForgeaxUsage(): string {
+export function renderForgeaxUsage(templateIds: readonly string[] = []): string {
+  const templateChoice = templateIds.length === 0 ? '<template-id>' : templateIds.join('|');
   return (
-    'Usage: forgeax new [directory] [--template empty|game-3d]\n' +
-    '       forgeax <init|doctor|test|dev|build|package|serve|preview> [directory]\n' +
-    '       forgeax capture [directory] [--backend auto|software|hardware] [--require-ui] [--deterministic] [--headless] [--output PATH]\n' +
-    '       forgeax engine <status|doctor|unlink> [--root directory]\n' +
-    '       forgeax engine use-local <engine-directory> [--root directory]\n' +
-    '       forgeax package [directory] [--output release/game-web.zip]\n' +
-    '       forgeax run <rhi.capture|rhi.summary|rhi.inspect> [options]\n' +
-    '       forgeax run <operation-id> --input <request.json>\n' +
-    '       forgeax exec <program.mjs> [--json]\n' +
-    '       forgeax asset <add|verify|inspect|list> [subject]\n' +
-    '       forgeax shader check [path]\n' +
-    '       forgeax plugin <install|uninstall> <module-or-id> [options]\n' +
-    '       forgeax skill <install|verify> [--root directory]\n' +
-    '       forgeax sdk install <directory> [--version VERSION]\n'
+    `Usage: forgeax project new [directory] --template ${templateChoice} [--root directory] [--id ID] [--name NAME] [--package-name PACKAGE]\n` +
+    '       forgeax project <init|check|test|build|package|preview|capture> [directory]\n' +
+    '       forgeax project engine <status|check|unlink|use-local> [--root directory]\n' +
+    '       forgeax project plugin <inspect|configure|disable|enable|install|uninstall> [options]\n' +
+    '       forgeax project skill <install|verify> [--root directory]\n' +
+    '       forgeax asset <import|verify|inspect|resolve|list> [subject]\n' +
+    '       forgeax asset shader check [path]\n' +
+    '       forgeax sdk install <directory> [--version VERSION]\n' +
+    '       forgeax dev <start|status|reload|stop|eval|camera|focus|capture> [options]\n' +
+    '       forgeax debug <preview|rhi|profile> <operation> [options]\n'
   );
 }

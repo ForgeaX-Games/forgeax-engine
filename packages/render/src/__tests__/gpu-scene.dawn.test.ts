@@ -46,6 +46,15 @@ function snapshot(entityKey: number, translationX: number): RenderableSnapshot {
   };
 }
 
+function updateSnapshot(value: RenderableSnapshot) {
+  return {
+    kind: 'update' as const,
+    worldId: value.worldId,
+    entityKey: value.entityKey,
+    snapshot: value,
+  };
+}
+
 describe('GpuScene Dawn residency', () => {
   it('uploads all five schema-derived tables to real GPU buffers', async () => {
     const adapter = (await rhi.requestAdapter()).unwrap();
@@ -65,15 +74,12 @@ describe('GpuScene Dawn residency', () => {
     availability.scene
       .sync(
         projection.apply([
-          {
-            kind: 'create',
-            snapshot: {
-              ...first,
-              materials: [material, secondMaterial],
-              gpuDrivenDraws: [firstDraw, { ...firstDraw, first: 39, materialSlot: 1 }],
-            },
-          },
-          { kind: 'create', snapshot: snapshot(8, 9) },
+          updateSnapshot({
+            ...first,
+            materials: [material, secondMaterial],
+            gpuDrivenDraws: [firstDraw, { ...firstDraw, first: 39, materialSlot: 1 }],
+          }),
+          updateSnapshot(snapshot(8, 9)),
         ]),
       )
       .unwrap();
@@ -147,8 +153,33 @@ describe('GpuScene Dawn residency', () => {
       ),
     ).toBe(0);
     expect(
+      views.instance.getUint32(
+        gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.instance, 'transformIndex'),
+        true,
+      ),
+    ).toBe(0);
+    expect(
       views.transform.getFloat32(
-        gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.transform, 'currentWorld') + 12 * 4,
+        gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.transform, 'currentWorld'),
+        true,
+      ),
+    ).toBe(1);
+    expect(
+      views.transform.getFloat32(
+        gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.transform, 'previousWorld'),
+        true,
+      ),
+    ).toBe(1);
+    const firstTransformIndex = views.primitive.getUint32(
+      gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.primitive, 'transformIndex'),
+      true,
+    );
+    expect(firstTransformIndex).toBe(1);
+    expect(
+      views.transform.getFloat32(
+        firstTransformIndex * GPU_SCENE_LAYOUTS.transform.stride +
+          gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.transform, 'currentWorld') +
+          12 * 4,
         true,
       ),
     ).toBe(3);
@@ -188,16 +219,19 @@ describe('GpuScene Dawn residency', () => {
     expect(
       views.material.getFloat32(
         GPU_SCENE_LAYOUTS.material.stride +
-          gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'params0'),
+          gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'baseColor'),
         true,
       ),
     ).toBeCloseTo(0.9);
     expect(
-      views.material.getFloat32(gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'params0'), true),
+      views.material.getFloat32(gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'baseColor'), true),
     ).toBeCloseTo(0.25);
     expect(
-      views.material.getUint32(gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'resource0'), true),
-    ).toBe(23);
+      views.material.getFloat32(gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'metallic'), true),
+    ).toBeCloseTo(0.2);
+    expect(
+      views.material.getFloat32(gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.material, 'roughness'), true),
+    ).toBeCloseTo(0.8);
 
     availability.scene.dispose();
     for (const readback of Object.values(readbacks)) device.destroyBuffer(readback);

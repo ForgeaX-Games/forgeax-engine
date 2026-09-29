@@ -1,0 +1,772 @@
+{
+  "backend": "webgpu",
+  "observedFrames": 60,
+  "drivenRafCallbacks": 233,
+  "profileComplete": true,
+  "summary": {
+    "fingerprint": "perf-shadow-stress/v1|seed=1523630302|ground=48|chunk=500|statics=4000|movers=128|characters=4|debris=0|points=0|camera=static|cascades=4|spots=4|hash=da5e67b5",
+    "cpuFrameMicros": {
+      "count": 30,
+      "mean": 204585.33333333334,
+      "p50": 107013,
+      "p95": 800027,
+      "max": 2033950
+    },
+    "syncedFrameMicros": {
+      "count": 0,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "shadowRasterPassCount": {
+      "count": 29,
+      "mean": 8,
+      "p50": 8,
+      "p95": 8,
+      "max": 8
+    },
+    "shadowRasterDrawCount": {
+      "count": 29,
+      "mean": 16,
+      "p50": 16,
+      "p95": 16,
+      "max": 16
+    },
+    "shadowTexelCulled": {
+      "count": 29,
+      "mean": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "shadowMissReasons": {
+      "skin-palette-changed": 232
+    }
+  },
+  "cpuPhasesMicros": {
+    "app/frame-total": {
+      "count": 30,
+      "mean": 204585.33333333334,
+      "p50": 107013,
+      "p95": 800027,
+      "max": 2033950
+    },
+    "app/frame-total>draw-source": {
+      "count": 30,
+      "mean": 1.7,
+      "p50": 1,
+      "p95": 2,
+      "max": 23
+    },
+    "app/frame-total>renderer-draw": {
+      "count": 30,
+      "mean": 200322.2,
+      "p50": 104255,
+      "p95": 798405,
+      "max": 2021201
+    },
+    "app/frame-total>world-update-injected": {
+      "count": 30,
+      "mean": 1.4,
+      "p50": 1,
+      "p95": 1,
+      "max": 24
+    },
+    "app/frame-total>world-update-primary": {
+      "count": 30,
+      "mean": 4221.533333333334,
+      "p50": 1096,
+      "p95": 12118,
+      "max": 79478
+    },
+    "render/record/graph-execute/main>record/graph-execute/forward/geometry-loop": {
+      "count": 30,
+      "mean": 15942.966666666667,
+      "p50": 458,
+      "p95": 899,
+      "max": 463415
+    },
+    "render/record/graph-execute/other>record/graph-execute/forward/geometry-loop": {
+      "count": 30,
+      "mean": 27.333333333333332,
+      "p50": 22,
+      "p95": 64,
+      "max": 88
+    },
+    "render/record/graph-execute>record/graph-execute/cluster-binner-upload": {
+      "count": 30,
+      "mean": 50.333333333333336,
+      "p50": 45,
+      "p95": 85,
+      "max": 116
+    },
+    "render/record/graph-execute>record/graph-execute/main": {
+      "count": 30,
+      "mean": 17545.966666666667,
+      "p50": 1853,
+      "p95": 3247,
+      "max": 473219
+    },
+    "render/record/graph-execute>record/graph-execute/other": {
+      "count": 1266,
+      "mean": 42.1129541864139,
+      "p50": 31,
+      "p95": 85,
+      "max": 719
+    },
+    "render/record/graph-execute>record/graph-execute/output-transform": {
+      "count": 30,
+      "mean": 797.8333333333334,
+      "p50": 349,
+      "p95": 738,
+      "max": 13159
+    },
+    "render/record/graph-execute>record/graph-execute/shadow": {
+      "count": 252,
+      "mean": 695.3452380952381,
+      "p50": 188,
+      "p95": 524,
+      "max": 72157
+    },
+    "render/record/graph-execute>record/graph-execute/skybox": {
+      "count": 30,
+      "mean": 99.7,
+      "p50": 84,
+      "p95": 276,
+      "max": 300
+    },
+    "render/record/graph-execute>record/graph-execute/spot-shadow": {
+      "count": 252,
+      "mean": 158.6468253968254,
+      "p50": 174,
+      "p95": 405,
+      "max": 520
+    },
+    "render/record>record/graph-execute": {
+      "count": 60,
+      "mean": 14330.45,
+      "p50": 1759,
+      "p95": 10577,
+      "max": 627402
+    },
+    "render/renderer-draw>bind-groups": {
+      "count": 30,
+      "mean": 168.7,
+      "p50": 7,
+      "p95": 58,
+      "max": 4783
+    },
+    "render/renderer-draw>extract": {
+      "count": 30,
+      "mean": 10098.133333333333,
+      "p50": 6811,
+      "p95": 12119,
+      "max": 107297
+    },
+    "render/renderer-draw>features": {
+      "count": 30,
+      "mean": 422.6333333333333,
+      "p50": 255,
+      "p95": 449,
+      "max": 5165
+    },
+    "render/renderer-draw>occlusion-prepare": {
+      "count": 30,
+      "mean": 13.966666666666667,
+      "p50": 5,
+      "p95": 14,
+      "max": 277
+    },
+    "render/renderer-draw>record": {
+      "count": 60,
+      "mean": 91998.55,
+      "p50": 3195,
+      "p95": 265652,
+      "max": 1872718
+    },
+    "render/renderer-draw>record/occlusion-global-advance": {
+      "count": 30,
+      "mean": 23.033333333333335,
+      "p50": 9,
+      "p95": 55,
+      "max": 281
+    },
+    "render/renderer-draw>sort": {
+      "count": 30,
+      "mean": 19.833333333333332,
+      "p50": 12,
+      "p95": 22,
+      "max": 208
+    }
+  },
+  "readback": {
+    "width": 320,
+    "height": 180,
+    "nonClearPixels": 56854,
+    "meanLuma": 0.3696670201661442,
+    "lumaVariance": 0.06038525471022993
+  },
+  "evidence": {
+    "backend": "webgpu",
+    "workloadFingerprint": "perf-shadow-stress/v1|seed=1523630302|ground=48|chunk=500|statics=4000|movers=128|characters=4|debris=0|points=0|camera=static|cascades=4|spots=4|hash=da5e67b5",
+    "options": {
+      "staticCasterCount": 4000,
+      "moverCount": 128,
+      "characterCount": 4,
+      "debrisCount": 0,
+      "pointCount": 0,
+      "camera": "static"
+    },
+    "profileFrames": 30,
+    "sampleFrames": 29,
+    "postSpawn": {
+      "staticChunkCount": 8,
+      "staticCasterCount": 4000,
+      "moverCount": 128,
+      "characterCount": 4,
+      "spotShadowCount": 4,
+      "directionalCascadeCount": 4
+    },
+    "frameProgress": 60,
+    "simulationSeconds": 1.0000000000000013,
+    "appRendererErrors": [],
+    "profileOverhead": {
+      "profilerEventObjectAllocations": 2400
+    },
+    "shadowRasterSamples": [
+      {
+        "frame": 30,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 31,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 32,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 33,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 34,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 35,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 36,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 37,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 38,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 39,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 40,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 41,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 42,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 43,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 44,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 45,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 46,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 47,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 48,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 49,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 50,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 51,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 52,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 53,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 54,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 55,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 56,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 57,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      },
+      {
+        "frame": 58,
+        "passCount": 8,
+        "drawCount": 16,
+        "viewCount": 8,
+        "staticLayerViewCount": 8,
+        "texelCulled": 0,
+        "misses": [
+          "directional:0:skin-palette-changed",
+          "directional:1:skin-palette-changed",
+          "directional:2:skin-palette-changed",
+          "directional:3:skin-palette-changed",
+          "spot:0:skin-palette-changed",
+          "spot:1:skin-palette-changed",
+          "spot:2:skin-palette-changed",
+          "spot:3:skin-palette-changed"
+        ]
+      }
+    ]
+  },
+  "assertions": {
+    "exactPostSpawn": true,
+    "sampledEveryFrame": true,
+    "everyShadowViewReported": true,
+    "texelCullingObserved": true,
+    "passCountMatchesMisses": true,
+    "notClearOnly": true,
+    "completeProfileNoDrops": true,
+    "noAppRendererErrors": true
+  }
+}

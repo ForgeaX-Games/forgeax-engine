@@ -1,6 +1,7 @@
 export interface DispatcherRequest {
   readonly url?: string | undefined;
   readonly method?: string | undefined;
+  readonly headers?: Readonly<Record<string, string | readonly string[] | undefined>> | undefined;
 }
 
 export interface DispatcherResponse {

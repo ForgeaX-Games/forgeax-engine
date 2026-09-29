@@ -1,11 +1,10 @@
-import { configureRuntimeAssetCatalog, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
+import { runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { createWorldContext, World, type EntityHandle } from '@forgeax/engine-ecs';
-import { mat4 } from '@forgeax/engine-math';
+import { mat4, vec3 } from '@forgeax/engine-math';
 import type { Context } from '@forgeax/engine-plugin';
 import { Camera, type RenderWorldLease } from '@forgeax/engine-render';
-import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
-import { Transform, scenePlugin } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform, scenePlugin } from '@forgeax/engine-scene';
 import { type Handle, type MaterialAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
@@ -26,7 +25,7 @@ import {
   validatedStagePlan,
 } from '@forgeax/engine-vfx-render';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { createBossScene, type BossSceneMaterials } from './scene';
+import { BOSS_ATTACK_TARGET, createBossScene, type BossSceneMaterials } from './scene';
 
 const EFFECT_GUID = '019e9c00-0000-7000-8000-000000000000';
 const BOSS_BODY_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000003';
@@ -62,24 +61,27 @@ function cameraSource() {
     read(world: World) {
       const owner = cameraEntities.get(world) ?? cameraEntity;
       const transform = world.get(owner, Transform);
+      const globalTransform = world.get(owner, GlobalTransform);
       const camera = world.get(owner, Camera);
-      if (!transform.ok || !camera.ok) return undefined;
+      if (!transform.ok || !globalTransform.ok || !camera.ok) return undefined;
       cameraReady = true;
-      const position = new Float32Array(transform.value.pos);
+      // Keep VFX projection on the same ECS camera authority as the scene
+      // renderer. The former fixed basis/lookAt path could diverge from the
+      // camera Transform (and made particles appear detached from the boss).
+      const cameraWorld = globalTransform.value.world;
+      const view = mat4.invert(mat4.create(), cameraWorld);
+      const projection = mat4.perspectiveReverseZ(
+        mat4.create(),
+        camera.value.fov,
+        camera.value.aspect,
+        camera.value.near,
+        camera.value.far,
+      );
       return {
-        position,
-        right: new Float32Array([1, 0, 0]),
-        up: new Float32Array([0, 1, 0]),
-        viewProjection: mat4.computeViewProj(
-          mat4.create(),
-          position,
-          [0, 0.8, 0],
-          [0, 1, 0],
-          camera.value.fov,
-          camera.value.aspect,
-          camera.value.near,
-          camera.value.far,
-        ),
+        position: new Float32Array(transform.value.pos),
+        right: new Float32Array(mat4.getRight(vec3.create(), cameraWorld)),
+        up: new Float32Array(mat4.getUp(vec3.create(), cameraWorld)),
+        viewProjection: mat4.multiply(mat4.create(), projection, view),
       };
     },
   };
@@ -139,7 +141,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const searchParams = new URLSearchParams(globalThis.location.search);
   const falsifyMode = searchParams.get('boss-lightning-falsify');
   const m35Mode = searchParams.get('boss-lightning-m35') === '1';
-  const world = new World();
+  if (runtimeBinding === undefined) {
+    throw new Error('boss-lightning: virtual bundler did not provide a runtime asset binding');
+  }
   const host = createVfxRuntimeHost({
     camera: cameraSource(),
     ...(m35Mode ? { maxQueuedTicks: 1 } : {}),
@@ -148,22 +152,27 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       createSceneDepthProvider({ available: () => cameraReady && falsifyMode !== 'missing-depth' }),
     ],
   });
-  const constructed = await constructRuntimeRendererHost(
+  // Let App own renderer construction so optional RHI capture can attach at
+  // the backend seam before this custom RenderFeature creates GPU resources.
+  // The old assemble path constructed the renderer first, which made
+  // `window.__forgeax.captureFrame` permanently unavailable for this demo.
+  const appResult = await createApp(
     target,
     {
       features:
         falsifyMode === 'disable-vfx' || falsifyMode === 'billboard-fallback'
           ? []
           : [host.feature],
+      plugins: [scenePlugin()],
+      assetRuntimeBinding: runtimeBinding,
     },
     forgeaxBundlerAdapter(),
   );
-  if (!constructed.ok) throw constructed.error;
-  const renderer = constructed.value.renderer;
-  const assets = constructed.value.assets;
-  const attachedMainRendererWorld = renderer.attach(world);
-  if (!attachedMainRendererWorld.ok) throw attachedMainRendererWorld.error;
-  const mainLease = attachedMainRendererWorld.value;
+  if (!appResult.ok) throw new Error(`boss-lightning: app assembly failed: ${String(appResult.error)}`);
+  const renderer = appResult.value.renderer;
+  const assets = appResult.value.assets;
+  if (assets === undefined) throw new Error('boss-lightning: App did not expose its AssetRegistry');
+  const world = appResult.value.world;
   renderer.subscribe((event) => {
     if (event.kind !== 'error') return;
     const error = event.error;
@@ -171,13 +180,11 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     validationErrors.push({
       code: error.code,
       hint: error.hint,
-      detail: 'detail' in error ? error.detail : undefined,
+      detail: 'detail' in error ? JSON.parse(JSON.stringify(error.detail, (_key, value) =>
+        value instanceof Error ? { ...value, name: value.name, message: value.message, stack: value.stack } : value,
+      )) : undefined,
     });
   });
-  configureRuntimeAssetCatalog(
-    assets,
-    runtimeBinding,
-  );
   const attached = await host.attachWorld({ world, assets });
   if (!attached.ok) throw new Error(`boss-lightning: VFX host attach failed: ${attached.error.hint}`);
 
@@ -207,8 +214,12 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   let m35World: World | undefined;
   let m35Player: EntityHandle | undefined;
   let m35Context: Context | undefined;
+  let mainLease: RenderWorldLease | undefined;
   let m35Lease: RenderWorldLease | undefined;
   if (m35Mode) {
+    const attachedMainRendererWorld = renderer.attach(world);
+    if (!attachedMainRendererWorld.ok) throw attachedMainRendererWorld.error;
+    mainLease = attachedMainRendererWorld.value;
     m35World = new World();
     const m35Camera = m35World
       .spawn(
@@ -239,8 +250,6 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       throw new Error(`boss-lightning: M35 VFX host attach failed: ${attachedM35HostWorld.error.hint}`);
     }
   }
-  const appResult = await createApp({ renderer, assets, world, plugins: [scenePlugin()] });
-  if (!appResult.ok) throw new Error(`boss-lightning: app assembly failed: ${appResult.error.hint}`);
   appResult.value.start();
   let nextImpactSequence = 1;
   const m35 =
@@ -259,7 +268,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             if (!siblingUpdate.ok || !affectedUpdate.ok) {
               return { siblingUpdate, affectedUpdate, draw: undefined };
             }
-            if (m35Lease === undefined) throw new Error('boss-lightning: M35 render lease unavailable');
+            if (mainLease === undefined || m35Lease === undefined) {
+              throw new Error('boss-lightning: M35 render leases unavailable');
+            }
             const draw = renderer.draw({
               leases: [mainLease, m35Lease],
               camera: { lease: mainLease },
@@ -276,7 +287,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             const detachSibling = await host.detachWorld({ world });
             const detachSiblingAgain = await host.detachWorld({ world });
             m35Lease?.dispose();
-            mainLease.dispose();
+            mainLease?.dispose();
             await renderer.dispose();
             await renderer.dispose();
             return {
@@ -390,14 +401,24 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       submitImpact: () => {
-        const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
-        const instance = runtime.getInstance(scene.player);
-        if (falsifyMode !== 'freeze-generation') instance?.patch({ intensity: 1.25 });
-        return instance?.submit({
+        const control = host.acquireControl(world);
+        if (!control.ok) return control;
+        const patch =
+          falsifyMode === 'freeze-generation'
+            ? undefined
+            : control.value.patchPlayerParameters({
+                player: scene.player,
+                values: { intensity: 1.25 },
+              });
+        if (patch !== undefined && !patch.ok) return patch;
+        const submitted = control.value.submitChannel({
+          player: scene.player,
           channel: 'impact',
-          payload: { position: [0.25, -0.7, 0], strength: 1 },
+          payload: { position: [...BOSS_ATTACK_TARGET], strength: 1 },
           sequence: nextImpactSequence++,
         });
+        if (!submitted.ok) return submitted;
+        return { patch, submitted };
       },
       validationErrors,
       get cameraReady() {

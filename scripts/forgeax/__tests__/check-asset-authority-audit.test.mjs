@@ -9,7 +9,7 @@ import {
 
 const root = new URL('../../..', import.meta.url);
 
-test('authority audit covers the ten named asset categories exactly once', async () => {
+test('authority audit covers the named asset categories exactly once', async () => {
   const definition = await loadAuthorityDefinition(root.pathname);
   const result = auditAuthorityDefinition(definition, root.pathname);
 
@@ -29,6 +29,7 @@ test('authority audit covers the ten named asset categories exactly once', async
       'image',
       'font',
       'audio',
+      'plugin',
     ],
   );
   for (const category of result.value.categories) {
@@ -96,10 +97,13 @@ test('authority manifest preserves sourceKey policy and excludes forge.json from
 
 test('authority schema is itself machine-readable JSON', async () => {
   const schema = JSON.parse(
-    await readFile(new URL('../../../asset-authority.schema.json', import.meta.url), 'utf8'),
+    await readFile(
+      new URL('../../../schemas/asset-authority.schema.json', import.meta.url),
+      'utf8',
+    ),
   );
   assert.equal(schema.$id, 'https://forgeax.dev/schema/asset-authority.schema.json');
-  assert.equal(schema['x-forgeax-audit'].categories.length, 10);
+  assert.equal(schema['x-forgeax-audit'].categories.length, 11);
   assert.equal(schema['x-forgeax-audit'].producers.length >= 10, true);
 });
 

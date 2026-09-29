@@ -21,6 +21,11 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * The renderer may batch this component into a bounded atlas, but the ECS
  * component remains a plain storage schema and carries no cardinality policy.
  *
+ * Receiver bias follows Bevy's point-light convention and is scale-invariant:
+ * `depthBias` moves the receiver toward the light in world units, and
+ * `normalBias` offsets it along its normal by that many cube texels at the
+ * receiver's distance. Defaults match Bevy (0.08 / 0.6).
+ *
  * @example Spawn a point light with default shadow config:
  *   world.spawn(
  *     { component: Transform, data: { pos: [0, 4, 0] } },
@@ -35,8 +40,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
  */
 export const PointLightShadow = defineComponent('PointLightShadow', {
   mapSize: { type: 'f32', default: 512 },
-  depthBias: { type: 'f32', default: 0.005 },
-  normalBias: { type: 'f32', default: 0.05 },
+  depthBias: { type: 'f32', default: 0.08 },
+  normalBias: { type: 'f32', default: 0.6 },
   nearPlane: { type: 'f32', default: 0.1 },
   farPlane: { type: 'f32', default: 25 },
   pcfKernelSize: { type: 'f32', default: 3 },

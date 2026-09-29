@@ -139,3 +139,26 @@ This package does not animate arbitrary component properties. It does not
 provide an animation FSM, masks, IK, a target registry, hidden subtree scanning,
 or editor UI. Material, light, camera, and custom component field animation
 require separate features.
+
+## Imported animation bounds
+
+The pure `@forgeax/engine-animation/animated-bounds` subpath serves the glTF and
+FBX import producers. It encloses influenced vertices after inverse-bind
+transforms across all imported LINEAR/STEP TRS clips, their convex blends, and
+the supplied morph-weight envelope. The published six-float AABB is in mesh
+local coordinates, including every instance using the skeleton.
+
+| Producer fact | Enclosure |
+|:--|:--|
+| Translation and scale | Rest pose plus key extrema |
+| Animated rotation | Complete unit-quaternion orbit, including between-key extrema |
+| Shared mesh/joint ancestors | Cancel before enclosure propagation |
+| Deep joint chains | Radius preserved under rotation; no repeated box-to-sphere inflation |
+| Missing influence facts, invalid hierarchy, or singular inverse mesh transform | No automatic bound |
+
+Explicit source or sidecar bounds remain authoritative. The importer does this
+work once; the renderer consumes the resulting Skeleton metadata without
+sampling animation to invent bounds each frame. Bounds certify the imported
+clip closure. Reimport after editing source clips; external procedural joint
+motion needs explicit bounds covering that motion. Conservative bounds may be
+larger than a sampled pose, which trades some culling precision for correctness.

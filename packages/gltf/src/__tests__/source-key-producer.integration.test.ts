@@ -86,7 +86,9 @@ describe('glTF producer source-key boundary', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('duplicate-source-key');
-    expect(result.error.detail.sourceIndices).toEqual([0, 1]);
+    expect((result.error.detail as { sourceIndices: readonly number[] }).sourceIndices).toEqual([
+      0, 1,
+    ]);
   });
 
   it('applies the same preflight to duplicate material names', () => {
@@ -95,7 +97,9 @@ describe('glTF producer source-key boundary', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('duplicate-source-key');
-    expect(result.error.detail.sourceIndices).toEqual([0, 1]);
+    expect((result.error.detail as { sourceIndices: readonly number[] }).sourceIndices).toEqual([
+      0, 1,
+    ]);
   });
 
   it('publishes producer-valid output when semantic identity is unique', () => {

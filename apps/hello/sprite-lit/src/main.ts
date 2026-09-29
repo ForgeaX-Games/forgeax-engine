@@ -117,12 +117,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const checkerboard = buildCheckerboardRgba(8);
   const textureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
     kind: 'texture',
-    width: checkerboard.width,
-    height: checkerboard.height,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: checkerboard.width, height: checkerboard.height },
+    },
     format: 'rgba8unorm-srgb',
     data: checkerboard.data,
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   });
 
 

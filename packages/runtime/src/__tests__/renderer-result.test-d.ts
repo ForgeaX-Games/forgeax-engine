@@ -9,6 +9,7 @@
 
 import type {
   FrameReceipt,
+  PublishedRenderFrameInput,
   RenderError,
   Renderer,
   RenderFrameInput,
@@ -31,6 +32,6 @@ describe('M6 — Renderer.attach returns a lease and draw consumes it', () => {
     expectTypeOf<AttachType>().returns.toEqualTypeOf<
       RenderResult<RenderWorldLease, import('@forgeax/engine-render').RenderError>
     >();
-    expectTypeOf<DrawArg>().toEqualTypeOf<RenderFrameInput>();
+    expectTypeOf<DrawArg>().toEqualTypeOf<RenderFrameInput | PublishedRenderFrameInput>();
   });
 });

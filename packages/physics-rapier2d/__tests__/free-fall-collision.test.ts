@@ -13,16 +13,17 @@
 // pw.raw.createRigidBody have been removed — they were semantically replaced
 // by the real ECS bridge test.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
 import {
   Collider,
   ColliderShapeValue,
+  CollidingEntities,
   RigidBody,
   RigidBodyTypeValue,
   registerPhysicsComponents,
 } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import { loadRapier2D } from '../src/wasm-loader';
 import {
@@ -33,8 +34,14 @@ import {
 function prepareWorld(): World {
   const world = new World();
   world.components.register(Transform).unwrap();
+  world.components.register(GlobalTransform).unwrap();
   registerPhysicsComponents(world);
   return world;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: test fixture accepts the ECS spawn component tuple.
+function spawnPairedEntity(world: World, ...components: any[]) {
+  return world.spawn(...components);
 }
 
 describe('feat-20260528 M3 t18 Rapier2D low-level primitives (collision, kinematic, despawn, rotation)', () => {
@@ -102,6 +109,40 @@ describe('feat-20260528 M3 t18 Rapier2D low-level primitives (collision, kinemat
     const pos2 = b2.translation();
     expect(pos1.y).toBeLessThan(1);
     expect(pos2.y).toBeLessThan(1);
+  });
+
+  it('skips colliding entities without the subscription component without reading it', async () => {
+    const RAPIER = await loadRapier2D();
+    if ('code' in RAPIER) {
+      expect(RAPIER.code).toBe('wasm-load-failed');
+      return;
+    }
+
+    const world = prepareWorld();
+    const subscriber = world.spawn(
+      { component: CollidingEntities as never, data: { entities: [] } },
+    ).unwrap();
+    const plain = world.spawn({ component: Transform as never, data: {} }).unwrap();
+    const pw = createRapier2DPhysicsWorld(RAPIER);
+    for (const [entity, x] of [[subscriber, -0.1], [plain, 0.1]] as const) {
+      const body = pw.raw.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 1));
+      body.userData = entity;
+      pw.raw.createCollider(
+        RAPIER.ColliderDesc.ball(0.5).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+        body,
+      );
+      pw.registerBody(entity, body.handle);
+    }
+    pw.step(1 / 60);
+    expect(pw.getCollisionPairs().get(subscriber)).toContain(plain);
+    expect(world.hasComponent(plain, CollidingEntities)).toBe(false);
+
+    const get = vi.spyOn(world, 'get');
+    pw.writebackCollidingEntities(world);
+    expect(get).not.toHaveBeenCalledWith(plain, CollidingEntities);
+    get.mockRestore();
+    const colliding = world.get(subscriber, CollidingEntities as never);
+    expect(colliding.ok && Array.from(colliding.value.entities as Uint32Array)).toContain(plain);
   });
 
   it('ball bounces on ground without errors in 2D', async () => {
@@ -225,8 +266,7 @@ describe('rapier-authored-transform-pose.test.ts', () => {
     const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
-    const obstacle = world
-      .spawn(
+    const obstacle = spawnPairedEntity(world,
         {
           component: Transform as never,
           data: {
@@ -268,8 +308,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     world.insertResource('PhysicsWorld', pw);
 
     // Spawn dynamic ball at y=5 with (Transform, RigidBody{dynamic}, Collider{sphere}).
-    const dynamicEntity = world
-      .spawn(
+    const dynamicEntity = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 5, 0]} },
         {
           component: RigidBody as never,
@@ -289,8 +328,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
       .unwrap();
 
     // Spawn static ground at y=0 with (Transform, RigidBody{static}, Collider{cuboid}).
-    const staticEntity = world
-      .spawn(
+    const staticEntity = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 0, 0]} },
         {
           component: RigidBody as never,
@@ -366,8 +404,7 @@ describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 
     // groundPosY + halfExtents[1] = 0 + 2 = 2. If the array collapse dropped
     // halfExtents[1] (=> 0 half-height) the ball would settle near 0.5 instead
     // of ~2.5, so this resting height is a dimension-sensitive regression.
-    const ball = world
-      .spawn(
+    const ball = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 6, 0] } },
         {
           component: RigidBody as never,
@@ -380,8 +417,7 @@ describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 
       )
       .unwrap();
 
-    world
-      .spawn(
+    spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 0, 0] } },
         { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
         {
@@ -425,8 +461,7 @@ describe('bug-20260713 solo round-22 Rapier2D raycast entity resolution', () => 
     world.insertResource('PhysicsWorld', pw);
 
     // Ground: static cuboid, top at y=0.
-    const ground = world
-      .spawn(
+    const ground = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, -0.5, 0] } },
         { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
         { component: Collider as never, data: { shape: 0, halfExtents: [10, 0.5] } },
@@ -434,8 +469,7 @@ describe('bug-20260713 solo round-22 Rapier2D raycast entity resolution', () => 
       .unwrap();
 
     // Target: static cuboid centred at x=5 (near face x=4), above the ground.
-    const target = world
-      .spawn(
+    const target = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [5, 1, 0] } },
         { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
         { component: Collider as never, data: { shape: 0, halfExtents: [1, 1] } },
@@ -483,8 +517,7 @@ describe('bug-20260713 solo round-26 Rapier2D bare-Collider static floor', () =>
     world.insertResource('PhysicsWorld', pw);
 
     // Ball: dynamic body + circle collider dropped from y=5.
-    const ball = world
-      .spawn(
+    const ball = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 5, 0] } },
         {
           component: RigidBody as never,
@@ -504,8 +537,7 @@ describe('bug-20260713 solo round-26 Rapier2D bare-Collider static floor', () =>
       .unwrap();
 
     // Floor: a BARE Collider — NO RigidBody. Cuboid top at y = 0 + 0.5 = 0.5.
-    const floor = world
-      .spawn(
+    const floor = spawnPairedEntity(world,
         { component: Transform as never, data: { pos: [0, 0, 0] } },
         {
           component: Collider as never,

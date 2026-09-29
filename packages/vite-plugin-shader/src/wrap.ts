@@ -13,6 +13,7 @@
 /// <reference types="@webgpu/types" />
 
 import type { ShaderError, ShaderErrorDetail } from '@forgeax/engine-shader-compiler';
+import type { MaterialError } from '@forgeax/engine-types';
 
 /**
  * Extension to the Rollup `RollupLog` shape — the top-level `hint` surface is
@@ -49,6 +50,19 @@ export interface ForgeaXShaderRollupLog {
       readonly compilerMessages?: readonly GPUCompilationMessage[] | undefined;
       readonly reason?: string | undefined;
     };
+  };
+}
+
+export interface ForgeaXMaterialRollupError extends Error {
+  readonly code: MaterialError['code'];
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: MaterialError['detail'];
+  readonly meta: {
+    readonly code: MaterialError['code'];
+    readonly expected: string;
+    readonly hint: string;
+    readonly detail: MaterialError['detail'];
   };
 }
 
@@ -127,4 +141,20 @@ export function toRollupLog(err: ShaderError): ForgeaXShaderRollupLog {
   }
 
   return log;
+}
+
+/** Project a structured material composition failure into a Rollup error. */
+export function toMaterialRollupError(error: MaterialError): ForgeaXMaterialRollupError {
+  return Object.assign(new Error(error.message), {
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    detail: error.detail,
+    meta: {
+      code: error.code,
+      expected: error.expected,
+      hint: error.hint,
+      detail: error.detail,
+    },
+  });
 }

@@ -5,15 +5,12 @@
 // depth-viz.wgsl - LearnOpenGL section 4.1 depth visualization demo.
 //
 // Custom material shader that visualizes the depth buffer: the fragment
-// stage reads @builtin(position).z (clip-space depth), applies the
-// standard OpenGL linearizeDepth formula, and outputs a grayscale value
+// stage reads @builtin(position).z (Reverse-Z depth), reconstructs
+// view-space distance, and outputs a grayscale value
 // where near=dark, far=light.
 //
-// The linearizeDepth formula is kept inline per OOS-1 (not promoted to
-// engine math/shader helper) -- it is the exact formula from LO 4.1:
-//
-//   z_ndc = depth * 2.0 - 1.0
-//   z_linear = (2.0 * near * far) / (far + near - z_ndc * (far - near))
+// The LO 4.1 distance visualization uses the Engine's Reverse-Z convention:
+//   z_linear = near / (depth + (1 - depth) * near / far)
 //   output = z_linear / far  (maps to approx [0, 1] for grayscale)
 //
 // near=0.1, far=100.0 (hardcoded to match LO 4.1 projection).
@@ -45,10 +42,9 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let depth = in.clip.z;
-  let z = depth * 2.0 - 1.0;
   let near = 0.1;
   let far = 100.0;
-  let linear = (2.0 * near * far) / (far + near - z * (far - near));
+  let linear = near / (depth + (1.0 - depth) * (near / far));
   let gray = linear / far;
   return vec4<f32>(gray, gray, gray, 1.0);
 }

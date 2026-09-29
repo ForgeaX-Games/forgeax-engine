@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "archive": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-sdk/artifacts/sdk/forgeax-sdk-v0.0.0-dev.634c561d12a3.zip",
+  "sha256": "fd60694bdaa0e60ef0c0e582318eb626133c30210d5b45e8bae50e33b8f0f706",
+  "engineCommit": "634c561d12a3132f5730de25fe5cf74f5a6e2ee5",
+  "sdkVersion": "0.0.0-dev.634c561d12a3",
+  "npm": {
+    "packageArchives": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-sdk/artifacts/sdk/npm/packages",
+    "packageCount": 62,
+    "sdkCarrier": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-sdk/artifacts/sdk/npm/forgeax-engine-sdk-0.0.0-dev.634c561d12a3.tgz"
+  },
+  "capabilities": [
+    "app",
+    "render",
+    "assets",
+    "shader",
+    "physics",
+    "audio",
+    "vfx",
+    "ui",
+    "debug"
+  ]
+}

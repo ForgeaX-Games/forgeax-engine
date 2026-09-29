@@ -1,6 +1,11 @@
 // @forgeax/engine-vfx - runtime-safe code-first GPU VFX contract.
 
-export type { ParticleEffectAsset, ParticleEmitterDefinition } from '@forgeax/engine-types';
+export type {
+  ParticleEffectAsset,
+  ParticleEffectAssetV3,
+  ParticleEffectProgramV3,
+  ParticleEmitterDefinition,
+} from '@forgeax/engine-types';
 export { particleEffectContribution } from './assets/particle-effect-decoder';
 export type {
   VfxAuthoringCapabilityDescriptor,
@@ -20,25 +25,34 @@ export type {
   ParticleChannelSource,
   ParticleCodeSourceError,
   ParticleCodeSourceInvalidDetail,
-  ParticleEffectRootSourceV2,
-  ParticleEffectSourceV2,
-  ParticleEmitterSourceV2,
   ParticleEventSource,
   ParticleRendererOverflowPolicy,
-  ParticleRendererSorting,
-  ParticleRendererSource,
   ParticleStageDomain,
   ParticleStageResourceAccess,
   ParticleStageResourceSource,
   ParticleStageSource,
 } from './code-source.js';
 export {
-  defineParticleEffectSourceV2,
   PARTICLE_CODE_DEFAULT_MODULE_ID,
   PARTICLE_STAGE_RESOURCE_NAMES,
-  parseParticleEffectSourceV2,
   parseVfxStageDeclarations,
 } from './code-source.js';
+export type {
+  ParticleAttributeRef,
+  ParticleEffectRootSourceV3,
+  ParticleEffectSourceV3,
+  ParticleEmitterSourceV3,
+  ParticleRendererSemantic,
+  ParticleRendererSemanticMap,
+  ParticleRendererSortingV3,
+  ParticleRendererSourceV3,
+} from './code-source-v3.js';
+export {
+  defaultParticleRendererAttributes,
+  defineParticleEffectSourceV3,
+  PARTICLE_RENDERER_SEMANTICS,
+  parseParticleEffectSourceV3,
+} from './code-source-v3.js';
 export type {
   VfxDataInterfaceBindingType,
   VfxDataInterfaceError,
@@ -72,20 +86,32 @@ export {
 } from './gpu-loader.js';
 export type {
   VfxGpuEffectAsset,
+  VfxGpuEffectAssetAny,
+  VfxGpuEffectAssetV3,
   VfxGpuEmitterProgram,
+  VfxGpuEmitterProgramAny,
+  VfxGpuEmitterProgramV3,
   VfxGpuProgram,
   VfxGpuProgramReflection,
+  VfxGpuProgramReflectionV3,
+  VfxGpuProgramV3,
+  VfxGpuRendererReflectionV3,
   VfxGpuStageReflection,
 } from './gpu-program.js';
-export { VFX_GPU_PROGRAM_ARTIFACT_KEY, VFX_GPU_PROGRAM_FORMAT } from './gpu-program.js';
+export {
+  VFX_GPU_PROGRAM_ARTIFACT_KEY,
+  VFX_GPU_PROGRAM_FORMAT,
+} from './gpu-program.js';
 export type {
   VfxGpuEmitterInspectSnapshot,
+  VfxGpuEmitterSource,
   VfxGpuPlayerInspectSnapshot,
   VfxGpuRuntimeDiagnostic,
   VfxGpuRuntimeOptions,
   VfxGpuTickIntent,
 } from './gpu-runtime.js';
 export {
+  buildVfxRecoveryIntents,
   createVfxInspectSnapshot,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   VfxGpuRuntime,
@@ -106,5 +132,23 @@ export {
   createParticleEffectInstance,
   ParticleEffectInstance,
 } from './instance.js';
+export type {
+  VfxCustomLayout,
+  VfxParametersLayout,
+  VfxParticleCoreAttribute,
+  VfxParticleCoreField,
+  VfxParticleCoreLayout,
+  VfxParticleCoreValue,
+  VfxParticleCoreValues,
+} from './particle-layout.js';
+export {
+  deriveVfxCustomLayout,
+  encodeVfxParticleCore,
+  normalizedVfxParticleAge,
+  VFX_PARTICLE_CORE_LAYOUT,
+  VFX_PARTICLE_CORE_STRIDE,
+  vfxParticleCoreField,
+  vfxParticleCoreWgsl,
+} from './particle-layout.js';
 export type { ParticleEffectPlayerData } from './player.js';
 export { ParticleEffectPlayer } from './player.js';

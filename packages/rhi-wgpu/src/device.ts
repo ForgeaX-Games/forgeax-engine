@@ -39,6 +39,7 @@ import {
   type PipelineLayoutDescriptor,
   type QuerySet,
   type QuerySetDescriptor,
+  type RenderBundleEncoderDescriptor,
   type RenderPipeline,
   type RenderPipelineDescriptor,
   type Result,
@@ -50,6 +51,7 @@ import {
   type RhiFeatures,
   type RhiLimits,
   type RhiQueue,
+  type RhiRenderBundleEncoder,
   type Sampler,
   type SamplerDescriptor,
   type Texture,
@@ -60,9 +62,12 @@ import {
 import { doubleDestroy, makeRhiBuffer, type RawBufferLike, unwrapBuffer } from './buffer';
 import { makeRhiCommandEncoder, type RawCommandEncoderLike } from './command-encoder';
 import { descriptorInvalid, featureNotEnabled, webgpuRuntimeError } from './errors';
-import { makeRhiQueue, type RawQueueLike } from './queue';
+import { probeR32FloatCapability } from './internal/r32float-capability';
+import { makeRhiQueue, normalizeExtent, type RawQueueLike } from './queue';
+import { makeRhiRenderBundleEncoder, type RawRenderPassLike } from './render-pass-encoder';
 
 type RhiWgpuDeviceLost = Awaited<RhiDevice['lost']>;
+let nextWgpuDeviceGeneration = 1;
 
 /**
  * Per-handle lifecycle marker for `RhiDevice.destroyTexture` fail-fast
@@ -86,6 +91,8 @@ const QUERY_SET_DESTROYED_MAP: WeakMap<QuerySet, { destroyed: boolean }> = new W
 export interface RawDeviceLike {
   readonly features?: ReadonlySet<string> | undefined;
   readonly limits?: Readonly<Record<string, number>> | undefined;
+  /** Concrete wgpu downlevel flag, projected by the wasm binding. */
+  readonly surfaceViewFormats?: boolean | undefined;
   readonly queue?: unknown;
   // forgeax-async-whitelist: wasm-bindgen — wgpu-wasm `Device.lost` Promise passthrough
   readonly lost?: Promise<{ readonly reason: string; readonly message: string }> | undefined;
@@ -99,12 +106,46 @@ export interface RawDeviceLike {
   createComputePipeline?(desc: unknown): unknown;
   createShaderModule?(desc: unknown): unknown;
   createCommandEncoder?(desc?: unknown): unknown;
+  createRenderBundleEncoder?(desc: unknown): unknown;
   createTextureView?(tex: unknown, desc: unknown): unknown;
   createQuerySet?(desc: unknown): unknown;
   // F4 (feat-20260622-s5): wgpu-wasm device exposed register_lost_callback (rhi.rs:935).
   // When raw.lost is undefined (wasm path without native device.lost Promise),
   // the constructor wires this to resolve the forged Promise.
   registerLostCallback?(cb: (reason: string, message: string) => void): void;
+}
+
+type WasmTextureExtent = {
+  width: number;
+  height: number;
+  depthOrArrayLayers: number;
+};
+
+/**
+ * Project the public WebGPU descriptor into the object-only shape accepted by
+ * wgpu-wasm's TextureDescriptorJs. Optional fields stay omitted when callers
+ * explicitly pass undefined, so serde defaults remain effective.
+ */
+function projectTextureDescriptorForWasm(desc: TextureDescriptor): Record<string, unknown> {
+  const size = desc.size as unknown;
+  const extent: WasmTextureExtent =
+    typeof size === 'number'
+      ? { width: size, height: 1, depthOrArrayLayers: 1 }
+      : normalizeExtent(size as GPUExtent3DStrict);
+  const projected: Record<string, unknown> = {
+    size: extent,
+    format: desc.format,
+    usage: desc.usage,
+  };
+  if (desc.label !== undefined) projected.label = desc.label;
+  if (desc.mipLevelCount !== undefined) projected.mipLevelCount = desc.mipLevelCount;
+  if (desc.sampleCount !== undefined) projected.sampleCount = desc.sampleCount;
+  if (desc.dimension !== undefined) projected.dimension = desc.dimension;
+  if (desc.viewFormats !== undefined) projected.viewFormats = Array.from(desc.viewFormats);
+  if (desc.textureBindingViewDimension !== undefined) {
+    projected.textureBindingViewDimension = desc.textureBindingViewDimension;
+  }
+  return projected;
 }
 
 // Caps probe — split by spec-feature gate vs mandatory-but-noncompliant
@@ -119,7 +160,9 @@ function probeRgba16floatRenderable(raw: RawDeviceLike): boolean {
       label: 'forgeax-caps-probe-rgba16float-renderable',
       format: 'rgba16float',
       usage: 16, // GPUTextureUsage.RENDER_ATTACHMENT
-      size: [1, 1, 1],
+      // wgpu-wasm deserializes TextureDescriptor.size as Extent3dJs;
+      // preserve its named POD shape instead of relying on array coercion.
+      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
     });
     return true;
   } catch {
@@ -140,7 +183,7 @@ function probeRg11b10ufloatRenderable(raw: RawDeviceLike, features: ReadonlySet<
       label: 'forgeax-caps-probe-rg11b10ufloat-renderable',
       format: 'rg11b10ufloat',
       usage: 16, // GPUTextureUsage.RENDER_ATTACHMENT
-      size: [1, 1, 1],
+      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
     });
     return true;
   } catch {
@@ -190,9 +233,12 @@ class RhiWgpuDeviceImpl implements RhiDevice {
   readonly lost: Promise<RhiWgpuDeviceLost>;
 
   private readonly raw: RawDeviceLike;
+  private readonly deviceGeneration: number;
+  private r32FloatProbe: ReturnType<typeof probeR32FloatCapability> | undefined;
 
   constructor(raw: RawDeviceLike) {
     this.raw = raw;
+    this.deviceGeneration = nextWgpuDeviceGeneration++;
     // Expose the raw handle on a single shim-internal field so the
     // top-level `createShaderModule(device, desc)` factory (index.ts) can
     // walk back to the raw GPUDevice without exposing the boundary to AI
@@ -245,7 +291,9 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       // in the raw feature set.
       timestampQuery: false,
       timestampPeriodNanoseconds: null,
-      indirectDrawing: true,
+      // WebGL2 cannot execute wgpu's indirect draws. The wasm binding may
+      // expose drawIndirect methods, but wgpu-core rejects the recorded work.
+      indirectDrawing: false,
       textureCompressionBc: hasFeature('texture-compression-bc'),
       textureCompressionEtc2: hasFeature('texture-compression-etc2'),
       textureCompressionAstc: hasFeature('texture-compression-astc'),
@@ -253,7 +301,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       pushConstants: false,
       textureBindingArray: false,
       samplerAliasing: true,
-      firstInstanceIndirect: hasFeature('indirect-first-instance'),
+      firstInstanceIndirect: false,
       // The wgpu GLES/WebGL2 downlevel may expose a non-zero translated
       // limit, but shader-storage buffers are not a usable WebGL2 contract.
       // Report the capability at the engine boundary rather than leaking the
@@ -264,6 +312,13 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       ...hdrCaps,
       maxColorAttachments: rawLimits.maxColorAttachments ?? 4,
     } as RhiCaps;
+    // Keep this route fact outside public RhiCaps. Render owns the closed
+    // dual-view/raw-only projection and reads the shim-internal property.
+    Object.defineProperty(this, 'surfaceViewFormats', {
+      value: raw.surfaceViewFormats ?? false,
+      enumerable: false,
+      configurable: false,
+    });
     this.queue =
       raw.queue === undefined || raw.queue === null
         ? makeRhiQueue({})
@@ -347,8 +402,13 @@ class RhiWgpuDeviceImpl implements RhiDevice {
     }
   }
 
+  probeTextureFormatCapability(): ReturnType<typeof probeR32FloatCapability> {
+    this.r32FloatProbe ??= probeR32FloatCapability(this.deviceGeneration);
+    return this.r32FloatProbe;
+  }
+
   createTexture(desc: TextureDescriptor): Result<Texture, RhiError> {
-    const r = this.wrap<Texture>(this.raw.createTexture, desc);
+    const r = this.wrap<Texture>(this.raw.createTexture, projectTextureDescriptorForWasm(desc));
     if (r.ok) {
       // feat-20260612 M1 / w5 — register the destroyed marker so
       // destroyTexture can fail-fast on the second call (D-7).
@@ -489,6 +549,16 @@ class RhiWgpuDeviceImpl implements RhiDevice {
     return this.wrap<ComputePipeline>(this.raw.createComputePipeline, desc);
   }
 
+  createRenderBundleEncoder(
+    desc: RenderBundleEncoderDescriptor,
+  ): Result<RhiRenderBundleEncoder, RhiError> {
+    const result = this.wrap<RawRenderPassLike & { finish(desc?: unknown): unknown }>(
+      this.raw.createRenderBundleEncoder,
+      { ...desc, colorFormats: Array.from(desc.colorFormats ?? []) },
+    );
+    return result.ok ? ok(makeRhiRenderBundleEncoder(result.value)) : result;
+  }
+
   createCommandEncoder(
     desc?: CommandEncoderDescriptor | undefined,
   ): Result<RhiCommandEncoder, RhiError> {
@@ -507,7 +577,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       );
     }
     try {
-      const raw = this.raw.createCommandEncoder.call(this.raw, desc);
+      const raw = this.raw.createCommandEncoder.call(this.raw, desc ?? {});
       return ok(makeRhiCommandEncoder(raw as RawCommandEncoderLike));
     } catch (e) {
       return webgpuRuntimeError(e);

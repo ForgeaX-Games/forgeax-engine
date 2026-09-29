@@ -15,13 +15,17 @@ encoder, finish, or submit.
 
 Use one path:
 
-1. Author schema-v2 emitter metadata with `program: { module }`, required fixed bounds, schedule, and renderer GUIDs.
+1. Author schema-v3 emitter metadata with `program: { module }`, required fixed bounds, schedule, and renderer GUIDs.
 2. Author `vfx_spawn` and `vfx_update` in WGSL; import `forgeax_vfx::prelude` and shared shader modules with `#import`.
 3. Cook with `createParticleCodeNativeCooker(modules)`; publish payload and `particle-effect/program.json` atomically.
 4. Create one `createVfxRuntimeHost({ camera })`, attach each `{ world, assets }`, and register `host.feature` with the Renderer.
 5. Load by GUID with `loadVfxGpuEffect`, allocate a shared `ParticleEffectAsset` ref, and spawn `ParticleEffectPlayer`.
 
 Read [`packages/vfx/README.md`](../../packages/vfx/README.md) for the author ABI and lifecycle, [`packages/vfx-compiler/README.md`](../../packages/vfx-compiler/README.md) for reflection and cook errors, and [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md) for GPU/render ownership.
+
+Every particle topology fogs at its own depth through the shared
+`translucent_fog`; alpha blending adds in-scattering and additive blending only
+attenuates. Particles never need an effect-side fog term.
 
 > [!IMPORTANT]
 > Behavior belongs in WGSL code, not a node/operator graph. Do not add CPU mirrors, runtime compilation, backend-name checks, direct RHI access, particle readback, or demo-side render workarounds.
@@ -38,6 +42,10 @@ generation, player handle, asset GUID and emitter ID; do not collapse it back to
 one latest intent or treat a realm-local handle as cross-World identity. Recover
 through the owning generation/LKG path. For asset changes, run
 `node scripts/asset-cook-contract.mjs`; a package-local scripts path is invalid.
+For a live, same-generation preview control, acquire `host.acquireControl(world)`
+and use its typed `patchPlayerParameters` or `submitChannel` methods. Their
+generation and structured errors are the evidence boundary; do not reach
+through `VFX_GPU_RUNTIME_RESOURCE_KEY` to mutate an instance directly.
 Verify with:
 
 ```sh
@@ -49,4 +57,4 @@ pnpm metrics:check
 pnpm metrics:run
 ```
 
-Browser and Dawn are required because Null structural success cannot prove compute validation, topology draws, or pixels. Visual evidence records `advanced-renderers-visible`, `live-patch-continuity`, `event-sub-emitter-visible`, and `hmr-last-known-good-visible` with a PNG and falsifier result.
+Browser and Dawn are required because Null structural success cannot prove compute validation, topology draws, or pixels. Visual evidence records `advanced-renderers-visible`, `live-patch-continuity`, `event-sub-emitter-visible`, and `hmr-last-known-good-visible` with a PNG and falsifier result. Program v3 custom billboard sorting is executable only when the source declares one typed `VfxCustom` sort field; the compiler and managed GPU pass reject ambiguity instead of silently falling back to emitter order.

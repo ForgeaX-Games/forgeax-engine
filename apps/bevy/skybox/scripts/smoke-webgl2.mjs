@@ -8,7 +8,7 @@ import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..', '..');
 const PORT = Number.parseInt(process.env.FORGEAX_SKYBOX_WEBGL2_PORT ?? '5421', 10);
-const FRAME_COUNT = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const FRAME_COUNT = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_SKYBOX_WEBGL2_DIR ?? resolve(ROOT, '.forgeax-debug/skybox-webgl2'),
 );

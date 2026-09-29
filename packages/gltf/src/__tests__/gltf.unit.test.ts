@@ -189,7 +189,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       await rm(tempDir, { recursive: true, force: true });
     });
 
-    describe('cli-gltf (forgeax-engine-remote-gltf plugin bin)', () => {
+    describe('cli-gltf (forgeax asset import plugin bin)', () => {
       describe('subcommand routing (a)', () => {
         it('prints help on --help and exits 0', async () => {
           const io = makeIO();
@@ -278,6 +278,9 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     'gltf-version-unsupported',
     'gltf-buffer-out-of-bounds',
     'gltf-extension-unsupported',
+    'gltf-lod-invalid',
+    'gltf-material-transmission-invalid',
+    'gltf-material-physical-invalid',
     'gltf-accessor-type-mismatch',
     'gltf-texture-load-failed',
     'gltf-meta-missing',
@@ -299,7 +302,8 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
   ];
 
   function classifyByExhaustiveSwitch(err: GltfError): string {
-    switch (err.code) {
+    const code = err.code;
+    switch (code) {
       case 'gltf-malformed-header':
         return 'malformed';
       case 'gltf-version-unsupported':
@@ -308,6 +312,12 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         return 'oob';
       case 'gltf-extension-unsupported':
         return 'ext';
+      case 'gltf-lod-invalid':
+        return 'lod';
+      case 'gltf-material-transmission-invalid':
+        return 'material-transmission-invalid';
+      case 'gltf-material-physical-invalid':
+        return 'material-physical-invalid';
       case 'gltf-accessor-type-mismatch':
         return 'accessor';
       case 'gltf-texture-load-failed':
@@ -345,6 +355,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       case 'gltf-mesh-bridge-invalid':
         return 'mesh-bridge-invalid';
     }
+    throw new Error(`unhandled glTF error code: ${code}`);
   }
 
   function buildErrSample(code: GltfErrorCode): GltfError {
@@ -357,6 +368,22 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         return gltfErr(code, { accessor: 0, byteOffset: 0, byteLength: 0, bufferIndex: 0 });
       case 'gltf-extension-unsupported':
         return gltfErr(code, { extension: 'KHR_x', source: 'extensionsRequired' });
+      case 'gltf-lod-invalid':
+        return gltfErr(code, { rootNode: 0, ids: [1], reason: 'missing-node' });
+      case 'gltf-material-transmission-invalid':
+        return gltfErr(code, {
+          extension: 'KHR_materials_transmission',
+          field: 'transmissionFactor',
+          reason: 'range',
+          actual: 2,
+        });
+      case 'gltf-material-physical-invalid':
+        return gltfErr(code, {
+          extension: 'KHR_materials_clearcoat',
+          field: 'clearcoatFactor',
+          reason: 'range',
+          actual: 2,
+        });
       case 'gltf-accessor-type-mismatch':
         return gltfErr(code, { accessorIndex: 0, reason: 'sparse' });
       case 'gltf-texture-load-failed':
@@ -438,6 +465,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       case 'gltf-mesh-bridge-invalid':
         return gltfErr(code, { reason: 'empty-input', primitiveCount: 0 });
     }
+    throw new Error(`unhandled glTF error code: ${code}`);
   }
 
   describe('errors.test.ts', () => {
@@ -446,8 +474,8 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     });
 
     describe('GltfErrorCode roster', () => {
-      it('GLTF_ERROR_HINTS exposes exactly 22 keys', () => {
-        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(22);
+      it('GLTF_ERROR_HINTS exposes exactly 25 keys', () => {
+        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(25);
       });
 
       it.each(ALL_CODES)('hint for %s is a non-empty string', (code) => {
@@ -1175,14 +1203,14 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(serialize(importerMesh?.payload)).toBe(serialize(baselineMesh));
         const meshBody = importerMesh?.artifacts.body;
         expect(meshBody?.mediaType).toBe('application/x-forgeax-mesh');
-        expect(meshBody?.assetCodec).toEqual({ name: 'mesh-binary', version: '4' });
+        expect(meshBody?.assetCodec).toEqual({ name: 'mesh-binary', version: '5' });
         expect(meshBody?.bytes).toBeInstanceOf(Uint8Array);
         const meshHeader = new DataView(
           (meshBody?.bytes as Uint8Array).buffer,
           (meshBody?.bytes as Uint8Array).byteOffset,
           (meshBody?.bytes as Uint8Array).byteLength,
         );
-        expect(meshHeader.getUint32(0, true)).toBe(4);
+        expect(meshHeader.getUint32(0, true)).toBe(5);
         expect(meshHeader.getUint32(4, true)).toBe(1);
         expect(meshHeader.getUint32(12, true)).toBe(
           baselineMesh.vertices.byteLength / (baselineMesh.vertices.length / 12),
@@ -1219,12 +1247,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
 
   const MOCK_TEXTURE: TextureAsset = {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array([0, 0, 0, 0]),
     colorSpace: 'srgb',
-    mipmap: true,
+    mips: { kind: 'generate' },
   };
 
   function buildSelfContainedGltfWithDataUriImage(): Uint8Array {
@@ -1296,6 +1323,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     bytes: Uint8Array;
     subAssets: readonly ImportSubAsset[];
     decodeCalls: DecodeCall[];
+    importSettings?: Readonly<Record<string, unknown>>;
   }): ImportContext {
     return {
       source: 'inline.gltf',
@@ -1319,8 +1347,20 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         };
       },
       subAssets: opts.subAssets,
-      importSettings: {},
+      importSettings: opts.importSettings ?? {},
     };
+  }
+
+  function buildSkinOnlyGltf(): Uint8Array {
+    return new TextEncoder().encode(
+      JSON.stringify({
+        asset: { version: '2.0' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ name: 'root', children: [1] }, { name: 'joint' }],
+        skins: [{ joints: [1] }],
+      }),
+    );
   }
 
   describe('gltf-importer-texture-data-uri.test.ts', () => {
@@ -1358,6 +1398,150 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(materialPayload.values?.emissiveTexture).toMatchObject({ texture: 1 });
       });
     });
+
+    it('derives animated bounds through the real glTF import path without metadata', async () => {
+      const binary = new Uint8Array(72);
+      new Float32Array(binary.buffer, 0, 3).set([1, 0, 0]);
+      new Uint16Array(binary.buffer, 12, 4).set([0, 0, 0, 0]);
+      new Float32Array(binary.buffer, 20, 4).set([1, 0, 0, 0]);
+      new Float32Array(binary.buffer, 36, 2).set([0, 1]);
+      new Float32Array(binary.buffer, 44, 6).set([0, 0, 0, 4, 2, 0]);
+      const guid = '019e2cc6-0c86-79da-aa76-b0984c86d493';
+      const source = {
+        asset: { version: '2.0' },
+        buffers: [
+          {
+            byteLength: 72,
+            uri: `data:application/octet-stream;base64,${Buffer.from(binary).toString('base64')}`,
+          },
+        ],
+        bufferViews: [
+          [0, 12],
+          [12, 8],
+          [20, 16],
+          [36, 8],
+          [44, 24],
+        ].map(([byteOffset, byteLength]) => ({ buffer: 0, byteOffset, byteLength })),
+        accessors: [
+          { bufferView: 0, componentType: 5126, count: 1, type: 'VEC3' },
+          { bufferView: 1, componentType: 5123, count: 1, type: 'VEC4' },
+          { bufferView: 2, componentType: 5126, count: 1, type: 'VEC4' },
+          { bufferView: 3, componentType: 5126, count: 2, type: 'SCALAR' },
+          { bufferView: 4, componentType: 5126, count: 2, type: 'VEC3' },
+        ],
+        meshes: [
+          { primitives: [{ mode: 0, attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 } }] },
+        ],
+        nodes: [
+          { name: 'root', children: [1, 2] },
+          { name: 'mesh', mesh: 0, skin: 0 },
+          { name: 'joint' },
+        ],
+        scenes: [{ nodes: [0] }],
+        scene: 0,
+        skins: [{ joints: [2] }],
+        animations: [
+          {
+            channels: [{ sampler: 0, target: { node: 2, path: 'translation' } }],
+            samplers: [{ input: 3, output: 4, interpolation: 'LINEAR' }],
+          },
+        ],
+      };
+      const produced = unwrap(
+        await gltfImporter.import(
+          makeDataUriCtx({
+            bytes: new TextEncoder().encode(JSON.stringify(source)),
+            subAssets: [{ guid, kind: 'skeleton', sourceIndex: 0 }],
+            decodeCalls: [],
+          }),
+        ),
+      );
+      const skeleton = produced.find((asset) => asset.guid === guid);
+      if (skeleton?.payload.kind !== 'skeleton') throw new Error('missing skeleton');
+      const bounds = skeleton.payload.bounds;
+      if (bounds === undefined) throw new Error('missing imported animation bounds');
+      expect(bounds[0]).toBeLessThanOrEqual(1);
+      expect(bounds[3]).toBeGreaterThanOrEqual(5);
+      expect(bounds[4]).toBeGreaterThanOrEqual(2);
+      expect((bounds[3] ?? NaN) - (bounds[0] ?? NaN)).toBeLessThan(4.01);
+    });
+
+    it('imports producer-authored animated skin bounds from importSettings with the SkinAsset', async () => {
+      const skeletonGuid = '019e2cc6-0c86-79da-aa76-b0984c86d490';
+      const skinGuid = '019e2cc6-0c86-79da-aa76-b0984c86d491';
+      const sceneGuid = '019e2cc6-0c86-79da-aa76-b0984c86d492';
+      const produced = unwrap(
+        await gltfImporter.import(
+          makeDataUriCtx({
+            bytes: buildSkinOnlyGltf(),
+            subAssets: [
+              { guid: skeletonGuid, sourceIndex: 0, kind: 'skeleton' },
+              { guid: skinGuid, sourceIndex: 0, kind: 'skin' },
+              { guid: sceneGuid, sourceIndex: 0, kind: 'scene' },
+            ],
+            decodeCalls: [],
+            importSettings: {
+              conservativeAnimatedBounds: [[-2, -3, -4, 2, 3, 4]],
+            },
+          }),
+        ),
+      );
+      const skeleton = produced.find((asset) => asset.guid === skeletonGuid);
+      expect(skeleton?.payload).toMatchObject({ kind: 'skeleton', jointCount: 1 });
+      if (skeleton?.payload.kind !== 'skeleton') throw new Error('expected SkeletonAsset');
+      expect(skeleton.payload.bounds).toEqual(new Float32Array([-2, -3, -4, 2, 3, 4]));
+
+      const skin = produced.find((asset) => asset.guid === skinGuid);
+      expect(skin?.payload).toEqual({
+        kind: 'skin',
+        skeletonGuid,
+        jointPaths: ['root/joint'],
+      });
+    });
+
+    it('reads glTF ForgeaX extras as producer-authored bounds without bind-pose derivation', async () => {
+      const parsed = await parseGltf(
+        {
+          asset: { version: '2.0' },
+          nodes: [{ name: 'root', children: [1] }, { name: 'joint' }],
+          scenes: [{ nodes: [0] }],
+          skins: [
+            {
+              joints: [1],
+              extras: { forgeax: { conservativeAnimatedBounds: [-1, -2, -3, 1, 2, 3] } },
+            },
+          ],
+        },
+        async () => new ArrayBuffer(0),
+        'extras.gltf',
+      );
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.value.skeletons[0]?.bounds).toEqual(new Float32Array([-1, -2, -3, 1, 2, 3]));
+    });
+
+    it('leaves animated bounds absent when skinned positions have no producer metadata', async () => {
+      const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+      const parsed = await parseGltf(
+        {
+          asset: { version: '2.0' },
+          buffers: [{ byteLength: positions.length * 4, uri: buildBase64Buffer(positions) }],
+          bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.length * 4 }],
+          accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+          meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+          nodes: [{ name: 'root', mesh: 0, skin: 0, children: [1] }, { name: 'joint' }],
+          scenes: [{ nodes: [0] }],
+          scene: 0,
+          skins: [{ joints: [1] }],
+        },
+        noopLoader,
+        'no-animated-bounds.gltf',
+      );
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.value.meshes[0]?.positions).toEqual(new Float32Array(positions));
+      expect(parsed.value.skeletons[0]?.bounds).toBeUndefined();
+    });
   });
 }
 
@@ -1371,12 +1555,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
 
   const EXT_MOCK_TEXTURE: TextureAsset = {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array([200, 100, 50, 255]),
     colorSpace: 'srgb',
-    mipmap: true,
+    mips: { kind: 'generate' },
   };
 
   interface SiblingCall {
@@ -1481,12 +1664,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
 
   const GLB_MOCK_TEXTURE: TextureAsset = {
     kind: 'texture',
-    width: 1,
-    height: 1,
+    shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array([255, 128, 64, 255]),
     colorSpace: 'srgb',
-    mipmap: true,
+    mips: { kind: 'generate' },
   };
 
   interface GlbDecodeCall {
@@ -1741,11 +1923,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       const meshRef = meshRefs?.[0];
       expect(meshRef?.sourceField?.componentName).toBe('MeshFilter');
       expect(meshRef?.sourceField?.fieldName).toBe('assetHandle');
-      expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+      expect(meshRef?.sceneEntityKey).toMatch(/^node-\d+$/);
       expect(scene?.refs.some((ref) => ref.guid === MAT_GUID)).toBe(false);
     });
 
-    it('(b) sceneEntityId matches entity localId for handle-field refs', async () => {
+    it('(b) sceneEntityKey identifies the keyed entity for handle-field refs', async () => {
       const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
       const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
       const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
@@ -1766,7 +1948,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
       const meshRef = scene?.refs.find((r) => r.guid === MESH_GUID);
-      expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+      expect(meshRef?.sceneEntityKey).toMatch(/^node-\d+$/);
     });
 
     it('(c) transitive texture edges live on MaterialAsset, not SceneAsset', async () => {
@@ -1815,6 +1997,15 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       expect(mat).toBeDefined();
       const parentRefs = mat?.refs.filter((r) => r.sourceField?.fieldName === 'parent');
       expect(parentRefs?.map((ref) => ref.guid)).toEqual(['019e2cc6-0c86-79da-aa76-b0984c86d4ff']);
+      expect(mat?.payload).toMatchObject({
+        kind: 'material',
+        parent: '019e2cc6-0c86-79da-aa76-b0984c86d4ff',
+      });
+      expect(Object.keys((mat?.payload ?? {}) as Record<string, unknown>).sort()).toEqual([
+        'kind',
+        'parent',
+        'values',
+      ]);
     });
 
     it('(e) material refs texture edges: sourceField.componentName="<material>" and fieldName is texture slot', async () => {
@@ -1841,7 +2032,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       expect(texRef).toBeDefined();
       expect(texRef?.sourceField?.componentName).toBe('<material>');
       expect(texRef?.sourceField?.fieldName).toBe('baseColorTexture');
-      expect(texRef?.sceneEntityId).toBeUndefined();
+      expect(texRef?.sceneEntityKey).toBeUndefined();
     });
 
     it('(f) all scene refs AssetRef entries have valid shape', async () => {
@@ -1921,6 +2112,25 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
           materials: [{ emissiveTexture: 0 }],
         });
         expect(map.get(0)).toBe('srgb');
+      });
+
+      it('physical extension texture slots keep their glTF color domains', () => {
+        const map = deriveTextureColorSpace({
+          imageCount: 4,
+          textures: [{ source: 0 }, { source: 1 }, { source: 2 }, { source: 3 }],
+          materials: [
+            {
+              sheenColorTexture: 0,
+              specularColorTexture: 1,
+              anisotropyTexture: 2,
+              thicknessTexture: 3,
+            },
+          ],
+        });
+        expect(map.get(0)).toBe('srgb');
+        expect(map.get(1)).toBe('srgb');
+        expect(map.get(2)).toBe('linear');
+        expect(map.get(3)).toBe('linear');
       });
 
       it('occlusionTexture image classifies as linear', () => {
@@ -2012,11 +2222,25 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         stderrSpy.mockRestore();
       });
 
-      it('v1 allowlist contains EXT_mesh_gpu_instancing (literal)', () => {
-        expect(EXTENSION_ALLOWLIST).toEqual(['EXT_mesh_gpu_instancing', 'EXT_meshopt_compression']);
+      it('public allowlist contains every currently supported extension (literal)', () => {
+        expect(EXTENSION_ALLOWLIST).toEqual([
+          'EXT_mesh_gpu_instancing',
+          'EXT_meshopt_compression',
+          'KHR_lights_punctual',
+          'KHR_texture_transform',
+          'KHR_materials_transmission',
+          'KHR_materials_ior',
+          'KHR_materials_volume',
+          'KHR_materials_clearcoat',
+          'KHR_materials_anisotropy',
+          'KHR_materials_sheen',
+          'KHR_materials_iridescence',
+          'KHR_materials_specular',
+          'KHR_materials_diffuse_transmission',
+        ]);
       });
 
-      it('(a) rejects extensionsRequired entries outside the allowlist', () => {
+      it('(a) rejects unsupported extensionsRequired entries', () => {
         const result = checkExtensions({
           extensionsRequired: ['KHR_materials_pbrSpecularGlossiness'],
         });
@@ -2029,7 +2253,9 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       });
 
       it('(b) accepts extensionsUsed (not required) into diagnostics list with no stderr', () => {
-        const result = checkExtensions({ extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'] });
+        const result = checkExtensions({
+          extensionsUsed: ['KHR_materials_pbrSpecularGlossiness', 'KHR_materials_transmission'],
+        });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual(['KHR_materials_pbrSpecularGlossiness']);
@@ -2067,6 +2293,23 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
 
       it('EXT_mesh_gpu_instancing in extensionsRequired routes ok (allowlisted)', () => {
         const result = checkExtensions({ extensionsRequired: ['EXT_mesh_gpu_instancing'] });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.unsupportedUsed).toEqual([]);
+        expect(stderrSpy).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        'KHR_materials_transmission',
+        'KHR_materials_ior',
+        'KHR_materials_volume',
+        'KHR_materials_clearcoat',
+        'KHR_materials_anisotropy',
+        'KHR_materials_sheen',
+        'KHR_materials_iridescence',
+        'KHR_materials_specular',
+      ])('%s in extensionsRequired routes ok (supported)', (extension) => {
+        const result = checkExtensions({ extensionsRequired: [extension] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual([]);
@@ -2667,16 +2910,6 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         for (let i = 0; i < first.subAssets.length; i++) {
           expect(second.subAssets[i]?.guid).toBe(first.subAssets[i]?.guid);
         }
-      });
-
-      it('BindPose AABB exported from parse-skin computes correctly', async () => {
-        const { computeBindPoseAABB } = await import('../parse-skin.js');
-        const pos = new Float32Array([-1, -2, -3, 1, 2, 3, 0, 0, 0]);
-        const aabb = computeBindPoseAABB(pos);
-        expect(aabb).toBeDefined();
-        if (!aabb) return;
-        expect(aabb.min).toEqual([-1, -2, -3]);
-        expect(aabb.max).toEqual([1, 2, 3]);
       });
     });
   });

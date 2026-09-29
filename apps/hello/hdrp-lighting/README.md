@@ -18,9 +18,11 @@ device, graph, and receipt path.
 | Material and shader identity | `Materials.standard`, `forgeax::default-standard-pbr` |
 | Frame lifecycle | `createApp -> attach -> draw -> FrameReceipt` |
 | Observation and recovery | receipt-bound `observe` / `recover` |
-| GPU evidence | Dawn 300-frame smoke |
+| GPU evidence | Dawn 60-frame smoke |
 
-The clustered profile is selected in the app options:
+The clustered profile is selected in the app options. `renderPath` chooses
+only the forward/deferred graph variant; both variants use the same unified
+Cluster light transport:
 
 ```ts
 const appRes = await createApp(
@@ -28,7 +30,7 @@ const appRes = await createApp(
   {
     standardProfile: {
       ...DEFAULT_STANDARD_PROFILE,
-      lighting: 'clustered',
+      renderPath: 'deferred',
     },
   },
   forgeaxBundlerAdapter(),
@@ -45,12 +47,11 @@ Run the real Dawn path:
 
 ```bash
 pnpm --filter @forgeax/hello-hdrp-lighting smoke
-FALSIFY=force-direct pnpm --filter @forgeax/hello-hdrp-lighting smoke
 ```
 
-The first command exercises the clustered lane for 300 frames. The falsifier
-selects the direct Standard lane, so the pixel and receipt evidence proves the
-lane selection is observable. A null backend, CPU stand-in, or skipped GPU
+The command exercises the clustered lane for 60 frames. A local
+`FALSIFY=force-forward` run selects the alternate forward graph while keeping
+the same Cluster light transport. A null backend, CPU stand-in, or skipped GPU
 path is not accepted as evidence.
 
 ## Related evidence

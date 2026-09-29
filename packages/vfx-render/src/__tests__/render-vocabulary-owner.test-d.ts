@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { ParticleRendererSource } from '@forgeax/engine-vfx';
+import type { ParticleRendererSourceV3 } from '@forgeax/engine-vfx';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   createVfxRenderInspectSnapshot,
@@ -13,8 +13,8 @@ import type {
 } from '../feature/particle-resources.js';
 import type { VfxStagePlanObservation } from '../feature/stage-plan.js';
 
-type RendererKind = ParticleRendererSource['kind'];
-type TopologyRenderer = Extract<ParticleRendererSource, { readonly capacity: number }>;
+type RendererKind = ParticleRendererSourceV3['kind'];
+type TopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;
 type TopologyKind = TopologyRenderer['kind'];
 type StageOutput = VfxStagePlanObservation['stageOutput'];
 
@@ -62,16 +62,16 @@ describe('VFX render vocabulary owners', () => {
 
   it('keeps both production projections derived from the source owner', () => {
     expect(normalizedGpuFeatureSource).toContain(
-      "type ParticleRendererKind = ParticleRendererSource['kind'];",
+      "type ParticleRendererKind = ParticleRendererSourceV3['kind'];",
     );
     expect(normalizedParticleResourcesSource).toContain(
-      "type ParticleRendererKind = ParticleRendererSource['kind'];",
+      "type ParticleRendererKind = ParticleRendererSourceV3['kind'];",
     );
     expect(normalizedGpuFeatureSource).toContain(
-      'type ParticleTopologyRenderer = Extract<ParticleRendererSource, { readonly capacity: number }>;',
+      'type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;',
     );
     expect(normalizedParticleResourcesSource).toContain(
-      'type ParticleTopologyRenderer = Extract<ParticleRendererSource, { readonly capacity: number }>;',
+      'type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;',
     );
     expect(gpuFeatureSource).toContain('readonly topology: ParticleRendererKind;');
     expect(gpuFeatureSource).toContain('topology: ParticleTopologyKind,');

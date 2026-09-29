@@ -17,7 +17,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 /**
  * Minimatch-like glob test: checks if a path matches a glob pattern.
- * Supports * (single segment) and ** (any depth) wildcards.
+ * Supports * (including within a single segment) and ** (any depth) wildcards.
  */
 function _pathMatchesGlob(path, glob) {
   const pathParts = path.split('/').filter(Boolean);
@@ -55,7 +55,9 @@ function _pathMatchesGlob(path, glob) {
 
 function segmentMatches(pathSegment, globSegment) {
   if (globSegment === '*') return true;
-  return pathSegment === globSegment;
+  if (!globSegment.includes('*')) return pathSegment === globSegment;
+  const escaped = globSegment.replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replaceAll('*', '.*');
+  return new RegExp(`^${escaped}$`).test(pathSegment);
 }
 
 /**
@@ -74,12 +76,15 @@ function globExists(root, glob) {
       return existsSync(dir);
     }
     const segment = parts[globIdx];
-    if (segment === '*') {
+    if (segment === '**') {
+      return walkDeep(dir, globIdx + 1);
+    }
+    if (segment.includes('*')) {
       if (!existsSync(dir)) return false;
       try {
         const entries = readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          if (!entry.name.startsWith('.') && segmentMatches(entry.name, segment)) {
             if (walk(join(dir, entry.name), globIdx + 1)) return true;
           }
         }
@@ -87,9 +92,6 @@ function globExists(root, glob) {
         return false;
       }
       return false;
-    }
-    if (segment === '**') {
-      return walkDeep(dir, globIdx + 1);
     }
     return walk(join(dir, segment), globIdx + 1);
   }

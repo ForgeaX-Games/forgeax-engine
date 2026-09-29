@@ -2,6 +2,7 @@
 
 export type { ParticleRenderCamera, ParticleRenderCameraSource } from './feature/camera.js';
 export {
+  encodeEventBuffer,
   encodeEventInputs,
   eventCapacity,
   eventCounterData,
@@ -10,15 +11,22 @@ export {
   VFX_EVENT_COUNTER_BYTES,
   VFX_EVENT_INPUT_BYTES,
 } from './feature/event-resources.js';
+export type { VfxRenderObservation } from './feature/gpu-particle-feature.js';
 export {
   createVfxRenderInspectSnapshot,
   gpuParticleRenderFeature,
   resolveBillboardAdvancedState,
   topologyRecoveryHint,
 } from './feature/gpu-particle-feature.js';
+export type {
+  ParticleMaterialInputPreparationError,
+  PreparedParticleMaterialInputs,
+} from './feature/particle-resources.js';
 export {
   createTopologyResourcePlan,
+  PARTICLE_INPUT_SHADER_IDENTIFIERS,
   PARTICLE_SHADER_IDENTIFIERS,
+  prepareParticleMaterialInputs,
   topologyCapacitySnapshot,
 } from './feature/particle-resources.js';
 export type {
@@ -42,6 +50,7 @@ export type {
 } from './host/data-interface-providers.js';
 export {
   createCameraProvider,
+  createNoiseProvider,
   createSceneDepthProvider,
   createVfxDataInterfaceRegistry,
 } from './host/data-interface-providers.js';

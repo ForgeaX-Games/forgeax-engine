@@ -1,19 +1,59 @@
-#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
+#pragma material_slot surface
+#import forgeax_material::displacement::{displaceVertex, displacedNormal}
+#import forgeax_clipping::planes::{applyViewClipping, applyLocalClipping}
+#import forgeax_pbr::standard_lighting::{SkylightUniforms, evaluateStandardEnvironment, evaluateStandardDirect}
+#import forgeax_pbr::gbuffer_output::{GBufferOutput, encodeStandardGBuffer}
+
+#import forgeax_material::slot::surface::{evaluate_surface, evaluate_standard_surface}
+#import forgeax_material::surface_v1::{SurfaceInput, SurfaceData}
+#import forgeax_view::common::{View, Mesh, meshMotionValid, InstanceData, view, shadowMap, shadowSampler, sampleMaterialTexture}
+#import forgeax_view::fog::{translucent_fog}
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+#import forgeax_view::common::{sceneIndexDraw}
+#else
+#import forgeax_view::common::{meshes, instances, meshReceivesShadows}
+#endif
+#import forgeax_scene_temporal::{sceneViewZ}
+#ifdef EXTENDED_LIGHTING_AVAILABLE
+#import forgeax_view::common::{spotModifierSampler, iesProfileTexture, cookieTexture, cookieMatrices}
+#endif
 #import forgeax_pbr::temporal::{projectPbrSceneTemporal}
-#import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
-#import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
+#import forgeax_pbr::brdf::{standardOpaqueF0, f_schlick, v_smith, d_ggx}
+#import forgeax_pbr::specular_aa::{geometricNormalSpread, specularAntiAliasedRoughness}
+#import forgeax_pbr::ibl_sampling::{decodeSpecularEnvironmentScale, sampleIblSpecular, sampleReflectionProbeSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
+#ifdef CLEARCOAT_AVAILABLE
+#import forgeax_pbr::clearcoat::{evaluateClearcoatLayer}
+#endif
+#ifdef ANISOTROPY_AVAILABLE
+#import forgeax_pbr::anisotropy::{evaluateAnisotropicNormal}
+#endif
+#ifdef SHEEN_AVAILABLE
+#import forgeax_pbr::sheen::{evaluateSheenLayer}
+#endif
+#ifdef IRIDESCENCE_AVAILABLE
+#import forgeax_pbr::iridescence::{evaluateIridescenceFresnel}
+#endif
 #import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
-#import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot}
-#import forgeax_view::fog::{apply_fog}
-#ifdef POINT_SHADOW_AVAILABLE
-#import forgeax_pbr::lighting_punctual::{evalPointShadowed}
-#import forgeax_view::common::{shadowParams}
+#import forgeax_cloud::layer::{cloud_apply_direct_solar}
+#ifdef CLUSTER_FORWARD_AVAILABLE
+#import forgeax_standard::cluster::{evaluateStandardClusterLights, sampleStandardAmbientOcclusion}
 #endif
 
 #define_import_path forgeax_material::pbr-skin
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis CLUSTER_FORWARD_AVAILABLE
 #pragma variant_axis VERTEX_COLOR_AVAILABLE
+#pragma variant_axis PROBE_BLEND_AVAILABLE
+#pragma variant_axis EXTENDED_LIGHTING_AVAILABLE
+#pragma variant_axis TRANSMISSION_AVAILABLE
+#pragma variant_axis DIRECTIONAL_PCSS_AVAILABLE
+#pragma variant_axis PROJECTOR_AVAILABLE
+#pragma variant_axis GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+#pragma variant_axis REFLECTION_FALLBACK_AVAILABLE
+#pragma variant_axis COVERAGE_ONLY
+
+
 
 // @forgeax/engine-shader - default-standard-pbr-skin.wgsl
 // (feat-20260523-skin-skeleton-animation M3 / T-29).
@@ -31,17 +71,16 @@
 //
 //   @group(0) @binding(0) view                       uniform   (see common.wgsl)
 //   @group(1) @binding(0) material                   uniform
-//   @group(1) @binding(1) baseColorSampler           sampler
+//   @group(1) @binding(1) baseColorTexture_sampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
-//   @group(1) @binding(3) metallicRoughnessSampler   sampler
+//   @group(1) @binding(3) metallicRoughnessTexture_sampler   sampler
 //   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32>
-//   @group(1) @binding(5) normalSampler              sampler
+//   @group(1) @binding(5) normalTexture_sampler              sampler
 //   @group(1) @binding(6) normalTexture              texture_2d<f32>
-//   @group(1) @binding(7) specularTintSampler + @binding(8) specularTintTexture
 //   @group(1) @binding(9..15) Skylight (irradiance / prefilter / brdfLut +
 //                              samplers) + skylight uniform (intensity)
 //   @group(2) @binding(0) meshes                     storage   (worldFromLocal mat4
-//                                                               + normalMatrix mat3,
+//                                                               + temporal fields,
 //                                                               see common.wgsl)
 //   @group(2) @binding(1) palette                    storage   (array of joint
 //                                                               skinning mat4x4,
@@ -67,92 +106,223 @@
 // 4 joints max; weighted sum of skinned positions from the palette buffer
 // indexed by the per-vertex skinIndex vector.
 
-struct Material {
-  baseColor          : vec4<f32>,
-  metallic           : f32,
-  roughness          : f32,
-  // Channel selectors (D-8): 4 independent f32 entries split out of the
-  // legacy `channelMap : vec4<u32>`. See default-standard-pbr.wgsl for
-  // the full rationale; the skin shader shares the same merged UBO shape.
-  metallicChannel    : f32,
-  roughnessChannel   : f32,
-  aoChannel          : f32,
-  extraChannel       : f32,
-  // vec3 align=16 inserts implicit padding so emissive lands at offset 48;
-  // the authored schema rounds to 112 B (matches default-standard-pbr SSOT).
-  emissive           : vec3<f32>,
-  emissiveIntensity  : f32,
-  occlusionStrength  : f32,
-  alphaCutoff        : f32,
-  clearcoat          : f32,
-  clearcoatRoughness : f32,
-  specularTint       : vec3<f32>,
-  normalScale                   : f32,
-  baseColorTextureCoordinatesTransform : vec4<f32>,
-  baseColorTextureCoordinatesMetadata : vec4<f32>,
-  metallicRoughnessTextureCoordinatesTransform : vec4<f32>,
-  metallicRoughnessTextureCoordinatesMetadata : vec4<f32>,
-  normalTextureCoordinatesTransform : vec4<f32>,
-  normalTextureCoordinatesMetadata : vec4<f32>,
-  specularTintTextureCoordinatesTransform : vec4<f32>,
-  specularTintTextureCoordinatesMetadata : vec4<f32>,
-  emissiveTextureCoordinatesTransform : vec4<f32>,
-  emissiveTextureCoordinatesMetadata : vec4<f32>,
-  occlusionTextureCoordinatesTransform : vec4<f32>,
-  occlusionTextureCoordinatesMetadata : vec4<f32>,
-};
-
-@group(1) @binding(0) var<uniform> material : Material;
-@group(1) @binding(1) var baseColorSampler : sampler;
+// The MaterialParameters struct and its binding-0 declaration are generated
+// from the root ParamSchema during material composition. Keeping the ABI out
+// of this template prevents a second handwritten interface from drifting from
+// the runtime UBO writer.
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
+@group(1) @binding(1) var baseColorTexture_sampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
+#endif
+#ifdef METALLIC_ROUGHNESS_TEXTURE_AVAILABLE
+@group(1) @binding(3) var metallicRoughnessTexture_sampler : sampler;
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
+#endif
+// The compiler remaps these named declarations from the material schema.
+#ifdef METALLIC_TEXTURE_AVAILABLE
+@group(1) @binding(50) var metallicTexture_sampler : sampler;
+@group(1) @binding(51) var metallicTexture : texture_2d<f32>;
+#endif
+#ifdef ROUGHNESS_TEXTURE_AVAILABLE
+@group(1) @binding(52) var roughnessTexture_sampler : sampler;
+@group(1) @binding(53) var roughnessTexture : texture_2d<f32>;
+#endif
+#ifdef ALPHA_TEXTURE_AVAILABLE
+@group(1) @binding(54) var alphaTexture_sampler : sampler;
+@group(1) @binding(55) var alphaTexture : texture_2d<f32>;
+#endif
+#ifdef NORMAL_TEXTURE_AVAILABLE
+@group(1) @binding(5) var normalTexture_sampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
-@group(1) @binding(7) var specularTintSampler : sampler;
-@group(1) @binding(8) var specularTintTexture : texture_2d<f32>;
-@group(1) @binding(9) var emissiveSampler : sampler;
+#endif
+#ifdef BUMP_TEXTURE_AVAILABLE
+@group(1) @binding(17) var bumpTexture_sampler : sampler;
+@group(1) @binding(18) var bumpTexture : texture_2d<f32>;
+#endif
+#ifdef EMISSIVE_TEXTURE_AVAILABLE
+@group(1) @binding(9) var emissiveTexture_sampler : sampler;
 @group(1) @binding(10) var emissiveTexture : texture_2d<f32>;
-@group(1) @binding(11) var occlusionSampler : sampler;
+#endif
+#ifdef OCCLUSION_TEXTURE_AVAILABLE
+@group(1) @binding(11) var occlusionTexture_sampler : sampler;
 @group(1) @binding(12) var occlusionTexture : texture_2d<f32>;
+#endif
+#ifdef TRANSMISSION_AVAILABLE
+#ifdef TRANSMISSION_TEXTURE_AVAILABLE
+@group(1) @binding(13) var transmissionSampler : sampler;
+@group(1) @binding(14) var transmissionTexture : texture_2d<f32>;
+#endif
+#ifdef THICKNESS_TEXTURE_AVAILABLE
+@group(1) @binding(15) var thicknessSampler : sampler;
+@group(1) @binding(16) var thicknessTexture : texture_2d<f32>;
+#endif
+@group(1) @binding(24) var transmissionBackdropTexture : texture_2d<f32>;
+#endif
+#ifdef CLEARCOAT_TEXTURE_AVAILABLE
+@group(1) @binding(26) var clearcoatSampler : sampler;
+@group(1) @binding(27) var clearcoatTexture : texture_2d<f32>;
+#endif
+#ifdef CLEARCOAT_ROUGHNESS_TEXTURE_AVAILABLE
+@group(1) @binding(28) var clearcoatRoughnessSampler : sampler;
+@group(1) @binding(29) var clearcoatRoughnessTexture : texture_2d<f32>;
+#endif
+#ifdef CLEARCOAT_NORMAL_TEXTURE_AVAILABLE
+@group(1) @binding(30) var clearcoatNormalSampler : sampler;
+@group(1) @binding(31) var clearcoatNormalTexture : texture_2d<f32>;
+#endif
+#ifdef ANISOTROPY_TEXTURE_AVAILABLE
+@group(1) @binding(32) var anisotropySampler : sampler;
+@group(1) @binding(33) var anisotropyTexture : texture_2d<f32>;
+#endif
+#ifdef SHEEN_COLOR_TEXTURE_AVAILABLE
+@group(1) @binding(34) var sheenColorSampler : sampler;
+@group(1) @binding(35) var sheenColorTexture : texture_2d<f32>;
+#endif
+#ifdef SHEEN_ROUGHNESS_TEXTURE_AVAILABLE
+@group(1) @binding(36) var sheenRoughnessSampler : sampler;
+@group(1) @binding(37) var sheenRoughnessTexture : texture_2d<f32>;
+#endif
+#ifdef IRIDESCENCE_TEXTURE_AVAILABLE
+@group(1) @binding(38) var iridescenceSampler : sampler;
+@group(1) @binding(39) var iridescenceTexture : texture_2d<f32>;
+#endif
+#ifdef IRIDESCENCE_THICKNESS_TEXTURE_AVAILABLE
+@group(1) @binding(40) var iridescenceThicknessSampler : sampler;
+@group(1) @binding(41) var iridescenceThicknessTexture : texture_2d<f32>;
+#endif
+#ifdef SPECULAR_TEXTURE_AVAILABLE
+@group(1) @binding(42) var specularTextureSampler : sampler;
+@group(1) @binding(43) var specularTexture : texture_2d<f32>;
+#endif
+#ifdef SPECULAR_COLOR_TEXTURE_AVAILABLE
+@group(1) @binding(44) var specularColorTextureSampler : sampler;
+@group(1) @binding(45) var specularColorTexture : texture_2d<f32>;
+#endif
+#ifdef DIFFUSE_TRANSMISSION_TEXTURE_AVAILABLE
+@group(1) @binding(68) var diffuseTransmissionSampler : sampler;
+@group(1) @binding(69) var diffuseTransmissionTexture : texture_2d<f32>;
+#endif
+#ifdef DIFFUSE_TRANSMISSION_COLOR_TEXTURE_AVAILABLE
+@group(1) @binding(70) var diffuseTransmissionColorSampler : sampler;
+@group(1) @binding(71) var diffuseTransmissionColorTexture : texture_2d<f32>;
+#endif
 
 // Preserve filtering reflection for resources passed to the shared sampler.
 fn materialTextureFilteringWitness() {
+#ifdef BUMP_TEXTURE_AVAILABLE
+  let bumpWitness = textureSample(bumpTexture, bumpTexture_sampler, vec2<f32>(0.0));
+#endif
+
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
   let base = baseColorTexture;
+#endif
+#ifdef METALLIC_ROUGHNESS_TEXTURE_AVAILABLE
   let metallicRoughness = metallicRoughnessTexture;
+#endif
+#ifdef NORMAL_TEXTURE_AVAILABLE
   let normal = normalTexture;
-  let specularTint = specularTintTexture;
+#endif
+#ifdef EMISSIVE_TEXTURE_AVAILABLE
   let emissive = emissiveTexture;
+#endif
+#ifdef OCCLUSION_TEXTURE_AVAILABLE
   let occlusion = occlusionTexture;
-  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
-  let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
-  let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
-  let specularTintWitness = textureSample(specularTint, specularTintSampler, vec2<f32>(0.0));
-  let emissiveWitness = textureSample(emissive, emissiveSampler, vec2<f32>(0.0));
-  let occlusionWitness = textureSample(occlusion, occlusionSampler, vec2<f32>(0.0));
+#endif
+#ifdef CLEARCOAT_TEXTURE_AVAILABLE
+  let clearcoat = clearcoatTexture;
+#endif
+#ifdef CLEARCOAT_ROUGHNESS_TEXTURE_AVAILABLE
+  let clearcoatRoughness = clearcoatRoughnessTexture;
+#endif
+#ifdef CLEARCOAT_NORMAL_TEXTURE_AVAILABLE
+  let clearcoatNormal = clearcoatNormalTexture;
+#endif
+#ifdef TRANSMISSION_AVAILABLE
+#ifdef TRANSMISSION_TEXTURE_AVAILABLE
+  let transmission = transmissionTexture;
+#endif
+#ifdef THICKNESS_TEXTURE_AVAILABLE
+  let thickness = thicknessTexture;
+#endif
+#endif
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
+  let baseWitness = textureSample(base, baseColorTexture_sampler, vec2<f32>(0.0));
+#endif
+#ifdef METALLIC_ROUGHNESS_TEXTURE_AVAILABLE
+  let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessTexture_sampler, vec2<f32>(0.0));
+#endif
+#ifdef NORMAL_TEXTURE_AVAILABLE
+  let normalWitness = textureSample(normal, normalTexture_sampler, vec2<f32>(0.0));
+#endif
+#ifdef EMISSIVE_TEXTURE_AVAILABLE
+  let emissiveWitness = textureSample(emissive, emissiveTexture_sampler, vec2<f32>(0.0));
+#endif
+#ifdef OCCLUSION_TEXTURE_AVAILABLE
+  let occlusionWitness = textureSample(occlusion, occlusionTexture_sampler, vec2<f32>(0.0));
+#endif
+#ifdef CLEARCOAT_TEXTURE_AVAILABLE
+  let clearcoatWitness = textureSample(clearcoat, clearcoatSampler, vec2<f32>(0.0));
+#endif
+#ifdef CLEARCOAT_ROUGHNESS_TEXTURE_AVAILABLE
+  let clearcoatRoughnessWitness = textureSample(clearcoatRoughness, clearcoatRoughnessSampler, vec2<f32>(0.0));
+#endif
+#ifdef CLEARCOAT_NORMAL_TEXTURE_AVAILABLE
+  let clearcoatNormalWitness = textureSample(clearcoatNormal, clearcoatNormalSampler, vec2<f32>(0.0));
+#endif
+#ifdef ANISOTROPY_TEXTURE_AVAILABLE
+  let anisotropyWitness = textureSample(anisotropyTexture, anisotropySampler, vec2<f32>(0.0));
+#endif
+#ifdef SHEEN_COLOR_TEXTURE_AVAILABLE
+  let sheenColorWitness = textureSample(sheenColorTexture, sheenColorSampler, vec2<f32>(0.0));
+#endif
+#ifdef SHEEN_ROUGHNESS_TEXTURE_AVAILABLE
+  let sheenRoughnessWitness = textureSample(sheenRoughnessTexture, sheenRoughnessSampler, vec2<f32>(0.0));
+#endif
+#ifdef IRIDESCENCE_TEXTURE_AVAILABLE
+  let iridescenceWitness = textureSample(iridescenceTexture, iridescenceSampler, vec2<f32>(0.0));
+#endif
+#ifdef IRIDESCENCE_THICKNESS_TEXTURE_AVAILABLE
+  let iridescenceThicknessWitness = textureSample(iridescenceThicknessTexture, iridescenceThicknessSampler, vec2<f32>(0.0));
+#endif
+#ifdef SPECULAR_TEXTURE_AVAILABLE
+  let specularWeightWitness = textureSample(specularTexture, specularTextureSampler, vec2<f32>(0.0));
+#endif
+#ifdef SPECULAR_COLOR_TEXTURE_AVAILABLE
+  let specularColorWitness = textureSample(specularColorTexture, specularColorTextureSampler, vec2<f32>(0.0));
+#endif
+#ifdef DIFFUSE_TRANSMISSION_TEXTURE_AVAILABLE
+  let diffuseTransmissionWitness = textureSample(diffuseTransmissionTexture, diffuseTransmissionSampler, vec2<f32>(0.0));
+#endif
+#ifdef DIFFUSE_TRANSMISSION_COLOR_TEXTURE_AVAILABLE
+  let diffuseTransmissionColorWitness = textureSample(diffuseTransmissionColorTexture, diffuseTransmissionColorSampler, vec2<f32>(0.0));
+#endif
+#ifdef TRANSMISSION_AVAILABLE
+#ifdef TRANSMISSION_TEXTURE_AVAILABLE
+  let transmissionWitness = textureSample(transmission, transmissionSampler, vec2<f32>(0.0));
+#endif
+#ifdef THICKNESS_TEXTURE_AVAILABLE
+  let thicknessWitness = textureSample(thickness, thicknessSampler, vec2<f32>(0.0));
+#endif
+#endif
 }
 
-struct SkylightUniforms {
-  intensity : f32,
-  // 16 B (WebGL2 / GLES 3.0 uniform-buffer 16-byte-multiple rule). The former
-  // pad0/1/2 lanes now carry the linear-space ambient `color` tint
-  // (downstream integration #4). Kept as three scalars (NOT vec3<f32>) so the
-  // struct stays exactly 16 B -- a vec3 has 16-byte std140 alignment and would
-  // grow the UBO to 32 B. Host writes `[intensity, colorR, colorG, colorB]`;
-  // color defaults to white so the multiply is identity for intensity-only
-  // callers.
-  colorR : f32,
-  colorG : f32,
-  colorB : f32,
-  rotation : vec4<f32>,
-};
-@group(1) @binding(13) var irradianceMap        : texture_cube<f32>;
-@group(1) @binding(14) var irradianceSampler    : sampler;
-@group(1) @binding(15) var prefilterMap         : texture_cube<f32>;
-@group(1) @binding(16) var prefilterSampler     : sampler;
-@group(1) @binding(17) var brdfLut              : texture_2d<f32>;
-@group(1) @binding(18) var brdfLutSampler       : sampler;
-@group(1) @binding(19) var<uniform> skylight    : SkylightUniforms;
+@group(1) @binding(17) var irradianceMap        : texture_cube<f32>;
+@group(1) @binding(18) var irradianceSampler    : sampler;
+@group(1) @binding(19) var prefilterMap         : texture_cube<f32>;
+@group(1) @binding(20) var prefilterSampler     : sampler;
+@group(1) @binding(21) var brdfLut              : texture_2d<f32>;
+@group(1) @binding(22) var<uniform> skylight    : SkylightUniforms;
+// Global specular remains resident when the per-draw prefilter slot holds a probe.
+@group(1) @binding(47) var skylightPrefilterMap : texture_cube<f32>;
+
+#ifdef PROBE_BLEND_AVAILABLE
+@group(3) @binding(1) var<storage, read> probeBlendRecords : array<vec4<f32>>;
+#endif
+
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+@group(1) @binding(46) var<storage, read> sceneMaterials : array<MaterialParameters>;
+@group(3) @binding(2) var<storage, read> visibleItems : array<vec4<u32>>;
+#endif
 
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(2) @binding(1) var<storage, read> palette : array<mat4x4<f32>>;
@@ -160,6 +330,16 @@ struct SkylightUniforms {
 #else
 @group(2) @binding(1) var<uniform> palette : array<mat4x4<f32>, 255>;
 @group(2) @binding(2) var<uniform> previousPalette : array<mat4x4<f32>, 255>;
+#endif
+
+#ifdef CLUSTER_FORWARD_AVAILABLE
+@group(2) @binding(7) var ssaoBlurredTexture : texture_2d<f32>;
+@group(2) @binding(8) var ssaoBlurredSampler : sampler;
+#endif
+
+#ifdef DISPLACEMENT_TEXTURE_AVAILABLE
+@group(1) @binding(56) var displacementTexture_sampler : sampler;
+@group(1) @binding(57) var displacementTexture : texture_2d<f32>;
 #endif
 
 struct VsIn  {
@@ -183,12 +363,15 @@ struct VsIn  {
 #endif
 };
 struct VsOut {
-  @builtin(position) clip : vec4<f32>,
+  @builtin(position) @invariant clip : vec4<f32>,
+#ifdef TRANSMISSION_AVAILABLE
+  @location(4) @interpolate(flat) transmissionBasis0 : vec4<f32>,
+#endif
   @location(0) worldPos : vec3<f32>,
   @location(1) worldNormal : vec3<f32>,
   @location(2) uv : vec2<f32>,
   @location(3) worldTangent : vec4<f32>,
-  @location(4) @interpolate(flat) instanceIdx : u32,
+  @location(7) positionOSAndViewZ : vec4<f32>,
   // feat-city-glb multi-UV tiling: second UV set varying at location 5
   // (parity with default-standard-pbr.wgsl).
   @location(5) uv1 : vec2<f32>,
@@ -196,41 +379,48 @@ struct VsOut {
   @location(9) uv3 : vec2<f32>,
   @location(10) uv4 : vec2<f32>,
   @location(11) uv5 : vec2<f32>,
-  @location(12) uv6 : vec2<f32>,
-  @location(13) uv7 : vec2<f32>,
+  // UV6/UV7 share one vec4 slot so the transmission basis tail can stay
+  // inside WebGL2's 14 user varying locations.
+  @location(12) uv6And7 : vec4<f32>,
 #ifdef VERTEX_COLOR_AVAILABLE
   @location(14) color : vec4<f32>,
 #endif
-  @location(7) viewZ : f32,
+  @location(6) ndc : vec4<f32>,
+#ifdef TRANSMISSION_AVAILABLE
+  @location(13) @interpolate(flat) transmissionBasis1 : vec4<f32>,
+#else
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  @location(15) @interpolate(flat) materialAddress : vec3<u32>,
+#endif
+#endif
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // Scene-index transmission variants carry the row selector in the same
+  // storage-backed lane.  These variants never target the WebGL2
+  // uniform-fallback limit, so location 15 stays outside its 14-location ABI.
+#ifdef TRANSMISSION_AVAILABLE
+  @location(15) @interpolate(flat) materialAddress : vec3<u32>,
+#endif
+#endif
 };
 
-fn pick_channel(rgba : vec4<f32>, channelIndex : u32) -> f32 {
-  switch (channelIndex) {
-    case 0u: { return rgba.r; }
-    case 1u: { return rgba.g; }
-    case 2u: { return rgba.b; }
-    default: { return rgba.a; }
+fn standardVertexPosition(in : VsIn) -> vec3<f32> {
+#ifdef DISPLACEMENT_TEXTURE_AVAILABLE
+  if (standardUsesDisplacementTexture()) {
+    return displaceVertex(in.pos, in.normal, displacementTexture, displacementTexture_sampler,
+      material.displacementScale, material.displacementBias,
+      material.displacementTextureCoordinatesTransform, material.displacementTextureCoordinatesMetadata,
+      array<vec2<f32>, 8>(in.uv, in.uv1, in.uv2, in.uv3, in.uv4, in.uv5, in.uv6, in.uv7));
   }
+#endif
+  return in.pos;
 }
 
-fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
-  var origin = viewParams.cameraPos;
-  var direction = normalize(worldPos - origin);
-  var rayDistance = length(worldPos - origin);
-  if (viewParams.temporalProjection.z >= 0.5) {
-    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
-    let nearPoint = nearH.xyz / nearH.w;
-    let farPoint = farH.xyz / farH.w;
-    direction = normalize(farPoint - nearPoint);
-    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
-    rayDistance = max(dot(worldPos - origin, direction), 0.0);
-  }
-  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
-}
+fn vs_main_impl(in : VsIn, paletteBase : u32, materialAddress : vec3<u32>) -> VsOut {
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  material = selectedMaterial(materialAddress.x);
+#endif
+  let localPosition = standardVertexPosition(in);
 
-@vertex
-fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   // 4-bone weighted skinning (plan-strategy D-3 / D-3a).
   // The host pre-computes each joint matrix as worldFromJoint * inverseBindMatrix
   // (CPU-side pre-multiplication, per D-4) and writes them into the palette
@@ -239,13 +429,13 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 
   // Accumulate the weighted 4-joint skinning matrix: sum(w_i * M_i).
   // Each palette entry is a mat4x4<f32> (world * IBM per joint).
-  // The host sets the BindGroup dynamic offset to (byteOffset / 64) so the
-  // first palette entry visible to this draw is palette[0]. The shader
-  // indexes into palette directly using the per-vertex skinIndex values.
-  let skinMatrix = palette[in.skinIndex.x] * in.skinWeight.x +
-    palette[in.skinIndex.y] * in.skinWeight.y +
-    palette[in.skinIndex.z] * in.skinWeight.z +
-    palette[in.skinIndex.w] * in.skinWeight.w;
+  // Direct draws use a dynamic offset so palette[0] is the first joint of
+  // the draw. Scene-index indirect draws bind the frame-global storage arena
+  // with zero offsets and carry the producer-owned slice in paletteBase.
+  let skinMatrix = palette[paletteBase + in.skinIndex.x] * in.skinWeight.x +
+    palette[paletteBase + in.skinIndex.y] * in.skinWeight.y +
+    palette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
+    palette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
 
   // glTF 2.0 sec.Skins Implementation Note: when a mesh node has a skin
   // property, the joint matrices already encode the global transform of each
@@ -260,7 +450,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   // This removes the implicit contract "Skin entity Transform.world must be
   // identity" -- a skin entity can be parented under any Transform chain and
   // the skinned mesh will rigidly follow via joint propagation alone.
-  let skinnedLocal = skinMatrix * vec4<f32>(in.pos, 1.0);
+  let skinnedLocal = skinMatrix * vec4<f32>(localPosition, 1.0);
 
   // Extract the upper-left 3x3 for normal/tangent transformation
   // (plan-strategy D-3a). WGSL mat4x4 columns are vec4:
@@ -274,15 +464,8 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   // world = skinnedLocal (position), no extra left-multiply --
   // palette = jointWorld * IBM is already full world-space.
   var out : VsOut;
-  // Keep meshes[0] and instances bindings referenced so naga_oil does not
-  // dead-code-eliminate the @group(2)@binding(0) and @group(3)@binding(0)
-  // globals. The host-side BGL shape must remain compatible with non-skin
-  // PBR pipeline layout (buildPbrSkinLayouts declares 2-entry mesh-array
-  // slot + separate instances slot). Without these keep-alive references,
-  // createRenderPipeline would fail on binding-count mismatch.
-  _ = meshes[0].worldFromLocal;
-  _ = instances[0].localFromInstance;
   out.clip = view.worldViewProj * skinnedLocal;
+  out.positionOSAndViewZ = vec4<f32>(localPosition, sceneViewZ(out.clip, view.temporalProjection));
   out.worldPos = skinnedLocal.xyz;
   out.worldNormal = normalize(skinNormal3x3 * in.normal);
   let worldTangentXyz = normalize(skinNormal3x3 * in.tangent.xyz);
@@ -293,18 +476,100 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   out.uv3 = in.uv3;
   out.uv4 = in.uv4;
   out.uv5 = in.uv5;
-  out.uv6 = in.uv6;
-  out.uv7 = in.uv7;
+  out.uv6And7 = vec4<f32>(in.uv6, in.uv7);
 #ifdef VERTEX_COLOR_AVAILABLE
   out.color = in.color;
 #endif
-  out.instanceIdx = idx;
+#ifdef TRANSMISSION_AVAILABLE
+  // Skin palette already contains the world-space transform. Forward its
+  // affine basis so transmission does not reread Mesh/Instance storage in
+  // the fragment stage.
+  out.transmissionBasis0 = vec4<f32>(skinMatrix[0].xyz, skinMatrix[1].x);
+  out.transmissionBasis1 = vec4<f32>(skinMatrix[1].y, skinMatrix[1].z, skinMatrix[2].x, skinMatrix[2].y);
+#endif
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  out.materialAddress = materialAddress;
+#endif
+  let clipPos = out.clip;
+  out.ndc = vec4(clipPos.xy / clipPos.w, clipPos.z / clipPos.w, skinMatrix[2].z);
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: viewZ replaces the
   // prior light-space-position varying; evalDirectional picks the cascade
   // matrix per fragment from viewZ + worldPos.
-  out.viewZ = -out.clip.w;
+  // Keep the cluster depth exactly aligned with the CPU binner for both
+  // perspective and off-axis orthographic projections.
   return out;
 }
+
+fn standardViewZ(in : VsOut) -> f32 {
+  return in.positionOSAndViewZ.w;
+}
+
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+fn sceneIndexVertex(in : VsIn, idx : u32) -> VsOut {
+  // visible = (scene instance row, material row, palette base, LOD fade).
+  // The palette already carries world space; the scene rows only name the
+  // probe identity and keep the shared scene bindings referenced.
+  let visible = visibleItems[idx];
+  let draw = sceneIndexDraw(visible.x);
+  _ = draw.world;
+  // Scene material rows never reach bit 31; it carries the receive opt-out.
+  return vs_main_impl(
+    in,
+    visible.z,
+    vec3<u32>(visible.y | select(STANDARD_NO_RECEIVE_BIT, 0u, draw.receivesShadows), draw.probe),
+  );
+}
+#endif
+
+// ShadowParticipation.receive: GPU-driven rows ride the flat material lane;
+// per-entity draws read the dynamic-offset Mesh slot directly.
+fn standardReceivesShadows(in : VsOut) -> bool {
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  return (in.materialAddress.x & STANDARD_NO_RECEIVE_BIT) == 0u;
+#else
+#if STORAGE_BUFFER_AVAILABLE == true
+  return meshReceivesShadows(meshes[0].temporal.y);
+#else
+  return true;
+#endif
+#endif
+}
+
+@vertex
+fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+  // This variant binds only the GPU Scene tables; every entry reads the
+  // visible stream.
+  return sceneIndexVertex(in, idx);
+#else
+  // Keep meshes[0] and instances bindings referenced so naga_oil does not
+  // dead-code-eliminate the @group(2)@binding(0) and @group(3)@binding(0)
+  // globals. The host-side BGL shape must remain compatible with non-skin
+  // PBR pipeline layout (buildPbrSkinLayouts declares 2-entry mesh-array
+  // slot + separate instances slot). Without these keep-alive references,
+  // createRenderPipeline would fail at binding-count validation.
+  _ = meshes[0u].worldFromLocal;
+  _ = instances[idx].localFromInstance;
+  return vs_main_impl(in, 0u, vec3<u32>(0xffffffffu, 0u, 0u));
+#endif
+}
+
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+@vertex
+fn vs_scene_index(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
+  return sceneIndexVertex(in, idx);
+}
+#endif
+
+const STANDARD_NO_RECEIVE_BIT : u32 = 0x80000000u;
+
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+fn selectedMaterial(index : u32) -> MaterialParameters {
+  return sceneMaterials[index & ~STANDARD_NO_RECEIVE_BIT];
+}
+
+
+#endif
 
 fn transformedMaterialUv(transform : vec4<f32>, metadata : vec4<f32>, in : VsOut) -> vec2<f32> {
   var source = in.uv;
@@ -313,8 +578,8 @@ fn transformedMaterialUv(transform : vec4<f32>, metadata : vec4<f32>, in : VsOut
   if (metadata.x >= 3.0) { source = in.uv3; }
   if (metadata.x >= 4.0) { source = in.uv4; }
   if (metadata.x >= 5.0) { source = in.uv5; }
-  if (metadata.x >= 6.0) { source = in.uv6; }
-  if (metadata.x >= 7.0) { source = in.uv7; }
+  if (metadata.x >= 6.0) { source = in.uv6And7.xy; }
+  if (metadata.x >= 7.0) { source = in.uv6And7.zw; }
   let scaled = source * transform.zw;
   let angle = metadata.y;
   let c = cos(angle);
@@ -330,137 +595,692 @@ fn materialVertexColor(in : VsOut) -> vec4<f32> {
 #endif
 }
 
-@fragment
-fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let baseUv = transformedMaterialUv(material.baseColorTextureCoordinatesTransform, material.baseColorTextureCoordinatesMetadata, in);
-  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorTextureCoordinatesMetadata.zw);
-  let vertexColor = materialVertexColor(in);
-  let alpha = material.baseColor.a * baseSample.a * vertexColor.a;
-  if (material.alphaCutoff > 0.0 && alpha <= material.alphaCutoff) {
+// Keep the cooked skinned artifact content-addressable per declared
+// capability set, including axes whose imported helper/resource surface is
+// otherwise identical after lowering.
+fn standardSkinVariantIdentity() -> f32 {
+  var identity = 0.0;
+#ifdef STORAGE_BUFFER_AVAILABLE
+  identity = identity + 1.0;
+#endif
+#ifdef CLUSTER_FORWARD_AVAILABLE
+  identity = identity + 2.0;
+#endif
+#ifdef VERTEX_COLOR_AVAILABLE
+  identity = identity + 4.0;
+#endif
+#ifdef PROBE_BLEND_AVAILABLE
+  identity = identity + 8.0;
+#endif
+#ifdef EXTENDED_LIGHTING_AVAILABLE
+  identity = identity + 16.0;
+#endif
+#ifdef TRANSMISSION_AVAILABLE
+  identity = identity + 32.0;
+#endif
+#ifdef DIRECTIONAL_PCSS_AVAILABLE
+  identity = identity + 64.0;
+#endif
+  return identity;
+}
+
+fn evaluateStandardSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
+#ifdef DISPLACEMENT_TEXTURE_AVAILABLE
+  let triangleNormal = displacedNormal(in.worldPos, in.worldNormal);
+#endif
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // Scene-index Surface helpers may close over the imported `material` symbol.
+  // The compiler's scene variant maps that symbol to a private provider so
+  // the whole helper call graph observes the selected row, not the direct
+  // material uniform.
+  material = selectedMaterial(in.materialAddress.x);
+#endif
+
+  applyViewClipping(in.worldPos, false);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.worldPos, false, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+  let viewDirectionWS = normalize(view.cameraPos - in.worldPos);
+  let positionOS = in.positionOSAndViewZ.xyz;
+  var vertexNormal = in.worldNormal;
+#ifdef DISPLACEMENT_TEXTURE_AVAILABLE
+  if (standardUsesDisplacementTexture() && (material.displacementScale != 0.0 || material.displacementBias != 0.0)) {
+    vertexNormal = triangleNormal;
+  }
+#endif
+  let input = SurfaceInput(
+    positionOS, in.worldPos, normalize(cross(dpdy(in.worldPos), dpdx(in.worldPos))) * select(-1.0, 1.0, frontFacing), vertexNormal, in.worldTangent, viewDirectionWS,
+    in.uv, in.uv1, in.uv2, in.uv3, in.uv4, in.uv5,
+    in.uv6And7.xy, in.uv6And7.zw, materialVertexColor(in), frontFacing, vec4<f32>(0.0), vec4<f32>(0.0),
+  );
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+#if TRANSMISSION_AVAILABLE == false
+  return evaluate_standard_surface(input, selectedMaterial(in.materialAddress.x));
+#else
+  return evaluate_surface(input);
+#endif
+#else
+  return evaluate_surface(input);
+#endif
+}
+
+fn finiteScalar(value : f32, fallback : f32) -> f32 {
+  let bounded = clamp(value, -65504.0, 65504.0);
+  return select(fallback, bounded, value == value);
+}
+
+fn finiteColor(value : vec3<f32>, fallback : vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(
+    finiteScalar(value.x, fallback.x),
+    finiteScalar(value.y, fallback.y),
+    finiteScalar(value.z, fallback.z),
+  );
+}
+
+fn alphaTestSurface(surface : SurfaceData) {
+  if (surface.alphaClipThreshold > 0.0 && surface.opacity <= surface.alphaClipThreshold) {
     discard;
   }
-  let albedo = material.baseColor.rgb * baseSample.rgb * vertexColor.rgb;
+}
 
-  let mrUv = transformedMaterialUv(material.metallicRoughnessTextureCoordinatesTransform, material.metallicRoughnessTextureCoordinatesMetadata, in);
-  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessTextureCoordinatesMetadata.zw);
-  let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
-  let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
+struct StandardPbrOutput {
+  @location(0) color : vec4<f32>,
+#ifdef REFLECTION_FALLBACK_AVAILABLE
+  // Linear HDR environment contribution from this same Standard BRDF callsite.
+  // The detached producer names this second target S_fallback.
+  @location(1) reflectionFallback : vec4<f32>,
+#endif
+};
 
-  var a = max(material.roughness, 0.04);
-  a = a * roughnessTex;
-  a = a * a;
-
-  let normalUv = transformedMaterialUv(material.normalTextureCoordinatesTransform, material.normalTextureCoordinatesMetadata, in);
-  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalTextureCoordinatesMetadata.zw).rg;
-  let normTangent = scaleTangentSpaceNormal(
-    decodeTangentSpaceNormalRg(normSampleRg), material.normalScale,
+fn standardSurfaceF0(in : VsOut, surface : SurfaceData) -> vec3<f32> {
+  let albedo = surface.baseColor;
+  let metallic = clamp(finiteScalar(surface.metallic, 0.0), 0.0, 1.0);
+  var specularColor = material.specularColor;
+#ifdef SPECULAR_COLOR_TEXTURE_AVAILABLE
+  if (standardUsesSpecularColorTexture()) {
+  let specularUv = transformedMaterialUv(
+    material.specularColorTextureCoordinatesTransform,
+    material.specularColorTextureCoordinatesMetadata,
+    in,
   );
-  let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
+  specularColor = specularColor * sampleMaterialTexture(
+    specularColorTexture,
+    specularColorTextureSampler,
+    specularUv,
+    material.specularColorTextureCoordinatesMetadata.zw,
+  ).rgb;
+  }
+#endif
+  var specularWeight = clamp(finiteScalar(material.specular, 1.0), 0.0, 1.0);
+#ifdef SPECULAR_TEXTURE_AVAILABLE
+  if (standardUsesSpecularTexture()) {
+  let specularWeightUv = transformedMaterialUv(
+    material.specularTextureCoordinatesTransform,
+    material.specularTextureCoordinatesMetadata,
+    in,
+  );
+  specularWeight = specularWeight * sampleMaterialTexture(
+    specularTexture,
+    specularTextureSampler,
+    specularWeightUv,
+    material.specularTextureCoordinatesMetadata.zw,
+  ).a;
+  }
+#endif
+  let safeIor = max(finiteScalar(material.ior, 1.5), 1.0);
+  return standardOpaqueF0(albedo, metallic, specularColor, specularWeight, safeIor);
+}
+
+// The lighting-owned fallback alpha carries this same material admission to
+// the trace. Unsupported lobes neither receive nor contribute screen radiance.
+fn standardSsrCoverage() -> f32 {
+  var coverage = 1.0;
+#ifdef CLEARCOAT_AVAILABLE
+  coverage = 0.0;
+#endif
+#ifdef ANISOTROPY_AVAILABLE
+  coverage = 0.0;
+#endif
+#ifdef IRIDESCENCE_AVAILABLE
+  coverage = 0.0;
+#endif
+  return coverage;
+}
+
+@fragment
+fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbrOutput {
+  let _variantIdentity = standardSkinVariantIdentity();
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+#if TRANSMISSION_AVAILABLE == false
+  let material = selectedMaterial(in.materialAddress.x);
+#endif
+#endif
+  let normalSpread = geometricNormalSpread(in.worldNormal);
+  let surface = evaluateStandardSurface(in, frontFacing);
+  alphaTestSurface(surface);
+  let alpha = surface.opacity;
+  let albedo = surface.baseColor;
+  let metallic = clamp(finiteScalar(surface.metallic, 0.0), 0.0, 1.0);
+  let iblRoughness = specularAntiAliasedRoughness(
+    clamp(finiteScalar(surface.roughness, 0.5), 0.04, 1.0), normalSpread);
+  let a = iblRoughness * iblRoughness;
+  let n = normalize(surface.normalWS);
 
   let v = normalize(view.cameraPos - in.worldPos);
-  let specularTint = material.specularTint * sampleMaterialTexture(
-    specularTintTexture, specularTintSampler,
-    transformedMaterialUv(material.specularTintTextureCoordinatesTransform, material.specularTintTextureCoordinatesMetadata, in),
-    material.specularTintTextureCoordinatesMetadata.zw,
-  ).rgb;
-  let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
-  let coatRoughness = max(material.clearcoatRoughness, 0.04);
-  let coatAlpha = coatRoughness * coatRoughness;
-  let coatF = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04)) * material.clearcoat;
-
-  let kD = (vec3<f32>(1.0) - f_schlick(max(dot(n, v), 0.0), f0)) * (1.0 - metallic);
-  let iblRoughness = max(material.roughness, 0.04) * roughnessTex;
-  let irradiance = sampleIblDiffuse(n, skylight.rotation, irradianceMap, irradianceSampler);
-  let specularIbl = sampleIblSpecular(
-    n, v, iblRoughness, f0,
-    skylight.rotation,
-    prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
+  let safeIor = max(finiteScalar(material.ior, 1.5), 1.0);
+  let dielectricF0 = pow((safeIor - 1.0) / (safeIor + 1.0), 2.0);
+  var f0 = standardSurfaceF0(in, surface);
+  var physicalNormal = n;
+#ifdef ANISOTROPY_AVAILABLE
+  var anisotropyStrength = finiteScalar(material.anisotropyStrength, 0.0);
+  var anisotropyRotation = finiteScalar(material.anisotropyRotation, 0.0);
+  var anisotropyDirection = vec2<f32>(1.0, 0.0);
+#ifdef ANISOTROPY_TEXTURE_AVAILABLE
+  if (standardUsesAnisotropyTexture()) {
+  let anisotropyUv = transformedMaterialUv(
+    material.anisotropyTextureCoordinatesTransform,
+    material.anisotropyTextureCoordinatesMetadata,
+    in,
   );
-  let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
-  var ambient = (kD * irradiance * albedo + specularIbl) * (vec3<f32>(1.0) - coatF);
-  if (material.clearcoat != 0.0) {
-    let clearcoatIbl = sampleIblSpecular(
-      n, v, coatRoughness, vec3<f32>(0.04),
-      skylight.rotation,
-      prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
-    );
-    ambient = ambient + clearcoatIbl * material.clearcoat;
+  let anisotropySample = sampleMaterialTexture(
+    anisotropyTexture,
+    anisotropySampler,
+    anisotropyUv,
+    material.anisotropyTextureCoordinatesMetadata.zw,
+  );
+  let encodedAnisotropyDirection = 2.0 * anisotropySample.rg - vec2<f32>(1.0, 1.0);
+  if (dot(encodedAnisotropyDirection, encodedAnisotropyDirection) >= 1e-6) {
+    anisotropyDirection = normalize(encodedAnisotropyDirection);
   }
-  ambient = ambient * skyColor * skylight.intensity;
-  var color = ambient;
-  let directionalShadow = evalDirectionalShadowFactor(n, in.worldPos, in.viewZ);
-  let directionalBase = evalDirectionalNoShadow(n, v, albedo, metallic, a, f0);
-  color = color + directionalShadow * directionalBase;
-  if (material.clearcoat != 0.0) {
-    let directionalClearcoat = evalDirectionalNoShadow(
-      n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-    );
-    color = color + directionalShadow * material.clearcoat * directionalClearcoat;
+  anisotropyStrength = anisotropyStrength * anisotropySample.b;
   }
-  let pointCount = pointLightsBuffer.count;
-  for (var i: u32 = 0u; i < pointCount; i = i + 1u) {
-    let p = pointLightsBuffer.slots[i];
-#ifdef POINT_SHADOW_AVAILABLE
-    if (p.shadowAtlasLayer >= 0) {
-      let lane = shadowParams[p.shadowAtlasLayer];
-      color = color + evalPointShadowed(
-        p.position, p.colorTimesIntensity, p.invRangeSquared,
-        in.worldPos, n, v, albedo, metallic, a, f0,
-        p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
-      );
-      if (material.clearcoat != 0.0) {
-        color = color + material.clearcoat * evalPointShadowed(
-          p.position, p.colorTimesIntensity, p.invRangeSquared,
-          in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-          p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
-        );
-      }
-    } else {
-      color = color + evalPoint(
-        p.position, p.colorTimesIntensity, p.invRangeSquared,
-        in.worldPos, n, v, albedo, metallic, a, f0,
-      );
-      if (material.clearcoat != 0.0) {
-        color = color + material.clearcoat * evalPoint(
-          p.position, p.colorTimesIntensity, p.invRangeSquared,
-          in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-        );
-      }
-    }
-#else
-    color = color + evalPoint(
-      p.position, p.colorTimesIntensity, p.invRangeSquared,
-      in.worldPos, n, v, albedo, metallic, a, f0,
-    );
-    if (material.clearcoat != 0.0) {
-      color = color + material.clearcoat * evalPoint(
-        p.position, p.colorTimesIntensity, p.invRangeSquared,
-        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-      );
-    }
 #endif
+  physicalNormal = evaluateAnisotropicNormal(
+    n,
+    in.worldTangent,
+    anisotropyStrength,
+    anisotropyRotation,
+    anisotropyDirection,
+  );
+#endif
+#ifdef IRIDESCENCE_AVAILABLE
+  var iridescenceStrength = finiteScalar(material.iridescence, 0.0);
+  var iridescenceThicknessFactor = 1.0;
+#ifdef IRIDESCENCE_TEXTURE_AVAILABLE
+  if (standardUsesIridescenceTexture()) {
+  let iridescenceUv = transformedMaterialUv(
+    material.iridescenceTextureCoordinatesTransform,
+    material.iridescenceTextureCoordinatesMetadata,
+    in,
+  );
+  let iridescenceSample = sampleMaterialTexture(
+    iridescenceTexture,
+    iridescenceSampler,
+    iridescenceUv,
+    material.iridescenceTextureCoordinatesMetadata.zw,
+  );
+  iridescenceStrength = iridescenceStrength * iridescenceSample.r;
   }
-  let spotCount = spotLightsBuffer.count;
-  for (var i: u32 = 0u; i < spotCount; i = i + 1u) {
-    let s = spotLightsBuffer.slots[i];
-    color = color + evalSpot(
-      s.position, s.direction, s.colorTimesIntensity,
-      s.cosInner, s.cosOuter, s.invRangeSquared,
-      in.worldPos, n, v, albedo, metallic, a, f0,
+#endif
+#ifdef IRIDESCENCE_THICKNESS_TEXTURE_AVAILABLE
+  if (standardUsesIridescenceThicknessTexture()) {
+  let iridescenceThicknessUv = transformedMaterialUv(
+    material.iridescenceThicknessTextureCoordinatesTransform,
+    material.iridescenceThicknessTextureCoordinatesMetadata,
+    in,
+  );
+  let iridescenceThicknessSample = sampleMaterialTexture(
+    iridescenceThicknessTexture,
+    iridescenceThicknessSampler,
+    iridescenceThicknessUv,
+    material.iridescenceThicknessTextureCoordinatesMetadata.zw,
+  );
+  iridescenceThicknessFactor = clamp(iridescenceThicknessSample.g, 0.0, 1.0);
+  }
+#endif
+  let filmThickness = mix(
+    finiteScalar(material.iridescenceThicknessMinimum, 100.0),
+    finiteScalar(material.iridescenceThicknessMaximum, 400.0),
+    iridescenceThicknessFactor,
+  );
+  f0 = evaluateIridescenceFresnel(
+    f0,
+    iridescenceStrength,
+    finiteScalar(material.iridescenceIor, 1.3),
+    filmThickness,
+  );
+#endif
+  var diffuseAlbedo = albedo;
+#ifdef TRANSMISSION_AVAILABLE
+  var transmissionSample = 1.0;
+#ifdef TRANSMISSION_TEXTURE_AVAILABLE
+  if (standardUsesTransmissionTexture()) {
+  let transmissionUv = transformedMaterialUv(material.transmissionTextureCoordinatesTransform, material.transmissionTextureCoordinatesMetadata, in);
+  transmissionSample = sampleMaterialTexture(
+    transmissionTexture,
+    transmissionSampler,
+    transmissionUv,
+    material.transmissionTextureCoordinatesMetadata.zw,
+  ).r;
+  }
+#endif
+  var thicknessSample = 1.0;
+#ifdef THICKNESS_TEXTURE_AVAILABLE
+  if (standardUsesThicknessTexture()) {
+  let thicknessUv = transformedMaterialUv(material.thicknessTextureCoordinatesTransform, material.thicknessTextureCoordinatesMetadata, in);
+  thicknessSample = sampleMaterialTexture(
+    thicknessTexture,
+    thicknessSampler,
+    thicknessUv,
+    material.thicknessTextureCoordinatesMetadata.zw,
+  ).g;
+  }
+#endif
+  let transmissionFactor = clamp(
+    finiteScalar(material.transmission, 0.0) * finiteScalar(transmissionSample, 1.0),
+    0.0,
+    1.0,
+  );
+  let viewDot = finiteScalar(dot(n, v), 0.0);
+  let refractionFromInside = viewDot < 0.0;
+  let refractionNormal = select(n, -n, refractionFromInside);
+  let refractionEta = select(1.0 / safeIor, safeIor, refractionFromInside);
+  let incident = -v;
+  let refracted = refract(incident, refractionNormal, refractionEta);
+  let refractedLengthSquared = dot(refracted, refracted);
+  let viewCos = clamp(abs(viewDot), 0.0, 1.0);
+  let fresnel = clamp(f_schlick(viewCos, vec3<f32>(dielectricF0)).x, 0.0, 1.0);
+  let transmittedEnergy = select(
+    0.0,
+    transmissionFactor * (1.0 - metallic) * (1.0 - fresnel),
+    refractedLengthSquared > 1e-6,
+  );
+  diffuseAlbedo = albedo * (1.0 - transmittedEnergy);
+#endif
+  // KHR_materials_diffuse_transmission: the dt fraction of the diffuse lobe
+  // leaves through the opposite hemisphere. Specular transmission above
+  // takes precedence, so only its remaining diffuse energy is split.
+  var transmissionAlbedo = vec3<f32>(0.0);
+#ifdef DIFFUSE_TRANSMISSION_AVAILABLE
+  var diffuseTransmissionSample = 1.0;
+#ifdef DIFFUSE_TRANSMISSION_TEXTURE_AVAILABLE
+  if (standardUsesDiffuseTransmissionTexture()) {
+  let diffuseTransmissionUv = transformedMaterialUv(
+    material.diffuseTransmissionTextureCoordinatesTransform,
+    material.diffuseTransmissionTextureCoordinatesMetadata,
+    in,
+  );
+  diffuseTransmissionSample = sampleMaterialTexture(
+    diffuseTransmissionTexture,
+    diffuseTransmissionSampler,
+    diffuseTransmissionUv,
+    material.diffuseTransmissionTextureCoordinatesMetadata.zw,
+  ).a;
+  }
+#endif
+  var diffuseTransmissionTint = finiteColor(material.diffuseTransmissionColor, vec3<f32>(1.0));
+#ifdef DIFFUSE_TRANSMISSION_COLOR_TEXTURE_AVAILABLE
+  if (standardUsesDiffuseTransmissionColorTexture()) {
+  let diffuseTransmissionColorUv = transformedMaterialUv(
+    material.diffuseTransmissionColorTextureCoordinatesTransform,
+    material.diffuseTransmissionColorTextureCoordinatesMetadata,
+    in,
+  );
+  diffuseTransmissionTint = diffuseTransmissionTint * sampleMaterialTexture(
+    diffuseTransmissionColorTexture,
+    diffuseTransmissionColorSampler,
+    diffuseTransmissionColorUv,
+    material.diffuseTransmissionColorTextureCoordinatesMetadata.zw,
+  ).rgb;
+  }
+#endif
+  let diffuseTransmissionFactor = clamp(
+    finiteScalar(material.diffuseTransmission, 0.0) * finiteScalar(diffuseTransmissionSample, 1.0),
+    0.0,
+    1.0,
+  );
+  // The lobe evaluators do not apply (1 - metallic) to this albedo.
+  transmissionAlbedo = diffuseTransmissionFactor * (1.0 - metallic) *
+    clamp(diffuseTransmissionTint, vec3<f32>(0.0), vec3<f32>(1.0));
+#ifdef TRANSMISSION_AVAILABLE
+  transmissionAlbedo = transmissionAlbedo * (1.0 - transmittedEnergy);
+#endif
+  diffuseAlbedo = diffuseAlbedo * (1.0 - diffuseTransmissionFactor);
+#endif
+  // Shared base lighting is also consumed by the deferred resolve.
+  var coatF = vec3<f32>(0.0);
+#ifdef CLEARCOAT_AVAILABLE
+  coatF = f_schlick(max(dot(physicalNormal, v), 0.0), vec3<f32>(0.04)) *
+    clamp(finiteScalar(material.clearcoat, 0.0), 0.0, 1.0);
+#endif
+  var probeShPreblend : array<vec4<f32>, 9>;
+  var probeLocalBlendFraction = 0.0;
+#ifdef PROBE_BLEND_AVAILABLE
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  let probeBase = in.materialAddress.y * 16u;
+  let probeHeader = probeBlendRecords[probeBase];
+  let probeIdentityValid =
+    u32(probeHeader.x) + 1u == in.materialAddress.y &&
+    u32(probeHeader.y) == in.materialAddress.z;
+#else
+  let probeBase = 0u;
+  let probeIdentityValid = true;
+#endif
+  probeShPreblend = array<vec4<f32>, 9>(
+    probeBlendRecords[probeBase + 1u], probeBlendRecords[probeBase + 2u], probeBlendRecords[probeBase + 3u],
+    probeBlendRecords[probeBase + 4u], probeBlendRecords[probeBase + 5u], probeBlendRecords[probeBase + 6u],
+    probeBlendRecords[probeBase + 7u], probeBlendRecords[probeBase + 8u], probeBlendRecords[probeBase + 9u],
+  );
+  probeLocalBlendFraction = select(0.0, probeBlendRecords[probeBase].z, probeIdentityValid);
+#endif
+  let environment = evaluateStandardEnvironment(in.worldPos, physicalNormal, v,
+    diffuseAlbedo, transmissionAlbedo, metallic, iblRoughness, f0, skylight, irradianceMap, irradianceSampler,
+    prefilterMap, prefilterSampler, brdfLut, skylightPrefilterMap,
+    probeShPreblend, probeLocalBlendFraction);
+  let ao = surface.occlusion;
+  let specularEnvironmentScale = decodeSpecularEnvironmentScale(
+    vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB), skylight.intensity);
+  var ambient = (environment.diffuse + environment.specular) * (vec3<f32>(1.0) - coatF) * ao;
+  var reflectionFallback = environment.specular * (vec3<f32>(1.0) - coatF) * ao;
+#ifdef CLUSTER_FORWARD_AVAILABLE
+  let screenAo = sampleStandardAmbientOcclusion(in.worldPos, view.worldViewProj,
+    ssaoBlurredTexture, ssaoBlurredSampler);
+  ambient *= screenAo;
+  reflectionFallback *= screenAo;
+#endif
+  var color = ambient;
+#ifdef TRANSMISSION_AVAILABLE
+  let screenUv = in.ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+  let localToWorld0 = in.transmissionBasis0.xyz;
+  let localToWorld1 = vec3<f32>(
+    in.transmissionBasis0.w,
+    in.transmissionBasis1.x,
+    in.transmissionBasis1.y,
+  );
+  let localToWorld2 = vec3<f32>(
+    in.transmissionBasis1.z,
+    in.transmissionBasis1.w,
+    in.ndc.w,
+  );
+  let inverseCofactor0 = cross(localToWorld1, localToWorld2);
+  let inverseCofactor1 = cross(localToWorld2, localToWorld0);
+  let inverseCofactor2 = cross(localToWorld0, localToWorld1);
+  let localToWorldDet = dot(localToWorld0, inverseCofactor0);
+  let safeLocalToWorldDet = select(1.0, localToWorldDet, abs(localToWorldDet) >= 1e-6);
+  let worldToLocal0 = vec3<f32>(
+    inverseCofactor0.x,
+    inverseCofactor1.x,
+    inverseCofactor2.x,
+  ) / safeLocalToWorldDet;
+  let worldToLocal1 = vec3<f32>(
+    inverseCofactor0.y,
+    inverseCofactor1.y,
+    inverseCofactor2.y,
+  ) / safeLocalToWorldDet;
+  let worldToLocal2 = vec3<f32>(
+    inverseCofactor0.z,
+    inverseCofactor1.z,
+    inverseCofactor2.z,
+  ) / safeLocalToWorldDet;
+  let refractedLocal = normalize(
+    worldToLocal0 * refracted.x +
+      worldToLocal1 * refracted.y +
+      worldToLocal2 * refracted.z,
+  );
+  let worldRefractedDirection =
+    localToWorld0 * refractedLocal.x +
+    localToWorld1 * refractedLocal.y +
+    localToWorld2 * refractedLocal.z;
+  let worldThickness = max(
+    finiteScalar(material.thickness, 0.0) * length(worldRefractedDirection) *
+      finiteScalar(thicknessSample, 1.0),
+    0.0,
+  );
+  let refractedUv = screenUv + (refracted.xy - incident.xy) * worldThickness * 0.25;
+  let guardBand = 0.02;
+  let insideGuardBand = all(refractedUv >= vec2<f32>(guardBand)) &&
+    all(refractedUv <= vec2<f32>(1.0 - guardBand));
+  let backdropMipCount = textureNumLevels(transmissionBackdropTexture);
+  let backdropMaxLod = max(f32(backdropMipCount) - 1.0, 0.0);
+  let backdropLod = clamp(iblRoughness * iblRoughness * backdropMaxLod, 0.0, backdropMaxLod);
+  let unrefractedBackdrop = textureSampleLevel(
+    transmissionBackdropTexture,
+    prefilterSampler,
+    clamp(screenUv, vec2<f32>(0.0), vec2<f32>(1.0)),
+    backdropLod,
+  ).rgb;
+  var transmittedBackdrop = unrefractedBackdrop;
+  if (refractedLengthSquared > 1e-6 && insideGuardBand) {
+    transmittedBackdrop = textureSampleLevel(
+      transmissionBackdropTexture,
+      prefilterSampler,
+      clamp(refractedUv, vec2<f32>(0.0), vec2<f32>(1.0)),
+      backdropLod,
+    ).rgb;
+  }
+  let safeAttenuationColor = clamp(
+    finiteColor(material.attenuationColor, vec3<f32>(1.0)),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0),
+  );
+  let safeAttenuationDistance = max(finiteScalar(material.attenuationDistance, 0.0), 0.0);
+  let attenuationExponent = worldThickness / max(safeAttenuationDistance, 1e-6);
+  let beerAttenuation = select(
+    vec3<f32>(1.0),
+    pow(safeAttenuationColor, vec3<f32>(attenuationExponent)),
+    safeAttenuationDistance > 1e-6 && worldThickness > 0.0,
+  );
+  color = color + finiteColor(transmittedBackdrop, vec3<f32>(0.0)) *
+    transmittedEnergy * beerAttenuation;
+#endif
+  color = color + surface.emissive;
+  var directionalShadowNormal = physicalNormal;
+#ifdef DIFFUSE_TRANSMISSION_AVAILABLE
+  // A back-lit thin surface receives through its opposite face; offset the
+  // shadow receiver toward the light so the leaf does not shadow itself
+  // (Unreal TwoSidedBxDF uses the same flipped-normal shadow bias).
+  directionalShadowNormal = select(physicalNormal, -physicalNormal,
+    dot(physicalNormal, -view.lightDir) < 0.0);
+#endif
+  let receiveShadows = standardReceivesShadows(in);
+  let directionalShadow = select(1.0, evalDirectionalShadowFactor(
+    directionalShadowNormal,
+    in.worldPos,
+    standardViewZ(in),
+  ), receiveShadows);
+  color += evaluateStandardDirect(in.worldPos, in.ndc.xyz, standardViewZ(in),
+    physicalNormal, v, diffuseAlbedo, transmissionAlbedo, metallic, a, f0, directionalShadow,
+    receiveShadows);
+// CLUSTER_FORWARD_AVAILABLE
+#ifdef SHEEN_AVAILABLE
+  var sheenColor = material.sheenColor;
+  var sheenRoughnessFactor = 1.0;
+#ifdef SHEEN_COLOR_TEXTURE_AVAILABLE
+  if (standardUsesSheenColorTexture()) {
+  sheenColor = sheenColor * sampleMaterialTexture(
+    sheenColorTexture,
+    sheenColorSampler,
+    transformedMaterialUv(material.sheenColorTextureCoordinatesTransform, material.sheenColorTextureCoordinatesMetadata, in),
+    material.sheenColorTextureCoordinatesMetadata.zw,
+  ).rgb;
+  }
+#endif
+#ifdef SHEEN_ROUGHNESS_TEXTURE_AVAILABLE
+  if (standardUsesSheenRoughnessTexture()) {
+  sheenRoughnessFactor = sampleMaterialTexture(
+    sheenRoughnessTexture,
+    sheenRoughnessSampler,
+    transformedMaterialUv(material.sheenRoughnessTextureCoordinatesTransform, material.sheenRoughnessTextureCoordinatesMetadata, in),
+    material.sheenRoughnessTextureCoordinatesMetadata.zw,
+  ).a;
+  }
+#endif
+  let sheenRoughness = clamp(
+    material.sheenRoughness * sheenRoughnessFactor,
+    0.0,
+    1.0,
+  );
+  color = evaluateSheenLayer(color, sheenColor, sheenRoughness, dot(n, v));
+#endif
+#ifdef CLEARCOAT_AVAILABLE
+  var clearcoatFactor = clamp(material.clearcoat, 0.0, 1.0);
+#ifdef CLEARCOAT_TEXTURE_AVAILABLE
+  if (standardUsesClearcoatTexture()) {
+  let clearcoatUv = transformedMaterialUv(material.clearcoatTextureCoordinatesTransform, material.clearcoatTextureCoordinatesMetadata, in);
+  clearcoatFactor = clamp(
+    material.clearcoat * sampleMaterialTexture(
+      clearcoatTexture,
+      clearcoatSampler,
+      clearcoatUv,
+      material.clearcoatTextureCoordinatesMetadata.zw,
+    ).r,
+    0.0,
+    1.0,
+  );
+  }
+#endif
+  var clearcoatRoughnessValue = clamp(max(material.clearcoatRoughness, 0.04), 0.04, 1.0);
+#ifdef CLEARCOAT_ROUGHNESS_TEXTURE_AVAILABLE
+  if (standardUsesClearcoatRoughnessTexture()) {
+  let clearcoatRoughnessUv = transformedMaterialUv(material.clearcoatRoughnessTextureCoordinatesTransform, material.clearcoatRoughnessTextureCoordinatesMetadata, in);
+  clearcoatRoughnessValue = clamp(
+    max(material.clearcoatRoughness, 0.04) * sampleMaterialTexture(
+      clearcoatRoughnessTexture,
+      clearcoatRoughnessSampler,
+      clearcoatRoughnessUv,
+      material.clearcoatRoughnessTextureCoordinatesMetadata.zw,
+    ).g,
+    0.04,
+    1.0,
+  );
+  }
+#endif
+  clearcoatRoughnessValue = specularAntiAliasedRoughness(clearcoatRoughnessValue, normalSpread);
+  var clearcoatNormalValue = in.worldNormal;
+#ifdef CLEARCOAT_NORMAL_TEXTURE_AVAILABLE
+  if (standardUsesClearcoatNormalTexture()) {
+  let clearcoatNormalUv = transformedMaterialUv(material.clearcoatNormalTextureCoordinatesTransform, material.clearcoatNormalTextureCoordinatesMetadata, in);
+  clearcoatNormalValue = applyTBN(
+    in.worldNormal,
+    in.worldTangent,
+    scaleTangentSpaceNormal(
+      decodeTangentSpaceNormalRg(sampleMaterialTexture(
+        clearcoatNormalTexture,
+        clearcoatNormalSampler,
+        clearcoatNormalUv,
+        material.clearcoatNormalTextureCoordinatesMetadata.zw,
+      ).rg),
+      vec2<f32>(material.clearcoatNormalScale),
+    ),
+  );
+  }
+#endif
+  var clearcoatIbl = vec3<f32>(0.0);
+  if (skylight.intensity < 0.0) {
+    clearcoatIbl = sampleReflectionProbeSpecular(
+      clearcoatNormalValue,
+      v,
+      clearcoatRoughnessValue,
+      vec3<f32>(0.04),
+      in.worldPos,
+      vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB),
+      skylight.rotation.xyz,
+      vec4<f32>(0.0, 0.0, 0.0, 1.0),
+      prefilterMap,
+      prefilterSampler,
+      brdfLut,
+      irradianceSampler,
+      skylightPrefilterMap, skylight.diffuseRotation, skylight.diffuseScale.xyz,
+      max(-skylight.intensity - 1.0, 0.0), skylight.rotation.w > 0.5,
     );
-    if (material.clearcoat != 0.0) {
-      color = color + material.clearcoat * evalSpot(
-        s.position, s.direction, s.colorTimesIntensity,
-        s.cosInner, s.cosOuter, s.invRangeSquared,
-        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-      );
-    }
+  } else {
+    clearcoatIbl = sampleIblSpecular(
+      clearcoatNormalValue,
+      v,
+      clearcoatRoughnessValue,
+      vec3<f32>(0.04),
+      skylight.rotation,
+      prefilterMap,
+      prefilterSampler,
+      brdfLut,
+      irradianceSampler,
+    );
   }
-  return applySceneFog(view, color, alpha, in.worldPos);
+  let clearcoatAlpha = clearcoatRoughnessValue * clearcoatRoughnessValue;
+  let clearcoatDirect = directionalShadow * evalDirectionalNoShadow(
+    clearcoatNormalValue,
+    v,
+    vec3<f32>(0.0),
+    1.0,
+    clearcoatAlpha,
+    vec3<f32>(0.04),
+    vec3<f32>(0.0),
+  );
+  let directionalClearcoat = cloud_apply_direct_solar(
+    clearcoatDirect,
+    in.worldPos,
+    view.cloudShadowOrigin.xyz,
+    view.cloudShadowRight.xyz,
+    view.cloudShadowUp.xyz,
+    view.cloudShadowProjection,
+  );
+  var clearcoatEnvironment = clearcoatIbl * specularEnvironmentScale * ao;
+#ifdef CLUSTER_FORWARD_AVAILABLE
+  clearcoatEnvironment *= sampleStandardAmbientOcclusion(in.worldPos, view.worldViewProj,
+    ssaoBlurredTexture, ssaoBlurredSampler);
+#endif
+  color = evaluateClearcoatLayer(
+    color,
+    clearcoatEnvironment + directionalClearcoat,
+    dot(clearcoatNormalValue, v),
+    clearcoatFactor,
+  );
+#endif
+  var output : StandardPbrOutput;
+  output.color = vec4<f32>(translucent_fog(view, in.worldPos, color, alpha), alpha);
+#ifdef REFLECTION_FALLBACK_AVAILABLE
+  output.reflectionFallback = vec4<f32>(reflectionFallback, standardSsrCoverage());
+#endif
+  return output;
+}
+
+// Keep the skinned Standard shader on the same multi-entry pass contract as
+// the rigid Standard shader. Deferred draws select this entry point from the
+// existing `forgeax::pbr-skin` artifact; lighting is performed by the deferred
+// pass after these base surface facts are written to the shared G-buffer.
+@fragment
+fn fs_gbuffer(in : VsOut, @builtin(front_facing) frontFacing : bool) -> GBufferOutput {
+  let normalSpread = geometricNormalSpread(in.worldNormal);
+  let surface = evaluateStandardSurface(in, frontFacing);
+  alphaTestSurface(surface);
+  var probeRow = 0u;
+#ifdef PROBE_BLEND_AVAILABLE
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  let base = in.materialAddress.y * 16u;
+  let header = probeBlendRecords[base];
+  if (u32(header.x) + 1u == in.materialAddress.y && u32(header.y) == in.materialAddress.z && header.z > 0.0) {
+    probeRow = in.materialAddress.y;
+  }
+#else
+  let header = probeBlendRecords[0];
+  if (header.z > 0.0) { probeRow = u32(header.x) + 1u; }
+#endif
+#endif
+  return encodeStandardGBuffer(surface.normalWS,
+    specularAntiAliasedRoughness(clamp(surface.roughness, 0.04, 1.0), normalSpread),
+    surface.baseColor, clamp(surface.metallic, 0.0, 1.0), standardSurfaceF0(in, surface),
+    surface.occlusion, surface.emissive, surface.opacity, u32(skylight.diffuseScale.w), probeRow,
+    standardReceivesShadows(in));
 }
 
 struct TemporalVsOut {
-  @builtin(position) clip : vec4<f32>,
+  @location(10) positionOS : vec3<f32>,
+  @location(11) clippingPositionWS : vec3<f32>,
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  @location(12) @interpolate(flat) temporal : vec2<f32>,
+  @location(13) @interpolate(flat) materialIndex : u32,
+#endif
+  @builtin(position) @invariant clip : vec4<f32>,
   @location(0) uv : vec2<f32>,
   @location(1) uv1 : vec2<f32>,
   @location(2) uv2 : vec2<f32>,
@@ -469,8 +1289,8 @@ struct TemporalVsOut {
   @location(5) uv5 : vec2<f32>,
   @location(6) uv6 : vec2<f32>,
   @location(7) uv7 : vec2<f32>,
-  @location(8) @interpolate(linear) currentClip : vec4<f32>,
-  @location(9) @interpolate(linear) previousClip : vec4<f32>,
+  @location(8) @interpolate(perspective) currentClip : vec4<f32>,
+  @location(9) @interpolate(perspective) previousClip : vec4<f32>,
 #ifdef VERTEX_COLOR_AVAILABLE
   @location(14) color : vec4<f32>,
 #endif
@@ -478,19 +1298,38 @@ struct TemporalVsOut {
 
 @vertex
 fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32) -> TemporalVsOut {
-  let currentSkin = palette[in.skinIndex.x] * in.skinWeight.x +
-    palette[in.skinIndex.y] * in.skinWeight.y +
-    palette[in.skinIndex.z] * in.skinWeight.z +
-    palette[in.skinIndex.w] * in.skinWeight.w;
-  let previousSkin = previousPalette[in.skinIndex.x] * in.skinWeight.x +
-    previousPalette[in.skinIndex.y] * in.skinWeight.y +
-    previousPalette[in.skinIndex.z] * in.skinWeight.z +
-    previousPalette[in.skinIndex.w] * in.skinWeight.w;
-  let currentWorld = currentSkin * vec4<f32>(in.pos, 1.0);
-  let previousWorld = previousSkin * vec4<f32>(in.pos, 1.0);
+  let localPosition = standardVertexPosition(in);
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // Scene-index draws bind the frame-global palette arena and carry the
+  // producer-owned slice in the visible item, exactly like vs_scene_index.
+  let visible = visibleItems[idx];
+  let paletteBase = visible.z;
+  let materialIndex = visible.y;
+  let temporalFlags = sceneIndexDraw(visible.x).temporal;
+#else
+  // Direct temporal draws use the per-entity dynamic offsets, so their slice
+  // base is zero just like the direct forward entry point.
+  let paletteBase = 0u;
+#endif
+  let currentSkin = palette[paletteBase + in.skinIndex.x] * in.skinWeight.x +
+    palette[paletteBase + in.skinIndex.y] * in.skinWeight.y +
+    palette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
+    palette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
+  let previousSkin = previousPalette[paletteBase + in.skinIndex.x] * in.skinWeight.x +
+    previousPalette[paletteBase + in.skinIndex.y] * in.skinWeight.y +
+    previousPalette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
+    previousPalette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
+  let currentWorld = currentSkin * vec4<f32>(localPosition, 1.0);
+  let previousWorld = previousSkin * vec4<f32>(localPosition, 1.0);
   var out : TemporalVsOut;
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  out.temporal = temporalFlags;
+  out.materialIndex = materialIndex;
+#endif
+  out.positionOS = localPosition;
+  out.clippingPositionWS = currentWorld.xyz;
   out.currentClip = view.temporalCurrentViewProj * currentWorld;
-  out.clip = out.currentClip;
+  out.clip = view.worldViewProj * currentWorld;
   out.previousClip = view.temporalPreviousViewProj * previousWorld;
   out.uv = in.uv;
   out.uv1 = in.uv1;
@@ -517,22 +1356,62 @@ fn temporalVertexAlpha(in : TemporalVsOut) -> f32 {
 
 @fragment
 fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  material = selectedMaterial(in.materialIndex);
+#endif
+  applyViewClipping(in.clippingPositionWS, false);
+#ifdef MATERIAL_CLIPPING_AVAILABLE
+  applyLocalClipping(in.clippingPositionWS, false, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
+#endif
+
+#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  let reactive = in.temporal.x;
+  let motionValid = in.temporal.y >= 0.5;
+#else
 #if STORAGE_BUFFER_AVAILABLE == true
+  // Direct draws bind this entity's row through the group(2) dynamic offset.
   let reactive = meshes[0].temporal.x;
+  let motionValid = meshMotionValid(meshes[0].temporal.y);
 #else
   let reactive = 1.0;
+  let motionValid = true;
 #endif
-  return projectPbrSceneTemporal(
+#endif
+  let temporal = projectPbrSceneTemporal(
     material.baseColor.a * temporalVertexAlpha(in),
     material.alphaCutoff,
+#ifdef ALPHA_HASH_AVAILABLE
+    material.alphaHash,
+#else
+    0.0,
+#endif
+    in.positionOS,
+#ifdef BASE_COLOR_TEXTURE_AVAILABLE
+    standardUsesBaseColorTexture(),
     baseColorTexture,
-    baseColorSampler,
+    baseColorTexture_sampler,
     material.baseColorTextureCoordinatesTransform,
     material.baseColorTextureCoordinatesMetadata,
+#endif
+#ifdef ALPHA_TEXTURE_AVAILABLE
+    standardUsesAlphaTexture(),
+    alphaTexture,
+    alphaTexture_sampler,
+    material.alphaTextureCoordinatesTransform,
+    material.alphaTextureCoordinatesMetadata,
+    material.alphaChannel,
+#endif
     in.currentClip,
     in.previousClip,
+    view.temporalProjection,
     reactive,
+    motionValid,
     in.uv, in.uv1, in.uv2, in.uv3,
     in.uv4, in.uv5, in.uv6, in.uv7,
   );
+#ifdef COVERAGE_ONLY
+  return vec4<f32>(1.0);
+#else
+  return temporal;
+#endif
 }

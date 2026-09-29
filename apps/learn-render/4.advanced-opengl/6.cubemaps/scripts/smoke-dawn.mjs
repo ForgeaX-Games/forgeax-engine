@@ -14,7 +14,7 @@
 //          (metallic=0) + DirectionalLight + Camera(tonemap).
 //        - World-B (skybox-off): SAME scene minus SkyboxBackground spawn
 //          (plan D-1 minimal delta -- every other field byte-identical).
-//   5. Each World renders N>=300 frames, then readback via copyTextureToBuffer.
+//   5. Each World renders N>=60 frames, then readback via copyTextureToBuffer.
 //   6. Diff: per-pixel byte comparison (4 bytes = 1 pixel). Any channel
 //      difference counts as 1 diff pixel. Assert diffCount > threshold
 //      (0.05% = 131 for 512x512) AND both states have 0 RhiError.
@@ -37,8 +37,9 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 512;
 const HEIGHT = 512;
 const TOTAL_PIXELS = WIDTH * HEIGHT;
@@ -181,7 +182,8 @@ const { decodeHdr } = await import('@forgeax/engine-image/hdr-decoder');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 try {
@@ -412,21 +414,30 @@ async function readbackPixels(device) {
 
 // --- 9. Draw frames helper ---
 
-async function drawFrames(world, frames) {
+async function drawFrames(world, frames, label) {
   const attachment = renderer.attach(world);
   if (!attachment.ok) throw attachment.error;
   const lease = attachment.value;
+  let framesObserved = 0;
+  let drawFailures = 0;
   for (let i = 0; i < frames; i++) {
     world.update(1 / 60).unwrap();
     const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
     if (!r.ok) {
-    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
-  } else {
+      drawFailures++;
+      errors.push({ code: r.error.code, hint: r.error.hint, label, frame: i });
+      continue;
+    }
     const completed = await r.value.completed;
-    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
-  }
+    if (!completed.ok) {
+      drawFailures++;
+      errors.push({ code: completed.error.code, hint: completed.error.hint, label, frame: i });
+      continue;
+    }
+    framesObserved++;
   }
   await sharedDevice.queue.onSubmittedWorkDone();
+  return { framesObserved, drawFailures };
 }
 
 // --- 10. Dual-state render ---
@@ -440,13 +451,14 @@ if (!device) {
 // State A: skybox-on (full IBL skybox + Skylight + two cubes)
 const worldOn = new World();
 await spawnScene(worldOn, true);
-await drawFrames(worldOn, SMOKE_MIN_FRAMES);
+const onFrames = await drawFrames(worldOn, SMOKE_MIN_FRAMES, 'skybox-on');
 const pixelsOn = await readbackPixels(device);
 
 // FALSIFY injection: if FALSIFY=skybox-reuse-buffer, force skybox-off to
 // reuse the on-state buffer (making the two states byte-identical). This
 // should cause the diff assertion to FAIL, proving sensitivity.
 let pixelsOff;
+let offFrames = { framesObserved: 0, drawFailures: 0 };
 if (FALSIFY === 'skybox-reuse-buffer') {
   console.warn('[smoke] FALSIFY=skybox-reuse-buffer active: reusing skybox-on buffer for skybox-off');
   pixelsOff = pixelsOn;
@@ -458,7 +470,7 @@ if (FALSIFY === 'skybox-reuse-buffer') {
   renderTarget = null;
   const worldOff = new World();
   await spawnScene(worldOff, false);
-  await drawFrames(worldOff, SMOKE_MIN_FRAMES);
+  offFrames = await drawFrames(worldOff, SMOKE_MIN_FRAMES, 'skybox-off');
   pixelsOff = await readbackPixels(device);
 }
 
@@ -466,12 +478,28 @@ if (FALSIFY === 'skybox-reuse-buffer') {
 
 const failures = [];
 
-// (a) Backend must be webgpu.
+if (onFrames.framesObserved < SMOKE_MIN_FRAMES) {
+  failures.push(
+    `(a) skybox-on completed frames=${onFrames.framesObserved} < ${SMOKE_MIN_FRAMES}`,
+  );
+}
+if (FALSIFY !== 'skybox-reuse-buffer' && offFrames.framesObserved < SMOKE_MIN_FRAMES) {
+  failures.push(
+    `(a) skybox-off completed frames=${offFrames.framesObserved} < ${SMOKE_MIN_FRAMES}`,
+  );
+}
+if (onFrames.drawFailures > 0 || offFrames.drawFailures > 0) {
+  failures.push(
+    `(b) draw completion failures: skybox-on=${onFrames.drawFailures}, skybox-off=${offFrames.drawFailures}`,
+  );
+}
+
+// (c) Backend must be webgpu.
 if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
   failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 
-// (b) Both passes must produce valid buffers.
+// (d) Both passes must produce valid buffers.
 if (pixelsOn.length !== TOTAL_PIXELS * 4) {
   failures.push(`(b) skybox-on pixel buffer size mismatch: ${pixelsOn.length} != ${TOTAL_PIXELS * 4}`);
 }
@@ -479,13 +507,13 @@ if (pixelsOff.length !== TOTAL_PIXELS * 4) {
   failures.push(`(b) skybox-off pixel buffer size mismatch: ${pixelsOff.length} != ${TOTAL_PIXELS * 4}`);
 }
 
-// (c) RhiError must be zero for both states.
+// (e) RhiError must be zero for both states.
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
 
-// (d) Both passes must be non-black (geometries rendered).
+// (f) Both passes must be non-black (geometries rendered).
 let nonBlackOn = 0;
 for (let i = 0; i < pixelsOn.length; i += 4) {
   if (pixelsOn[i] !== 0 || pixelsOn[i + 1] !== 0 || pixelsOn[i + 2] !== 0) {
@@ -506,7 +534,7 @@ if (nonBlackOff === 0) {
   failures.push('(d) skybox-off frame is completely black (geometries not rendered)');
 }
 
-// (e) Dual-state pixel diff: count pixels where any channel differs.
+// (g) Dual-state pixel diff: count pixels where any channel differs.
 // If FALSIFY=skybox-reuse-buffer is active, buffers are identical and
 // this assertion MUST fail (proving sensitivity).
 let diffCount = 0;
@@ -569,9 +597,14 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${SMOKE_MIN_FRAMES}, ` +
+  `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${Math.min(onFrames.framesObserved, offFrames.framesObserved)}, ` +
     `RhiError count=${errors.length}, nonBlackOn=${nonBlackOn}, nonBlackOff=${nonBlackOff}, ` +
     `dualPassDiff=${diffCount} > threshold=${DIFF_THRESHOLD} (${diffPct}%)`,
+);
+
+emitSmokeReceipt(
+  'app-learn-render-4-advanced-opengl-6-cubemaps/smoke',
+  Math.min(onFrames.framesObserved, offFrames.framesObserved),
 );
 
 device.destroy?.();

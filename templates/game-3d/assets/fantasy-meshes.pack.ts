@@ -1,10 +1,10 @@
 import { vec3 } from '@forgeax/engine/math';
 import { meshFromInterleaved } from '@forgeax/engine/geometry';
 import type { Vec3 } from '@forgeax/engine/math';
-import type { ScriptablePackDefinition } from '@forgeax/engine/pack/source';
+import { definePack } from '@forgeax/engine/pack/source';
 import type { MeshAsset, Submesh } from '@forgeax/engine/types';
 import { ok } from '@forgeax/engine/types';
-import { ASSET_IDS, PACKAGE_IDS } from '../src/asset-ids.ts';
+import { assetGuid, PACKAGE_IDS } from './shared/asset-refs.ts';
 
 const TAU = Math.PI * 2;
 const NORMAL_EPSILON = 0.0001;
@@ -14,39 +14,21 @@ const DEFAULT_TANGENT = vec3.create(0, 0, 1);
 const WORLD_UP = vec3.create(0, 1, 0);
 const WORLD_X = vec3.create(1, 0, 0);
 
-const assets = {
-  'mesh/klein-bottle': {
-    guid: ASSET_IDS.kleinBottleMesh,
-    kind: 'mesh',
-    name: 'Game 3D / Klein Bottle',
-  },
-  'mesh/trefoil-knot': {
-    guid: ASSET_IDS.trefoilKnotMesh,
-    kind: 'mesh',
-    name: 'Game 3D / Trefoil Knot',
-  },
-  'mesh/astral-bloom': {
-    guid: ASSET_IDS.astralBloomMesh,
-    kind: 'mesh',
-    name: 'Game 3D / Astral Bloom',
-  },
-} as const;
-
 const palette = [
   {
     slotName: 'Azure Flux',
     sourceKey: 'game-3d:fantasy:azure',
-    defaultMaterial: ASSET_IDS.fantasyAzureMaterial,
+    defaultMaterial: assetGuid(PACKAGE_IDS.materials, 'material/fantasy-azure'),
   },
   {
     slotName: 'Violet Rift',
     sourceKey: 'game-3d:fantasy:violet',
-    defaultMaterial: ASSET_IDS.fantasyVioletMaterial,
+    defaultMaterial: assetGuid(PACKAGE_IDS.materials, 'material/fantasy-violet'),
   },
   {
     slotName: 'Solar Gold',
     sourceKey: 'game-3d:fantasy:gold',
-    defaultMaterial: ASSET_IDS.fantasyGoldMaterial,
+    defaultMaterial: assetGuid(PACKAGE_IDS.materials, 'material/fantasy-gold'),
   },
 ] as const;
 
@@ -269,16 +251,10 @@ function astralBloomPosition(out: Vec3, u: number, v: number): Vec3 {
   return out;
 }
 
-export default {
-  schemaVersion: '1.0.0',
+export default definePack({
+  schemaVersion: '2.0.0',
   packageId: PACKAGE_IDS.fantasyMeshes,
   name: 'Game 3D / Fantasy Procedural Meshes',
-  assets,
-  externalAssets: {
-    azureMaterial: ASSET_IDS.fantasyAzureMaterial,
-    violetMaterial: ASSET_IDS.fantasyVioletMaterial,
-    goldMaterial: ASSET_IDS.fantasyGoldMaterial,
-  },
   build: () => {
     const kleinBottle = buildSurface({
       uSegments: 72,
@@ -305,4 +281,4 @@ export default {
       'mesh/astral-bloom': astralBloom.value,
     });
   },
-} satisfies ScriptablePackDefinition<typeof assets>;
+});

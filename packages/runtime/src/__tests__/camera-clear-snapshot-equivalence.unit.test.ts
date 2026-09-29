@@ -21,7 +21,8 @@ import {
   makeZeroCameraFallbackSnapshot,
   ZERO_CAMERA_CLEAR_FALLBACK,
 } from '../../../render/src/record/frame-snapshot';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 function spawnCameraWithClear(world: World, clear: readonly [number, number, number, number]) {
   world

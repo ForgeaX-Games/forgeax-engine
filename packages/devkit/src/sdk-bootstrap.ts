@@ -1,12 +1,10 @@
-import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { execFileCommand } from './child-process.js';
 import type { SdkContext } from './sdk.js';
 import type { CommandResult } from './types.js';
 
-const execFileAsync = promisify(execFile);
 const SDK_INIT_PATH = ['.forgeax', 'sdk-init.json'] as const;
 const SDK_INIT_SCHEMA_VERSION = '1.0.0' as const;
 
@@ -28,7 +26,11 @@ export interface SdkInitReport extends SdkInitState {
 
 export interface AgentOnboarding {
   readonly read: readonly string[];
-  readonly next: {
+  readonly templateSelection?: {
+    readonly required: true;
+    readonly available: readonly string[];
+  };
+  readonly next?: {
     readonly cwd: string;
     readonly argv: readonly string[];
   };
@@ -42,13 +44,17 @@ export function agentOnboarding(sdk: SdkContext, projectRoot?: string): AgentOnb
       resolve(root, 'skills', 'forgeax-engine-sdk', 'SKILL.md'),
       resolve(root, 'skills', 'forgeax-engine-sdk', 'references', 'feature-catalog.md'),
     ],
-    next:
-      projectRoot === undefined
-        ? {
-            cwd: root,
-            argv: ['node', './bin/forgeax.mjs', 'new', '../my-game'],
-          }
-        : { cwd: root, argv: ['pnpm', 'exec', 'forgeax', 'list', '--json'] },
+    ...(projectRoot === undefined
+      ? {
+          templateSelection: {
+            required: true as const,
+            available: [...sdk.templates.keys()].sort(),
+          },
+        }
+      : {}),
+    ...(projectRoot === undefined
+      ? {}
+      : { next: { cwd: root, argv: ['pnpm', 'exec', 'forgeax', 'help', '--tree', '--json'] } }),
   };
 }
 
@@ -99,7 +105,7 @@ function supportedPnpm(version: string): boolean {
 
 async function currentPnpm(): Promise<CommandResult<string>> {
   try {
-    const result = await execFileAsync('pnpm', ['--version'], { maxBuffer: 1024 * 1024 });
+    const result = await execFileCommand('pnpm', ['--version'], { maxBuffer: 1024 * 1024 });
     const version = result.stdout.trim();
     if (version.length === 0) throw new Error('pnpm returned an empty version');
     return { ok: true, value: version };
@@ -107,7 +113,7 @@ async function currentPnpm(): Promise<CommandResult<string>> {
     return commandFailure(
       'pnpm-unavailable',
       'pnpm 11.7.0 or newer in the pnpm 11 line to be available on PATH',
-      'Install or activate pnpm 11, then rerun forgeax init from the SDK root.',
+      'Install or activate pnpm 11, then rerun forgeax project init from the SDK root.',
       { reason: cause instanceof Error ? cause.message : String(cause) },
     );
   }
@@ -145,7 +151,7 @@ export async function requireSdkInitialization(
     return commandFailure(
       'sdk-not-initialized',
       'the downloaded SDK to be initialized for this Node/pnpm/platform tuple',
-      'Run ./bin/forgeax init from the SDK root once, then run forgeax new outside the SDK.',
+      'Run ./bin/forgeax project init from the SDK root once, then run forgeax project new outside the SDK.',
       {
         sdkRoot: sdk.root,
         sdkVersion: sdk.manifest.sdkVersion,
@@ -160,8 +166,8 @@ export async function requireSdkInitialization(
 }
 
 async function copyBootstrapInputs(sdk: SdkContext, root: string): Promise<void> {
-  const template = sdk.templates.get(sdk.defaultTemplate);
-  if (template === undefined) throw new Error('sdk-default-template-missing');
+  const template = sdk.templates.get('empty');
+  if (template === undefined) throw new Error('sdk-bootstrap-template-missing');
   for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'] as const) {
     await cp(resolve(template, name), resolve(root, name));
   }
@@ -189,7 +195,7 @@ export async function sdkInitCommand(
     return commandFailure(
       'pnpm-version-unsupported',
       'pnpm >=11.7.0 <12',
-      'Activate pnpm 11.7.0 or newer in the pnpm 11 line, then rerun forgeax init.',
+      'Activate pnpm 11.7.0 or newer in the pnpm 11 line, then rerun forgeax project init.',
       { actual: pnpmResult.value, expected: sdk.manifest.requirements.pnpm },
     );
   }
@@ -214,7 +220,7 @@ export async function sdkInitCommand(
   try {
     staging = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-init-'));
     await copyBootstrapInputs(sdk, staging);
-    await execFileAsync('pnpm', sdkBootstrapInstallArgs(sdk.store), {
+    await execFileCommand('pnpm', sdkBootstrapInstallArgs(sdk.store), {
       cwd: staging,
       env: { ...process.env, CI: 'true' },
       maxBuffer: 16 * 1024 * 1024,
@@ -226,7 +232,7 @@ export async function sdkInitCommand(
     return commandFailure(
       'sdk-init-failed',
       'the SDK dependency closure to install and build native packages successfully',
-      'Inspect the pnpm output, repair Node/pnpm or platform permissions, then rerun forgeax init from the SDK root.',
+      'Inspect the pnpm output, repair Node/pnpm or platform permissions, then rerun forgeax project init from the SDK root.',
       { reason: cause instanceof Error ? cause.message : String(cause), sdkRoot: sdk.root },
     );
   } finally {

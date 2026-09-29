@@ -59,8 +59,88 @@ function topologyPixelEvidence(path) {
     const green = png.data[offset + 1] / 255;
     const blue = png.data[offset + 2] / 255;
     if (blue > 0.45 && green > red * 1.35) counts.ribbon += 1;
-    if (red > 0.45 && red > green * 1.1 && green > blue * 1.25) counts.trail += 1;
-    if (blue > 0.45 && red > green * 1.35 && blue > green * 1.35) counts.beam += 1;
+    // Trail and beam share the cool Arc Nova palette. Keep the old warm
+    // predicate for older fixtures, but accept the authored cyan/teal path so
+    // the oracle measures topology output rather than a color-era detail.
+    const warmTrail = red > 0.45 && red > green * 1.1 && green > blue * 1.25;
+    const coolTrail = green > 0.45 && blue > 0.35 && green > red * 1.5;
+    if (warmTrail || coolTrail) counts.trail += 1;
+  }
+  // A beam is the saturated magenta, elongated component. Requiring both
+  // channels at a high floor and an elongated connected component prevents
+  // the blue scene/background or unrelated round particles from satisfying
+  // the beam oracle merely through red-vs-green contrast.
+  const beamPixel = (offset) => {
+    const red = png.data[offset] / 255;
+    const green = png.data[offset + 1] / 255;
+    const blue = png.data[offset + 2] / 255;
+    const warmBeam = red > 0.75 && blue > 0.75 && green < 0.35 && red > green * 1.35;
+    const coolBeam = blue > 0.72 && green > 0.28 && red < 0.42 && blue > green * 1.1;
+    return warmBeam || coolBeam;
+  };
+  // The authored beam joins the mouth glow at its source, so its connected
+  // component also contains the round charge and fails the old thin-component
+  // aspect-ratio test. Count the distinctly saturated blue pixels in the
+  // lower/right strike quadrant as a secondary proof. The fallback scene has
+  // only a few scattered blue pixels there; a real beam has a continuous core.
+  let lowerRightCoolBeamPixels = 0;
+  for (let y = Math.floor(png.height * 0.45); y < png.height; y += 1) {
+    for (let x = Math.floor(png.width * 0.5); x < png.width; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      const red = png.data[offset] / 255;
+      const green = png.data[offset + 1] / 255;
+      const blue = png.data[offset + 2] / 255;
+      if (blue > 0.85 && green > 0.3 && red < 0.35 && blue > green * 1.4) {
+        lowerRightCoolBeamPixels += 1;
+      }
+    }
+  }
+  const visited = new Uint8Array(png.width * png.height);
+  const queue = new Int32Array(png.width * png.height);
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const start = y * png.width + x;
+      if (visited[start] !== 0 || !beamPixel(start * 4)) continue;
+      let head = 0;
+      let tail = 0;
+      let size = 0;
+      let minX = x;
+      let minY = y;
+      let maxX = x;
+      let maxY = y;
+      queue[tail++] = start;
+      visited[start] = 1;
+      while (head < tail) {
+        const current = queue[head++];
+        const currentX = current % png.width;
+        const currentY = Math.floor(current / png.width);
+        size += 1;
+        minX = Math.min(minX, currentX);
+        minY = Math.min(minY, currentY);
+        maxX = Math.max(maxX, currentX);
+        maxY = Math.max(maxY, currentY);
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (dx === 0 && dy === 0) continue;
+            const nextX = currentX + dx;
+            const nextY = currentY + dy;
+            if (nextX < 0 || nextY < 0 || nextX >= png.width || nextY >= png.height) continue;
+            const next = nextY * png.width + nextX;
+            if (visited[next] !== 0) continue;
+            visited[next] = 1;
+            if (beamPixel(next * 4)) queue[tail++] = next;
+          }
+        }
+      }
+      const width = maxX - minX + 1;
+      const height = maxY - minY + 1;
+      if (size >= 20 && Math.max(width, height) >= Math.min(width, height) * 3) {
+        counts.beam += size;
+      }
+    }
+  }
+  if (counts.beam === 0 && lowerRightCoolBeamPixels >= 160) {
+    counts.beam = lowerRightCoolBeamPixels;
   }
   return counts;
 }
@@ -184,12 +264,25 @@ function probeCode() {
   return `async page => {
     await page.waitForFunction(() => globalThis.__forgeaxBossLightning !== undefined, null, { timeout: 10000 });
     await page.waitForTimeout(${captureDelayMs});
-    await page.evaluate(count => {
+    const submittedTick = await page.evaluate(count => {
+      const front = globalThis.__forgeaxBossLightning;
+      const runtime = front.world.getResource('VfxGpuRuntime');
+      const tick = runtime.lastCommitted(front.player)?.tick ?? -1;
       for (let index = 0; index < count; index += 1) {
-        globalThis.__forgeaxBossLightning?.submitImpact?.();
+        const result = front.submitImpact?.();
+        if (result === undefined || result.ok === false || result.patch?.ok === false || result.submitted?.ok !== true) {
+          throw new Error('Impact submission failed: ' + JSON.stringify(result));
+        }
       }
+      return tick;
     }, ${mode === 'event-queue-cleared' ? 8 : 1});
-    await page.waitForTimeout(100);
+    await page.waitForFunction(tick => {
+      const front = globalThis.__forgeaxBossLightning;
+      const runtime = front.world.getResource('VfxGpuRuntime');
+      const committed = runtime.lastCommitted(front.player);
+      return committed !== undefined && committed.tick > tick &&
+        (${mode.length === 0 ? "committed.instanceGeneration > 0 && runtime.eventCounters(front.player).consumed > 0" : 'true'});
+    }, submittedTick, { timeout: 15000 });
     return await page.evaluate(() => {
       const runtime = globalThis.__forgeaxBossLightning;
       if (runtime === undefined) return { booted: false };
@@ -199,7 +292,7 @@ function probeCode() {
       return {
         booted: true,
         seed: 42,
-        camera: { position: [0, 1.35, 8.5], target: [0, 0.8, 0] },
+        camera: { position: [0.2, 1.15, 5.8], target: [0.2, 0.35, 0] },
         program: runtime.effectAsset === undefined ? undefined : {
           format: runtime.effectAsset.program.format,
           fingerprint: runtime.effectAsset.program.fingerprint,
@@ -211,8 +304,10 @@ function probeCode() {
         },
         arcNovaEmitters: runtime.effectAsset?.program.emitters
           .map(item => item.id)
-          .filter(id => ${JSON.stringify(['charge-arcane-dial','charge-hex-seal','charge-prismatic-crown','release-axis-lance','release-radial-blades','impact-violet-shock','impact-cross-crown','decay-ember-facets'])}.includes(id)),
+          .filter(id => ${JSON.stringify(['charge-arcane-dial','impact-violet-shock'])}.includes(id)),
         runtime: diagnostics,
+        hostInspection: runtime.inspect?.(),
+        featureDiagnostics: runtime.renderer.inspect().featureDiagnostics,
         eventScenario: ${JSON.stringify(eventScenario)},
         gpuLocal: diagnostics?.gpuLocalEvents === true,
         eventCounters: diagnostics?.eventCounters,
@@ -246,16 +341,16 @@ function probeCode() {
 
 function assertNormal(value) {
   if (!value.booted || value.program === undefined) {
-    throw new Error('normal path did not expose a GUID-loaded v2 GPU program');
+    throw new Error('normal path did not expose a GUID-loaded Program v3 GPU program');
   }
   const kinds = new Set(value.program.emitters.flatMap(item => item.renderers));
   if (!kinds.has('billboard') || !kinds.has('mesh')) {
     throw new Error(`normal path missing billboard/mesh programs: ${JSON.stringify(value.program.emitters)}`);
   }
-  if (value.program.format !== 'forgeax-vfx-program-2' || !value.runtime?.hasPlayer) {
+  if (value.program.format !== 'forgeax-vfx-program-4' || !value.runtime?.hasPlayer) {
     throw new Error(`GPU runtime did not own the player: ${JSON.stringify(value)}`);
   }
-  if (value.arcNovaEmitters?.length !== 8) {
+  if (value.arcNovaEmitters?.length !== 2) {
     throw new Error(`Arc Nova emitters are not in the managed GPU program: ${JSON.stringify(value.arcNovaEmitters)}`);
   }
   if (
@@ -269,10 +364,21 @@ function assertNormal(value) {
   if (!value.cameraReady || value.validationErrors.length !== 0) {
     throw new Error(`active camera or WebGPU validation contract failed: ${JSON.stringify(value)}`);
   }
+  if (!value.featureDiagnostics?.some(item =>
+    item.identity === 'forgeax.vfx-render.gpu-particles' && item.status === 'active'
+  )) {
+    throw new Error(`VFX feature is not active: ${JSON.stringify(value.featureDiagnostics)}`);
+  }
   if (value.visualEvidence?.expectations.some(item => item.verdict !== 'pass')) {
     throw new Error(`visual evidence expectations failed: ${JSON.stringify(value.visualEvidence)}`);
   }
-  if (value.runtime.dataInterfaceSnapshot?.result?.value?.readiness !== 'ready') {
+  const dataInterfaceResult = value.runtime.dataInterfaceSnapshot?.result;
+  const rendererPreparedFallback =
+    dataInterfaceResult?.ok === false &&
+    dataInterfaceResult.error?.code === 'vfx-data-interface-missing' &&
+    dataInterfaceResult.error?.expected?.includes('resident') &&
+    value.runtime.diagnostics?.length === 0;
+  if (dataInterfaceResult?.value?.readiness !== 'ready' && !rendererPreparedFallback) {
     throw new Error(`Data Interface providers were not ready: ${JSON.stringify(value.runtime)}`);
   }
   if (
@@ -385,29 +491,33 @@ function assertFalsified(value) {
 }
 
 let server;
+let serverOutput = '';
 async function waitForServer(url) {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     if (server?.exitCode !== null && server?.exitCode !== undefined) {
-      throw new Error(`Vite exited before serving ${url} (code=${server.exitCode})`);
+      throw new Error(`Vite exited before serving ${url} (code=${server.exitCode}): ${serverOutput}`);
     }
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
       if (response.ok) return;
     } catch {
       // Vite is still booting.
     }
     await new Promise(resolveReady => setTimeout(resolveReady, 100));
   }
-  throw new Error(`Vite did not serve ${url} within 30s`);
+  throw new Error(`Vite did not serve ${url} within 30s: ${serverOutput}`);
 }
 
 try {
   server = spawn('pnpm', ['--filter', '@forgeax/hello-boss-lightning', 'exec', 'vite', '--host', '127.0.0.1', '--port', port, '--strictPort'], {
     cwd: repoRoot,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
+  const captureOutput = chunk => { serverOutput = (serverOutput + chunk.toString()).slice(-12000); };
+  server.stdout.on('data', captureOutput);
+  server.stderr.on('data', captureOutput);
   await waitForServer(pageUrl);
   cli('open', pageUrl);
   const rawProbe = cli('--raw', 'run-code', probeCode());

@@ -126,7 +126,7 @@ async function readbackRgba16f(
   texture: GPUTexture,
   arrayLayer: number,
   mipLevel: number,
-): Promise<number[]> {
+): Promise<{ values: number[]; rawBytes: number[] }> {
   // Read one pixel from (0,0) of (face=arrayLayer, mip=mipLevel).
   const bytesPerRow = 256;
   const buffer = device.createBuffer({
@@ -142,7 +142,8 @@ async function readbackRgba16f(
   device.queue.submit([encoder.finish()]);
   await buffer.mapAsync(0x0001 /* MAP_READ */);
   const range = buffer.getMappedRange();
-  const dv = new DataView(range.slice(0));
+  const raw = new Uint8Array(range.slice(0));
+  const dv = new DataView(raw.buffer);
   buffer.unmap();
   const f16ToF32 = (u16: number) => {
     const sign = (u16 & 0x8000) >> 15;
@@ -152,12 +153,129 @@ async function readbackRgba16f(
     if (exp === 0x1f) return frac ? Number.NaN : (sign ? -1 : 1) * Number.POSITIVE_INFINITY;
     return (sign ? -1 : 1) * 2 ** (exp - 15) * (1 + frac / 1024);
   };
-  return [
-    f16ToF32(dv.getUint16(0, true)),
-    f16ToF32(dv.getUint16(2, true)),
-    f16ToF32(dv.getUint16(4, true)),
-    f16ToF32(dv.getUint16(6, true)),
-  ];
+  return {
+    values: [
+      f16ToF32(dv.getUint16(0, true)),
+      f16ToF32(dv.getUint16(2, true)),
+      f16ToF32(dv.getUint16(4, true)),
+      f16ToF32(dv.getUint16(6, true)),
+    ],
+    rawBytes: [...raw.slice(0, 8)],
+  };
+}
+
+interface TextureReadbackSpec {
+  readonly label: string;
+  readonly texture: GPUTexture;
+  readonly width: number;
+  readonly height: number;
+  readonly faces: number;
+  readonly mipLevels: number;
+  readonly identity: string;
+}
+
+/**
+ * Submit all subresource copies before mapping any staging buffer. This keeps
+ * the readback observational: no producer pass is interrupted by a map/wait.
+ */
+async function assertFiniteTextureRgba16f(
+  device: GPUDevice,
+  spec: TextureReadbackSpec,
+): Promise<void> {
+  const bytesPerPixel = 8;
+  const parts: Array<{
+    readonly buffer: GPUBuffer;
+    readonly width: number;
+    readonly height: number;
+    readonly face: number;
+    readonly mip: number;
+    readonly rowPitch: number;
+  }> = [];
+  const encoder = device.createCommandEncoder({ label: `${spec.label}-full-readback` });
+  for (let mip = 0; mip < spec.mipLevels; mip += 1) {
+    const width = Math.max(1, spec.width >> mip);
+    const height = Math.max(1, spec.height >> mip);
+    const rowPitch = Math.ceil((width * bytesPerPixel) / 256) * 256;
+    for (let face = 0; face < spec.faces; face += 1) {
+      const buffer = device.createBuffer({
+        label: `${spec.label}-readback-face${face}-mip${mip}`,
+        size: rowPitch * height,
+        usage: 0x0001 | 0x0008,
+      });
+      encoder.copyTextureToBuffer(
+        { texture: spec.texture, mipLevel: mip, origin: { x: 0, y: 0, z: face } },
+        { buffer, bytesPerRow: rowPitch },
+        { width, height, depthOrArrayLayers: 1 },
+      );
+      parts.push({ buffer, width, height, face, mip, rowPitch });
+    }
+  }
+  device.queue.submit([encoder.finish()]);
+  await Promise.all(parts.map((part) => part.buffer.mapAsync(0x0001)));
+  try {
+    for (const part of parts) {
+      const raw = new Uint8Array(part.buffer.getMappedRange()).slice();
+      const view = new DataView(raw.buffer);
+      for (let y = 0; y < part.height; y += 1) {
+        for (let x = 0; x < part.width; x += 1) {
+          const offset = y * part.rowPitch + x * bytesPerPixel;
+          for (let channel = 0; channel < 4; channel += 1) {
+            const value = f16ToF32(view.getUint16(offset + channel * 2, true));
+            if (!Number.isFinite(value)) {
+              const rawBytes = [...raw.slice(offset, offset + bytesPerPixel)];
+              throw new Error(
+                `${spec.label} non-finite sample at texture=${spec.identity}, face=${part.face}, mip=${part.mip}, x=${x}, y=${y}; rawBytes=${rawBytes.join(',')}`,
+              );
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    for (const part of parts) {
+      part.buffer.unmap();
+      part.buffer.destroy();
+    }
+  }
+}
+
+function f16ToF32(u16: number): number {
+  const sign = (u16 & 0x8000) >> 15;
+  const exp = (u16 & 0x7c00) >> 10;
+  const frac = u16 & 0x03ff;
+  if (exp === 0) return (sign ? -1 : 1) * 2 ** -14 * (frac / 1024);
+  if (exp === 0x1f) return frac ? Number.NaN : (sign ? -1 : 1) * Number.POSITIVE_INFINITY;
+  return (sign ? -1 : 1) * 2 ** (exp - 15) * (1 + frac / 1024);
+}
+
+async function loadPhysicalGuidEquirect(): Promise<EquirectAsset> {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  const guid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+  const bodyPath = path.resolve(
+    here,
+    '../../../../../apps/hello/physical-material/dist/assets',
+    `${guid}-body.bin`,
+  );
+  const raw = (fs.readFileSync as unknown as (path: string) => Uint8Array)(bodyPath);
+  const data = new Uint8Array(raw.byteLength);
+  data.set(raw);
+  const digest = crypto.createHash('sha256').update(data).digest('hex');
+  const expected = '391ac77feea42745a6ae6b12d4da46bed90e8af4721525f4def0882c10cd8084';
+  if (digest !== expected) throw new Error(`physical HDR body hash mismatch: ${digest}`);
+  console.error(
+    `[ibl-diagnostic] ${JSON.stringify({ sourceGuid: guid, bodyPath, bodySha256: digest, width: 1600, height: 800, format: 'rgba16float', deviceGeneration: 0 })}`,
+  );
+  return {
+    kind: 'equirect',
+    width: 1600,
+    height: 800,
+    format: 'rgba16float',
+    data,
+    colorSpace: 'linear',
+  };
 }
 
 describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
@@ -184,7 +302,10 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
       const scope = DeviceScope.create(0, 'ibl-dawn-test');
       store.bindDeviceScope(scope);
       const world = new World();
-      const equirect = makeWhiteEquirect();
+      const equirect =
+        process.env.FORGEAX_IBL_REAL_SOURCE === '1'
+          ? await loadPhysicalGuidEquirect()
+          : makeWhiteEquirect();
       const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
       // The production path receives the opaque RhiDevice and the same
@@ -220,7 +341,16 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
 
       // (a) equirect-to-cube face 0 center pixel != 0
       const cubePx = await readbackRgba16f(rawDevice, cubeRaw, 0, 0);
-      expect(cubePx.some((c) => c !== 0)).toBe(true);
+      expect(cubePx.values.some((c) => c !== 0)).toBe(true);
+      await assertFiniteTextureRgba16f(rawDevice, {
+        label: 'base-cube',
+        texture: cubeRaw,
+        width: Math.min(equirect.width, equirect.height),
+        height: Math.min(equirect.width, equirect.height),
+        faces: 6,
+        mipLevels: 1,
+        identity: 'cubemap-source',
+      });
 
       // (b) irradiance, (c) prefilter, (d) brdfLut: the textures live on
       // IblPipelineCache after t52/t53. Read opaque cache slots through the
@@ -234,16 +364,53 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
       expect(irrTex).toBeDefined();
       expect(prefTex).toBeDefined();
       expect(brdfTex).toBeDefined();
-      if (irrTex === undefined || prefTex === undefined || brdfTex === undefined) return;
+      expect(cache.prefilterFaceViewsByMip).toBeDefined();
+      if (
+        irrTex === undefined ||
+        prefTex === undefined ||
+        brdfTex === undefined ||
+        cache.prefilterFaceViewsByMip === undefined
+      )
+        return;
 
-      const irrPx = await readbackRgba16f(rawDevice, rawTexture(irrTex), 0, 0);
-      expect(irrPx.some((c) => c !== 0)).toBe(true);
+      const irrRaw = rawTexture(irrTex);
+      const irrPx = await readbackRgba16f(rawDevice, irrRaw, 0, 0);
+      expect(irrPx.values.some((c) => c !== 0)).toBe(true);
+      await assertFiniteTextureRgba16f(rawDevice, {
+        label: 'irradiance',
+        texture: irrRaw,
+        width: 32,
+        height: 32,
+        faces: 6,
+        mipLevels: 1,
+        identity: 'ibl-irradiance-cube',
+      });
 
-      const prefPx = await readbackRgba16f(rawDevice, rawTexture(prefTex), 0, 0);
-      expect(prefPx.some((c) => c !== 0)).toBe(true);
+      const prefRaw = rawTexture(prefTex);
+      const prefPx = await readbackRgba16f(rawDevice, prefRaw, 0, 0);
+      expect(prefPx.values.some((c) => c !== 0)).toBe(true);
+      await assertFiniteTextureRgba16f(rawDevice, {
+        label: 'prefilter',
+        texture: prefRaw,
+        width: 128,
+        height: 128,
+        faces: 6,
+        mipLevels: cache.prefilterFaceViewsByMip.length,
+        identity: 'ibl-prefilter-cube',
+      });
 
-      const brdfPx = await readbackRgba16f(rawDevice, rawTexture(brdfTex), 0, 0);
-      expect(brdfPx.some((c) => c !== 0)).toBe(true);
+      const brdfRaw = rawTexture(brdfTex);
+      const brdfPx = await readbackRgba16f(rawDevice, brdfRaw, 0, 0);
+      expect(brdfPx.values.some((c) => c !== 0)).toBe(true);
+      await assertFiniteTextureRgba16f(rawDevice, {
+        label: 'brdf-lut',
+        texture: brdfRaw,
+        width: 256,
+        height: 256,
+        faces: 1,
+        mipLevels: 1,
+        identity: 'ibl-brdf-lut',
+      });
     },
     60_000,
   );

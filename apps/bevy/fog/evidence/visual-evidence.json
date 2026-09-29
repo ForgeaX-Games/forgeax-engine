@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "forgeax-render-visual-evidence/1",
+  "featureId": "feat-20260827-render-temporal-environment-bloom-syntax-corrected",
+  "source": {
+    "path": "apps/bevy/fog/src/main.ts",
+    "sha256": "cacd50be5f2d207d57df76c1264d25ac6d67cf871509056806b322681d345ef3"
+  },
+  "build": {
+    "command": "pnpm --filter @forgeax/bevy-fog build",
+    "sha256": "16198527ba8b5e74859e0898689060bc398037722d1fa20862ee4951757212f0"
+  },
+  "backend": "browser-webgpu",
+  "runner": "playwright",
+  "frames": 300,
+  "captures": [
+    {
+      "id": "environment-atmosphere-fog",
+      "png": "evidence/fog-visual.png",
+      "observed": "Read PNG shows a lit fogged ground plane and central structure with preserved alpha",
+      "verdict": "pass",
+      "confidence": "high"
+    }
+  ],
+  "falsify": [
+    {
+      "id": "uniform",
+      "result": "pass"
+    },
+    {
+      "id": "height",
+      "result": "pass"
+    },
+    {
+      "id": "owner-switch",
+      "result": "pass"
+    },
+    {
+      "id": "recovery",
+      "result": "pass"
+    }
+  ],
+  "status": "pass"
+}

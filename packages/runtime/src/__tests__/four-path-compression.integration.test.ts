@@ -15,7 +15,8 @@
 //   D-10: all fixture data programmatic
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import { packMeshBin } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,38 +36,23 @@ function parseGuid(g: string): AssetGuid {
 }
 
 /**
- * Minimal synthetic mesh bin payload — v2 header, 3 vertices of 12 floats,
- * Uint16 indices, JSON submesh + aabb tail. Compatible with unpackMeshBin.
+ * Minimal mesh encoded through the current canonical vertex and binary owners.
  */
 function makeMeshBinPayload(): Uint8Array {
-  const vertices = new Float32Array(36);
-  for (let i = 0; i < 3; i++) {
-    const b = i * 12;
-    vertices[b + 0] = i * 1;
-    vertices[b + 1] = 0;
-    vertices[b + 2] = 0;
-    vertices[b + 3] = 0;
-    vertices[b + 4] = 1;
-    vertices[b + 5] = 0;
-    vertices[b + 6] = 0;
-    vertices[b + 7] = 0;
-    vertices[b + 8] = 1;
-    vertices[b + 9] = 0;
-    vertices[b + 10] = 0;
-    vertices[b + 11] = 1;
-  }
+  const attributes = {
+    position: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+    normal: new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0]),
+    uv: new Float32Array(6),
+    tangent: new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]),
+  };
+  const { vertices } = packInterleavedVertexAttributes(attributes, 3).unwrap();
   const indices = new Uint16Array([0, 1, 2]);
 
-  const packed = packMeshBinV4(
+  const packed = packMeshBin(
     {
       vertices,
       indices,
-      attributes: {
-        position: new Float32Array(9),
-        normal: new Float32Array(9),
-        uv: new Float32Array(6),
-        tangent: new Float32Array(12),
-      },
+      attributes,
       submeshes: [
         {
           indexOffset: 0,
@@ -216,10 +202,10 @@ describe('w16: 4-path compressed-fixture loading', () => {
                   guid: GUID_TEX,
                   kind: 'texture',
                   payload: {
-                    width: 4,
-                    height: 4,
+                    shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
                     format: 'rgba8unorm',
                     colorSpace: 'srgb',
+                    mips: { kind: 'none' },
                   },
                   refs: [],
                   artifacts: {

@@ -1,7 +1,7 @@
 // @forgeax/engine-state -- OnEnter / OnExit callback registry (M4 / m4w2)
 //
 // OnEnter(token, value) and OnExit(token, value) return branded schedule-label
-// strings (pattern: `${name}__OnEnter__${value}` / `${name}__OnExit__${value}`).
+// strings encoding the token name, transition kind and variant as a JSON tuple.
 //
 // addOnEnter(token, variant, fn) / addOnExit(token, variant, fn) push fn into a
 // per-label callback registry and return an unsubscribe handle. The registry is
@@ -49,13 +49,13 @@ interface CallbackEntry {
 /**
  * Module-private callback registry.
  *
- * Key: `${tokenName}__OnEnter__${variant}` or `${tokenName}__OnExit__${variant}`
+ * Key: an unambiguous JSON tuple of token name, transition kind and variant.
  * Value: ordered array of callback entries (fired in registration order).
  */
 const _registry = new Map<string, CallbackEntry[]>();
 
 function makeLabel(tokenName: string, prefix: string, variant: string): string {
-  return `${tokenName}${prefix}${variant}`;
+  return JSON.stringify([tokenName, prefix, variant]);
 }
 
 /**
@@ -134,6 +134,7 @@ function _add(label: string, fn: StateCallback): UnsubscribeHandle {
     const idx = list.findIndex((e) => e.id === id);
     if (idx !== -1) {
       list.splice(idx, 1);
+      if (list.length === 0) _registry.delete(label);
     }
   };
 }

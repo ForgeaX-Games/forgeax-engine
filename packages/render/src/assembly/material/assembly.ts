@@ -1,48 +1,451 @@
-import type { CookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
-import type { MaterialValue } from '@forgeax/engine-types';
+import {
+  type MaterialRenderProjection as AssetMaterialRenderProjection,
+  projectMaterialRecord,
+} from '@forgeax/engine-assets-runtime';
+import {
+  type CookedMaterialRecord,
+  materialLayerPlanIdentity,
+} from '@forgeax/engine-pack/material-cook';
+import {
+  createStandardPbrArtifactReceipt,
+  type MaterialShaderArtifact,
+  type MaterialShaderArtifactReceipt,
+  type MaterialShaderEntry,
+  type MaterialShaderManifestEntry,
+  type MaterialShaderProgram,
+  type ShaderRegistry,
+} from '@forgeax/engine-shader';
+import type { MaterialProgramAddress, StandardLayerPlan } from '@forgeax/engine-types';
+import { resolveMaterialShaderUvSetCount } from '../material-shader-policy';
+import { projectStandardLayerPlan } from './standard-layer-projection.js';
 
-export interface MaterialRenderPassProjection {
-  readonly name: string;
-  readonly module: string;
-  readonly vertexEntry?: string;
-  readonly fragmentEntry?: string;
-  readonly moduleSlots?: Readonly<Record<string, string>>;
-  readonly renderState?: Readonly<Record<string, unknown>>;
-  readonly artifactHash: string;
-}
+type ProgramEntry = MaterialShaderEntry & { readonly program: MaterialShaderProgram };
 
-export interface MaterialRenderProjection {
-  readonly materialGuid: string;
-  readonly specializationKey: string;
-  readonly artifactHash: string;
-  readonly passes: readonly MaterialRenderPassProjection[];
-  readonly runtimeValues: Readonly<Record<string, MaterialValue | null>>;
-  readonly staticSelection: readonly string[];
-}
-
-function projectPass(
-  record: CookedMaterialRecord,
-  pass: CookedMaterialRecord['resolved']['passes'][number],
-): MaterialRenderPassProjection {
-  const program = pass.program;
-  return {
-    name: pass.name,
-    module: program.module,
-    ...(program.vertexEntry === undefined ? {} : { vertexEntry: program.vertexEntry }),
-    ...(program.fragmentEntry === undefined ? {} : { fragmentEntry: program.fragmentEntry }),
-    ...(program.moduleSlots === undefined ? {} : { moduleSlots: program.moduleSlots }),
-    ...(pass.renderState === undefined ? {} : { renderState: pass.renderState }),
-    artifactHash: record.artifact.digest,
-  };
+export type { MaterialRenderPassProjection } from '@forgeax/engine-assets-runtime';
+export interface MaterialRenderProjection extends AssetMaterialRenderProjection {
+  readonly layerPlan: StandardLayerPlan;
 }
 
 export function assembleMaterialProjection(record: CookedMaterialRecord): MaterialRenderProjection {
+  const layerPlan = projectStandardLayerPlan(record.resolved.parameters, record.resolved.passes);
+  const expectedLayerPlanIdentity = materialLayerPlanIdentity(record);
+  if (
+    expectedLayerPlanIdentity !== undefined &&
+    record.receipt.derivedInterface.layerPlanIdentity !== expectedLayerPlanIdentity
+  ) {
+    throw new Error(
+      `Standard material layer-plan identity mismatch: expected ${expectedLayerPlanIdentity}, got ${record.receipt.derivedInterface.layerPlanIdentity ?? 'missing'}`,
+    );
+  }
   return {
-    materialGuid: record.guid,
-    specializationKey: record.specializationKey ?? record.receipt.identity.programIdentity,
-    artifactHash: record.artifact.digest,
-    passes: record.resolved.passes.map((pass) => projectPass(record, pass)),
-    runtimeValues: record.resolved.values,
-    staticSelection: [],
+    ...projectMaterialRecord(record),
+    layerPlan,
   };
+}
+
+/**
+ * Assemble the one built-in Standard PBR artifact from the registry-owned entry.
+ * Both rigid and skinned identifiers use this producer; unsupported identifiers
+ * stay outside the GPU-driven Standard PBR lane.
+ */
+export function assembleStandardPbrArtifact(
+  materialShaderId: string,
+  program: MaterialShaderProgram,
+  vertexColorAvailable?: boolean,
+): MaterialShaderArtifact | undefined;
+export function assembleStandardPbrArtifact(
+  materialShaderId: string,
+  shaderEntry: ProgramEntry,
+  options?: MaterialShaderArtifactRequest,
+): MaterialShaderArtifact | undefined;
+export function assembleStandardPbrArtifact(
+  materialShaderId: string,
+  shaderEntryOrProgram: ProgramEntry | MaterialShaderProgram,
+  optionsOrVertexColor: MaterialShaderArtifactRequest | boolean = {},
+): MaterialShaderArtifact | undefined {
+  const skinned =
+    materialShaderId === 'forgeax::pbr-skin' ||
+    materialShaderId === 'forgeax::default-standard-pbr-skin';
+  if (materialShaderId !== 'forgeax::default-standard-pbr' && !skinned) return undefined;
+
+  const options =
+    typeof optionsOrVertexColor === 'boolean'
+      ? { vertexColorAvailable: optionsOrVertexColor }
+      : optionsOrVertexColor;
+  const shaderEntry: ProgramEntry = !('program' in shaderEntryOrProgram)
+    ? {
+        source: shaderEntryOrProgram.source,
+        program: shaderEntryOrProgram,
+        paramSchema: [],
+        receipt: createStandardPbrArtifactReceipt(skinned, options.vertexColorAvailable ?? false),
+      }
+    : shaderEntryOrProgram;
+
+  const publishedReceipt = shaderEntry.receipt;
+  // The legacy no-request call remains source-compatible for the built-in
+  // Standard lane. Once a geometry fact is requested, however, the receipt
+  // must come from the producer-selected artifact; synthesising a different
+  // color layout here would let source, pipeline, and vertex ABI diverge.
+  if (
+    options.vertexColorAvailable !== undefined &&
+    (publishedReceipt === undefined ||
+      receiptHasVertexColor(publishedReceipt) !== options.vertexColorAvailable)
+  ) {
+    return undefined;
+  }
+  const receipt = publishedReceipt ?? createStandardPbrArtifactReceipt(skinned);
+  return {
+    material: materialShaderId,
+    pass: options.pass ?? 'forward',
+    program: shaderEntry.program,
+    layoutIdentity: receipt.reflection.layoutIdentity,
+    bindings: [],
+    deps: [],
+    ...(options.variantSet === undefined ? {} : { variantSet: options.variantSet }),
+    ...(options.address === undefined
+      ? {}
+      : {
+          vertexEntry:
+            options.address === 'scene-index' ? receipt.sceneIndexEntry : receipt.directEntry,
+        }),
+    vertexInputs: receipt.vertexInputs.map(
+      (input): Readonly<Record<string, unknown>> => ({
+        semantic: input.semantic,
+        location: input.location,
+        format: input.format,
+      }),
+    ),
+    receipt,
+  };
+}
+
+export interface MaterialShaderArtifactRequest {
+  /** Geometry-owned COLOR_0 fact used to select the matching published variant. */
+  readonly vertexColorAvailable?: boolean;
+  /** Deformation lane used to select a skin-compatible shadow variant. */
+  readonly deformation?: 'rigid' | 'skin';
+  readonly clustered?: boolean;
+  /** Retained frame probe records require the matching shader ABI. */
+  readonly probeBlend?: boolean;
+  readonly reflectionFallback?: boolean;
+  readonly visibleSurface?: boolean;
+  readonly variantSet?: string;
+  /** Submission address requested by the consumer; GPU-driven uses scene-index. */
+  readonly address?: MaterialProgramAddress;
+  /** Concrete Pass whose entry metadata is being assembled. */
+  readonly pass?: 'forward' | 'shadow' | 'depth';
+}
+
+function receiptHasVertexColor(receipt: MaterialShaderArtifactReceipt): boolean {
+  return receipt.vertexInputs.some((input) => input.semantic === 'color');
+}
+
+function receiptUvSetCount(receipt: MaterialShaderArtifactReceipt): number {
+  let count = 0;
+  for (const input of receipt.vertexInputs) {
+    if (input.semantic === 'uv') count = Math.max(count, 1);
+    else if (/^uv([1-7])$/.test(input.semantic)) {
+      count = Math.max(count, Number(input.semantic.slice(2)) + 1);
+    }
+  }
+  return count;
+}
+
+function assemblePublishedArtifact(
+  materialShaderId: string,
+  shaderEntry: ProgramEntry,
+  options: MaterialShaderArtifactRequest,
+  reflectedUvSetCount?: number,
+): MaterialShaderArtifact | undefined {
+  const receipt = shaderEntry.receipt;
+  if (receipt === undefined) return undefined;
+  if (
+    options.vertexColorAvailable !== undefined &&
+    receiptHasVertexColor(receipt) !== options.vertexColorAvailable
+  ) {
+    return undefined;
+  }
+  return {
+    material: materialShaderId,
+    pass: options.pass ?? 'forward',
+    program: shaderEntry.program,
+    layoutIdentity: receipt.reflection.layoutIdentity,
+    bindings: [],
+    deps: [],
+    uvSetCount:
+      resolveMaterialShaderUvSetCount(shaderEntry.source, reflectedUvSetCount) ??
+      receiptUvSetCount(receipt),
+    ...(options.variantSet === undefined ? {} : { variantSet: options.variantSet }),
+    ...(options.address === undefined
+      ? {}
+      : {
+          vertexEntry:
+            options.address === 'scene-index' ? receipt.sceneIndexEntry : receipt.directEntry,
+        }),
+    ...(options.pass === 'shadow' ? { fragmentEntry: 'fs_shadow' } : {}),
+    vertexInputs: receipt.vertexInputs.map(
+      (input): Readonly<Record<string, unknown>> => ({
+        semantic: input.semantic,
+        location: input.location,
+        format: input.format,
+      }),
+    ),
+    receipt,
+  };
+}
+
+function selectedMaterialShaderEntry(
+  entry: Pick<MaterialShaderEntry, 'paramSchema'>,
+  program: MaterialShaderProgram,
+  receipt: MaterialShaderArtifactReceipt | undefined,
+): ProgramEntry {
+  return {
+    source: program.source,
+    program,
+    paramSchema: entry.paramSchema,
+    ...(receipt === undefined ? {} : { receipt }),
+  };
+}
+
+function selectPublishedVariant(
+  entry: {
+    readonly variants: readonly {
+      readonly definesKey: string;
+      readonly defines: Readonly<Record<string, boolean>>;
+      readonly composedWgsl: string;
+      readonly receipt?: MaterialShaderArtifactReceipt;
+    }[];
+  },
+  options: MaterialShaderArtifactRequest,
+): (typeof entry.variants)[number] | undefined {
+  const desiredColor = options.vertexColorAvailable;
+  const declaresColorAxis = entry.variants.some((variant) =>
+    Object.hasOwn(variant.defines, 'VERTEX_COLOR_AVAILABLE'),
+  );
+  let withColor =
+    desiredColor === undefined || !declaresColorAxis
+      ? [...entry.variants]
+      : entry.variants.filter((variant) => variant.defines.VERTEX_COLOR_AVAILABLE === desiredColor);
+  const declaresSkinningAxis = entry.variants.some((variant) =>
+    Object.hasOwn(variant.defines, 'SKINNING_DISABLED'),
+  );
+  if (options.deformation !== undefined && declaresSkinningAxis) {
+    const skinningDisabled = options.deformation !== 'skin';
+    withColor = withColor.filter(
+      (variant) => variant.defines.SKINNING_DISABLED === skinningDisabled,
+    );
+  }
+  for (const [axis, requested] of [
+    ['CLUSTER_FORWARD_AVAILABLE', options.clustered],
+    ['PROBE_BLEND_AVAILABLE', options.probeBlend],
+    ['REFLECTION_FALLBACK_AVAILABLE', options.reflectionFallback],
+    ['VISIBLE_SURFACE_AVAILABLE', options.visibleSurface ?? false],
+    [
+      'GPU_DRIVEN_SCENE_INDEX_AVAILABLE',
+      options.address === undefined ? undefined : options.address === 'scene-index',
+    ],
+    // Indirect batches address scene instance rows through visibleItems. The explicit
+    // variant bypasses that lookup and must not win a lexical ranking tie.
+    ['GPU_DRIVEN_SCENE_INDEX_EXPLICIT', options.address === undefined ? undefined : false],
+  ] as const) {
+    if (
+      requested !== undefined &&
+      entry.variants.some((variant) => Object.hasOwn(variant.defines, axis))
+    ) {
+      withColor = withColor.filter((variant) => variant.defines[axis] === requested);
+    }
+  }
+  if (options.variantSet === undefined) {
+    // Coverage-only is an explicit temporal producer variant. Ordinary
+    // material publication must stay on the color-producing shader.
+    withColor = withColor.filter((variant) => variant.defines.COVERAGE_ONLY !== true);
+  }
+  if (options.variantSet !== undefined) {
+    const requestedAxes = new Map(
+      options.variantSet.length === 0
+        ? []
+        : options.variantSet.split('+').map((entry) => {
+            const [name, value] = entry.split('=');
+            return [name ?? '', value === 'true'] as const;
+          }),
+    );
+    withColor = withColor.filter((variant) =>
+      [...requestedAxes].every(([name, value]) => variant.defines[name] === value),
+    );
+  }
+  // GPU-driven Standard owns the storage-backed scene-index variant. Prefer that exact family, then fall back to the closest variant
+  // carrying the requested COLOR_0 fact. This keeps the selection deterministic
+  // without making capability names an admission whitelist.
+  const ranked = withColor
+    .map((variant) => ({
+      variant,
+      score:
+        (variant.defines.STORAGE_BUFFER_AVAILABLE === true ? 8 : 0) +
+        (variant.defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE === true ? 4 : 0) +
+        (variant.defines.CLUSTER_FORWARD_AVAILABLE === false ? 2 : 0) +
+        (variant.defines.PROBE_BLEND_AVAILABLE === false ? 1 : 0) +
+        (variant.defines.TRANSMISSION_AVAILABLE === false ? 1 : 0),
+    }))
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.variant.definesKey.localeCompare(right.variant.definesKey),
+    );
+  return ranked[0]?.variant;
+}
+
+function materialShaderLookupIds(materialShaderId: string): readonly string[] {
+  return materialShaderId === 'forgeax::pbr-skin'
+    ? ['forgeax::pbr-skin', 'forgeax::default-standard-pbr-skin']
+    : materialShaderId === 'forgeax::default-standard-pbr-skin'
+      ? ['forgeax::default-standard-pbr-skin', 'forgeax::pbr-skin']
+      : [materialShaderId];
+}
+
+const STANDARD_SHADOW_CASTER_ID = 'forgeax::default-shadow-caster';
+
+function isBuiltinStandardPbrMaterialShader(materialShaderId: string): boolean {
+  return (
+    materialShaderId === 'forgeax::default-standard-pbr' ||
+    materialShaderId === 'forgeax::default-standard-pbr-skin' ||
+    materialShaderId === 'forgeax::pbr-skin'
+  );
+}
+
+/** Resolve the registry-owned Standard PBR artifact, including the historical skin alias. */
+export function resolveStandardPbrArtifact(
+  materialShaderId: string,
+  shader: Pick<ShaderRegistry, 'findMaterialArtifact' | 'materialProgram'> &
+    Partial<Pick<ShaderRegistry, 'materialShaderManifestEntries'>>,
+  options: MaterialShaderArtifactRequest = {},
+): MaterialShaderArtifact | undefined {
+  const lookupIds = materialShaderLookupIds(materialShaderId);
+  for (const lookupId of lookupIds) {
+    const lookup = shader.findMaterialArtifact(lookupId);
+    if (!lookup.ok) continue;
+    let manifestEntry: MaterialShaderManifestEntry | undefined;
+    for (const entry of shader.materialShaderManifestEntries?.() ?? []) {
+      if (entry.identifier === lookupId) {
+        manifestEntry = entry;
+        break;
+      }
+    }
+    const selected =
+      manifestEntry === undefined || manifestEntry.variants.length === 0
+        ? undefined
+        : selectPublishedVariant(manifestEntry, options);
+    const selectedEntry =
+      selected === undefined
+        ? lookup.value
+        : selectedMaterialShaderEntry(
+            lookup.value,
+            shader.materialProgram(selected.composedWgsl),
+            selected.receipt,
+          );
+    const artifact = assembleStandardPbrArtifact(materialShaderId, selectedEntry, options);
+    if (artifact === undefined) return undefined;
+    // A variant source without producer receipt is not safe to admit on a
+    // geometry-specific path. The assembly helper keeps its legacy fallback
+    // only for callers that did not provide a geometry fact.
+    if (
+      options.vertexColorAvailable !== undefined &&
+      artifact.receipt !== undefined &&
+      receiptHasVertexColor(artifact.receipt) !== options.vertexColorAvailable
+    ) {
+      return undefined;
+    }
+    return selected === undefined ? artifact : { ...artifact, variantSet: selected.definesKey };
+  }
+  return undefined;
+}
+
+// Registry entries and manifest publications are immutable. Replace the projection
+// when either owner identity changes; old registrations remain weakly held.
+const publishedArtifacts = new WeakMap<
+  MaterialShaderEntry,
+  {
+    readonly manifest: MaterialShaderManifestEntry | undefined;
+    readonly requests: Map<string, MaterialShaderArtifact>;
+  }
+>();
+
+/**
+ * Resolve any producer-published material artifact through the same manifest
+ * variant relation as Standard. Unlike the Standard compatibility helper this
+ * never fabricates a receipt: a custom shader without producer ABI remains
+ * outside the GPU-driven lane with a structured preparation error.
+ */
+export function resolveMaterialShaderArtifact(
+  materialShaderId: string,
+  shader: Pick<ShaderRegistry, 'findMaterialArtifact' | 'materialProgram'> &
+    Partial<Pick<ShaderRegistry, 'materialShaderManifestEntries'>>,
+  options: MaterialShaderArtifactRequest = {},
+): MaterialShaderArtifact | undefined {
+  const lookupIds =
+    options.pass === 'shadow' && isBuiltinStandardPbrMaterialShader(materialShaderId)
+      ? [STANDARD_SHADOW_CASTER_ID]
+      : materialShaderLookupIds(materialShaderId);
+  for (const lookupId of lookupIds) {
+    const lookup = shader.findMaterialArtifact(lookupId);
+    if (!lookup.ok) continue;
+    let manifestEntry: MaterialShaderManifestEntry | undefined;
+    for (const entry of shader.materialShaderManifestEntries?.() ?? []) {
+      if (entry.identifier === lookupId) {
+        manifestEntry = entry;
+        break;
+      }
+    }
+    let cache = publishedArtifacts.get(lookup.value);
+    if (cache === undefined || cache.manifest !== manifestEntry) {
+      cache = { manifest: manifestEntry, requests: new Map() };
+      publishedArtifacts.set(lookup.value, cache);
+    }
+    const requestKey = JSON.stringify([
+      materialShaderId,
+      options.vertexColorAvailable,
+      options.deformation,
+      options.clustered,
+      options.probeBlend,
+      options.reflectionFallback,
+      options.variantSet,
+      options.address,
+      options.pass,
+    ]);
+    const cached = cache.requests.get(requestKey);
+    if (cached !== undefined) return cached;
+    const selected =
+      manifestEntry === undefined || manifestEntry.variants.length === 0
+        ? undefined
+        : selectPublishedVariant(manifestEntry, options);
+    // A published variant set is an explicit producer contract. Falling back
+    // to the primary entry when the requested axes have no variant would pair
+    // one source with another artifact's receipt.
+    if (
+      manifestEntry !== undefined &&
+      manifestEntry.variants.length > 0 &&
+      selected === undefined
+    ) {
+      continue;
+    }
+    const selectedEntry =
+      selected === undefined
+        ? lookup.value
+        : selectedMaterialShaderEntry(
+            lookup.value,
+            shader.materialProgram(selected.composedWgsl),
+            selected.receipt,
+          );
+    const artifact = assemblePublishedArtifact(
+      lookupId === STANDARD_SHADOW_CASTER_ID ? lookupId : materialShaderId,
+      selectedEntry,
+      options,
+      manifestEntry?.uvSetCount,
+    );
+    if (artifact !== undefined) {
+      const published =
+        selected === undefined ? artifact : { ...artifact, variantSet: selected.definesKey };
+      cache.requests.set(requestKey, published);
+      return published;
+    }
+  }
+  return undefined;
 }

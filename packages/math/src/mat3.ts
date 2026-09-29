@@ -228,11 +228,7 @@ export function fromMat4(out: Mat3, m: Mat4Like): Mat3 {
  * Used to transform normals from model space to world / view space; when m has a non-uniform
  * scale, normals must use normalMatrix (the upper-left 3x3 of m alone is incorrect).
  *
- * Per-frame consumer: feat-20260518-pbr-direct-lighting-mvp M3 / w14 wires
- * `render-system-record.ts` to call this helper once per renderable per frame
- * (host-side computation; result lives in mesh SSBO `normalMatrix` slot at
- * byte offset 64 within each PER_ENTITY_STRIDE = 256 B slot, plan-strategy
- * D-5 + AC-08).
+ * CPU utility; render shaders derive normals from the world transform.
  *
  * @degrade upper-left 3x3 singular -> out = identity (same convention as D-P1, via mat3.invert).
  *

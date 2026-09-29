@@ -16,7 +16,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type Component, defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { SceneInstance } from '@forgeax/engine-render';
-import type { LocalEntityId, MountOverride, SceneAsset } from '@forgeax/engine-types';
+import type { SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -25,10 +25,6 @@ import { registerSceneComponents } from './helpers/register-scene-components';
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
 
 function mkReg(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -59,10 +55,14 @@ function findMountedMember(w: World, rootA: EntityHandle): EntityHandle {
   }
   throw new Error('no mounted member found');
 }
-function firstMountOverride(scene: SceneAsset, comp: string): MountOverride | undefined {
-  for (const m of scene.mounts ?? []) {
-    for (const ov of m.overrides ?? []) {
-      if (ov.comp === comp) return ov;
+function firstInstanceOverride(
+  scene: SceneAsset,
+  comp: string,
+): { readonly value: unknown } | undefined {
+  for (const entity of Object.values(scene.entities)) {
+    for (const instanceOverride of entity.instance?.overrides ?? []) {
+      const value = instanceOverride.components[comp];
+      if (value !== undefined) return { value };
     }
   }
   return undefined;
@@ -83,12 +83,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
 
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
-          components: { Test_SPackSharedScalar: { assetRef: guid1 } },
-        },
-      ],
+      entities: { 'entity-0': { components: { Test_SPackSharedScalar: { assetRef: guid1 } } } },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -116,7 +111,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     expect(refs).toContain(guid1);
 
     const payload = asset.payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     expect(entities).toHaveLength(1);
 
     const ent0 = entities[0];
@@ -138,12 +133,9 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
 
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
-          components: { Test_SPackSharedArray: { sources: [guidA, guidB] } },
-        },
-      ],
+      entities: {
+        'entity-0': { components: { Test_SPackSharedArray: { sources: [guidA, guidB] } } },
+      },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -163,7 +155,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     expect(refs).toContain(guidB);
 
     const payload = asset.payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     const ent0 = entities[0];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
@@ -190,12 +182,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
 
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
-          components: { Test_STilesetPack: { tileset: tilesetGuid } },
-        },
-      ],
+      entities: { 'entity-0': { components: { Test_STilesetPack: { tileset: tilesetGuid } } } },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -226,12 +213,11 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     // collection (only strings are collected), so Phase 2 index lookup will fail.
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
+      entities: {
+        'entity-0': {
           components: { Test_SFailFastPack: { loneRef: 'non-collected-guid-wont-be-in-refs' } },
         },
-      ],
+      },
     };
 
     // Use a completely unrelated GUID for the asset to ensure Phase 1 collects nothing.
@@ -272,15 +258,14 @@ describe('m3-t2: unregistered component silently skipped', () => {
 
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
+      entities: {
+        'entity-0': {
           components: {
             Test_SRegComp: { val: 42 },
             Unreg_TestSkip: { mysteryField: 'should-survive' },
           },
         },
-      ],
+      },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -296,7 +281,7 @@ describe('m3-t2: unregistered component silently skipped', () => {
     const asset = assets[0];
     if (!asset) throw new Error('asset missing');
     const payload = asset.payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     expect(entities).toHaveLength(1);
 
     const ent0 = entities[0];
@@ -325,15 +310,14 @@ describe('m3-t2: unregistered component silently skipped', () => {
 
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        {
-          localId: localId(0),
+      entities: {
+        'entity-0': {
           components: {
             Test_SRegComp2: { count: 99 },
             Unreg_TestSkip2: { ghostField: 12345 },
           },
         },
-      ],
+      },
     };
 
     const packResult = serializeSceneAssetToPack(
@@ -349,7 +333,7 @@ describe('m3-t2: unregistered component silently skipped', () => {
     const asset = assets[0];
     if (!asset) throw new Error('asset missing');
     const payload = asset.payload as Record<string, unknown>;
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     expect(entities).toHaveLength(1);
 
     const ent0 = entities[0];
@@ -409,13 +393,15 @@ function mintCatalogued(reg: AssetRegistry, w: World, guid: string, tag: number)
 function mountOne(reg: AssetRegistry, w: World): EntityHandle {
   const child: SceneAsset = {
     kind: 'scene',
-    entities: [{ localId: localId(0), components: { Transform: { pos: [1, 0, 0] } } }],
+    entities: { 'entity-0': { components: { Transform: { pos: [1, 0, 0] } } } },
   };
   catScene(reg, W18_CHILD, child);
   const parent: SceneAsset = {
     kind: 'scene',
-    entities: [{ localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } }],
-    mounts: [{ localId: localId(1), source: W18_CHILD, memberFirst: localId(2), memberCount: 1 }],
+    entities: {
+      'entity-0': { components: { Transform: { pos: [0, 0, 0] } } },
+      child: { components: {}, instance: { source: W18_CHILD } },
+    },
   };
   catScene(reg, W18_PARENT, parent);
   const inst = reg.instantiate(rs(w, parent), w);
@@ -443,7 +429,7 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     const collect = rootsToSceneAsset(reg, w, [root]);
     expect(collect.ok).toBe(true);
     if (!collect.ok) return;
-    const ov = firstMountOverride(collect.value, 'AnimationPlayer');
+    const ov = firstInstanceOverride(collect.value, 'AnimationPlayer');
     expect(ov).toBeDefined();
     if (!ov) return;
     const clips = (ov.value as Record<string, unknown>).clips as unknown[];
@@ -473,7 +459,7 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     const collect = rootsToSceneAsset(reg, w, [root]);
     expect(collect.ok).toBe(true);
     if (!collect.ok) return;
-    const ov = firstMountOverride(collect.value, 'AnimationPlayer');
+    const ov = firstInstanceOverride(collect.value, 'AnimationPlayer');
     expect(ov).toBeDefined();
     if (!ov) return;
     const clips = (ov.value as Record<string, unknown>).clips as unknown[];
@@ -499,7 +485,7 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     const collect = rootsToSceneAsset(reg, w, [root]);
     expect(collect.ok).toBe(true);
     if (!collect.ok) return;
-    const ov = firstMountOverride(collect.value, 'W18_ScalarShared');
+    const ov = firstInstanceOverride(collect.value, 'W18_ScalarShared');
     expect(ov).toBeDefined();
     if (!ov) return;
     const val = ov.value as Record<string, unknown>;
@@ -522,7 +508,7 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     const collect = rootsToSceneAsset(reg, w, [root]);
     expect(collect.ok).toBe(true);
     if (!collect.ok) return;
-    const ov = firstMountOverride(collect.value, 'W18_ScalarShared');
+    const ov = firstInstanceOverride(collect.value, 'W18_ScalarShared');
     expect(ov).toBeDefined();
     if (!ov) return;
     const val = ov.value as Record<string, unknown>;

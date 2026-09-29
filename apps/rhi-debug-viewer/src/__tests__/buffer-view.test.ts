@@ -26,6 +26,7 @@ function model(): ViewerModel {
       },
     ],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [],
     passes: [],
     events: [],

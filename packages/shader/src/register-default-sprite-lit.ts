@@ -56,12 +56,9 @@ export interface SpriteLitCaps {
  * compiled by @forgeax/engine-vite-plugin-shader at build time and surfaced
  * in manifest.json. The caller reads it from the manifest entries.
  *
- * `caps.storageBuffer` switches the runtime BGL buffer types for
- * @group(0) bindings 1+2 (pointLightsBuffer / spotLightsBuffer):
- * `false` -> uniform fallback (AC-10 WebGL2 path); `true` -> read-only-storage.
- * The BGL itself is built downstream in runtime/pbr-pipeline.ts (sprite-lit
- * reuses pbr-view / pbr-mesh-array / pbr-instances unchanged; AC-07
- * BGL byte-identical).
+ * `caps.storageBuffer` is retained for the shared mesh/instance layout
+ * selection. Sprite-lit local lighting reads the same Standard Cluster group
+ * as PBR; the view group has no direct point/spot arrays.
  *
  * @param registry ShaderRegistry instance (engine boot path).
  * @param composedWgsl Post-naga_oil composed WGSL source string.

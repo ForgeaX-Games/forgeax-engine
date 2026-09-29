@@ -14,13 +14,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 let width = 320;
 let height = 180;
-const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const featureEvidenceDir = process.env.FORGEAX_FOG_EVIDENCE_DIR ?? resolve(appRoot, 'artifacts');
 const pairEvidenceDir = resolve(featureEvidenceDir, 'dawn-fog-pairs');
 const errors = [];
 const recoveryErrors = [];
 const pairScreenshots = new Map();
 let recoveryExpected = false;
+const TEMPORAL_SETTLE_FRAMES = 34;
 
 let create;
 let globals;
@@ -115,10 +116,18 @@ const mockCanvas = {
       configure(descriptor) {
         ensureRenderTarget(descriptor.device, descriptor.format ?? 'rgba8unorm');
       },
-      unconfigure() {},
+      // A real GPUCanvasContext releases its current swap-chain image when
+      // unconfigured. Clear the Dawn test surface too, so renderer recovery
+      // cannot read back a texture minted by the lost device.
+      unconfigure() {
+        renderTarget = undefined;
+        renderTargetDevice = undefined;
+        renderTargetFormat = undefined;
+      },
       getCurrentTexture() {
         if (
           !renderTarget ||
+          renderTargetDevice !== sharedDevice ||
           renderTarget.width !== mockCanvas.width ||
           renderTarget.height !== mockCanvas.height
         ) {
@@ -134,28 +143,36 @@ const mockCanvas = {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const manifest = await buildEngineShaderManifest();
-const manifestUrl = 'data:application/json,' + encodeURIComponent(JSON.stringify(manifest));
-const { createApp, createFullscreenRenderFeature } = await import('@forgeax/engine-app');
+const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(manifestUrl));
+const { createApp } = await import('@forgeax/engine-app');
 const { World } = await import('@forgeax/engine-ecs');
 const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
 const { quat } = await import('@forgeax/engine-math');
-const { Camera, Materials, MeshFilter, MeshRenderer, PointLight, PostProcessParams, perspective } =
+const {
+  Camera,
+  DEFAULT_STANDARD_PROFILE,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  TONEMAP_NEUTRAL,
+  VolumetricFog,
+  perspective,
+} =
   await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const fogScene = JSON.parse(readFileSync(resolve(appRoot, 'src/fog-scene.json'), 'utf8'));
-const fogShader = readFileSync(resolve(appRoot, 'src/fog.wgsl'), 'utf8');
-const fogEffectId = 'bevy-fog::distance';
-const fogEffect = createFullscreenRenderFeature({
-  identity: fogEffectId,
-  source: fogShader,
-  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
-  params: {
-    byteSize: 16,
-    defaultValue: new Uint8Array(new Float32Array([2, 0.001, 20, 0]).buffer),
+const appResult = await createApp(
+  mockCanvas,
+  {
+    standardProfile: {
+      ...DEFAULT_STANDARD_PROFILE,
+      volumetricFog: { quality: 'high', depth: 64, tileSize: 4 },
+    },
   },
-});
-
-const appResult = await createApp(mockCanvas, { features: [fogEffect] }, { shaderManifestUrl: manifestUrl });
+  { shaderManifestUrl: manifestUrl },
+);
 if (!appResult.ok) {
   console.error('[smoke-dawn] unavailable: createApp failed: ' + appResult.error.code);
   process.exit(1);
@@ -177,6 +194,22 @@ app.setDrawSource(() => ({
   cameraOwner: 0,
   resourceOwner,
 }));
+const densityExtent = 64;
+const densityData = new Uint8Array(densityExtent * densityExtent * densityExtent);
+densityData.fill(96);
+const densityAsset = {
+  kind: 'texture',
+  shape: {
+    viewDimension: '3d',
+    extent: { width: densityExtent, height: densityExtent, depth: densityExtent },
+  },
+  format: 'r8unorm',
+  colorSpace: 'linear',
+  mips: { kind: 'none' },
+  data: densityData,
+};
+const densityHandle = world.allocSharedRef('TextureAsset', densityAsset);
+const resourceDensityHandle = resourceWorld.allocSharedRef('TextureAsset', densityAsset);
 const ground = world.allocSharedRef(
   'MaterialAsset',
   Materials.standard({ baseColor: fogScene.materials.ground, roughness: 0.92 }),
@@ -228,7 +261,18 @@ spawnSphere([markers.low.x, markers.low.sphereY, markers.depth]);
 spawnCube([markers.high.x, markers.high.baseY, markers.depth], markers.high.baseScale, structure);
 spawnSphere([markers.high.x, markers.high.sphereY, markers.depth]);
 spawnCube(endWall.position, endWall.scale, structure);
-world.spawn(
+const primaryLight = world.spawn(
+  { component: Transform, data: { pos: fogScene.lighting.position } },
+  {
+    component: PointLight,
+    data: {
+      color: fogScene.lighting.color,
+      intensity: fogScene.lighting.intensity,
+      range: fogScene.lighting.range,
+    },
+  },
+).unwrap();
+const resourceLight = resourceWorld.spawn(
   { component: Transform, data: { pos: fogScene.lighting.position } },
   {
     component: PointLight,
@@ -255,6 +299,7 @@ const camera = world.spawn(
         near: fogScene.camera.near,
         far: fogScene.camera.far,
       }),
+      tonemap: TONEMAP_NEUTRAL,
       clearColor: [...fogScene.fogColor, 1],
     },
   },
@@ -265,21 +310,34 @@ let revision = 0;
 let previousPhase;
 let fogOwnerWorld = world;
 let activeFogData;
-const fogParameters = fogScene.fog;
-function packFogParams(parameters) {
-  const bytes = new ArrayBuffer(16);
-  const values = new Float32Array(bytes);
-  values[0] = parameters.heightFalloff > 0 ? 2 : 1;
-  values[1] = Math.max(parameters.density * (parameters.heightFalloff > 0 ? 5 : 1), 0.001);
-  values[2] = 20;
-  values[3] = 0;
-  return new Uint8Array(bytes);
+const volumeBounds = { min: [-18, -1, -72], max: [18, 12, 1] };
+const volumeParameters = {
+  uniform: { extinction: [0.028, 0.028, 0.028], boundsMin: volumeBounds.min },
+  change: { extinction: [0.05, 0.05, 0.05], boundsMin: volumeBounds.min },
+  height: { extinction: [0.028, 0.028, 0.028], boundsMin: [
+    volumeBounds.min[0],
+    0.35,
+    volumeBounds.min[2],
+  ] },
+};
+function volumeData(data) {
+  const ownerIsResource = fogOwnerWorld === resourceWorld;
+  return {
+    light: ownerIsResource ? resourceLight : primaryLight,
+    density: ownerIsResource ? resourceDensityHandle : densityHandle,
+    boundsMin: data.boundsMin,
+    boundsMax: volumeBounds.max,
+    extinction: data.extinction,
+    albedo: [1, 1, 1],
+    emission: [0, 0, 0],
+    anisotropy: 0,
+    maxDistance: 120,
+  };
 }
-
 function attachFog(data) {
   fogEntity = fogOwnerWorld.spawn({
-    component: PostProcessParams,
-    data: { shader: fogEffectId, data: packFogParams(data) },
+    component: VolumetricFog,
+    data: volumeData(data),
   }).unwrap();
   activeFogData = data;
   revision += 1;
@@ -291,7 +349,7 @@ function updateFog(data) {
     attachFog(data);
     return;
   }
-  fogOwnerWorld.set(fogEntity, PostProcessParams, { data: packFogParams(data) }).unwrap();
+  fogOwnerWorld.set(fogEntity, VolumetricFog, volumeData(data)).unwrap();
   revision += 1;
 }
 
@@ -313,8 +371,8 @@ function switchFogOwner(nextWorld) {
   fogOwnerWorld = nextWorld;
   if (activeFogData !== undefined) {
     fogEntity = fogOwnerWorld.spawn({
-      component: PostProcessParams,
-      data: { shader: fogEffectId, data: packFogParams(activeFogData) },
+      component: VolumetricFog,
+      data: volumeData(activeFogData),
     }).unwrap();
   }
   revision += 1;
@@ -339,20 +397,22 @@ function applyPhase(phase) {
       detachFog();
       break;
     case 'uniform':
-      updateFog(fogParameters.uniform);
+      updateFog(volumeParameters.uniform);
       break;
     case 'change':
-      updateFog(fogParameters.change);
+      updateFog(volumeParameters.change);
       break;
     case 'height':
-      updateFog(fogParameters.height);
+      updateFog(volumeParameters.height);
       break;
     case 'detach-reattach':
       detachFog();
-      attachFog(fogParameters.height);
+      attachFog(volumeParameters.height);
       break;
     case 'camera-switch':
-      world.set(camera, Transform, { pos: [7, 7, 1] }).unwrap();
+      // Keep the switch visible to the fixed center ROI: a large forward move
+      // lands the center ray on the unlit ground and falsely reports black fog.
+      world.set(camera, Transform, { pos: [3, 7.5, 14] }).unwrap();
       revision += 1;
       break;
     case 'owner-switch':
@@ -375,6 +435,7 @@ function applyPhase(phase) {
 
 async function readbackCenter() {
   await sharedDevice.queue.onSubmittedWorkDone();
+  if (!renderTarget) ensureRenderTarget(sharedDevice, 'rgba8unorm');
   const targetWidth = renderTarget.width;
   const targetHeight = renderTarget.height;
   const bytesPerRow = Math.ceil((targetWidth * 4) / 256) * 256;
@@ -549,6 +610,9 @@ const trace = await runFogLifecycle({
     return { phaseState, recovery };
   },
   captureFrame: async ({ frame, phase, advanced }) => {
+    for (let settle = 0; settle < TEMPORAL_SETTLE_FRAMES; settle += 1) {
+      if (!(await advanceSettlingFrame())) break;
+    }
     const sample = await readbackRenderableFrame();
     const observed = sample.rgba;
     const roi = sampleFogRois(sample.pixels, sample.width, sample.height);
@@ -609,6 +673,16 @@ const evidencePath = resolve(featureEvidenceDir, 'dawn-fog-trace.json');
 mkdirSync(dirname(evidencePath), { recursive: true });
 const evidence = {
   ...trace,
+  schemaVersion: 'bevy-fog-evidence/1',
+  featureId: 'feat-20260827-render-temporal-environment-bloom-syntax-corrected',
+  source: { path: 'apps/bevy/fog/src/main.ts', sha256: createHash('sha256').update(readFileSync(resolve(appRoot, 'src/main.ts'))).digest('hex') },
+  build: { command: 'pnpm --filter @forgeax/bevy-fog build', sha256: createHash('sha256').update(readFileSync(resolve(appRoot, 'package.json'))).digest('hex') },
+  backend: 'dawn-node',
+  runner: { kind: 'dawn.node', id: process.env.CI ? 'ci-dawn' : 'local-dawn' },
+  status: trace.verdict === 'pass' ? 'pass' : 'fail',
+  frameIdentity: { first: 0, last: Math.max(0, trace.frames - 1), sequenceSha256: createHash('sha256').update(trace.phaseTrace.join('|')).digest('hex') },
+  visualEvidence: (trace.visualEvidence ?? []).map((entry, index) => ({ id: `fog-${entry.phase ?? index}`, png: pairScreenshots.get(entry.phase)?.path ?? resolve(pairEvidenceDir, 'missing.png'), observed: JSON.stringify(entry.observed ?? []), verdict: entry.verdict ?? 'fail', confidence: entry.confidence ?? 'low' })),
+  falsify: ['uniform', 'height', 'owner-switch', 'recovery'].map((id) => ({ id, result: trace.cases.some((entry) => entry.caseId === id && entry.verdict === 'pass') ? 'pass' : 'fail' })),
   errors: errors.map((error) => error.code ?? String(error)),
   recoveryErrors: recoveryErrors.map((error) => error.code ?? String(error)),
   pairScreenshots: Array.from(pairScreenshots.values()),

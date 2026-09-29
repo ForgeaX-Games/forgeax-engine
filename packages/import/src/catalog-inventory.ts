@@ -13,12 +13,14 @@ export async function buildCatalogResult(
   registeredImporterKeys: ReadonlySet<string> = new Set(),
   scanOptions: ScanOptions = {},
   catalogVisibility: CatalogProducerVisibility = () => true,
+  sourceIdentityFor?: (sourcePath: string) => string,
 ): Promise<CatalogBuildResult> {
   const options: CatalogBuildProjectionOptions = {
     base,
     scanOptions,
     importerPolicy: (importer) => catalogImporterPolicy(importer, registeredImporterKeys),
     visibility: catalogVisibility,
+    ...(sourceIdentityFor === undefined ? {} : { sourceIdentityFor }),
   };
   return buildCatalogProjection(roots, options);
 }

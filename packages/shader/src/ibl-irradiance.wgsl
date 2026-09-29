@@ -3,10 +3,12 @@
 // @forgeax/engine-shader - ibl-irradiance.wgsl
 // (feat-20260520-skylight-ibl-cubemap M3 / t44).
 //
-// Diffuse irradiance convolution. Per LearnOpenGL §6.2.2: hemisphere
-// Riemann sum (sampleDelta = 0.025) integrates the env cubemap to produce
-// the convolved irradiance cubemap consumed by sampleIblDiffuse() at
-// runtime.
+// Diffuse irradiance convolution. Per LearnOpenGL §6.2.2: a bounded
+// hemisphere Riemann sum (sampleDelta = 0.05) integrates the env cubemap to
+// produce the convolved irradiance cubemap consumed by sampleIblDiffuse() at
+// runtime. The budget is deliberately bounded for the rgba16float bake target
+// so every backend completes the fragment without overflowing its shader
+// work budget.
 //
 // @group(0) = per-face viewProj uniform.
 // @group(1) = env cubemap (texture_cube<f32>) + sampler. This is the same
@@ -36,7 +38,25 @@ struct CubemapFaceUniforms {
 @group(1) @binding(0) var envCube: texture_cube<f32>;
 @group(1) @binding(1) var envSamplerS: sampler;
 
-const IRRADIANCE_SAMPLE_DELTA: f32 = 0.025;
+const IRRADIANCE_SAMPLE_DELTA: f32 = 0.05;
+
+// The bake target is rgba16float, so a sample is admissible only when all of
+// its lanes can be represented by that format. Equality catches NaN while
+// the bound also rejects infinities before they enter the running sum.
+fn irradianceFiniteScalar(value: f32) -> bool {
+  return value == value && abs(value) <= 65504.0;
+}
+
+fn irradianceFiniteVec3(value: vec3<f32>) -> bool {
+  return irradianceFiniteScalar(value.x) &&
+         irradianceFiniteScalar(value.y) &&
+         irradianceFiniteScalar(value.z);
+}
+
+fn irradianceSanitizeScalar(value: f32) -> f32 {
+  let bounded = clamp(value, 0.0, 65504.0);
+  return select(0.0, bounded, irradianceFiniteScalar(value));
+}
 
 @vertex
 fn cubemap_vs(in0: CubemapVsIn) -> CubemapVsOut {
@@ -76,14 +96,32 @@ fn irradianceConvolve_fs(in0: CubemapVsOut) -> @location(0) vec4<f32> {
       let sampleColor = textureSampleLevel(
         envCube, envSamplerS, sampleVec, 0.0,
       ).rgb;
-      irradiance += sampleColor * cos(theta) * sin(theta);
-      nrSamples += 1.0;
+      // A malformed direction or backend sample must not poison the whole
+      // irradiance face. Skip only non-finite samples and keep the
+      // normalization count in lockstep with the accumulated radiance.
+      let sampleWeight = cos(theta) * sin(theta);
+      if (
+        irradianceFiniteVec3(sampleVec) &&
+        irradianceFiniteVec3(sampleColor) &&
+        irradianceFiniteScalar(sampleWeight)
+      ) {
+        irradiance += sampleColor * sampleWeight;
+        nrSamples += 1.0;
+      }
       theta += IRRADIANCE_SAMPLE_DELTA;
     }
     phi += IRRADIANCE_SAMPLE_DELTA;
   }
 
-  // IRRADIANCE_PAYLOAD_E_TIMES_PI: the stored payload is E * pi.
+  // IRRADIANCE_PAYLOAD_E_OVER_PI: PI * the uniform theta/phi sample average
+  // produces the Lambert-normalized diffuse radiance E / PI. Runtime sampling
+  // consumes this payload directly; applying another Lambert divide would
+  // darken diffuse IBL by PI.
   irradiance = PI * irradiance / max(nrSamples, 1.0);
-  return vec4<f32>(irradiance, 1.0);
+  return vec4<f32>(
+    irradianceSanitizeScalar(irradiance.x),
+    irradianceSanitizeScalar(irradiance.y),
+    irradianceSanitizeScalar(irradiance.z),
+    1.0,
+  );
 }

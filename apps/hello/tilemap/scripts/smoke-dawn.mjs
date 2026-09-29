@@ -6,7 +6,7 @@
 //   - Registers a TilesetAsset (4 regions x 4 tile entries).
 //   - Spawns a Tilemap (cols=8 rows=8 chunkSize=4) + one TileLayer with
 //     a hand-chosen anchor table along the diagonal.
-//   - Calls the lease-bound renderer.draw request for 60+ frames; on frame 60 mutates the
+//   - Calls the lease-bound renderer.draw request for 60+ frames; halfway through mutates the
 //     TileLayer in place + markTileLayerDirty triggers a rebuild pass.
 //   - Pixel readback samples the framebuffer to confirm the rebuild has
 //     changed at least one channel by >= 0.1 max-channel-delta.
@@ -138,7 +138,7 @@ const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const errors = [];
 renderer.subscribe((event) => {
-  if (event.kind === 'error') errors.push({ code: event.error.code });
+  if (event.kind === 'error') errors.push({ code: event.error.code, expected: event.error.expected, hint: event.error.hint, detail: event.error.detail });
 });
 
 
@@ -167,12 +167,11 @@ function buildSyntheticTileAtlas() {
 const atlas = buildSyntheticTileAtlas();
 const atlasPayload = {
   kind: 'texture',
-  width: atlas.width,
-  height: atlas.height,
+  shape: { viewDimension: '2d', extent: { width: atlas.width, height: atlas.height } },
   format: 'rgba8unorm-srgb',
   data: atlas.data,
   colorSpace: 'srgb',
-  mipmap: false,
+  mips: { kind: 'none' },
 };
 const atlasHandle = world.allocSharedRef('TextureAsset', atlasPayload);
 const atlasCatalog = assets.catalog('hello-tilemap/atlas', atlasPayload);
@@ -222,6 +221,7 @@ const layer = world
   .spawn(
     { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 1 } },
     { component: ChildOf, data: { parent: tilemap } },
+    { component: Transform, data: {} },
   )
   .unwrap();
 
@@ -233,7 +233,7 @@ world.spawn(
 let framesDrawn = 0;
 let dirtyTriggered = false;
 for (let f = 0; f < TARGET_FRAMES; f++) {
-  if (f === 60 && !dirtyTriggered) {
+  if (f === Math.floor(TARGET_FRAMES / 2) && !dirtyTriggered) {
     const view = world.get(layer, TileLayer).unwrap().tiles;
     view[0] = 0;
     view[7 * cols + 7] = 1;
@@ -247,7 +247,7 @@ for (let f = 0; f < TARGET_FRAMES; f++) {
     environment: { lease: worldAttachment1.value },
   });
   if (!r.ok) {
-    console.error(`[hello-tilemap smoke] draw frame ${f} error: ${r.error.code}`);
+    console.error(`[hello-tilemap smoke] draw frame ${f} error: ${JSON.stringify({ result: { code: r.error.code, expected: r.error.expected, hint: r.error.hint, detail: r.error.detail }, events: errors })}`);
     process.exit(1);
   }
   framesDrawn += 1;
@@ -289,6 +289,15 @@ if (failures.length > 0) {
 
 console.log(
   `[hello-tilemap smoke] PASS — frames=${framesDrawn}, derived cell entities=${derivedCount}, RhiError count=0`,
+);
+console.log(
+  `[forgeax-smoke-receipt] ${JSON.stringify({
+    schemaVersion: 1,
+    gateId: 'hello-tilemap/smoke',
+    commandId: 'smoke',
+    framesObserved: framesDrawn,
+    completed: true,
+  })}`,
 );
 device.destroy?.();
 delete globalThis.navigator.gpu;

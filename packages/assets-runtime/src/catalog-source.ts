@@ -6,8 +6,9 @@ import {
   type CatalogEntry,
   type ResourceRevision,
   type RuntimeAssetBinding,
+  validateCatalogDelta,
 } from '@forgeax/engine-types';
-import { fetchCatalog } from './registry/catalog';
+import { fetchCatalog, resolveCatalogAssetUrl } from './registry/catalog';
 
 export type CatalogListener = (delta: CatalogDelta) => void;
 
@@ -15,6 +16,13 @@ export type CatalogListener = (delta: CatalogDelta) => void;
 export interface CatalogSource {
   enumerate(): Promise<Result<readonly CatalogEntry[], AssetError>>;
   subscribe(listener: CatalogListener): () => void;
+  /** Bind one immutable publication through Pack, artifacts and decode. The closure owns its bytes. */
+  openPackage?(packageUrl: string): typeof globalThis.fetch | undefined;
+  /** Same-domain immutable data; ordinary Registry domain/reference checks still apply. */
+  /** Canonical transport authority when this source is URL-backed. */
+  readonly url?: string;
+  /** Producer revision required before a source may expose its entries. */
+  readonly expectedRevision?: ResourceRevision;
   readonly expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
 }
 
@@ -72,7 +80,7 @@ export function createCatalogSource(options: {
       const result = await fetchCatalog(
         options.url,
         options.fetch ?? globalThis.fetch,
-        undefined,
+        (packageUrl) => resolveCatalogAssetUrl({ packIndexUrl: options.url }, packageUrl),
         options.expectedRevision,
         options.expectedScope,
       );
@@ -84,6 +92,31 @@ export function createCatalogSource(options: {
     subscribe(listener) {
       return options.subscribe?.(listener) ?? (() => {});
     },
+    ...(options.url === undefined ? {} : { url: options.url }),
+    ...(options.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: options.expectedRevision }),
     ...(options.expectedScope === undefined ? {} : { expectedScope: options.expectedScope }),
+  };
+}
+
+export interface CatalogHotChannel {
+  on(event: string, listener: (data: unknown) => void): void;
+  off(event: string, listener: (data: unknown) => void): void;
+}
+
+/** Fold `forgeax:catalog-delta` into an open catalog source. Invalid deltas leave the replica unchanged. */
+export function createCatalogHotSubscription(
+  hot: CatalogHotChannel | undefined,
+): (listener: CatalogListener) => () => void {
+  return (listener) => {
+    if (hot === undefined) return () => {};
+    const onDelta = (data: unknown): void => {
+      const validation = validateCatalogDelta(data);
+      if (!validation.ok) return;
+      listener(validation.value);
+    };
+    hot.on('forgeax:catalog-delta', onDelta);
+    return () => hot.off('forgeax:catalog-delta', onDelta);
   };
 }

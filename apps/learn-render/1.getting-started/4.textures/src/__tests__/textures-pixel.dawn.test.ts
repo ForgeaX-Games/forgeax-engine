@@ -9,7 +9,7 @@
 // records into a texture the test can `copyTextureToBuffer` + `mapAsync`
 // later -- no chromium composite, no xvfb. Mirrors
 // apps/hello/gltf/src/__tests__/draw-indexed.dawn.test.ts patterning and
-// the textures app's own scripts/smoke-dawn.mjs (300-frame harness;
+// the textures app's own scripts/smoke-dawn.mjs (60-frame harness;
 // here we run the minimum viable 1-frame budget the assertions need).
 //
 // Why dawn, not browser: the browser project on Linux GHA runners drives
@@ -37,6 +37,7 @@
 // inspect static pixels, not animation), keeping the test inside the
 // dawn project default 5s vitest timeout.
 
+import { shaderManifestUrl } from '../../../../../../packages/runtime/src/__tests__/shader-manifest-url.fixture';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -88,9 +89,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC-08h)', () => {
   it('renders wood-container cube with sRGB encode + UV variation + outer rim clear (single dawn frame)', async () => {
@@ -180,12 +179,14 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     if (!woodGuidRes.ok) return;
     const woodTexAsset: TextureAsset = {
       kind: 'texture',
-      width: woodDecoded.width,
-      height: woodDecoded.height,
+      shape: {
+        viewDimension: '2d',
+        extent: { width: woodDecoded.width, height: woodDecoded.height },
+      },
       format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
       data: woodDecoded.bytes,
       colorSpace: woodDecoded.colorSpace,
-      mipmap: woodDecoded.mipmap,
+      mips: woodDecoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
     };
     assets.catalog<TextureAsset>(woodMeta.guid, woodTexAsset);
     const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);

@@ -1,5 +1,5 @@
-import type { MaterialAsset } from '@forgeax/engine-types';
-import { type World } from '@forgeax/engine-ecs';
+import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
+import { type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 import { quat } from '@forgeax/engine-math';
@@ -23,6 +23,7 @@ const ALPHA_BLEND = {
 export interface TransparencyScene {
   readonly materials: readonly {
     readonly handle: Handle<'MaterialAsset', 'shared'>;
+    readonly content: EntityHandle;
     readonly color: readonly [number, number, number];
   }[];
 }
@@ -69,7 +70,6 @@ export function buildTransparencyWorld(world: World, aspect: number): Transparen
   const maskedUnlitGreen = world.allocSharedRef('MaterialAsset', Materials.unlit([0.05, 0.8, 0.1, 1], {
     alphaCutoff: 0.1,
     queue: 2450,
-    castShadow: false,
   }));
   spawnMesh(world, sphere, maskedUnlitGreen, [-1, 0.5, -1.5]);
 
@@ -102,10 +102,10 @@ export function buildTransparencyWorld(world: World, aspect: number): Transparen
 
   return {
     materials: [
-      { handle: maskedGreen, color: [0.05, 0.8, 0.1] },
-      { handle: maskedUnlitGreen, color: [0.05, 0.8, 0.1] },
-      { handle: blendedBlue, color: [0.05, 0.15, 0.9] },
-      { handle: alphaCoverageGreen, color: [0.05, 0.8, 0.1] },
+      { handle: maskedGreen, color: [0.05, 0.8, 0.1], content: world.spawn({ component: RuntimeMaterialValue, data: { asset: maskedGreen, parameter: 'baseColor', kind: 2, value: [...[0.05, 0.8, 0.1], 1] } }).unwrap() },
+      { handle: maskedUnlitGreen, color: [0.05, 0.8, 0.1], content: world.spawn({ component: RuntimeMaterialValue, data: { asset: maskedUnlitGreen, parameter: 'baseColor', kind: 2, value: [...[0.05, 0.8, 0.1], 1] } }).unwrap() },
+      { handle: blendedBlue, color: [0.05, 0.15, 0.9], content: world.spawn({ component: RuntimeMaterialValue, data: { asset: blendedBlue, parameter: 'baseColor', kind: 2, value: [...[0.05, 0.15, 0.9], 1] } }).unwrap() },
+      { handle: alphaCoverageGreen, color: [0.05, 0.8, 0.1], content: world.spawn({ component: RuntimeMaterialValue, data: { asset: alphaCoverageGreen, parameter: 'baseColor', kind: 2, value: [...[0.05, 0.8, 0.1], 1] } }).unwrap() },
     ],
   };
 }
@@ -113,12 +113,7 @@ export function buildTransparencyWorld(world: World, aspect: number): Transparen
 export function stepTransparencyAlpha(world: World, scene: TransparencyScene, elapsed: number): number {
   const alpha = Math.sin(elapsed) / 2 + 0.5;
   for (const material of scene.materials) {
-    const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(material.handle);
-    if (!result.ok) continue;
-    const values = result.value.values as Record<string, unknown> | undefined;
-    if (values === undefined) continue;
-    values.baseColor = [...material.color, alpha];
-    world.sharedRefs.markChanged(material.handle).unwrap();
+    world.set(material.content, RuntimeMaterialValue, { value: [...material.color, alpha] }).unwrap();
   }
   return alpha;
 }

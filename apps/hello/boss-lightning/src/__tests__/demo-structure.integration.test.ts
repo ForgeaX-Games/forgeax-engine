@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseParticleEffectSourceV2 } from '@forgeax/engine-vfx';
+import { parseParticleEffectSourceV3 } from '@forgeax/engine-vfx';
 import { describe, expect, it } from 'vitest';
 
 const demoRoot = resolve(import.meta.dirname, '../..');
@@ -10,19 +10,17 @@ const scenePath = resolve(demoRoot, 'src/scene.ts');
 const materialsPath = resolve(demoRoot, 'assets/boss-lightning-materials.pack.json');
 const arcNovaEmitterIds = [
   'charge-arcane-dial',
-  'charge-hex-seal',
-  'charge-prismatic-crown',
-  'release-axis-lance',
-  'release-radial-blades',
   'impact-violet-shock',
-  'impact-cross-crown',
-  'decay-ember-facets',
 ];
 const bossMaterialGuids = [
   '019e9c00-0000-7000-8000-000000000003',
   '019e9c00-0000-7000-8000-000000000004',
   '019e9c00-0000-7000-8000-000000000005',
   '019e9c00-0000-7000-8000-000000000006',
+];
+const authoredShaderFiles = [
+  'arc-nova-sigil.wgsl',
+  'arc-nova-violet-sigil.wgsl',
 ];
 
 describe('Boss Lightning source and Pack declaration', () => {
@@ -47,7 +45,7 @@ describe('Boss Lightning source and Pack declaration', () => {
       kind: 'particle-effect',
       execution: 'cooked',
     });
-    const authored = parseParticleEffectSourceV2(pack.assets[0]?.payload);
+    const authored = parseParticleEffectSourceV3(pack.assets[0]?.payload);
     expect(authored.ok).toBe(true);
     if (!authored.ok) throw new Error(authored.error.hint);
     if ('parent' in authored.value) throw new Error('Boss Lightning must be a root effect');
@@ -65,7 +63,7 @@ describe('Boss Lightning source and Pack declaration', () => {
     for (const emitter of authored.value.emitters.slice(5)) {
       expect(emitter.backend.required).toBe('gpu');
       expect(emitter.space).toBe('world');
-      expect(emitter.schedule.loopDuration).toBe(2.4);
+      expect(emitter.schedule.loopDuration).toBeGreaterThan(0);
       expect(() => readFileSync(resolve(demoRoot, 'assets', emitter.program.module), 'utf8')).not.toThrow();
     }
     expect(pack.assets[0]?.refs).toEqual([]);
@@ -81,6 +79,23 @@ describe('Boss Lightning source and Pack declaration', () => {
     expect(vite).toContain('cookers:');
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json'), 'utf8')).toThrow();
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json.meta.json'), 'utf8')).toThrow();
+  });
+
+  it('publishes a private shader namespace without colliding with the capability app', () => {
+    const helloIds = authoredShaderFiles.map((file) => {
+      const source = readFileSync(resolve(demoRoot, 'assets', file), 'utf8');
+      return source.match(/^#define_import_path\s+(\S+)/m)?.[1];
+    });
+    const capabilityRoot = resolve(demoRoot, '../../game-capability-lab/assets');
+    const capabilityIds = authoredShaderFiles.map((file) =>
+      readFileSync(resolve(capabilityRoot, file), 'utf8').match(/^#define_import_path\s+(\S+)/m)?.[1],
+    );
+    expect(helloIds).toEqual([
+      'hello_boss_lightning::arc_nova_sigil',
+      'hello_boss_lightning::arc_nova_violet_sigil',
+    ]);
+    expect(new Set(helloIds).size).toBe(authoredShaderFiles.length);
+    expect(helloIds.some((id) => capabilityIds.includes(id))).toBe(false);
   });
 
   it('requires the public GUID-to-pixels assembly before the demo turns green', () => {

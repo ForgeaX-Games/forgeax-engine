@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/hello-ssr-inspection.schema.json",
+  "title": "hello-ssr bounded inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "lane", "config", "coverage", "history", "work", "passRoster", "fallbackSource"],
+  "properties": {
+    "status": { "enum": ["not-requested", "requested", "admitted", "fallback-only", "structural-only"] },
+    "lane": { "enum": ["deferred", "forward"] },
+    "config": { "type": ["object", "null"] },
+    "coverage": { "type": "object", "additionalProperties": false, "required": ["hitCount", "fallbackCount", "excludedCount"], "properties": { "hitCount": { "type": "integer", "minimum": 0 }, "fallbackCount": { "type": "integer", "minimum": 0 }, "excludedCount": { "type": "integer", "minimum": 0 } } },
+    "history": { "type": "object", "additionalProperties": false, "required": ["state", "bytes", "resetCount"], "properties": { "state": { "type": "string" }, "bytes": { "type": "integer", "minimum": 0 }, "resetCount": { "type": "integer", "minimum": 0 } } },
+    "work": { "type": "object", "additionalProperties": false, "required": ["attachmentCount", "passCount", "bindingCount", "resourceCount", "historyCount", "temporalDemand"], "properties": { "attachmentCount": { "type": "integer", "minimum": 0 }, "passCount": { "type": "integer", "minimum": 0 }, "bindingCount": { "type": "integer", "minimum": 0 }, "resourceCount": { "type": "integer", "minimum": 0 }, "historyCount": { "type": "integer", "minimum": 0 }, "temporalDemand": { "type": "integer", "minimum": 0 } } },
+    "passRoster": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1 } },
+    "fallbackSource": { "enum": ["probe", "skylight", "neutral", null] }
+  }
+}

@@ -99,6 +99,7 @@ export function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]
         refs.add(we.passHandleId);
         break;
       }
+      case 'resetRenderState':
       case 'passInsertDebugMarker': {
         const we = e as { passHandleId: HandleId };
         refs.add(we.passHandleId);
@@ -134,18 +135,27 @@ export function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]
         const we = e as {
           cmdHandleId: HandleId;
           colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
+          colorAttachmentResolveTargetHandleIds?: readonly (HandleId | undefined)[];
           depthStencilViewHandleId?: HandleId;
+          occlusionQuerySetHandleId?: HandleId;
+          timestampQuerySetHandleId?: HandleId;
         };
         refs.add(we.cmdHandleId);
         for (const vhId of we.colorAttachmentViewHandleIds) {
           if (vhId !== undefined) refs.add(vhId);
         }
+        for (const vhId of we.colorAttachmentResolveTargetHandleIds ?? []) {
+          if (vhId !== undefined) refs.add(vhId);
+        }
         if (we.depthStencilViewHandleId !== undefined) refs.add(we.depthStencilViewHandleId);
+        if (we.occlusionQuerySetHandleId !== undefined) refs.add(we.occlusionQuerySetHandleId);
+        if (we.timestampQuerySetHandleId !== undefined) refs.add(we.timestampQuerySetHandleId);
         break;
       }
       case 'beginComputePass': {
-        const we = e as { cmdHandleId: HandleId };
+        const we = e as { cmdHandleId: HandleId; timestampQuerySetHandleId?: HandleId };
         refs.add(we.cmdHandleId);
+        if (we.timestampQuerySetHandleId !== undefined) refs.add(we.timestampQuerySetHandleId);
         break;
       }
       case 'finish': {
@@ -204,6 +214,7 @@ export function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]
         break;
       }
       case 'createBindGroup':
+      case 'getBindGroupLayout':
       case 'createPipelineLayout':
       case 'createRenderPipeline':
       case 'createComputePipeline':
@@ -223,16 +234,27 @@ export function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]
       }
       case 'destroyBuffer':
       case 'destroyTexture':
+      case 'destroyQuerySet':
         refs.add(e.handleId);
         break;
       case 'frameMark':
       case 'createBuffer':
       case 'createTexture':
+      case 'createQuerySet':
       case 'createSampler':
       case 'createBindGroupLayout':
       case 'createShaderModule':
       case 'createCommandEncoder':
         // Leaf declaration events — no backward references to collect.
+        break;
+      case 'resolveQuerySet':
+        refs.add(e.cmdHandleId);
+        refs.add(e.querySetHandleId);
+        refs.add(e.destinationHandleId);
+        break;
+      case 'beginOcclusionQuery':
+      case 'endOcclusionQuery':
+        refs.add(e.passHandleId);
         break;
       default: {
         // Exhaustiveness guard: if a new RhiCallEvent member is added to the
@@ -292,8 +314,11 @@ export function _getCreateEventReferencedHandleIds(event: RhiCallEvent): HandleI
       const e = event as { sourceHandleId: HandleId };
       return [e.sourceHandleId];
     }
+    case 'getBindGroupLayout':
+      return [(event as { pipelineHandleId: HandleId }).pipelineHandleId];
     case 'createBuffer':
     case 'createTexture':
+    case 'createQuerySet':
     case 'createSampler':
     case 'createBindGroupLayout':
     case 'createShaderModule':

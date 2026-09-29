@@ -1,26 +1,29 @@
+import { STANDARD_PHYSICAL_BINDING_START } from '@forgeax/engine-shader';
 // skylight-bind-group.ts -- Skylight resources merged into @group(1) PBR
-// material BGL (binding 7..13) + fallback identity resource bundle.
+// material BGL (binding 7..12) + fallback identity resource bundle. The
+// complete Standard material group appends transmission entries.
 //
 // Plan-strategy D-5 (round-4 REVISED): the round-2 stand-alone @group(4)
 // Skylight BindGroupLayout collided with WebGPU's default maxBindGroups=4
 // limit, blocking pbr-pl pipeline-layout creation in chrome-beta. Round-4
-// rewrites the contract: Skylight 7 entries are **appended** to the
-// existing PBR material BindGroupLayout at bindings 7..13; pipeline layout
+// rewrites the contract: Skylight 6 entries are **appended** to the
+// existing PBR material BindGroupLayout at bindings 7..12; pipeline layout
 // stays at 4 slots `[view, material, mesh, instances]`; unlit pipeline is
 // untouched (it uses its own material BGL).
 //
 // Surface (M2 round-4 / t40 amend):
 //   - mergeSkylightIntoMaterialBgl(materialBglEntries): given the existing
 //     7 PBR material BindGroupLayout entries (binding 0..6), returns the
-//     merged 14-entry array with Skylight resources at binding 7..13
-//     [irrTex, irrSampler, prefTex, prefSampler, brdfTex, brdfSampler,
+//     merged 13-entry array with Skylight resources at binding 7..12
+//     [irrTex, irrSampler, prefTex, prefSampler, brdfTex,
 //     uniform { intensity: f32 }]. The merge is a pure function -- caller
 //     (createRenderer) is responsible for passing the result to
 //     `device.createBindGroupLayout`.
 //   - assembleMaterialWithSkylightEntries(materialEntries, skylightResources):
-//     given the existing 7 material BindGroupEntry values + a skylight
-//     resource bundle (active or fallback), returns the merged 14-entry
-//     array suitable for `device.createBindGroup`. Charter P5 minimal
+//     given the existing material BindGroupEntry values + a skylight
+//     resource bundle (active or fallback), returns the merged material
+//     array with the engine-owned transmission pair at the end, suitable for
+//     `device.createBindGroup`. Charter P5 minimal
 //     surface: this helper does NOT allocate samplers/textures itself.
 //   - createSkylightFallback(device, queue): allocate a 1x1 white
 //     irradiance/prefilter cube pair + a 1x1 BRDF approximation + intensity=0 uniform
@@ -122,11 +125,13 @@ export interface SkylightQueue {
  */
 export interface SkylightBindGroupResources {
   readonly irradianceView: TextureView;
+  /** Shared by diffuse irradiance and the BRDF lookup table. */
   readonly irradianceSampler: Sampler;
   readonly prefilterView: TextureView;
+  /** Present only when the per-draw prefilter slot was replaced by a local probe. */
+  readonly skylightPrefilterView?: TextureView;
   readonly prefilterSampler: Sampler;
   readonly brdfLutView: TextureView;
-  readonly brdfLutSampler: Sampler;
   readonly intensityBuffer: Buffer;
 }
 
@@ -139,7 +144,7 @@ export interface SkylightBindGroupResources {
  *
  * No stand-alone `bindGroup` field: the round-2 stand-alone Skylight BG
  * is gone (D-5 round-4); the fallback resources flow into the PBR
- * material BG at binding 7..13.
+ * material BG at binding 7..12.
  */
 export interface SkylightFallback {
   readonly irradianceTexture: Texture;
@@ -155,7 +160,7 @@ export interface SkylightFallback {
 // ─── Pure merger: BindGroupLayout entries (D-5 round-4) ─────────────────────
 
 /**
- * Append the 7 Skylight BindGroupLayout entries after the existing PBR
+ * Append the 6 Skylight BindGroupLayout entries after the existing PBR
  * user-region entries. Pure function -- the
  * caller passes the result to `device.createBindGroupLayout`. Charter P4
  * consistent abstraction: one BGL holds material + Skylight together,
@@ -204,15 +209,9 @@ export function mergeSkylightIntoMaterialBgl(
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     texture: { sampleType: 'float', viewDimension: '2d' },
   } as BglEntry);
-  // binding 12: brdfLutSampler
+  // binding 12: uniform { intensity: f32 }
   merged.push({
     binding: skylightBindingStart + 5,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    sampler: { type: 'filtering' },
-  } as BglEntry);
-  // binding 13: uniform { intensity: f32 }
-  merged.push({
-    binding: skylightBindingStart + 6,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     buffer: { type: 'uniform' },
   } as BglEntry);
@@ -222,7 +221,7 @@ export function mergeSkylightIntoMaterialBgl(
 // ─── Pure merger: BindGroupEntry values (assembly site) ─────────────────────
 
 /**
- * Append the 7 Skylight BindGroupEntry resources (binding 7..13) onto the
+ * Append the 6 Skylight BindGroupEntry resources (binding 7..12) onto the
  * existing PBR material BindGroupEntry values (binding 0..6). The caller
  * passes the result to `device.createBindGroup` as part of the merged
  * material BG.
@@ -232,22 +231,41 @@ export function mergeSkylightIntoMaterialBgl(
  * call site, same layout shape -- charter P4 + F1 (AI users do not need
  * a `if (hasSkylight)` branch when writing demos).
  */
-export interface EmissiveAoBindGroupResources {
-  readonly emissiveSampler: Sampler;
-  readonly emissiveView: TextureView;
-  readonly occlusionSampler: Sampler;
-  readonly occlusionView: TextureView;
+/** Engine-owned material transmission injection resources. */
+export interface TransmissionBindGroupResources {
+  readonly sampler: Sampler;
+  readonly backdropView?: TextureView | null;
 }
 
-// Lightmap (emissive + occlusion sampler/texture pair x 2) injection start
-// is computed from the assembled list length on each push — no hardcoded
-// 14-slot literal. After 7 material + 7 skylight entries are pushed below,
-// the lightmap binding land naturally at start = 14 (D-6 / w15).
+/** Renderer-owned sampled resources consumed by the single-layer medium. */
+export interface SurfaceMediumBindGroupResources {
+  readonly planarView: TextureView;
+  readonly planarUniform: Buffer;
+  readonly planarUniformOffset: number;
+  readonly rawDepthSampler: Sampler;
+  readonly rawDepthView: TextureView;
+  readonly nearestLayerSampler: Sampler;
+  readonly nearestLayerView: TextureView;
+  readonly nearestDepthSampler: Sampler;
+  readonly nearestDepthView: TextureView;
+}
+
+/** Engine-owned texture injection resources derived from material parameters. */
+export interface TextureInjectionResource {
+  readonly slot: number;
+  readonly sampler: Sampler;
+  readonly view: TextureView;
+}
+
+// IBL and transmission injection starts are computed from the assembled list length on each push —
+// no hardcoded binding literals.
 
 export function assembleMaterialWithSkylightEntries(
   materialEntries: readonly BindGroupEntry[],
   skylight: SkylightBindGroupResources,
-  emissiveAo?: EmissiveAoBindGroupResources | undefined,
+  transmission?: TransmissionBindGroupResources | null | undefined,
+  textureInjections: readonly TextureInjectionResource[] = [],
+  surfaceMedium?: SurfaceMediumBindGroupResources | undefined,
 ): BindGroupEntry[] {
   // IBL injection start = end of the user-region. The user-region IS
   // `materialEntries` (UBO binding 0 + N sampler/texture pairs), so its length
@@ -280,36 +298,97 @@ export function assembleMaterialWithSkylightEntries(
     },
     {
       binding: iblStart + 5,
-      resource: { kind: 'sampler', value: skylight.brdfLutSampler },
-    },
-    {
-      binding: iblStart + 6,
       resource: { kind: 'buffer', value: { buffer: skylight.intensityBuffer } },
     },
   ];
-  if (emissiveAo !== undefined) {
-    // Lightmap injection start = current accumulated length
-    // (post material + skylight). Mirrors the appendInjection contract
-    // in pbr-pipeline.ts (D-6).
-    const lightmapStart = result.length;
+  // A null transmission omits the unavailable backdrop slots. Otherwise the
+  // existing Skylight resources fill unused slots without changing their ABI.
+  // Physical injections below keep their fixed binding numbers in either case.
+  const transmissionSampler = transmission?.sampler ?? skylight.irradianceSampler;
+  const transmissionView = transmission?.backdropView ?? skylight.brdfLutView;
+  const transmissionStart = result.length;
+  if (transmission !== null)
     result.push(
       {
-        binding: lightmapStart,
-        resource: { kind: 'sampler', value: emissiveAo.emissiveSampler },
+        binding: transmissionStart,
+        resource: { kind: 'sampler', value: transmissionSampler },
       },
       {
-        binding: lightmapStart + 1,
-        resource: { kind: 'textureView', value: emissiveAo.emissiveView },
-      },
-      {
-        binding: lightmapStart + 2,
-        resource: { kind: 'sampler', value: emissiveAo.occlusionSampler },
-      },
-      {
-        binding: lightmapStart + 3,
-        resource: { kind: 'textureView', value: emissiveAo.occlusionView },
+        binding: transmissionStart + 1,
+        resource: { kind: 'textureView', value: transmissionView },
       },
     );
+  if (surfaceMedium !== undefined) {
+    const surfaceStart = result.length;
+    result.push(
+      {
+        binding: surfaceStart,
+        resource: { kind: 'sampler', value: surfaceMedium.rawDepthSampler },
+      },
+      {
+        binding: surfaceStart + 1,
+        resource: { kind: 'textureView', value: surfaceMedium.rawDepthView },
+      },
+      {
+        binding: surfaceStart + 2,
+        resource: { kind: 'sampler', value: surfaceMedium.nearestLayerSampler },
+      },
+      {
+        binding: surfaceStart + 3,
+        resource: { kind: 'textureView', value: surfaceMedium.nearestLayerView },
+      },
+      {
+        binding: surfaceStart + 4,
+        resource: { kind: 'sampler', value: surfaceMedium.nearestDepthSampler },
+      },
+      {
+        binding: surfaceStart + 5,
+        resource: { kind: 'textureView', value: surfaceMedium.nearestDepthView },
+      },
+      {
+        binding: surfaceStart + 6,
+        resource: { kind: 'textureView', value: surfaceMedium.planarView },
+      },
+      {
+        binding: surfaceStart + 7,
+        resource: {
+          kind: 'buffer',
+          value: {
+            buffer: surfaceMedium.planarUniform,
+            offset: surfaceMedium.planarUniformOffset,
+            size: 96,
+          },
+        },
+      },
+    );
+  }
+  // Standard physical maps occupy fixed bindings starting at STANDARD_PHYSICAL_BINDING_START.  The `slot` value
+  // is the canonical index from STANDARD_PHYSICAL_TEXTURE_FIELDS; preserve
+  // gaps for omitted authored maps instead of compacting this tail.
+  const physicalStart = STANDARD_PHYSICAL_BINDING_START;
+  for (let index = 0; index < textureInjections.length; index += 1) {
+    const resource = textureInjections[index];
+    if (resource === undefined) continue;
+    const binding = physicalStart + resource.slot * 2;
+    result.push(
+      {
+        binding,
+        resource: { kind: 'sampler', value: resource.sampler },
+      },
+      {
+        binding: binding + 1,
+        resource: { kind: 'textureView', value: resource.view },
+      },
+    );
+  }
+  if (surfaceMedium === undefined) {
+    result.push({
+      binding: 47,
+      resource: {
+        kind: 'textureView',
+        value: skylight.skylightPrefilterView ?? skylight.prefilterView,
+      },
+    });
   }
   return result;
 }
@@ -342,11 +421,9 @@ export function createSkylightFallback(
   device: SkylightDevice,
   queue: SkylightQueue,
 ): SkylightFallback {
-  // One sampler shared across the three texture slots. The PBR material
-  // BindGroup still declares 3 separate sampler bindings (D-5 round-4
-  // ordering at binding 8/10/12), so we pass the same handle three times
-  // in assembleMaterialWithSkylightEntries; WebGPU spec permits sampler
-  // reuse across BindGroupEntry slots.
+  // Diffuse IBL and the BRDF LUT share one binding; prefilter remains a
+  // separate binding so per-draw reflection probes can replace it. Both
+  // bindings use this linear-clamp sampler for the global environment.
   const samplerResult = device.createSampler({
     label: 'skylight-fallback-sampler',
     magFilter: 'linear',
@@ -489,11 +566,11 @@ export function createSkylightFallback(
   if (!brdfLutViewResult.ok) throw brdfLutViewResult.error;
   const brdfLutView = brdfLutViewResult.value;
 
-  // intensity=0 uniform. The WGSL struct is two vec4-aligned lanes:
-  // [intensity, colorR, colorG, colorB] + [rotation quaternion].
+  // The 64-byte Standard environment payload reserves two extra vec4 lanes
+  // for probe-mode diffuse color and rotation. Ordinary Skylight leaves them zero.
   const intensityBufResult = device.createBuffer({
     label: 'skylight-fallback-intensity',
-    size: 32,
+    size: 64,
     usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
   });
   if (!intensityBufResult.ok) throw intensityBufResult.error;

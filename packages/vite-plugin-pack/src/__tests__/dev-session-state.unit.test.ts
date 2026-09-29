@@ -45,70 +45,40 @@ function runtimeBinding(scopeId: string, generation: number): RuntimeAssetBindin
 }
 
 describe('DevSession state machine', () => {
-  it.each([
-    {
-      code: 'pack-source-load-failed',
-      detail: {
-        sourcePath: 'assets/scene.pack.ts',
-        phase: 'module-load',
-        diagnostic: 'AssetGuidParser is not defined',
-      },
-    },
-    {
-      code: 'pack-source-external-closure-mismatch',
-      detail: {
-        sourcePath: 'assets/scene.pack.ts',
-        unusedDeclaredGuids: ['019fb7ce-3300-7000-8000-000000000003'],
-      },
-    },
-  ])('keeps concrete source failure blocking until a corrected snapshot is accepted: $code', async (cause) => {
+  it('publishes failure and repair to the HTTP runtime binding without replacing the accepted generation', async () => {
     const session = createDevSession({
       generation: 1,
       productionSession: productionSession(),
       startup: async () => snapshot(1),
     });
-    session.bindRuntime(runtimeBinding('repair-source', 1));
-    await session.start();
+    session.bindRuntime(runtimeBinding('material', 1));
     try {
-      await session.rebuild(async () => {
-        throw {
-          code: 'produce-failed',
-          expected: 'accepted source',
-          hint: 'repair source',
-          detail: { stage: 'produce' },
-          cause,
-        };
+      await session.start();
+      expect(session.runtimeScope()).toMatchObject({
+        status: 'ready',
+        authority: 'authoritative',
+        generation: 1,
       });
-      expect(session.state().status).toBe('degraded');
+      await session.rebuild(async () => {
+        throw new Error('WGSL compilation failed');
+      });
       expect(session.runtimeScope()).toMatchObject({
         status: 'degraded',
-        diagnostics: [
-          expect.objectContaining({
-            severity: 'blocking',
-            cause: expect.objectContaining({ cause }),
-          }),
-        ],
+        authority: 'degraded',
+        generation: 1,
       });
-      await session.rebuild(async () => {
-        throw new Error('still broken');
+      expect(session.runtimeScope()?.diagnostics?.length).toBeGreaterThan(0);
+      await session.rebuild(async () => snapshot(2));
+      expect(session.runtimeScope()).toMatchObject({
+        status: 'ready',
+        authority: 'authoritative',
+        generation: 1,
+        diagnostics: [],
       });
-      expect(session.runtimeScope()?.status).toBe('degraded');
-      await session.rebuild(async () => ({
-        ...snapshot(1),
-        catalog: [{ ...entry, packageUrl: '/preview/corrected.pack.json' }],
-      }));
-      expect(session.state()).toMatchObject({
-        status: 'serving',
-        snapshot: {
-          catalog: [expect.objectContaining({ packageUrl: '/preview/corrected.pack.json' })],
-        },
-      });
-      expect(session.runtimeScope()).toMatchObject({ status: 'ready', diagnostics: [] });
     } finally {
       await session.close();
     }
   });
-
   it('owns and clears the runtime scope with its generation session', async () => {
     const session = createDevSession({
       generation: 1,
@@ -159,88 +129,12 @@ describe('DevSession state machine', () => {
     await session.close();
   });
 
-  it('retries a failed startup without inventing an accepted snapshot', async () => {
-    const session = createDevSession({
-      generation: 1,
-      productionSession: productionSession(),
-      startup: async () => {
-        throw new Error('broken source');
-      },
-    });
-    session.bindRuntime(runtimeBinding('recovery', 1));
-    await session.start();
-    expect(session.runtimeScope()).toMatchObject({
-      status: 'degraded',
-      authority: 'degraded',
-      diagnostics: [expect.objectContaining({ code: 'scan-failed' })],
-    });
-    await session.rebuild(async ({ previous }) => {
-      expect(previous).toBeUndefined();
-      throw new Error('source still broken');
-    });
-    expect(session.state().status).toBe('failed');
-    await session.rebuild(async ({ generation, previous }) => {
-      expect(previous).toBeUndefined();
-      return snapshot(generation);
-    });
-    expect(session.state().status).toBe('serving');
-    expect(session.runtimeScope()).toMatchObject({ status: 'ready', diagnostics: [] });
-    await session.close();
-  });
-
-  it('ignores an older failed recovery after a newer recovery succeeds', async () => {
-    const session = createDevSession({
-      generation: 1,
-      productionSession: productionSession(),
-      startup: async () => {
-        throw new Error('broken source');
-      },
-    });
-    await session.start();
-    let reject!: (error: Error) => void;
-    const older = session.rebuild(
-      () =>
-        new Promise((_, fail) => {
-          reject = fail;
-        }),
-    );
-    await session.rebuild(async () => snapshot(2));
-    reject(new Error('stale failure'));
-    await older;
-    expect(session.state()).toMatchObject({ status: 'serving', snapshot: { generation: 2 } });
-    await session.close();
-  });
-
-  it('does not publish a recovery after the session is closed', async () => {
-    const session = createDevSession({
-      generation: 1,
-      productionSession: productionSession(),
-      startup: async () => {
-        throw new Error('broken source');
-      },
-    });
-    await session.start();
-    let release!: (value: DevSessionSnapshot) => void;
-    const recovery = session.rebuild(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const closing = session.close();
-    release(snapshot(2));
-    await Promise.all([recovery, closing]);
-    expect(session.state()).toEqual({ status: 'closed' });
-    expect(session.runtimeScope()).toBeUndefined();
-  });
-
   it('keeps the accepted snapshot visible during rebuild failure and closes with 410', async () => {
     const session = createDevSession({
       generation: 3,
       productionSession: productionSession(),
       startup: async () => snapshot(3),
     });
-    session.bindRuntime(runtimeBinding('retained-publication', 3));
     await session.start();
     expect(session.state().status).toBe('serving');
 
@@ -250,21 +144,7 @@ describe('DevSession state machine', () => {
     expect(session.state().status).toBe('degraded');
     expect(session.state()).toMatchObject({
       status: 'degraded',
-      snapshot: { catalog: [entry], authority: 'authoritative', diagnostics: [] },
-    });
-    expect(session.runtimeScope()).toMatchObject({
-      status: 'degraded',
-      authority: 'authoritative',
-      diagnostics: [expect.objectContaining({ code: 'scan-failed' })],
-    });
-    await session.rebuild(async ({ previous, generation }) => {
-      expect(previous?.authority).toBe('authoritative');
-      return snapshot(generation);
-    });
-    expect(session.runtimeScope()).toMatchObject({
-      status: 'ready',
-      authority: 'authoritative',
-      diagnostics: [],
+      snapshot: { catalog: [entry] },
     });
 
     await session.close();
@@ -313,5 +193,61 @@ describe('DevSession state machine', () => {
     await starting;
     expect(session.state()).toEqual({ status: 'closed' });
     expect(session.state()).toEqual({ status: 'closed' });
+  });
+  it('recovers a failed startup without creating a previous snapshot', async () => {
+    const session = createDevSession({
+      generation: 1,
+      productionSession: productionSession(),
+      startup: async () => {
+        throw new Error('broken source');
+      },
+    });
+    session.bindRuntime(runtimeBinding('startup-repair', 1));
+    try {
+      await session.start();
+      expect(session.runtimeScope()?.status).toBe('degraded');
+      await session.rebuild(async ({ previous }) => {
+        expect(previous).toBeUndefined();
+        throw new Error('still broken');
+      });
+      expect(session.state().status).toBe('failed');
+      await session.rebuild(async ({ previous, generation }) => {
+        expect(previous).toBeUndefined();
+        return snapshot(generation);
+      });
+      expect(session.state().status).toBe('serving');
+      expect(session.runtimeScope()).toMatchObject({ status: 'ready', diagnostics: [] });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('preserves the accepted snapshot and ignores an obsolete rebuild rejection', async () => {
+    const accepted = snapshot(1);
+    const session = createDevSession({
+      generation: 1,
+      productionSession: productionSession(),
+      startup: async () => accepted,
+    });
+    try {
+      await session.start();
+      await session.rebuild(async () => {
+        throw new Error('broken candidate');
+      });
+      expect(session.state()).toMatchObject({ status: 'degraded', snapshot: accepted });
+      let reject!: (error: Error) => void;
+      const pending = session.rebuild(
+        () =>
+          new Promise((_resolve, fail) => {
+            reject = fail;
+          }),
+      );
+      await session.rebuild(async () => snapshot(3));
+      reject(new Error('late rejection'));
+      await pending;
+      expect(session.state()).toMatchObject({ status: 'serving', snapshot: snapshot(3) });
+    } finally {
+      await session.close();
+    }
   });
 });

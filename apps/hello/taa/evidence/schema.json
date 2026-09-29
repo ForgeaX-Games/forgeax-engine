@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/hello-taa-auto-exposure-evidence/1",
+  "title": "hello-taa auto exposure feature evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "featureId", "source", "build", "backend", "runner", "resolution", "frames", "frameIdentity", "stages", "exposure", "lut", "resourceGrowth", "visualEvidence", "falsify", "status"],
+  "properties": {
+    "schemaVersion": { "const": "hello-taa-auto-exposure-evidence/1" },
+    "featureId": { "const": "feat-20260827-auto-exposure-hdr-color-grading" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "sha256"],
+      "properties": { "command": { "type": "string", "minLength": 1 }, "sha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } }
+    },
+    "backend": { "enum": ["browser-webgpu", "dawn-node", "rhi-null"] },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": { "kind": { "type": "string", "minLength": 1 }, "id": { "type": "string", "minLength": 1 } }
+    },
+    "resolution": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } } },
+    "frames": { "type": "integer", "minimum": 60 },
+    "frameIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first", "last", "sequenceSha256"],
+      "properties": { "first": { "type": "integer", "minimum": 0 }, "last": { "type": "integer", "minimum": 0 }, "sequenceSha256": { "pattern": "^[a-f0-9]{64}$", "type": "string" } }
+    },
+    "stages": { "type": "array", "minItems": 3, "items": { "type": "object", "additionalProperties": false, "required": ["id", "domain", "readback"], "properties": { "id": { "enum": ["linear-hdr", "linear-ldr", "final-srgb"] }, "domain": { "enum": ["linear-HDR", "linear-LDR", "final-sRGB"] }, "readback": { "type": "object", "additionalProperties": false, "required": ["rawHash", "frame"], "properties": { "rawHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "frame": { "type": "integer", "minimum": 0 } } } } } },
+    "exposure": { "type": "object", "additionalProperties": false, "required": ["mode", "ev"], "properties": { "mode": { "enum": ["manual", "auto"] }, "ev": { "type": "object", "additionalProperties": false, "required": ["first", "last", "generation"], "properties": { "first": { "type": "number" }, "last": { "type": "number" }, "generation": { "type": "integer", "minimum": 0 } } } } },
+    "lut": { "type": "object", "additionalProperties": false, "required": ["generation", "strength", "sourceKey"], "properties": { "generation": { "type": "integer", "minimum": 0 }, "strength": { "type": "number", "minimum": 0, "maximum": 1 }, "sourceKey": { "type": "string", "minLength": 1 } } },
+    "resourceGrowth": { "type": "object", "additionalProperties": false, "required": ["stableFrames", "byteLengthDelta", "bindGroupDelta"], "properties": { "stableFrames": { "type": "integer", "minimum": 1 }, "byteLengthDelta": { "const": 0 }, "bindGroupDelta": { "const": 0 } } },
+    "visualEvidence": { "type": "array", "minItems": 3, "items": { "type": "object", "additionalProperties": false, "required": ["id", "png", "observed", "verdict", "confidence"], "properties": { "id": { "enum": ["exposure-adaptation-card", "white-balance-card", "lut-output-card"] }, "png": { "type": "string", "minLength": 1 }, "observed": { "type": "string", "minLength": 1 }, "verdict": { "enum": ["pass", "fail", "unavailable"] }, "confidence": { "enum": ["high", "medium", "low"] } } } },
+    "falsify": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "result"], "properties": { "id": { "type": "string", "minLength": 1 }, "result": { "enum": ["pass", "fail", "unavailable"] } }, "additionalProperties": false } },
+    "status": { "enum": ["pass", "fail", "blocked", "unavailable"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "backend": { "const": "rhi-null" } } }, "then": { "properties": { "status": { "enum": ["blocked", "unavailable"] } } } },
+    { "if": { "properties": { "status": { "const": "unavailable" } } }, "then": { "properties": { "visualEvidence": { "items": { "properties": { "verdict": { "const": "unavailable" } } } } } } },
+    { "if": { "properties": { "status": { "const": "pass" } } }, "then": { "properties": { "backend": { "enum": ["browser-webgpu", "dawn-node"] }, "visualEvidence": { "items": { "properties": { "verdict": { "const": "pass" } } } } } } }
+  ]
+}

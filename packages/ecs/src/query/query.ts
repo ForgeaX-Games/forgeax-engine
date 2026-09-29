@@ -18,13 +18,17 @@ import {
   QueryIterationInvalidatedError,
   QuerySpanUnavailableError,
   type QuerySpanUnavailableReason,
+  RelationshipTargetReadonlyError,
 } from '../errors';
+import { DERIVED_WRITER } from '../internal';
+import { isRelationshipTarget, relationshipRole } from '../relationship-index';
 import type { Archetype, ArchetypeId } from '../storage/archetype';
 import type { ArchetypeGraph } from '../storage/archetype-graph';
-import { sparseTagIndex } from '../storage/change-detection';
+import { PROJECTION_BLOCK_SIZE, sparseTagIndex } from '../storage/change-detection';
 import type { FieldView, ManagedColumnReader } from '../storage/column';
 import type { Table } from '../storage/table';
 import { type WorldInternal, worldInternal } from '../world-internal';
+import { createDerivedRangeWriter, type DerivedRangeWriter } from './derived-range-writer';
 
 export interface QueryDescriptor<
   R extends readonly Component[] = readonly Component[],
@@ -91,7 +95,7 @@ export interface Query<
    * Read one known entity without iterating the query's matching tables.
    * Structural descriptor constraints are applied; temporal `changed` and
    * `added` filters are intentionally not evaluated because this is an
-   * identity-addressed read, not a journal drain.
+   * identity-addressed read, not a version scan.
    */
   at(entity: EntityHandle): QueryRow<R, W, O> | undefined;
   spans(): Result<Iterable<QuerySpan<R, W>>, QuerySpanUnavailableError>;
@@ -202,21 +206,14 @@ class QueryRowFacade<
   }
 
   has(component: R[number] | W[number] | O[number]): boolean {
-    return (
-      this.archetype?.components.some(
-        (candidate) => componentId(candidate) === componentId(component),
-      ) === true
-    );
+    const id = componentId(component);
+    return this.archetype?.components.some((candidate) => componentId(candidate) === id) === true;
   }
 
   get<C extends R[number]>(component: C): ReadonlyRowShape<C>;
   get<C extends O[number]>(component: C): ReadonlyRowShape<C> | undefined;
   get(component: Component): Record<string, unknown> | undefined {
-    if (
-      !this.archetype?.components.some(
-        (candidate) => componentId(candidate) === componentId(component),
-      )
-    ) {
+    if (!this.has(component)) {
       return undefined;
     }
     const result = this.world[worldInternal].getQueryRow(this.entity, component);
@@ -227,7 +224,17 @@ class QueryRowFacade<
   mut<C extends W[number]>(component: C): MutableRowShape<C> {
     const current = this.get(component);
     if (current === undefined) throw new Error(`Query row lacks ${component.name}.`);
-    this.world[worldInternal].markComponentChanged(this.entity, componentId(component));
+    if (isRelationshipTarget(component)) {
+      throw new RelationshipTargetReadonlyError(component.name, 'query row');
+    }
+    // Relationship sources must let the owner validate before recording
+    // authored evidence. A stale/cyclic target therefore has zero mutation
+    // side effects, while ordinary components retain the existing eager
+    // `mut()` evidence semantics.
+    const relationshipSource = relationshipRole(component)?.kind === 'source';
+    if (!relationshipSource) {
+      this.world[worldInternal].markComponentChanged(this.entity, componentId(component));
+    }
     return new Proxy(current, {
       set: (target, property, value) => {
         if (typeof property !== 'string') return false;
@@ -254,8 +261,13 @@ class QuerySpanFacade<R extends readonly Component[], W extends readonly Compone
     readonly length: number,
   ) {
     const entityColumn = table.storage.get(componentId(Entity))?.fields.get('self');
-    this.entities = (entityColumn?.view.subarray(rowStart, rowStart + length) ??
-      new Uint32Array(0)) as Readonly<Uint32Array>;
+    this.entities = (
+      entityColumn === undefined
+        ? new Uint32Array(0)
+        : rowStart === 0 && length === entityColumn.view.length
+          ? entityColumn.view
+          : entityColumn.view.subarray(rowStart, rowStart + length)
+    ) as Readonly<Uint32Array>;
   }
 
   get<C extends R[number]>(component: C): ReadonlyColumnShape<C> {
@@ -268,6 +280,12 @@ class QuerySpanFacade<R extends readonly Component[], W extends readonly Compone
   }
 
   mut<C extends W[number]>(component: C): MutableColumnShape<C> {
+    // A span exposes live column storage. Relationship source and target
+    // columns must never obtain that raw write capability: source writes need
+    // target-side maintenance and target writes are engine-owned projections.
+    if (relationshipRole(component) !== undefined) {
+      throw new RelationshipTargetReadonlyError(component.name, 'query span');
+    }
     this.world[worldInternal].markComponentRangeChanged(
       this.table,
       componentId(component),
@@ -288,7 +306,7 @@ function makeManagedColumnReader(
   length: number,
   fieldType: string,
 ): ManagedColumnReader<string> {
-  const slots = view.subarray(0, length);
+  const slots = view.length === length ? view : view.subarray(0, length);
   return Object.freeze({
     length,
     get(i: number): number {
@@ -310,7 +328,8 @@ function buildColumnShape(
   for (const [fieldName, column] of fields) {
     const start = rowStart * column.arity;
     const end = start + rowCount * column.arity;
-    const view = column.view.subarray(start, end);
+    const view =
+      start === 0 && end === column.view.length ? column.view : column.view.subarray(start, end);
     const fieldType = componentSchema(component)[fieldName];
     shape[fieldName] =
       fieldType !== undefined && isManagedField(fieldType)
@@ -328,6 +347,7 @@ class ExecutableQuery<
 {
   private matchedArchetypes: ArchetypeId[] = [];
   private matchedTables: number[] = [];
+  private matchedTableObjects: Table[] = [];
   private lastGraphGeneration = -1;
   private lastObservedEpoch = 0;
   private active = false;
@@ -343,8 +363,9 @@ class ExecutableQuery<
     const structureEpoch = this.world[worldInternal].getStructureEpoch();
     const upperBound = this.world[worldInternal].getMutationEpoch();
     const row = new QueryRowFacade<R, W, O>(this.world);
-    let archetypeIndex = 0;
-    let tableIndex = 0;
+    const unchanged = this.hasUnchangedInput();
+    let archetypeIndex = unchanged ? this.matchedArchetypes.length : 0;
+    let tableIndex = unchanged ? this.matchedTables.length : 0;
     let rowIndex = 0;
     let finished = false;
 
@@ -419,7 +440,7 @@ class ExecutableQuery<
   at(entity: EntityHandle): QueryRow<R, W, O> | undefined {
     const archetype = this.world[worldInternal].getEntityArchetype(entity);
     if (archetype === undefined || !this.archetypeMatches(archetype)) return undefined;
-    return new QueryRowFacade<R, W, O>(this.world).bind(entity, archetype).snapshot();
+    return new QueryRowFacade<R, W, O>(this.world).bind(entity, archetype);
   }
 
   spans(): Result<Iterable<QuerySpan<R, W>>, QuerySpanUnavailableError> {
@@ -432,7 +453,9 @@ class ExecutableQuery<
         query.refreshMatches();
         const structureEpoch = query.world[worldInternal].getStructureEpoch();
         const upperBound = query.world[worldInternal].getMutationEpoch();
-        let index = 0;
+        const filterIds = [...query.compiled.changedIds, ...query.compiled.addedIds];
+        let tableIndex = query.hasUnchangedInput() ? query.matchedTables.length : 0;
+        let rowIndex = 0;
         let finished = false;
         const close = (commit: boolean): void => {
           if (finished) return;
@@ -450,13 +473,49 @@ class ExecutableQuery<
                 query.world[worldInternal].getStructureEpoch(),
               );
             }
-            while (index < query.matchedTables.length) {
+            while (tableIndex < query.matchedTables.length) {
               const table =
-                query.world[worldInternal].getGraph().tables[query.matchedTables[index++] ?? -1];
-              if (table === undefined || table.size === 0) continue;
+                query.world[worldInternal].getGraph().tables[query.matchedTables[tableIndex] ?? -1];
+              if (table === undefined || table.size === 0) {
+                tableIndex += 1;
+                rowIndex = 0;
+                continue;
+              }
+              if (query.compiled.changedIds.length === 0 && query.compiled.addedIds.length === 0) {
+                tableIndex += 1;
+                rowIndex = 0;
+                return {
+                  done: false,
+                  value: new QuerySpanFacade<R, W>(query.world, table, 0, table.size),
+                };
+              }
+              while (
+                rowIndex < table.size &&
+                !query.denseChangeMatches(table, rowIndex, upperBound)
+              ) {
+                const block = Math.floor(rowIndex / PROJECTION_BLOCK_SIZE);
+                const unchanged = filterIds.some(
+                  (id) =>
+                    (table.storage.get(id)?.epochs.blocks[block] ?? 0) <= query.lastObservedEpoch,
+                );
+                rowIndex = unchanged ? (block + 1) * PROJECTION_BLOCK_SIZE : rowIndex + 1;
+              }
+              if (rowIndex >= table.size) {
+                tableIndex += 1;
+                rowIndex = 0;
+                continue;
+              }
+              const start = rowIndex;
+              rowIndex += 1;
+              while (
+                rowIndex < table.size &&
+                query.denseChangeMatches(table, rowIndex, upperBound)
+              ) {
+                rowIndex += 1;
+              }
               return {
                 done: false,
-                value: new QuerySpanFacade<R, W>(query.world, table, 0, table.size),
+                value: new QuerySpanFacade<R, W>(query.world, table, start, rowIndex - start),
               };
             }
             close(true);
@@ -469,6 +528,28 @@ class ExecutableQuery<
         };
       },
     });
+  }
+
+  [DERIVED_WRITER]<C extends W[number]>(
+    component: C,
+  ): Result<DerivedRangeWriter<R[number], C>, QuerySpanUnavailableError> {
+    const reason = this.spanUnavailableReason();
+    if (reason !== undefined) return err(new QuerySpanUnavailableError(reason));
+    return ok(
+      createDerivedRangeWriter<R[number], C>(
+        this.world as unknown as import('../world').World,
+        component,
+        {
+          structureEpoch: () => this.world[worldInternal].getStructureEpoch(),
+          tables: () => {
+            this.refreshMatches();
+            return this.matchedTableObjects;
+          },
+          readComponents: this.compiled.descriptor.read ?? [],
+          writeComponents: this.compiled.descriptor.write ?? [],
+        },
+      ),
+    );
   }
 
   combinations(k = 2): Iterable<readonly QueryRow<R, W, O>[]> {
@@ -513,6 +594,13 @@ class ExecutableQuery<
     };
   }
 
+  private hasUnchangedInput(): boolean {
+    const epochs = this.world[worldInternal].getComponentMutationEpochs();
+    // Changed predicates are conjunctive. One unchanged input proves the
+    // entire result empty without consulting any entity or table row.
+    return this.compiled.changedIds.some((id) => (epochs[id] ?? 0) <= this.lastObservedEpoch);
+  }
+
   private beginIteration(): void {
     if (this.active) throw new QueryIterationActiveError();
     this.active = true;
@@ -527,6 +615,10 @@ class ExecutableQuery<
     this.matchedTables = graph.tables
       .filter((table) => this.tableMatches(table))
       .map((table) => table.id);
+    this.matchedTableObjects = this.matchedTables.flatMap((id) => {
+      const table = graph.tables[id];
+      return table === undefined ? [] : [table];
+    });
     this.lastGraphGeneration = graph.generation;
   }
 
@@ -580,14 +672,28 @@ class ExecutableQuery<
     return true;
   }
 
+  private denseChangeMatches(table: Table, row: number, upperBound: number): boolean {
+    for (const componentId of this.compiled.changedIds) {
+      const epoch = table.storage.get(componentId)?.epochs.changed[row] ?? 0;
+      if (epoch <= this.lastObservedEpoch || epoch > upperBound) return false;
+    }
+    for (const componentId of this.compiled.addedIds) {
+      const epoch = table.storage.get(componentId)?.epochs.added[row] ?? 0;
+      if (epoch <= this.lastObservedEpoch || epoch > upperBound) return false;
+    }
+    return true;
+  }
+
   private spanUnavailableReason(): QuerySpanUnavailableReason | undefined {
     if (this.compiled.sparseRoute) return 'sparse-component';
     if ((this.compiled.descriptor.optional?.length ?? 0) > 0) return 'optional-data';
-    if (
-      (this.compiled.descriptor.changed?.length ?? 0) > 0 ||
-      (this.compiled.descriptor.added?.length ?? 0) > 0
-    )
-      return 'row-change-filter';
+    // A writable relationship source would bypass the source owner (and its
+    // materialized target/backpointer), while a target is an ECS-owned
+    // projection. Keep read-only relationship inputs usable by Scene's
+    // derived writer; only the descriptor's writable role is ineligible.
+    if ((this.compiled.descriptor.write ?? []).some((component) => relationshipRole(component))) {
+      return 'relationship-component';
+    }
     return undefined;
   }
 }

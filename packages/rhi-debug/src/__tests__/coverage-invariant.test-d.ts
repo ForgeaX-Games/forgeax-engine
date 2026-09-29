@@ -7,16 +7,19 @@
 // AC-01: Uncovered = never for all three interfaces.
 // AC-02: falsification variant proves the guard is sensitive.
 //
-// Two non-1:1 mappings per plan-strategy D-1:
+// Non-1:1 mappings per plan-strategy D-1:
 //   1. Method `end` -> kind `endRenderPass` / `endComputePass`
 //   2. Render-pass `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`
 //      -> kind `passPushDebugGroup` / `passPopDebugGroup` / `passInsertDebugMarker`
 //   3. Compute-pass `setPipeline` -> kind `setComputePipeline`
 //      (method name identical on both interfaces, different kinds)
+//   4. Command-encoder `encodeEmptyComputePass` -> existing
+//      `beginComputePass` + `endComputePass` event pair (compound operation)
 
 import type {
   RhiCommandEncoder,
   RhiComputePassEncoder,
+  RhiRenderBundleEncoder,
   RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import { describe, expectTypeOf, it } from 'vitest';
@@ -24,7 +27,8 @@ import { describe, expectTypeOf, it } from 'vitest';
 // ---- CapturedMethods: all RHI method names that have a RhiCallEvent kind ----
 
 type CapturedMethods =
-  // RhiCommandEncoder methods (11 captured)
+  // RhiCommandEncoder methods (12 captured; encodeEmptyComputePass is a
+  // compound operation recorded as an existing begin/end event pair)
   | 'beginRenderPass'
   | 'beginComputePass'
   | 'copyBufferToBuffer' // overloaded, one keyof entry
@@ -32,16 +36,19 @@ type CapturedMethods =
   | 'copyTextureToBuffer'
   | 'copyTextureToTexture'
   | 'clearBuffer'
+  | 'resolveQuerySet'
   | 'pushDebugGroup' // encoder-level, maps to kind 'pushDebugGroup'
   | 'popDebugGroup' // encoder-level, maps to kind 'popDebugGroup'
   | 'insertDebugMarker' // encoder-level, maps to kind 'insertDebugMarker'
   | 'finish'
+  | 'encodeEmptyComputePass' // compound -> beginComputePass + endComputePass
   // RhiRenderPassEncoder methods (16 captured)
   | 'setPipeline' // render pass: kind='setPipeline'; compute pass: kind='setComputePipeline'
   | 'setVertexBuffer'
   | 'setIndexBuffer'
   | 'setBindGroup' // overloaded, one keyof entry
   | 'draw'
+  | 'executeBundles' // expanded commands plus resetRenderState
   | 'drawIndexed'
   | 'setViewport'
   | 'setScissorRect'
@@ -49,6 +56,8 @@ type CapturedMethods =
   | 'setStencilReference'
   | 'drawIndirect'
   | 'drawIndexedIndirect'
+  | 'beginOcclusionQuery'
+  | 'endOcclusionQuery'
   // pushDebugGroup/popDebugGroup/insertDebugMarker on render pass exist as
   // methods BUT map to pass*DebugGroup kinds. The keyof name is still
   // pushDebugGroup/popDebugGroup/insertDebugMarker (covered above).
@@ -59,12 +68,7 @@ type CapturedMethods =
 
 // ---- DeferredMethods: RHI method names in DEFERRED_COMMANDS (AC-06) ----
 
-type DeferredMethods =
-  | 'beginOcclusionQuery'
-  | 'endOcclusionQuery'
-  | 'executeBundles'
-  | 'writeTimestamp'
-  | 'resolveQuerySet';
+type DeferredMethods = 'writeTimestamp';
 
 // ---- Per-interface coverage assertions (AC-01) ----
 
@@ -110,6 +114,13 @@ describe('AC-02 falsification', () => {
     // Sanity check: without the deliberate omission, Uncovered = never.
     // This doubles as a regression test that CapturedMethods is correctly maintained.
     type Uncovered = Exclude<keyof RhiCommandEncoder, CapturedMethods | DeferredMethods>;
+    expectTypeOf<Uncovered>().toEqualTypeOf<never>();
+  });
+});
+
+describe('RhiRenderBundleEncoder coverage', () => {
+  it('every bundle command is captured at execution time', () => {
+    type Uncovered = Exclude<keyof RhiRenderBundleEncoder, CapturedMethods>;
     expectTypeOf<Uncovered>().toEqualTypeOf<never>();
   });
 });

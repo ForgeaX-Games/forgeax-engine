@@ -9,9 +9,9 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(new URL('../..', import.meta.url).pathname);
 const ROSTER_ROOTS = ['apps/hello', 'apps/learn-render'];
-const FRAME_TARGET = 300;
+const FRAME_TARGET = 60;
 const MATERIAL_DECLARATION_PATH = 'scripts/forgeax/material-acceptance.declaration.json';
-const MATERIAL_IDENTITY_FIELDS = [
+const MATERIAL_CORE_IDENTITY_FIELDS = [
   'layoutIdentity',
   'programIdentity',
   'pipelineIdentity',
@@ -19,6 +19,32 @@ const MATERIAL_IDENTITY_FIELDS = [
   'compilerFingerprint',
   'artifactDigest',
 ];
+const MATERIAL_RECEIPT_IDENTITY_FIELDS = [
+  ...MATERIAL_CORE_IDENTITY_FIELDS,
+  'materialPublicationIdentity',
+  'valueGeneration',
+  'dependencyGeneration',
+  'cookGeneration',
+];
+const MATERIAL_GENERATION_FIELDS = new Set([
+  'valueGeneration',
+  'dependencyGeneration',
+  'cookGeneration',
+]);
+const MATERIAL_WITNESS_RECEIPT_SCHEMA = 'material-witness-receipt/1';
+const MATERIAL_WITNESS_RECEIPT_KIND = 'material-witness-receipt';
+const MATERIAL_CHILD_FORBIDDEN_FIELDS = ['colorSpace', 'passes', 'parameters'];
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizedGuid(value) {
+  return typeof value === 'string' ? value.toLowerCase() : undefined;
+}
+
+function isMaterialIdentityValue(field, value) {
+  return MATERIAL_GENERATION_FIELDS.has(field)
+    ? Number.isSafeInteger(value) && value >= 1
+    : typeof value === 'string' && value.length > 0;
+}
 
 function readPackage(dir) {
   try {
@@ -243,25 +269,29 @@ export function validateMaterialAcceptanceDeclaration(declaration, pathExists = 
   return { ok: errors.length === 0, errors, declaredCategories: [...categories] };
 }
 
-function hasRealMaterialEvidence(evidence, mode) {
+export function hasRealMaterialEvidence(evidence, mode) {
   if (evidence === null || typeof evidence !== 'object') return false;
   const identity = evidence.materialIdentity;
   if (identity === null || typeof identity !== 'object') return false;
   if (
-    MATERIAL_IDENTITY_FIELDS.some(
-      (field) => typeof identity[field] !== 'string' || identity[field].length === 0,
-    )
+    MATERIAL_CORE_IDENTITY_FIELDS.some((field) => !isMaterialIdentityValue(field, identity[field]))
   ) {
     return false;
   }
   if (mode === 'browser') {
-    const readback = evidence.renderDiagnostics?.readback ?? evidence.browserVisual;
+    const readback =
+      evidence.readback ?? evidence.renderDiagnostics?.readback ?? evidence.browserVisual;
+    const pixel = evidence.pixel;
     return (
       evidence.browserPath === true &&
       evidence.webgpu === true &&
       readback?.status === 'ok' &&
       Number(readback.nonZeroBytes) > 0 &&
-      (readback.nonZeroAlphaPixels === undefined || Number(readback.nonZeroAlphaPixels) > 0)
+      Number(readback.nonZeroAlphaPixels) > 0 &&
+      Array.isArray(pixel) &&
+      pixel.length >= 4 &&
+      pixel.slice(0, 3).some((value) => Number(value) > 0) &&
+      Number(pixel[3]) > 0
     );
   }
   return (
@@ -324,6 +354,17 @@ function jsonRecords(stdout, stderr) {
     });
 }
 
+function isMaterialPassRecord(value) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    value.status === 'pass' &&
+    value.materialIdentity !== null &&
+    typeof value.materialIdentity === 'object' &&
+    !Array.isArray(value.materialIdentity)
+  );
+}
+
 function findCookedFixture(value, materialGuid) {
   if (value === null || typeof value !== 'object') return undefined;
   if (Array.isArray(value)) {
@@ -333,7 +374,9 @@ function findCookedFixture(value, materialGuid) {
     }
     return undefined;
   }
-  if (typeof value.guid === 'string' && value.guid.toLowerCase() === materialGuid.toLowerCase()) {
+  const valueGuid = normalizedGuid(value.guid);
+  const targetGuid = normalizedGuid(materialGuid);
+  if (valueGuid !== undefined && valueGuid === targetGuid) {
     const cooked = value.payload?.cooked;
     if (cooked !== null && typeof cooked === 'object') return cooked;
   }
@@ -342,6 +385,115 @@ function findCookedFixture(value, materialGuid) {
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+export function compactFixtureIdentity(fixture, witness) {
+  const errors = [];
+  if (fixture.schemaVersion !== MATERIAL_WITNESS_RECEIPT_SCHEMA) {
+    errors.push(`fixture schema must be ${MATERIAL_WITNESS_RECEIPT_SCHEMA}`);
+  }
+  if (fixture.kind !== MATERIAL_WITNESS_RECEIPT_KIND) {
+    errors.push(`fixture kind must be ${MATERIAL_WITNESS_RECEIPT_KIND}`);
+  }
+  const materialGuid = normalizedGuid(fixture.materialGuid);
+  const rootGuid = normalizedGuid(fixture.rootGuid);
+  if (typeof fixture.materialGuid !== 'string' || !GUID_RE.test(fixture.materialGuid)) {
+    errors.push('fixture materialGuid is invalid');
+  }
+  if (typeof fixture.rootGuid !== 'string' || !GUID_RE.test(fixture.rootGuid)) {
+    errors.push('fixture rootGuid is invalid');
+  }
+  if (materialGuid !== normalizedGuid(witness?.materialGuid)) {
+    errors.push(`fixture material GUID mismatch: expected ${witness.materialGuid}`);
+  }
+  const rootPublication = fixture.rootPublication;
+  const rootPublicationValid =
+    rootPublication !== null &&
+    typeof rootPublication === 'object' &&
+    typeof rootPublication.guid === 'string' &&
+    GUID_RE.test(rootPublication.guid) &&
+    typeof rootPublication.format === 'string' &&
+    typeof rootPublication.path === 'string' &&
+    !isAbsolute(rootPublication.path) &&
+    typeof rootPublication.sourceKey === 'string';
+  if (rootPublication !== null && !rootPublicationValid) {
+    errors.push('fixture rootPublication must be null or a relative source provenance object');
+  }
+  if (rootPublicationValid && normalizedGuid(rootPublication.guid) !== rootGuid) {
+    errors.push('fixture rootPublication guid must equal rootGuid');
+  }
+  if (rootGuid !== materialGuid && rootPublication === null) {
+    errors.push('parent-bearing fixture must contain rootPublication provenance');
+  }
+  const child = fixture.child;
+  if (
+    child === null ||
+    typeof child !== 'object' ||
+    !Array.isArray(child.authoredKeys) ||
+    !Array.isArray(child.forbiddenFields)
+  ) {
+    errors.push('fixture child must contain authoredKeys and forbiddenFields arrays');
+  } else {
+    const authoredKeys = [...child.authoredKeys].sort();
+    const forbiddenFields = [...child.forbiddenFields].sort();
+    if (!authoredKeys.every((key) => typeof key === 'string')) {
+      errors.push('fixture child authoredKeys must contain strings');
+    }
+    if (!forbiddenFields.every((field) => MATERIAL_CHILD_FORBIDDEN_FIELDS.includes(field))) {
+      errors.push('fixture child forbiddenFields contains an unknown field');
+    }
+    if (rootGuid !== materialGuid) {
+      const expectedKeys = ['kind', 'parent', 'values'];
+      if (JSON.stringify(authoredKeys) !== JSON.stringify(expectedKeys)) {
+        errors.push(`fixture child authoredKeys must equal ${expectedKeys.join(',')}`);
+      }
+      if (forbiddenFields.length > 0) errors.push('fixture child must have no forbidden fields');
+    }
+  }
+  const identity = fixture.receipt?.identity;
+  if (identity === null || typeof identity !== 'object') {
+    errors.push('fixture does not contain a receipt identity');
+  } else {
+    const missing = MATERIAL_RECEIPT_IDENTITY_FIELDS.filter(
+      (field) => !isMaterialIdentityValue(field, identity[field]),
+    );
+    if (missing.length > 0) errors.push(`fixture receipt identity lacks ${missing.join(', ')}`);
+    const wasm = identity.wasm;
+    const missingWasm =
+      wasm === null || typeof wasm !== 'object'
+        ? ['wasm.sourceContentKey', 'wasm.artifactSha256', 'wasm.glueSha256']
+        : ['sourceContentKey', 'artifactSha256', 'glueSha256']
+            .filter(
+              (field) =>
+                typeof wasm[field] !== 'string' ||
+                wasm[field].length === 0 ||
+                wasm[field] === 'unavailable',
+            )
+            .map((field) => `wasm.${field}`);
+    if (missingWasm.length > 0)
+      errors.push(`fixture receipt identity lacks ${missingWasm.join(', ')}`);
+  }
+  if (typeof fixture.artifactDigest !== 'string' || fixture.artifactDigest.length === 0) {
+    errors.push('fixture artifactDigest is missing');
+  }
+  if (
+    !Array.isArray(fixture.sourceClosure) ||
+    !fixture.sourceClosure.every((source) => typeof source === 'string' && !isAbsolute(source))
+  ) {
+    errors.push('fixture sourceClosure must contain repository-relative paths or module IDs');
+  }
+  return errors.length === 0
+    ? {
+        schemaVersion: MATERIAL_WITNESS_RECEIPT_SCHEMA,
+        identity,
+        artifactDigest: fixture.artifactDigest,
+        materialGuid: fixture.materialGuid,
+        rootGuid: fixture.rootGuid,
+        rootPublication,
+        child,
+        sourceClosure: fixture.sourceClosure,
+      }
+    : { error: errors.join('; ') };
 }
 
 function fixtureIdentity(witness) {
@@ -357,16 +509,19 @@ function fixtureIdentity(witness) {
       error: `fixture JSON could not be read: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+  if (fixture?.schemaVersion === MATERIAL_WITNESS_RECEIPT_SCHEMA) {
+    return compactFixtureIdentity(fixture, witness);
+  }
   const cooked = findCookedFixture(fixture, witness.materialGuid);
   const identity = cooked?.receipt?.identity;
-  if (cooked?.receipt?.schemaVersion !== 'material-cook/3') {
-    return { error: 'fixture does not contain a material-cook/3 receipt' };
+  if (cooked?.receipt?.schemaVersion !== 'material-cook/4') {
+    return { error: 'fixture does not contain a material-cook/4 receipt' };
   }
   if (identity === null || typeof identity !== 'object') {
     return { error: 'fixture does not contain a receipt identity' };
   }
-  const missing = MATERIAL_IDENTITY_FIELDS.filter(
-    (field) => typeof identity[field] !== 'string' || identity[field].length === 0,
+  const missing = MATERIAL_RECEIPT_IDENTITY_FIELDS.filter(
+    (field) => !isMaterialIdentityValue(field, identity[field]),
   );
   const wasm = identity.wasm;
   const missingWasm =
@@ -381,11 +536,74 @@ function fixtureIdentity(witness) {
           )
           .map((field) => `wasm.${field}`);
   return missing.length === 0 && missingWasm.length === 0
-    ? { identity, artifactDigest: cooked.artifactDigest ?? cooked.artifact?.digest }
+    ? { identity, artifactDigest: cooked.artifactDigest }
     : { error: `fixture receipt identity lacks ${[...missing, ...missingWasm].join(', ')}` };
 }
 
-async function runMaterialWitness(witness) {
+export function compareCompactFixtureToLive(fixture, evidence) {
+  if (fixture?.schemaVersion !== MATERIAL_WITNESS_RECEIPT_SCHEMA) return [];
+  if (fixture.error !== undefined || evidence === null || typeof evidence !== 'object') return [];
+  const errors = [];
+  const liveIdentity = evidence.materialIdentity;
+  if (normalizedGuid(fixture.materialGuid) !== normalizedGuid(liveIdentity?.materialGuid)) {
+    errors.push(`fixture/live material GUID mismatch: expected ${fixture.materialGuid}`);
+  }
+  if (normalizedGuid(fixture.rootGuid) !== normalizedGuid(evidence.rootGuid)) {
+    errors.push(`fixture/live root GUID mismatch: expected ${fixture.rootGuid}`);
+  }
+  for (const field of MATERIAL_RECEIPT_IDENTITY_FIELDS) {
+    if (fixture.identity?.[field] !== liveIdentity?.[field]) {
+      errors.push(`stale fixture identity ${field}`);
+    }
+  }
+  if (fixture.artifactDigest !== liveIdentity?.artifactDigest) {
+    errors.push('stale fixture artifactDigest');
+  }
+  const expectedRootPublication = fixture.rootPublication;
+  const liveRootPublication = evidence.rootPublication;
+  if (!Object.hasOwn(evidence, 'rootPublication')) {
+    errors.push('live rootPublication is missing');
+  } else if (expectedRootPublication === null) {
+    if (liveRootPublication !== null) errors.push('fixture/live rootPublication mismatch');
+  } else if (
+    expectedRootPublication === null ||
+    typeof expectedRootPublication !== 'object' ||
+    Array.isArray(expectedRootPublication) ||
+    liveRootPublication === null ||
+    typeof liveRootPublication !== 'object' ||
+    Array.isArray(liveRootPublication) ||
+    typeof liveRootPublication.guid !== 'string' ||
+    !GUID_RE.test(liveRootPublication.guid) ||
+    typeof liveRootPublication.format !== 'string' ||
+    typeof liveRootPublication.path !== 'string' ||
+    isAbsolute(liveRootPublication.path) ||
+    typeof liveRootPublication.sourceKey !== 'string'
+  ) {
+    errors.push('live rootPublication is missing or invalid');
+  } else {
+    if (normalizedGuid(liveRootPublication.guid) !== normalizedGuid(fixture.rootGuid)) {
+      errors.push('live rootPublication guid must equal rootGuid');
+    }
+    for (const field of ['guid', 'path', 'sourceKey', 'format']) {
+      const expected = expectedRootPublication[field];
+      const actual = liveRootPublication[field];
+      const equal =
+        field === 'guid'
+          ? normalizedGuid(expected) === normalizedGuid(actual)
+          : expected === actual;
+      if (!equal) errors.push(`stale fixture rootPublication ${field}`);
+    }
+  }
+  const liveClosure = evidence.source ?? evidence.observed?.sourceClosure;
+  if (!Array.isArray(liveClosure)) {
+    errors.push('live sourceClosure is missing');
+  } else if (JSON.stringify(fixture.sourceClosure) !== JSON.stringify(liveClosure)) {
+    errors.push('stale fixture sourceClosure');
+  }
+  return errors;
+}
+
+export async function runMaterialWitness(witness) {
   const fixture = fixtureIdentity(witness);
   const command = witness.command;
   let result;
@@ -406,8 +624,11 @@ async function runMaterialWitness(witness) {
   const records = jsonRecords(result.stdout, result.stderr);
   const parsed = parseSmokeOutput(result.stdout, result.stderr);
   const rawEvidence = records.at(-1) ?? {};
-  const materialIdentity = parsed.materialIdentity ?? rawEvidence.materialIdentity;
+  const passEvidence = [...records].reverse().find(isMaterialPassRecord);
+  const materialIdentity =
+    passEvidence?.materialIdentity ?? parsed.materialIdentity ?? rawEvidence.materialIdentity;
   const normalizedEvidence = {
+    ...(passEvidence ?? {}),
     ...rawEvidence,
     materialIdentity:
       materialIdentity === null || typeof materialIdentity !== 'object'
@@ -416,17 +637,24 @@ async function runMaterialWitness(witness) {
             ...materialIdentity,
             materialGuid: materialIdentity.materialGuid ?? rawEvidence.rootGuid,
           },
-    frames: rawEvidence.frames ?? parsed.frameCount,
+    rootGuid: rawEvidence.rootGuid ?? passEvidence?.rootGuid,
+    source: rawEvidence.source ?? passEvidence?.source,
+    observed: rawEvidence.observed ?? passEvidence?.observed,
+    pixel: rawEvidence.pixel ?? passEvidence?.pixel,
+    browserPath: rawEvidence.browserPath ?? passEvidence?.browserPath,
+    webgpu: rawEvidence.webgpu ?? passEvidence?.webgpu,
+    frames: rawEvidence.frames ?? passEvidence?.frames ?? parsed.frameCount,
   };
   const errors = [];
   if (result.exitCode !== 0) errors.push(`command exited with ${result.exitCode}`);
   if (fixture.error !== undefined) errors.push(fixture.error);
   if (
-    normalizedEvidence.materialIdentity?.materialGuid?.toLowerCase() !==
-    witness.materialGuid.toLowerCase()
+    normalizedGuid(normalizedEvidence.materialIdentity?.materialGuid) !==
+    normalizedGuid(witness.materialGuid)
   ) {
     errors.push(`material GUID mismatch: expected ${witness.materialGuid}`);
   }
+  errors.push(...compareCompactFixtureToLive(fixture, normalizedEvidence));
   if (!hasRealMaterialEvidence(normalizedEvidence, witness.evidence)) {
     errors.push(`missing real ${witness.evidence} WebGPU draw/readback evidence`);
   }

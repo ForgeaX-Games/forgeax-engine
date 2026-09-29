@@ -1,3 +1,4 @@
+import { installGpuDrivenEvidence } from '@forgeax/apps-shared/gpu-driven-evidence';
 import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
@@ -51,7 +52,8 @@ import { perspective } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SceneInstance } from '@forgeax/engine-render';
 
-import { type AnimationClip, type Handle, type SceneAsset } from '@forgeax/engine-types';
+import { ok, type AnimationClip, type Handle, type SceneAsset } from '@forgeax/engine-types';
+import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const FOX_SCENE_GUID = '019eb2ce-6232-74a0-8da7-00be6d2f8774';
@@ -70,6 +72,42 @@ const CLEAR_G = 0.4;
 const CLEAR_B = 0.4;
 const CLEAR_A = 1.0;
 
+type GpuPassTimingVisualMode = 'off' | 'on' | 'unsupported';
+
+const GPU_PASS_TIMING_OPTIONS = {
+  maxPassesPerFrame: 64,
+  maxFramesInFlight: 2,
+  retentionFrames: 8,
+} as const;
+
+const visualParams = new URLSearchParams(window.location.search);
+const requestedGpuPassTimingVisualMode = visualParams.get('gpu-pass-timing');
+const gpuPassTimingVisualMode: GpuPassTimingVisualMode =
+  requestedGpuPassTimingVisualMode === 'on' || requestedGpuPassTimingVisualMode === 'unsupported'
+    ? requestedGpuPassTimingVisualMode
+    : 'off';
+const gpuPassTimingVisualCapture = visualParams.get('gpu-pass-timing-capture') === '1';
+document.documentElement.dataset.gpuPassTiming = gpuPassTimingVisualMode;
+
+async function visualRhi(): Promise<typeof rhiWebgpu.rhi | undefined> {
+  if (gpuPassTimingVisualMode !== 'unsupported') return undefined;
+  // The visual unsupported mode uses the real browser RHI with admission
+  // filtered at the adapter boundary. Unit/browser refusal tests still cover
+  // the renderer's structured unavailable observation; this hook only makes
+  // the same hello-skin target reproducibly render that branch for evidence.
+  const browserRhi = rhiWebgpu;
+  const requestAdapter = browserRhi.rhi.requestAdapter;
+  browserRhi.rhi.requestAdapter = async (...args) => {
+    const result = await requestAdapter(...args);
+    if (!result.ok) return result;
+    return ok({
+      ...result.value,
+      features: new Set([...result.value.features].filter((feature) => feature !== 'timestamp-query')),
+    });
+  };
+  return browserRhi.rhi;
+}
+
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-skin: missing <canvas id="app"> in index.html');
 
@@ -85,17 +123,31 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const bundler = import.meta.env.DEV
     ? { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) }
     : forgeaxBundlerAdapter();
-  const appRes = await createApp(
-    target,
-    { plugins: [skinningPlugin()] },
-    bundler,
-  );
+  const explicitRhi = await visualRhi();
+  const appOptions =
+    gpuPassTimingVisualMode === 'off'
+      ? { plugins: [skinningPlugin()], ...(explicitRhi === undefined ? {} : { rhi: explicitRhi }) }
+      : {
+          plugins: [skinningPlugin()],
+          gpuPassTiming: GPU_PASS_TIMING_OPTIONS,
+          ...(explicitRhi === undefined ? {} : { rhi: explicitRhi }),
+        };
+  const appRes = await createApp(target, { ...appOptions, ...(import.meta.env.DEV && runtimeBinding !== undefined ? { assetRuntimeBinding: runtimeBinding } : {}) }, bundler);
   if (!appRes.ok) {
     console.error('[skin] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
   const world: World = app.world;
+  installGpuDrivenEvidence(world, app.renderer);
+  document.documentElement.dataset.gpuPassTimingCapability = String(
+    app.renderer.inspect().capabilities.timestampQuery,
+  );
+  if (gpuPassTimingVisualCapture) {
+    app.onError((error) => {
+      console.error(`[skin] timing visual renderer error: ${error.code} ${error.hint}`);
+    });
+  }
   console.warn('[skin] Standard pipeline active');
 
   const assets = app.assets;
@@ -152,7 +204,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Find the Skin entity inside the spawned hierarchy. AnimationPlayer is a
   // single component on this one entity; advanceAnimationPlayer (auto-
   // registered by createApp) drives joint Transforms, render-system-extract
-  // writes Transform.world * IBM into the per-frame skin palette upload.
+  // writes GlobalTransform.world * IBM into the per-frame skin palette upload.
   const root = instRes.value;
 
   // bug-20260615-skin-mesh-node-double-transform: parent the Fox under a
@@ -198,6 +250,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         times: [0],
         weights: [1],
         speeds: [1],
+        paused: gpuPassTimingVisualCapture,
       },
   });
   const playerEnt = root as EntityHandle;
@@ -253,7 +306,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Mode tracks which keystroke path drove the most recent player.set so the
   // HUD can label the active path (hardcut vs crossfade vs 3way).
   let currentMode: 'hardcut' | 'crossfade' | '3way' = 'hardcut';
-  let currentPaused = false;
+  let currentPaused = gpuPassTimingVisualCapture;
   // Crossfade state owned by skin-blend-driver. crossfadeStart === null means
   // the system is idle; while non-null, every frame in [start, start+0.3s]
   // re-writes the slot weights with the linear-interpolated value.
@@ -298,6 +351,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       slotLines.push(`slot[${i}]: clips[${i}]=${cname}  weights[${i}]=${w}  times[${i}]=${t}`);
     }
     hudEl.innerHTML =
+      `GPU timing: ${gpuPassTimingVisualMode}<br />` +
       `Mode: ${currentMode}  State: ${state}<br />` +
       slotLines.join('<br />') +
       '<br /><span style="color:#8a90a8;">[1] Survey  [2] Walk  [3] Run  [4] Walk-&gt;Run blend  [5] 3-way  [Space] Pause</span>';

@@ -9,7 +9,7 @@
 //
 // GREEN after m2-w3 (encode validation) + m2-w5 (AssetErrorCode member).
 
-import { packMeshBinV4 } from '@forgeax/engine-import';
+import { packMeshBin } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
 
 describe('mesh-bin contract violation (import-side) (feat-20260629 m2-w2)', () => {
@@ -32,7 +32,7 @@ describe('mesh-bin contract violation (import-side) (feat-20260629 m2-w2)', () =
     const vertices = new Float32Array(4 * 28); // 12 + 8*2 = 28
     const indices = new Uint16Array([0, 1, 2]);
 
-    const result = packMeshBinV4({ vertices, indices, attributes: attrs }, 'import://invalid-uv');
+    const result = packMeshBin({ vertices, indices, attributes: attrs }, 'import://invalid-uv');
     expect(result.ok).toBe(false);
   });
 });
@@ -47,7 +47,7 @@ describe('mesh-bin v4 producer red matrix', () => {
   };
 
   it('returns deterministic v4 bytes with projection digest, stride, and RGBA payload facts', () => {
-    const result = packMeshBinV4(
+    const result = packMeshBin(
       {
         vertices: new Float32Array([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0.5, 0.25, 1]),
         indices: new Uint16Array([0, 0, 0]),
@@ -58,7 +58,7 @@ describe('mesh-bin v4 producer red matrix', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const repeat = packMeshBinV4(
+    const repeat = packMeshBin(
       {
         vertices: new Float32Array([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0.5, 0.25, 1]),
         indices: new Uint16Array([0, 0, 0]),
@@ -73,7 +73,7 @@ describe('mesh-bin v4 producer red matrix', () => {
   });
 
   it('rejects cardinality and RGBA shape corruption without publishing bytes', () => {
-    const result = packMeshBinV4(
+    const result = packMeshBin(
       {
         vertices: new Float32Array(16),
         indices: new Uint16Array([0, 1, 2]),

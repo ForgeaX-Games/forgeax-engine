@@ -37,7 +37,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "hello-triangle baseline anchor only; hello-skin smoke covers 300-frame skinned draw path (AC-35)"
+        "reason": "hello-triangle baseline anchor only; hello-skin smoke covers 60-frame skinned draw path (AC-35)"
       },
       "bench": {
         "enabled": false,
@@ -64,7 +64,8 @@
     "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
-    "@forgeax/engine-render": "workspace:*"
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
@@ -74,7 +75,7 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

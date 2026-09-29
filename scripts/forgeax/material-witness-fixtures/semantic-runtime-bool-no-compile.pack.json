@@ -99,34 +99,34 @@
             },
             "identity": {
               "artifactDigest": "sha256:33180b5a10c7de38819afd2ce6b5ae77b6e2f8b4104c78d14a7955a21b3381e1",
-              "compilerFingerprint": "sha256-0f47b9f3deb7057ca22901763a13d9ef3a9c8f82c70a4a5c2f6a0819dfbdbfd5",
+              "compilerFingerprint": "sha256-315cb7d98e978da90ccf5bc8b410fa66d1cd22f0868a4797fcad2a5e3e77e6bd",
               "cookGeneration": 1,
-              "cookIdentity": "sha256:858eb7991e19740ddaa56f6390d691cb4ba222632cf7d7766d9a299fb333b142",
+              "cookIdentity": "sha256:69306422864c87183ea44ad2b1cecd3d460ed597da11c1161d4dd3776f38f41e",
               "dependencyGeneration": 1,
               "layoutIdentity": "sha256-5aa426f256788bd82c58f3aa2c60eaa872ed947794a8ad758ef5a1c5e23b4010",
               "materialContractDigest": "sha256:7ed45aea209e2932f49fd7137eff07d6c73644625372474f8376a0f4432684d9",
               "materialPublicationIdentity": "sha256:004e170af0ada49dfb9ac0a36b9c962c1c84cbdf756f237e388fa0a5851e81dc",
-              "pipelineIdentity": "sha256:cd247cf21d6836d91ec3a362b13d8d6d2d415c77e170b8a71b48f3b1bd1b0056",
-              "programIdentity": "sha256:308ec92c9b4f2dbf2e45e724393bab3eecfc67681204e1d08b0e508ee21f0d28",
-              "sourceClosureDigest": "sha256:a77753f8669e3a5eef7704672c06bd61fb6573c229fb21d3ed1ea72e4c4b34e6",
-              "sourceRevision": "sha256:a77753f8669e3a5eef7704672c06bd61fb6573c229fb21d3ed1ea72e4c4b34e6",
+              "pipelineIdentity": "sha256:da003a6ad9a752a5afe6bf4518ec2cf2c495026cf8c3a5114f4223047338e2d4",
+              "programIdentity": "sha256:58609de025005200cdbf97f7aed461308110d6e90e73c4caf3f9b1bb0c198a28",
+              "sourceClosureDigest": "sha256:90fbaa4fbdc6d3c2a3d32bb1d72ead53b6d5e44e680a1984e916dc00919890a0",
+              "sourceRevision": "sha256:90fbaa4fbdc6d3c2a3d32bb1d72ead53b6d5e44e680a1984e916dc00919890a0",
               "valueGeneration": 1,
               "wasm": {
-                "artifactBytes": 3197085,
-                "artifactSha256": "40c2b706ec3bb40a97cda8302491d0a34da0744b214db8993ae4c74590d550b7",
-                "compilerFingerprint": "sha256-0f47b9f3deb7057ca22901763a13d9ef3a9c8f82c70a4a5c2f6a0819dfbdbfd5",
+                "artifactBytes": 6501567,
+                "artifactSha256": "37f65f2ddcc6b34f13e854aec465ad49cf3b6c7b64923a159cd67738dad8b287",
+                "compilerFingerprint": "sha256-315cb7d98e978da90ccf5bc8b410fa66d1cd22f0868a4797fcad2a5e3e77e6bd",
                 "dependencies": {
                   "naga": "29.0.3",
                   "nagaOil": "0.22.0",
                   "wasmBindgen": "0.2.121",
                   "wgpu": "29.0.3"
                 },
-                "glueBytes": 139303,
-                "glueSha256": "6cc49495a4686a2a0ecf7cb53fc933388f4f7ff42647ca686271aef26b730ff6",
+                "glueBytes": 140441,
+                "glueSha256": "a4554a3ce15dc611742eef723f51386dbad29e39e9d8524c999544d84281b33b",
                 "schemaVersion": "wgpu-wasm-provenance/1",
-                "sourceContentKey": "sha256-46dafdc239db077e9b3b54b4d2622f10c8e9e5c76b8bd811a06c597d5ba8b1ef",
+                "sourceContentKey": "sha256-31f6100e755c0e2395924e73331fd1518675c7312110da790cc7267461c84fcc",
                 "toolchain": {
-                  "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+                  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
                   "wasmBindgen": "unavailable",
                   "wasmPack": "wasm-pack 0.14.0"
                 }
@@ -135,7 +135,7 @@
             "profile": "webgpu/v1",
             "schemaVersion": "material-cook/3",
             "sourceClosure": [
-              "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-material-semantic-8e0R4M/warm/root.wgsl",
+              "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-material-semantic-VpTDaa/warm/root.wgsl",
               "forgeax_material::parameters",
               "semantic::lighting_warm"
             ]
@@ -170,11 +170,11 @@
           },
           "schemaVersion": "material-cook/3",
           "sourceClosure": [
-            "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-material-semantic-8e0R4M/warm/root.wgsl",
+            "/var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/forgeax-material-semantic-VpTDaa/warm/root.wgsl",
             "forgeax_material::parameters",
             "semantic::lighting_warm"
           ],
-          "specializationKey": "material/019f0000-0000-7000-8000-000000000201/sha256:33180b5a10c7de38819afd2ce6b5ae77b6e2f8b4104c78d14a7955a21b3381e1"
+          "specializationKey": "1b8d078f6c6f685ec5c805dbb88f9d64917b08c006b747cb5118d63aa265cb9d"
         }
       },
       "refs": [],

@@ -6,9 +6,10 @@ describe('Standard forward post color-domain order', () => {
     expect(resolvePostColorDomainContract('linear-ldr')).toEqual([
       ['transparent-blend', 'linear-ldr', 'linear-ldr'],
       ['bloom', 'linear-hdr', 'linear-hdr'],
-      ['tone', 'linear-hdr', 'linear-ldr'],
-      ['fxaa', 'linear-ldr', 'linear-ldr'],
-      ['output', 'linear-ldr', 'display-encoded'],
+      ['output-transform', 'linear-ldr', 'display-encoded'],
+      ['fxaa', 'display-encoded', 'display-encoded'],
+      ['post-effect', 'display-encoded', 'display-encoded'],
+      ['present', 'display-encoded', 'display-encoded'],
     ]);
   });
 });

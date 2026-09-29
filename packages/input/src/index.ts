@@ -48,6 +48,7 @@ export {
 export {
   type CompositeBackendOptions,
   type CompositeInputBackend,
+  type CompositeInputLease,
   makeCompositeBackend,
 } from './composite-backend';
 export {

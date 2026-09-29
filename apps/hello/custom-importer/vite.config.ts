@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
@@ -42,7 +42,6 @@ export default defineConfig({
       },
       roots: [localAssets],
       importers: [reelGameBlobImporter()],
-      refresh: reloadAssetHost(),
       runtimeBinding,
     }),
   ],

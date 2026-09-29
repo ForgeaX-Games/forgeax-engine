@@ -1,19 +1,36 @@
-import type { Plugin } from '@forgeax/engine-plugin';
-import type { RenderFeature } from '@forgeax/engine-render';
+import {
+  type Context,
+  type Fiber,
+  mountPluginAsset,
+  type Plugin,
+  type PluginPrograms,
+  startNativePlugin,
+} from '@forgeax/engine-plugin';
+import type { Renderer, RenderFeature, RenderTargetAuthoring } from '@forgeax/engine-render';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { APP_ERROR_HINTS, APP_EXPECTED, AppError, type AppError as AppErrorType } from '../errors';
+import type { RuntimePackOptions } from '../runtime-packs.js';
 import type { ExecutionBootstrapValue } from './types';
 
 /** Realm-local engine assembly returned by an execution bootstrap module. */
 export interface PreparedExecutionBootstrap {
+  readonly pluginPrograms?: PluginPrograms;
+  readonly runtimePacks?: RuntimePackOptions;
+  readonly root?: { readonly guid: string };
   /** Render features constructed in the realm that will own the Renderer. */
   readonly features?: readonly RenderFeature<unknown>[];
+  /** Runs in the actual Renderer realm, before source plugins and the first draw. */
+  readonly configureRenderer?: (renderer: Renderer) => void | Promise<void>;
   /** Plugins constructed in the realm that will own the World. */
   readonly plugins?: readonly Plugin[];
 }
 
 /** Realm-local Host bridge available to execution bootstrap plugins. */
 export interface ExecutionBootstrapHost {
+  /** Logical target authoring; physical resources always belong to the Renderer. */
+  readonly renderTargets?: RenderTargetAuthoring;
+  /** Canvas owned by the selected execution realm (HTMLCanvasElement or OffscreenCanvas). */
+  readonly canvas?: HTMLCanvasElement | OffscreenCanvas;
   readonly port?: MessagePort;
   setPointerLockAllowed(allowed: boolean): void;
 }
@@ -24,16 +41,13 @@ declare module '@forgeax/engine-plugin' {
   }
 }
 
-/** Bind the optional Host transport to the same Fiber that owns bootstrap plugins. */
+/** Borrow the session-owned Host transport for this World bootstrap. */
 export function executionBootstrapHostPlugin(host: ExecutionBootstrapHost): Plugin {
   return {
     name: 'execution-bootstrap-host',
     provide: 'executionBootstrapHost',
     apply(ctx) {
       ctx.provide('executionBootstrapHost', host);
-      if (host.port !== undefined) {
-        ctx.effect(() => () => host.port?.close(), 'execution/bootstrap-port');
-      }
     },
   };
 }
@@ -105,7 +119,8 @@ export async function prepareBootstrapEntry(
       typeof prepared !== 'object' ||
       prepared === null ||
       (prepared.features !== undefined && !Array.isArray(prepared.features)) ||
-      (prepared.plugins !== undefined && !Array.isArray(prepared.plugins))
+      (prepared.plugins !== undefined && !Array.isArray(prepared.plugins)) ||
+      (prepared.configureRenderer !== undefined && typeof prepared.configureRenderer !== 'function')
     ) {
       return err(
         bootstrapError(
@@ -119,4 +134,27 @@ export async function prepareBootstrapEntry(
   } catch (cause) {
     return err(bootstrapError('prepare', moduleUrl, cause));
   }
+}
+
+/** Start outside apply so children may inject services provided by their parent. */
+export async function activateExecutionRoot(
+  context: Context,
+  root: NonNullable<PreparedExecutionBootstrap['root']>,
+  signal?: AbortSignal,
+): Promise<{ readonly fiber: Fiber }> {
+  const result = await startNativePlugin(
+    context,
+    {
+      name: 'forgeax:project-root',
+      inject: ['assets', 'pluginPrograms'],
+      async apply(ctx) {
+        const mounted = await mountPluginAsset(ctx, root.guid, signal);
+        if (!mounted.ok) throw mounted.error;
+      },
+    },
+    undefined,
+    signal === undefined ? {} : { signal },
+  );
+  if (!result.ok) throw result.error;
+  return { fiber: result.value };
 }

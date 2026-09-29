@@ -20,7 +20,14 @@
 // regression in the kernel logic itself. The kernel is the executable AC-06
 // spec; w18 implementation must derive identical behavior.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+
+const directionalShader = readFileSync(
+  fileURLToPath(new URL('../../../shader/src/lighting-directional.wgsl', import.meta.url)),
+  'utf8',
+);
 
 // biome-ignore lint/suspicious/noExplicitAny: dawn-node detection guard
 const dawnReady = typeof navigator !== 'undefined' && (navigator as any).gpu !== undefined;
@@ -226,6 +233,18 @@ async function runKernel(inputs: KernelInputs): Promise<{
 describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
   it.skipIf(!dawnReady)("'dawn-binding-missing' -- dawn.node binding injection failed", () => {
     expect(dawnReady).toBe(true);
+  });
+
+  it('production Directional PCSS uses raw depth and comparison without new bindings', () => {
+    expect(directionalShader).toContain('fn _samplePcssForCascade');
+    expect(directionalShader).toContain('shadow_load_raw_depth');
+    expect(directionalShader).toContain('shadow_sample_compare');
+    expect(directionalShader).toContain('PCSS_MEDIUM_RAW_TAPS : u32 = 8u');
+    expect(directionalShader).toContain('PCSS_MEDIUM_COMPARE_TAPS : u32 = 16u');
+    expect(directionalShader).toContain('PCSS_HIGH_RAW_TAPS : u32 = 16u');
+    expect(directionalShader).toContain('PCSS_HIGH_COMPARE_TAPS : u32 = 32u');
+    expect(directionalShader).not.toMatch(/@binding\(/);
+    expect(directionalShader).not.toMatch(/frameIndex|frame_index|taaJitter|taa_jitter|jitter/);
   });
 
   describe('cascade selection by viewZ (AC-03 / AC-06)', () => {

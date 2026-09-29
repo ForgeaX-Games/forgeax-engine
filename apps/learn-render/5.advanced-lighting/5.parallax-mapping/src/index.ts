@@ -3,9 +3,8 @@
 //
 // One custom material shader (parallax.wgsl) carries all three LO 5.5
 // algorithms; the active path + height scale + texture set are switched at
-// runtime by mutating the MaterialAsset.values object BY REFERENCE in a
-// keydown handler (D-7) — extract/record pick up the change next frame, no
-// recompile.
+// runtime through managed World parameters and material bindings, without
+// recompiling the shader.
 //
 // The manifest's cooked material record derives the material bind group from
 // the shader's declared texture fields, including the height-map slot.
@@ -19,16 +18,17 @@
 import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { HANDLE_QUAD, RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 
-import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import { replayCapturedFrameInBrowser } from '@forgeax/apps-shared/rhi-debug-browser-replay';
 
 import './parallax.wgsl';
 
@@ -84,7 +84,7 @@ void bootstrap(canvas);
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
+    import.meta.env.DEV && runtimeBinding !== undefined ? { assetRuntimeBinding: runtimeBinding } : {},
     { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
@@ -138,26 +138,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const toyBoxHandles = await loadSet(TEXTURE_SETS.toyBox);
   if (bricksHandles === null || toyBoxHandles === null) return;
 
-  // Construct the MaterialAsset POJO. We keep a live reference to values
-  // so the keydown handler can mutate algoMode / heightScale / texture handles
-  // in place — extract reads the same object next frame (D-7).
-  const values: Record<string, MaterialValue | null> = {
-    baseColor: [1.0, 1.0, 1.0, 1.0],
-    heightScale: HEIGHT_SCALE_DEFAULT,
-    algoMode: 0.0,
-    baseColorTexture: bricksHandles.diffuse,
-    normalTexture: bricksHandles.normal,
-    heightTexture: bricksHandles.height,
-  };
-  const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
-    kind: 'material',
-    passes: [{ name: 'Forward', program: { module: PARALLAX_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } }],
-    values,
-  });
+  // Each texture set has immutable bindings; scalar parameters live in the World.
+  const materials = [bricksHandles, toyBoxHandles].map((textures) =>
+    world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [{ name: 'Forward', program: { module: PARALLAX_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } }],
+      values: {
+        baseColor: [1, 1, 1, 1], heightScale: HEIGHT_SCALE_DEFAULT, algoMode: 0,
+        baseColorTexture: textures.diffuse, normalTexture: textures.normal, heightTexture: textures.height,
+      },
+    }),
+  );
+  const mat = materials[0]!;
+  const algorithm = world.spawn({ component: RuntimeMaterialValue, data: { asset: mat, parameter: 'algoMode', value: [0] } }).unwrap();
+  const height = world.spawn({ component: RuntimeMaterialValue, data: { asset: mat, parameter: 'heightScale', value: [HEIGHT_SCALE_DEFAULT] } }).unwrap();
 
   // Wall quad facing +Z (HANDLE_QUAD = createPlaneGeometry(1,1) with tangents
   // at @location(3); the shader builds its TBN from them).
-  world.spawn(
+  const wall = world.spawn(
     { component: Transform, data: { pos: [0, 0, 0]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [mat] } },
@@ -182,17 +180,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   // HUD + keyboard switching. algoMode/heightScale/texture-set are discrete
-  // events: mutate values by reference; the next extract picks it up.
+  // events: publish parameters or rebind the material for the next frame.
   const hud = document.querySelector<HTMLPreElement>('#hud');
   let activeSet: 'bricks2' | 'toyBox' = 'bricks2';
   const renderHud = (): void => {
     if (hud === null) return;
-    const algo = ALGO_LABELS[Math.round(values.algoMode as number)] ?? '?';
+    const algo = ALGO_LABELS[Math.round(world.get(algorithm, RuntimeMaterialValue).unwrap().value[0]!)] ?? '?';
     const setLabel = activeSet === 'bricks2' ? 'bricks2' : 'toy_box';
     hud.textContent = [
       'LearnOpenGL 5.5 — Parallax Mapping',
       `algorithm : ${algo}   [1 basic] [2 steep] [3 POM]`,
-      `heightScale: ${(values.heightScale as number).toFixed(2)}   [-]/[=] adjust`,
+      `heightScale: ${(world.get(height, RuntimeMaterialValue).unwrap().value[0]!).toFixed(2)}   [-]/[=] adjust`,
       `texture   : ${setLabel}   [T] toggle`,
       'camera    : WASD + mouse drag, scroll = zoom',
     ].join('\n');
@@ -202,35 +200,35 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   window.addEventListener('keydown', (ev) => {
     switch (ev.key) {
       case '1':
-        values.algoMode = 0.0;
+        world.set(algorithm, RuntimeMaterialValue, { value: [0] }).unwrap();
         break;
       case '2':
-        values.algoMode = 1.0;
+        world.set(algorithm, RuntimeMaterialValue, { value: [1] }).unwrap();
         break;
       case '3':
-        values.algoMode = 2.0;
+        world.set(algorithm, RuntimeMaterialValue, { value: [2] }).unwrap();
         break;
       case '-':
       case '_':
-        values.heightScale = Math.max(
+        world.set(height, RuntimeMaterialValue, { value: [Math.max(
           HEIGHT_SCALE_MIN,
-          (values.heightScale as number) - HEIGHT_SCALE_STEP,
-        );
+          (world.get(height, RuntimeMaterialValue).unwrap().value[0]!) - HEIGHT_SCALE_STEP,
+        )] }).unwrap();
         break;
       case '=':
       case '+':
-        values.heightScale = Math.min(
+        world.set(height, RuntimeMaterialValue, { value: [Math.min(
           HEIGHT_SCALE_MAX,
-          (values.heightScale as number) + HEIGHT_SCALE_STEP,
-        );
+          (world.get(height, RuntimeMaterialValue).unwrap().value[0]!) + HEIGHT_SCALE_STEP,
+        )] }).unwrap();
         break;
       case 't':
       case 'T': {
         activeSet = activeSet === 'bricks2' ? 'toyBox' : 'bricks2';
-        const h = activeSet === 'bricks2' ? bricksHandles : toyBoxHandles;
-        values.baseColorTexture = h.diffuse;
-        values.normalTexture = h.normal;
-        values.heightTexture = h.height;
+        const material = materials[activeSet === 'bricks2' ? 0 : 1]!;
+        world.set(algorithm, RuntimeMaterialValue, { asset: material }).unwrap();
+        world.set(height, RuntimeMaterialValue, { asset: material }).unwrap();
+        world.set(wall, MeshRenderer, { materials: [material] }).unwrap();
         break;
       }
       default:
@@ -261,7 +259,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // World before reading the Host-owned presentation surface.
 function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
-  const win = window as unknown as { __captureParallaxMapping?: CaptureHook };
+  const win = window as unknown as { __captureParallaxMapping?: CaptureHook; __replayParallaxMappingCapture?: typeof replayCapturedFrameInBrowser };
+  win.__replayParallaxMappingCapture = replayCapturedFrameInBrowser;
   win.__captureParallaxMapping = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
     const r = await captureCanvasPixels(target);

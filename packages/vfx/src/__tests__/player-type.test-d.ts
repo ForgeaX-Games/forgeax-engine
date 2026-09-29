@@ -7,6 +7,7 @@ import {
   type ParticleEffectPlayer,
   type VfxEffectReflection,
 } from '../index.js';
+import { VFX_PARTICLE_CORE_LAYOUT } from '../particle-layout.js';
 
 type Values = {
   readonly direction: readonly [number, number, number];
@@ -14,9 +15,11 @@ type Values = {
 };
 
 const reflection: VfxEffectReflection = {
-  version: 1,
+  version: 3,
   parameters: { name: 'VfxParameters', fields: [], size: 0, alignment: 1 },
   custom: { name: 'VfxCustom', fields: [], size: 0, alignment: 1 },
+  core: VFX_PARTICLE_CORE_LAYOUT,
+  customLayout: { name: 'VfxCustom', fields: [], size: 0, alignment: 1, stride: 0, lanes: 0 },
   fingerprint: 'sha256:player-type',
 };
 

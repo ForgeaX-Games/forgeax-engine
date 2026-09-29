@@ -31,7 +31,8 @@ import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { describe, expect, it } from 'vitest';
-import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame } from '../../../render/src/render-system-extract-tail';
 import {
   ACTIVE_CAMERA_KEY,
   getActiveCamera,
@@ -147,16 +148,14 @@ describe('w7 — getActiveCamera / setActiveCamera', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('w7 — extractFrame ActiveCamera selection', () => {
-  it('(2) no ActiveCamera + multiple cameras -> all cameras surface (first-hit fallback preserved)', () => {
+  it('(2) no ActiveCamera + multiple display cameras -> first display camera surfaces', () => {
     const world = new World();
     const assets = makeAssets();
     spawnCamera(world, 1.0);
     spawnCamera(world, 2.0);
     const frame = extractFrame(world, prepareExtractContext(world, { assets }));
-    // No selection -> existing behavior: both cameras flow through; record
-    // stage fires multi-camera diagnostic + uses first hit. We assert extract
-    // does NOT prune when there is no ActiveCamera.
-    expect(frame.cameras.length).toBe(2);
+    // No selection -> the first display camera remains the display authority.
+    expect(frame.cameras.length).toBe(1);
   });
 
   it('(1) ActiveCamera pointing at 2nd camera -> only that camera surfaces', () => {
@@ -171,15 +170,15 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     expect(frame.cameras[0]?.fov).toBeCloseTo(2.0, 5);
   });
 
-  it('(3) ActiveCamera pointing at non-existent entity -> fallback to first-hit (all cameras)', () => {
+  it('(3) ActiveCamera pointing at non-existent entity -> fallback to first display camera', () => {
     const world = new World();
     const assets = makeAssets();
     spawnCamera(world, 1.0);
     spawnCamera(world, 2.0);
     setActiveCamera(world, 999999);
     const frame = extractFrame(world, prepareExtractContext(world, { assets }));
-    // Unresolvable -> behave as if no ActiveCamera (do not prune).
-    expect(frame.cameras.length).toBe(2);
+    // Unresolvable -> behave as if no ActiveCamera.
+    expect(frame.cameras.length).toBe(1);
   });
 
   it('(4) single camera + ActiveCamera pointing at it -> behavior unchanged (one camera)', () => {

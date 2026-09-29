@@ -20,6 +20,7 @@ describe('renderer recovery and receipt contract', () => {
       expect(result.error.code).toBe('renderer-state-invalid');
       expect(result.error.hint.length).toBeGreaterThan(0);
     }
+    expect(renderer.inspect().state).toBe('alive');
     await renderer.dispose();
   });
 
@@ -38,6 +39,13 @@ describe('renderer recovery and receipt contract', () => {
     expect(frame.ok).toBe(true);
     if (!frame.ok) return;
     const receipt: FrameReceipt = frame.value;
+    expect(world.update().ok).toBe(true);
+    const nextFrame = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
+    expect(nextFrame.ok).toBe(true);
     const observed = await renderer.observe(receipt, { include: ['draws', 'bindings'] });
     expect(observed.ok).toBe(true);
     if (observed.ok) expect(observed.value.frameId).toBe(receipt.frameId);

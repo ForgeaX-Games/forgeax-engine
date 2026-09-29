@@ -51,7 +51,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, defineSystemSet, ENTITY_NULL_RAW } from '@forgeax/engine-ecs';
-import { createWorldProjection, type WorldProjection } from '@forgeax/engine-ecs/projection';
+import { createStateProjection, type StateProjection } from '@forgeax/engine-ecs/projection';
 import { MorphWeights, Transform } from '@forgeax/engine-scene';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
@@ -61,7 +61,7 @@ import {
   _resetAnimationWarnsForTests as resetAnimationDiagnosticsForTests,
 } from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
-import { AnimationTargetId, AnimationTargets } from '../animation-target';
+import { AnimatedBy, AnimationTargetId, AnimationTargets } from '../animation-target';
 import { AnimationPlayerSlotLengthMismatchError } from '../player-errors';
 
 /**
@@ -88,6 +88,7 @@ export function _resetAnimationWarnsForTests(world: World): void {
  * be a compile error against the reader shape).
  */
 export function advanceAnimationPlayer(world: World, dt: number): void {
+  refreshTargetMaps(world);
   const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
   // Collect entity handles inside the walk (the Entity.self view is transient),
@@ -234,40 +235,81 @@ interface TargetMap {
   readonly resolvedClips: WeakMap<AnimationClip, readonly (EntityHandle | undefined)[]>;
 }
 
+interface TargetBinding {
+  readonly entity: EntityHandle;
+  readonly player: EntityHandle | undefined;
+  readonly id: string | undefined;
+  readonly transform: boolean;
+}
+
 interface WorldTargetMapCache {
-  readonly projection: WorldProjection;
+  readonly projection: StateProjection;
+  readonly bindings: Map<number, TargetBinding>;
   readonly players: Map<number, TargetMap>;
 }
 
 const targetMapCacheByWorld = new WeakMap<World, WorldTargetMapCache>();
 
-function targetMapForPlayer(world: World, player: EntityHandle): TargetMap {
+/** Collect binding changes once before advancing any player. */
+function refreshTargetMaps(world: World): void {
   let cache = targetMapCacheByWorld.get(world);
   if (cache === undefined) {
     cache = {
-      projection: createWorldProjection(world, {
-        components: [AnimationTargets, AnimationTargetId],
-      }),
+      projection: createStateProjection(
+        world,
+        [AnimationTargets, AnimationTargetId, AnimatedBy, Transform],
+        [AnimationTargets, AnimationTargetId, AnimatedBy],
+      ),
+      bindings: new Map(),
       players: new Map(),
     };
     targetMapCacheByWorld.set(world, cache);
-  } else {
-    const changes = cache.projection.poll();
-    if (changes.status === 'rebuild' || changes.changes.length > 0) {
-      cache = {
-        projection: createWorldProjection(world, {
-          components: [AnimationTargets, AnimationTargetId],
-        }),
-        players: new Map(),
-      };
-      targetMapCacheByWorld.set(world, cache);
-    }
   }
+  const batch = cache.projection.read();
+  for (const index of batch.indices) {
+    const old = cache.bindings.get(index);
+    const entity = cache.projection.entity(index);
+    if (entity === undefined) {
+      if (old?.player !== undefined) cache.players.delete(old.player);
+      if (old !== undefined) cache.players.delete(old.entity);
+      cache.bindings.delete(index);
+      continue;
+    }
+    const bindingChanged =
+      batch.membershipChanged ||
+      old?.entity !== entity ||
+      cache.projection.changed(entity, AnimatedBy) ||
+      cache.projection.changed(entity, AnimationTargetId);
+    const by = bindingChanged ? world.get(entity, AnimatedBy) : undefined;
+    const id = bindingChanged ? world.get(entity, AnimationTargetId) : undefined;
+    const next: TargetBinding = {
+      entity,
+      player: bindingChanged ? (by?.ok ? (by.value.player ?? undefined) : undefined) : old?.player,
+      id: bindingChanged ? (id?.ok ? id.value.value : undefined) : old?.id,
+      transform: world.hasComponent(entity, Transform),
+    };
+    if (
+      old?.entity !== entity ||
+      old.player !== next.player ||
+      old.id !== next.id ||
+      old.transform !== next.transform
+    ) {
+      if (old?.player !== undefined) cache.players.delete(old.player);
+      if (next.player !== undefined) cache.players.delete(next.player);
+    }
+    if (batch.membershipChanged || cache.projection.changed(entity, AnimationTargets))
+      cache.players.delete(entity);
+    cache.bindings.set(index, next);
+  }
+  batch.accept();
+}
 
-  const cached = cache.players.get(player as number);
+function targetMapForPlayer(world: World, player: EntityHandle): TargetMap {
+  const cache = targetMapCacheByWorld.get(world);
+  const cached = cache?.players.get(player);
   if (cached !== undefined) return cached;
   const built = buildTargetMap(world, player);
-  cache.players.set(player as number, built);
+  cache?.players.set(player, built);
   return built;
 }
 

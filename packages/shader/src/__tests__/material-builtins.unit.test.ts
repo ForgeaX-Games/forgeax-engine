@@ -10,6 +10,7 @@ import {
   isEngineMaterialModule,
 } from '../index.js';
 import type { MaterialShaderArtifact } from '../material/artifact-types.js';
+import { createMaterialShaderProgram } from '../material/program';
 import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '../material-schemas.js';
 
 const builtinSources = [
@@ -34,6 +35,12 @@ describe('built-in MaterialAsset sources', () => {
     expect(isEngineMaterialModule('game::custom')).toBe(false);
     expect(
       isEngineMaterial({
+        ...createBuiltinMaterialAsset('standard'),
+        parameters: [{ name: 'clippingControl', type: 'vec4' }],
+      }),
+    ).toBe(false);
+    expect(
+      isEngineMaterial({
         passes: [{ name: 'forward', program: { module: 'game::custom' } }],
       }),
     ).toBe(false);
@@ -45,6 +52,7 @@ describe('built-in MaterialAsset sources', () => {
 
     expect(material.kind).toBe('material');
     expect(pass?.program.module).toBe(BUILTIN_MATERIAL_MODULES[kind]);
+    expect(pass?.renderState?.tags).toEqual({ LightMode: 'Forward' });
     expect(pass).not.toHaveProperty('shader');
     expect(material.parameters?.length).toBeGreaterThan(0);
     expect(material.values).toBeDefined();
@@ -55,7 +63,7 @@ describe('built-in MaterialAsset sources', () => {
     const artifact: MaterialShaderArtifact = {
       material: 'builtin-standard',
       pass: material.passes?.[0]?.name ?? 'forward',
-      wgsl: 'builtin-standard-wgsl',
+      program: createMaterialShaderProgram('builtin-standard-wgsl'),
       layoutIdentity: 'sha256-builtin-standard-layout',
       bindings: [],
       deps: [BUILTIN_MATERIAL_MODULES.standard],
@@ -70,6 +78,46 @@ describe('built-in MaterialAsset sources', () => {
       { ...material, values: { ...material.values, baseColor: [0.2, 0.3, 0.4, 1] } }.values,
     ).toMatchObject({ baseColor: [0.2, 0.3, 0.4, 1] });
   });
+
+  it.each([
+    'default-standard-pbr.wgsl',
+    'default-standard-pbr-skin.wgsl',
+  ] as const)('keeps the Standard user-region ABI before Skylight in %s', (file) => {
+    const text = source(file);
+    const bindings = [
+      'baseColorTexture_sampler',
+      'baseColorTexture',
+      'metallicRoughnessTexture_sampler',
+      'metallicRoughnessTexture',
+      'normalTexture_sampler',
+      'normalTexture',
+      'emissiveTexture_sampler',
+      'emissiveTexture',
+      'occlusionTexture_sampler',
+      'occlusionTexture',
+      'transmissionSampler',
+      'transmissionTexture',
+      'thicknessSampler',
+      'thicknessTexture',
+      'irradianceMap',
+    ];
+    let previous = -1;
+    for (const name of bindings) {
+      const index = new RegExp(`\\bvar\\s+${name}\\s*:`).exec(text)?.index ?? -1;
+      expect(index, `${file} must declare ${name}`).toBeGreaterThan(previous);
+      previous = index;
+    }
+    expect(text).toContain('@binding(13) var transmissionSampler');
+    expect(text).toContain('@binding(16) var thicknessTexture');
+    expect(text).toContain('@binding(17) var irradianceMap');
+    expect(text).toMatch(
+      /#ifdef SPECULAR_COLOR_TEXTURE_AVAILABLE\s+@group\(1\) @binding\(44\) var specularColorTextureSampler/u,
+    );
+    expect(text).toMatch(
+      /#ifdef SPECULAR_COLOR_TEXTURE_AVAILABLE[\s\S]*?@group\(1\) @binding\(45\) var specularColorTexture/u,
+    );
+    expect(text).not.toMatch(/@binding\((?:7|8)\) var specularColorTexture/u);
+  });
 });
 
 describe('built-in and custom material derived layout matrix', () => {
@@ -77,9 +125,25 @@ describe('built-in and custom material derived layout matrix', () => {
     const names = DEFAULT_STANDARD_PBR_PARAM_SCHEMA.map((entry) => entry.name);
     expect(names).toContain('emissiveTexture');
     expect(names).toContain('occlusionTexture');
+    expect(names).toContain('transmissionTexture');
+    expect(names).toContain('thicknessTexture');
+    expect(names).toContain('displacementTexture');
     expect(
       DEFAULT_STANDARD_PBR_PARAM_SCHEMA.filter((entry) => entry.type === 'texture2d'),
-    ).toHaveLength(6);
+    ).toHaveLength(24);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'clearcoatTexture',
+        'clearcoatRoughnessTexture',
+        'clearcoatNormalTexture',
+        'anisotropyTexture',
+        'sheenColorTexture',
+        'sheenRoughnessTexture',
+        'iridescenceTexture',
+        'iridescenceThicknessTexture',
+        'specularTexture',
+      ]),
+    );
   });
 
   it('derives a coordinate record for every texture parameter in an interleaved custom schema', () => {

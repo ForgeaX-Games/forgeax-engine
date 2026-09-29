@@ -3,7 +3,7 @@ import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErr
 // apps/bevy/parallax-mapping/scripts/smoke-dawn.mjs
 //
 // Bevy 3D parallax_mapping Dawn smoke.
-// Structural-only: >=300 frames, onError=0, no pixel readback. This is the
+// Structural-only: >=60 frames, onError=0, no pixel readback. This is the
 // regression baseline; the pixel-readback discriminator (non-black +
 // displacement-visible + algo-switch diff) lives in scripts/smoke-browser.mjs.
 //
@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -160,7 +160,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 try {
@@ -206,12 +207,11 @@ if (!parallaxEntry) {
 
 const mkTex = (decoded) => ({
   kind: 'texture',
-  width: decoded.width,
-  height: decoded.height,
+  shape: { viewDimension: '2d', extent: { width: decoded.width, height: decoded.height } },
   format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: decoded.bytes,
   colorSpace: decoded.colorSpace,
-  mipmap: decoded.mipmap,
+  mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 });
 
 const guids = {

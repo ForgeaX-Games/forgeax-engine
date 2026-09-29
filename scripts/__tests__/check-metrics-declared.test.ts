@@ -19,7 +19,7 @@
 // Detector contract (plan-tasks.json#w9 description):
 //   node scripts/check-metrics-declared.mjs [--root <dir>] [--schema <path>]
 //   --root   default = process.cwd()
-//   --schema default = <root>/forgeax-metrics.schema.json
+//   --schema default = <root>/schemas/forgeax-metrics.schema.json
 //
 // Reference:
 //   - requirements §AC-03 / §AC-12 / §AC-15
@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..');
 const detector = resolve(repoRoot, 'scripts/check-metrics-declared.mjs');
 const fixturesDir = resolve(__dirname, 'fixtures');
-const realSchema = resolve(repoRoot, 'forgeax-metrics.schema.json');
+const realSchema = resolve(repoRoot, 'schemas/forgeax-metrics.schema.json');
 
 interface RunResult {
   status: number;

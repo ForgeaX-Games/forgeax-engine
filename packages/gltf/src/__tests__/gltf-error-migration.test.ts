@@ -17,7 +17,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? '.', '..', '..', '..', '..');
-const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts');
+const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'core-contracts.ts');
 const GLTF_ERRORS = resolve(REPO_ROOT, 'packages', 'gltf', 'src', 'errors.ts');
 
 function grepCount(pattern: string, file: string): number {
@@ -125,12 +125,12 @@ function grepCountImportGltfErrorFromTypes(): number {
 }
 
 describe('M1 GltfErrorCode migration grep gate (AC-28)', () => {
-  it("(a) types/src/index.ts contains zero 'gltf-' string literals", () => {
+  it("(a) types/src/core-contracts.ts contains zero 'gltf-' string literals", () => {
     const count = grepCount("'gltf-", TYPES_INDEX);
     expect(count).toBe(0);
   });
 
-  it('(b) types/src/index.ts contains zero export type GltfError* exports', () => {
+  it('(b) types/src/core-contracts.ts contains zero export type GltfError* exports', () => {
     const count = grepCount('export type GltfError', TYPES_INDEX);
     expect(count).toBe(0);
   });

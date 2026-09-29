@@ -13,7 +13,7 @@ const sceneCase = {
   caseId: 'direct-directional-urp',
   required: true,
   colorDomain: 'linearHdr',
-  pipeline: { identity: 'urp', engineId: 'forgeax::urp' },
+  pipeline: { identity: 'standard', engineId: 'forgeax::standard', renderPath: 'forward' },
   scene: { width: 1, height: 1, background: [0, 0, 0, 1] },
   budget: { analyticMax: 0.01, roiMax: 0.01, byteMax: 0 },
 } as const;
@@ -33,7 +33,7 @@ async function makeArtifact() {
   return createPipelineEvidenceArtifact({
     invocationId: 'm4-artifact-contract',
     sceneCase,
-    pipelineId: 'forgeax::urp',
+    pipelineId: 'forgeax::standard',
     runtimeId: 'browser',
     backendId: 'webgpu',
     frameId: 7,
@@ -66,7 +66,7 @@ describe('PipelineEvidence artifact writer', () => {
 
     const artifact = await makeArtifact();
     expect(artifact.invocationId).toBe('m4-artifact-contract');
-    expect(artifact.pipelineId).toBe('forgeax::urp');
+    expect(artifact.pipelineId).toBe('forgeax::standard');
     expect(artifact.runtimeId).toBe('browser');
     expect(artifact.provenance.adapterId).toBe('forgeax-webgpu');
     expect(artifact.sourceHash).toMatch(/^[0-9a-f]{64}$/);
@@ -89,7 +89,7 @@ describe('PipelineEvidence artifact writer', () => {
 
   it.each([
     ['missing bytes', { linearHdr: { bytes: new Uint8Array(), format: 'rgba16float', size: { width: 1, height: 1 } } }],
-    ['wrong pipeline runtime', { pipelineId: 'forgeax::hdrp', runtimeId: 'browser' }],
+    ['wrong pipeline runtime', { pipelineId: 'forgeax::standard', runtimeId: 'browser' }],
   ])('%s is rejected before artifact output', async (_name, override) => {
     await expect(createPipelineEvidenceArtifact({
       ...(await makeArtifact()),

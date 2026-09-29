@@ -1,4 +1,6 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { discoverPluginAssets, executionWorkerEntries, publishedPluginInventory, pluginProgramsBuild, pluginRuntimeProjection } from '@forgeax/engine-devkit/plugin-build';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
@@ -8,72 +10,88 @@ import { fbxImporter } from '@forgeax/engine-fbx';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
+import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
-import { targetProfileImporter } from '../../templates/game-default/assets/plugins/target-profile-importer';
+import { targetProfileImporter } from '../../apps/game-capability-lab/assets/plugins/target-profile-importer';
 import { createParticleCodeNativeCookerFromRoots } from '@forgeax/engine-vfx-compiler';
 import { resolveProjectPort } from '@forgeax/engine-devkit';
+import {
+  collectAssetDeclarationRoots,
+  gameCapabilityAssetRoots,
+  parseTemplateSmokeSlugs,
+  selectTemplateAssetRoots,
+} from './src/template-asset-roots';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const previewPort = resolveProjectPort(undefined);
 const templatesDir = resolve(monorepoRoot, 'templates');
-const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
+const appsDir = resolve(monorepoRoot, 'apps');
+const templateAssetRoot = resolve(appsDir, 'game-capability-lab', 'assets');
 const isPublicDistribution = existsSync(resolve(monorepoRoot, '.forgeax-public-distribution'));
 const publicTemplateResourceRoot = resolve(templateAssetRoot, 'sdk-resources');
-const brotatoAssetRoot = resolve(templatesDir, 'game-brotato-3d', 'assets');
+const brotatoAssetRoot = resolve(appsDir, 'showcase', 'brotato-3d', 'assets');
 const previewUiAuthoringMetaPath = resolve(
   here,
   'assets',
   'ui-authoring',
   'preview-hud.ui.html.meta.json',
 );
+const surfaceEvidencePackRoot = resolve(here, 'assets', 'surface-standard-evidence.pack.ts');
+const surfaceOnly = process.env.FORGEAX_SURFACE_ONLY === '1';
+const surfacePackRoots = [
+  resolve(templatesDir, 'game-3d', 'assets', 'materials.pack.ts'),
+  surfaceEvidencePackRoot,
+  resolve(here, 'assets', 'surface-water-splash.pack.json'),
+  resolve(here, 'assets', 'surface-water-splash-material.pack.json'),
+];
 // Keep the authored WGSL tree under assets/ so the template has one visible
 // content root, but do not hand build-only shader sidecars to vite-plugin-pack.
 // Pack is a runtime catalog; forgeaxShader owns WGSL compilation and manifest
 // publication. Explicit file roots make that boundary executable instead of
 // relying on a directory-name convention.
-const templatePackRoots = [
-  'animated-target-material.pack.json',
-  'arc-nova-ember-shard.shader.pack.json',
-  'arc-nova-geometry.pack.json',
-  'arc-nova-shard.shader.pack.json',
-  'arc-nova-sigil.shader.pack.json',
-  'arc-nova-violet-sigil.shader.pack.json',
-  'base-material.pack.json',
-  'boss-lightning-contact.pack.json',
-  'boss-lightning-flight.pack.json',
-  'boss-lightning-materials.pack.json',
-  'boss-lightning-suite.pack.json',
-  'boss-lightning-telegraph.pack.json',
-  'charge-vfx-effect.pack.json',
-  'hit-flash-material.pack.json',
-  'hit-vfx-effect.pack.json',
-  'hit-vfx-materials.pack.json',
-  'multi-material-target.pack.json',
-  'resonance-forge.pack.ts',
-  'scene.pack.json',
-  'target-profile.json.meta.json',
-  'ui/hud.pack.json',
-  'ui/settings.pack.json',
-].map((relativePath) => resolve(templateAssetRoot, relativePath));
-const sdkTemplatePackRoots = ['game-empty', 'game-3d'].flatMap((template) => {
-  const assetRoot = resolve(templatesDir, template, 'assets');
-  return readdirSync(assetRoot, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.pack.ts'))
-    .map((entry) => resolve(assetRoot, entry.name))
-    .sort();
-});
-templatePackRoots.push(
-  ...sdkTemplatePackRoots,
-  resolve(brotatoAssetRoot, 'brotato-3d.pack.ts'),
-  resolve(brotatoAssetRoot, 'brotato-impact-vfx.pack.json'),
-  resolve(brotatoAssetRoot, 'ui/hud.pack.json'),
+const gameCapabilityPackRoots = gameCapabilityAssetRoots(templateAssetRoot);
+const selectedTemplateSlugs = parseTemplateSmokeSlugs(process.env.FORGEAX_TEMPLATE_SMOKE_SLUGS);
+const templatePackRoots = selectTemplateAssetRoots(
+  [
+    { slug: 'game-capability-lab', roots: gameCapabilityPackRoots },
+    {
+      slug: 'empty',
+      roots: collectAssetDeclarationRoots(resolve(templatesDir, 'empty', 'assets')),
+    },
+    {
+      slug: 'game-3d',
+      roots: collectAssetDeclarationRoots(resolve(templatesDir, 'game-3d', 'assets')),
+    },
+    {
+      slug: 'brotato-3d',
+      roots: [
+        resolve(brotatoAssetRoot, 'brotato-3d.pack.ts'),
+        resolve(brotatoAssetRoot, 'game.pack.json'),
+        resolve(brotatoAssetRoot, 'brotato-impact-vfx.pack.json'),
+        resolve(brotatoAssetRoot, 'ui/hud.pack.json'),
+      ],
+    },
+  ],
+  selectedTemplateSlugs,
 );
+const game3dOnlySmoke =
+  selectedTemplateSlugs.length === 1 && selectedTemplateSlugs[0] === 'game-3d';
+const materialPackages = game3dOnlySmoke
+  ? []
+  : [
+      resolve(templateAssetRoot, 'animated-target-material.pack.json'),
+      resolve(templateAssetRoot, 'hit-flash-material.pack.json'),
+      resolve(templateAssetRoot, 'arc-nova-sigil.shader.pack.json'),
+      resolve(templateAssetRoot, 'arc-nova-violet-sigil.shader.pack.json'),
+      resolve(templateAssetRoot, 'arc-nova-shard.shader.pack.json'),
+      resolve(templateAssetRoot, 'arc-nova-ember-shard.shader.pack.json'),
+    ];
 // Contributor builds read the private asset checkout. Public SDK source builds
-// use the exact allowlisted files materialized below templates/game-default.
+// use the exact allowlisted files materialized below apps/game-capability-lab.
 const skyMetaPath = resolve(
   monorepoRoot,
   ...(isPublicDistribution
@@ -158,35 +176,33 @@ const externalAssetRoots = isPublicDistribution
 // The tracked template packs are the Preview's required catalog. Public SDK
 // source snapshots intentionally omit contributor-only binary fixtures, so
 // exclude only those missing optional roots instead of disabling Pack (and
-// therefore every tracked game-3d pack) as a unit.
-const packRoots = [
-  ...templatePackRoots,
-  previewUiAuthoringMetaPath,
-  ...externalAssetRoots.filter((root) => existsSync(root)),
-];
-export default defineConfig(({ command }) => ({
-  define: command === 'build' ? { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': JSON.stringify('0') } : undefined,
-  plugins: [
-    forgeaxShader({
-      // game-default custom materials are authored packs: the pack owns the
-      // parameter contract, while the WGSL module remains the build-time
-      // source. This keeps manifest paramSchema and runtime MaterialAsset in
-      // lockstep on WebGPU and the WebGL2 fallback.
-      materialPackages: [
-        resolve(templatesDir, 'game-default/assets/animated-target-material.pack.json'),
-        resolve(templatesDir, 'game-default/assets/hit-flash-material.pack.json'),
-        resolve(templatesDir, 'game-default/assets/arc-nova-sigil.shader.pack.json'),
-        resolve(templatesDir, 'game-default/assets/arc-nova-violet-sigil.shader.pack.json'),
-        resolve(templatesDir, 'game-default/assets/arc-nova-shard.shader.pack.json'),
-        resolve(templatesDir, 'game-default/assets/arc-nova-ember-shard.shader.pack.json'),
-      ],
-    }) as never,
-    // RHI capture is a dev-only inspection front door. Keeping the plugin out
-    // of `vite build` makes the production Preview graph free of the recorder,
-    // upload route, and debug-only browser chunk.
-    ...(command === 'serve' ? [vitePluginRhiDebug()] : []),
-    pluginPack({
-      runtimeBinding: createStandaloneRuntimeAssetBinding('preview'),
+// therefore every tracked game-3d pack) as a unit. The SDK collision lane
+// selects only game-3d; keep its startup closure to that template rather than
+// scanning unrelated Preview fixtures before the server can listen. The full
+// smoke roster keeps the broader roots for its cross-template coverage.
+const packRoots = surfaceOnly
+  ? [...surfacePackRoots, ...(process.env.FORGEAX_WATER_DEMO === '1' ? [skyMetaPath] : [])]
+  : [
+      ...templatePackRoots,
+      ...(game3dOnlySmoke
+        ? []
+        : [
+            surfaceEvidencePackRoot,
+            previewUiAuthoringMetaPath,
+            ...externalAssetRoots.filter((root) => existsSync(root)),
+          ]),
+    ];
+const particleSourceRoots = surfaceOnly ? [resolve(here, 'assets')] : selectTemplateAssetRoots(
+  [
+    { slug: 'game-capability-lab', roots: [templateAssetRoot] },
+    { slug: 'brotato-3d', roots: [brotatoAssetRoot] },
+  ],
+  selectedTemplateSlugs,
+);
+export default defineConfig(async ({ command }) => {
+  const runtimeBinding = createStandaloneRuntimeAssetBinding('preview');
+  const pack = pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
       ddc: {
         buildCacheRoot: resolve(monorepoRoot, 'shared-build-inputs', 'ddc'),
@@ -199,11 +215,71 @@ export default defineConfig(({ command }) => ({
         fbxImporter,
         gltfImporter,
         fontImporter,
-        { key: 'ui', ...createUiImporter() },
+        createUiImporter(),
         targetProfileImporter(),
       ],
-      cookers: [createParticleCodeNativeCookerFromRoots([templateAssetRoot, brotatoAssetRoot])],
-    }),
+      cookers: [
+        createMaterialPackCooker([
+          resolve(templatesDir, 'game-3d', 'assets', 'shaders'),
+          resolve(here, 'assets', 'shaders'),
+          resolve(templateAssetRoot),
+        ]),
+        createParticleCodeNativeCookerFromRoots(particleSourceRoots),
+      ],
+    });
+  const manifests = [
+    ['game-capability-lab', 'apps/game-capability-lab/forge.json'],
+    ['depth-of-field', 'apps/game-capability-lab/depth-of-field.forge.json'],
+    ['brotato-3d', 'apps/showcase/brotato-3d/forge.json'],
+    ['empty', 'templates/empty/forge.json'],
+    ['game-3d', 'templates/game-3d/forge.json'],
+  ] as const;
+  const programPlugins = await Promise.all(manifests.map(async ([namespace, path]) => {
+    const manifest = JSON.parse(await readFile(resolve(monorepoRoot, path), 'utf8'));
+    const selected = !surfaceOnly && (!selectedTemplateSlugs.length || selectedTemplateSlugs.includes(namespace) ||
+      namespace === 'depth-of-field' && selectedTemplateSlugs.includes('game-capability-lab'));
+    const projectRoot = dirname(resolve(monorepoRoot, path));
+    const inventory = selected ? await discoverPluginAssets({ root: projectRoot, assetRoots: ['assets'] }) : { assets: new Map(), sourceInputs: new Map(), deferred: [] };
+    return pluginProgramsBuild({ namespace, projectRoot, roots: selected ? manifest.roots : {}, tools: [],
+      inventory: () => publishedPluginInventory(projectRoot, inventory, pack), binding: runtimeBinding, pack });
+  }));
+  return ({
+  define: command === 'build' ? { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': JSON.stringify('0') } : undefined,
+  // Template smoke exercises the real browser module graph, but Vite's
+  // automatic dependency discovery eagerly crawls every Preview template and
+  // can spend more than the CI startup budget in shader/WASM transforms before
+  // opening the HTTP listener. The smoke path keeps discovery disabled and
+  // lets the browser request the same modules on demand; runtime errors remain
+  // observable in the existing template journey.
+  optimizeDeps:
+    command === 'serve' && process.env.FORGEAX_TEMPLATE_SMOKE === '1'
+      ? {
+          noDiscovery: true,
+          include: ['@forgeax/engine-ui/authoring', '@forgeax/engine-ui/importer'],
+        }
+      : undefined,
+  plugins: [
+    executionWorkerEntries(),
+    forgeaxShader({
+      // game-default custom materials are authored packs: the pack owns the
+      // parameter contract, while the WGSL module remains the build-time
+      // source. This keeps manifest paramSchema and runtime MaterialAsset in
+      // lockstep on WebGPU and the WebGL2 fallback.
+      // The isolated game-3d collision lane has no game-capability-lab
+      // material users. Leaving this list empty lets forgeaxShader consume
+      // the producer-owned shared engine manifest instead of compiling the
+      // whole custom-material fleet before Vite opens its listener.
+      materialPackages,
+    }) as never,
+    // RHI capture is a dev-only inspection front door. Keeping the plugin out
+    // of `vite build` makes the production Preview graph free of the recorder,
+    // upload route, and debug-only browser chunk.
+    ...(command === 'serve' && process.env.FORGEAX_SURFACE_PROBE !== '1'
+      ? [vitePluginRhiDebug()]
+      : []),
+    pack,
+    pluginRuntimeProjection(),
+    ...programPlugins,
   ],
   server: {
     ...previewPort,
@@ -220,7 +296,9 @@ export default defineConfig(({ command }) => ({
     rollupOptions: {
       input: {
         main: resolve(here, 'index.html'),
+        water: resolve(here, 'water.html'),
       },
     },
   },
-}));
+});
+});

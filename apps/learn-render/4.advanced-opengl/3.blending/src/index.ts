@@ -45,6 +45,11 @@ import './alpha-test.wgsl';
 
 const ALPHA_TEST_SHADER_ID = 'learn_render::alpha_test';
 
+type LearnRenderErrorRecord = {
+  readonly code: string;
+  readonly hint?: string;
+  readonly detail?: unknown;
+};
 
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
@@ -105,8 +110,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 4.3 blending] app.onError:', error.code, error.hint);
-    const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
-    if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
+    const bus = (globalThis as unknown as { __learnRenderErrors?: LearnRenderErrorRecord[] }).__learnRenderErrors;
+    if (bus !== undefined) {
+      const detail = 'detail' in error ? error.detail : undefined;
+      bus.push({ code: error.code, hint: error.hint, ...(detail === undefined ? {} : { detail }) });
+    }
   });
   const assets = app.assets;
   if (assets === undefined) {
@@ -161,7 +169,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       grassHandleRes.ok ? null : grassHandleRes.error.code,
       windowHandleRes.ok ? null : windowHandleRes.error.code,
     );
-    const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
+    const bus = (globalThis as unknown as { __learnRenderErrors?: LearnRenderErrorRecord[] }).__learnRenderErrors;
     if (bus !== undefined) {
       if (!metalHandleRes.ok) bus.push({ code: metalHandleRes.error.code, hint: metalHandleRes.error.hint });
       if (!marbleHandleRes.ok) bus.push({ code: marbleHandleRes.error.code, hint: marbleHandleRes.error.hint });
@@ -342,6 +350,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
 declare global {
   interface Window {
-    __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    __learnRenderErrors?: LearnRenderErrorRecord[];
   }
 }

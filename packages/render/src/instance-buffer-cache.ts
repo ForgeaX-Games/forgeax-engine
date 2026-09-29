@@ -23,12 +23,18 @@ import type { GpuBuffer } from './gpu-resource';
  * and routes dispose through the RHI shim's destroy bookkeeping SSOT. The
  * two `uploaded*` fields are the cache invalidation fingerprint -- when the
  * archetype version bumps or the byte length changes, the record stage
- * allocates a fresh GpuBuffer and replaces the entry.
+ * allocates a fresh GpuBuffer and replaces the entry. World-authored Instances
+ * use renderer-private projection identity; sprite/fold snapshots use entity
+ * identity. Neither cache key is an authoring handle.
  */
 export interface InstanceBufferCacheEntry {
   readonly buffer: GpuBuffer;
   readonly uploadedByteLength: number;
   readonly uploadedArchVersion: number;
+  /** Accepted instance-projection revision uploaded into this buffer. */
+  readonly uploadedRevision?: number;
+  /** See `InstanceResidentUpload.uploadedMotionRows`. */
+  readonly uploadedMotionRows?: readonly { readonly start: number; readonly end: number }[];
 }
 
 function destroyInstanceBufferEntries(
@@ -79,6 +85,15 @@ export interface InstanceBufferCacheErrorSink {
  */
 export function disposeInstanceBuffers(
   map: Map<number, InstanceBufferCacheEntry>,
+  errorRegistry?: InstanceBufferCacheErrorSink,
+): void {
+  destroyInstanceBufferEntries(map.values(), errorRegistry);
+  map.clear();
+}
+
+/** Destroy the renderer-owned buffers used by internal large-instance chunks. */
+export function disposeInstanceBufferChunks(
+  map: Map<string, InstanceBufferCacheEntry>,
   errorRegistry?: InstanceBufferCacheErrorSink,
 ): void {
   destroyInstanceBufferEntries(map.values(), errorRegistry);

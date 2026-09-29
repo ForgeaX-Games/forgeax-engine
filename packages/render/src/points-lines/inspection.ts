@@ -36,7 +36,7 @@ export interface PointsLinesInspection {
   readonly materialHandle: number;
   readonly materialGeneration: number;
   readonly style: PointsLinesStyle;
-  readonly topology: 'point-list' | 'line-list';
+  readonly topology: 'point-list' | 'line-list' | 'line-strip';
   readonly lane: PointsLinesInspectionLane;
   readonly pointCount: number;
   readonly segmentCount: number;
@@ -51,7 +51,7 @@ export interface PointsLinesInspection {
 
 export interface PointsLinesInspectionInput {
   readonly snapshot: PointsLinesRetainedSnapshot;
-  readonly topology: 'point-list' | 'line-list';
+  readonly topology: 'point-list' | 'line-list' | 'line-strip';
   readonly lane: PointsLinesInspectionLane;
   readonly pointCount: number;
   readonly segmentCount: number;

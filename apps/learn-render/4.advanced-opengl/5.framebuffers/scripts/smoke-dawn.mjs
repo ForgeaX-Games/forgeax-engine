@@ -4,9 +4,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt, smokeFrameBudget } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const MODE_FRAMES = Math.max(150, Math.ceil(MIN_FRAMES / 2));
+const MIN_FRAMES = smokeFrameBudget();
+const MODE_FRAMES = Math.ceil(MIN_FRAMES / 2);
 const WIDTH = 512;
 const HEIGHT = 512;
 const EPSILON = 0.05;
@@ -233,5 +234,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(`[smoke] PASS - frames=${totalFrames}, Standard host lease/receipt, inversion epsilon=${EPSILON}`);
+emitSmokeReceipt('learn-render-framebuffers/direct-dawn', totalFrames);
 sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

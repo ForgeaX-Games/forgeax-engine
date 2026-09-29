@@ -12,7 +12,7 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const FIXTURE = resolve(ROOT, 'templates/game-default/assets/ui/hud.pack.json');
+const FIXTURE = resolve(ROOT, 'apps/game-capability-lab/assets/ui/hud.pack.json');
 const GUID = '019f8354-6386-4386-849d-f2ab4b96229c';
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_PRODUCTION_UI_EDIT_DIR ?? resolve(ROOT, '.forgeax-debug/production-ui-edit'),

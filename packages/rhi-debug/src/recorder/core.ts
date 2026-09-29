@@ -5,12 +5,14 @@
 import type {
   Result,
   RhiDevice,
+  RhiError,
   RhiInstance,
   ShaderModule,
   TextureView,
 } from '@forgeax/engine-rhi';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
-import { textureBlockLayout } from '../texel-layout';
+import { digestBytes } from '../protocol/codec';
+import { computeTextureLayout, projectTextureExtent, textureBlockLayout } from '../texel-layout';
 import type { HandleId, RhiCallEvent, RhiCapsRecorded, Tape } from '../types';
 import { _getCreateEventReferencedHandleIds } from './closure';
 
@@ -44,12 +46,53 @@ const TEXTURE_USAGE_COPY_DST = 0x02;
 const TEXTURE_USAGE_BINDING = 0x04;
 /** Bound staging allocation, command submission, and map concurrency per batch. */
 export const SNAPSHOT_RESOURCE_BATCH_SIZE = 32;
+/** Target staging bytes per batch; a larger resource is read alone. */
+export const SNAPSHOT_STAGING_BYTES = 32 * 1024 * 1024;
+
+export interface SnapshotResourceDescriptor {
+  readonly kind: 'buffer' | 'texture';
+  readonly size?: number | GPUExtent3DStrict;
+  readonly format?: GPUTextureFormat;
+  readonly sampleCount?: number;
+  readonly mipLevelCount?: number;
+  readonly usage: number;
+}
+
+/** The same seedability and layout govern budget admission and GPU batching. */
+export function snapshotResourceBytes(entry: SnapshotResourceDescriptor) {
+  if (entry.kind === 'buffer') {
+    const bytes = isMappableBuffer(entry.usage)
+      ? 0
+      : typeof entry.size === 'number'
+        ? entry.size
+        : 0;
+    return { payload: bytes, staging: bytes };
+  }
+  if (!isSnapshottableTexture(entry.format, entry.size, entry.sampleCount))
+    return { payload: 0, staging: 0 };
+  const { width, height, layerCount } = projectTextureExtent(entry.size);
+  const layout = computeTextureLayout(
+    entry.format,
+    width,
+    height,
+    layerCount,
+    entry.mipLevelCount ?? 1,
+  );
+  if (layout === undefined) return { payload: 0, staging: 0 };
+  const staging = layout.slices.reduce(
+    (bytes, slice) =>
+      bytes +
+      Math.ceil((Math.ceil(slice.width / layout.blockWidth) * layout.bytesPerBlock) / 256) *
+        256 *
+        Math.ceil(slice.height / layout.blockHeight),
+    0,
+  );
+  return { payload: layout.totalBytes, staging };
+}
 
 /**
- * True for each depth / stencil texture format. Their content is render-pass
- * output (shadow maps, z-buffers), never an uploaded byte payload, and
- * queue.writeTexture rejects them (no CopyDst), so the frame-header snapshot
- * loop skips them rather than emitting an un-seedable initialData event.
+ * Depth/stencil formats require an aspect-specific readback and restore path;
+ * they cannot be restored with queue.writeTexture.
  */
 function isDepthOrStencilFormat(format: GPUTextureFormat | undefined): boolean {
   return format !== undefined && (format.startsWith('depth') || format.startsWith('stencil'));
@@ -57,24 +100,25 @@ function isDepthOrStencilFormat(format: GPUTextureFormat | undefined): boolean {
 
 /**
  * True for a texture the frame-header snapshot can read back AND re-seed
- * faithfully: each color format with a known texel-block footprint, at each
+ * faithfully: depth32float and each color format with a known texel-block footprint, at each
  * array-layer count and each mip count. The readback + seed path
  * (readbackTexturePixels + computeTextureLayout + replayInitialData) walks
  * every (layer, mip) subresource with block-aware bytesPerRow, so ordinary
  * texels and BC/ETC/ASTC compressed assets share one round-trip contract.
  *
- * Still skipped (no faithful path today, Fail Fast rather than corrupt seed):
- * - depth/stencil formats: queue.writeTexture rejects them (no CopyDst seed).
+ * Not seeded (reported as missing initial contents in FrameModel):
+ * - depth/stencil formats other than depth32float: no faithful seed yet.
+ *   depth32float uses a raw float snapshot and a depth-only raster restore.
  * - multisample (sampleCount > 1): writeTexture rejects an MSAA target. MSAA
- *   attachments are transient (resolved into a single-sample texture that IS
- *   snapshottable), so skipping loses no seed.
+ *   resolved targets can be snapshotted, but retained multisample contents
+ *   require producing work in the captured frame.
  */
-function isSnapshottableColorTexture(
+function isSnapshottableTexture(
   format: GPUTextureFormat | undefined,
   _size: number | GPUExtent3DStrict | undefined,
   sampleCount?: number,
 ): boolean {
-  if (isDepthOrStencilFormat(format)) return false;
+  if (isDepthOrStencilFormat(format) && format !== 'depth32float') return false;
   // Multisample textures reject queue.writeTexture; skip (resolved target seeds).
   if (sampleCount !== undefined && sampleCount > 1) return false;
   // Round-trippable iff its texel-block footprint is known.
@@ -126,19 +170,13 @@ function allocHandleId(kind: string): HandleId {
   return `${kind}:${++_nextHandleId}`;
 }
 
-function fastHash(data: ArrayBuffer): string {
-  const view = new Uint8Array(data);
-  let hash = 5381;
-  for (let i = 0; i < view.length; i++) {
-    hash = ((hash << 5) + hash + (view[i] ?? 0)) | 0;
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function storeBlob(state: RecorderInternal, data: ArrayBuffer): string {
-  const hash = fastHash(data);
+/** Takes ownership of an independent CPU snapshot; callers must never mutate it. */
+function storeOwnedBlob(state: RecorderInternal, data: ArrayBuffer): string {
+  // Reuse the tape's content digest. A short rolling hash can alias ordinary
+  // uniform texture data and silently replace another resource's snapshot.
+  const hash = digestBytes(new Uint8Array(data));
   if (!state.blobPool.has(hash)) {
-    state.blobPool.set(hash, data.slice(0) as ArrayBuffer);
+    state.blobPool.set(hash, data);
   }
   return hash;
 }
@@ -206,18 +244,7 @@ interface RecorderInternal {
    * entry so the live-resource set never grows unbounded (AC-09). One registry,
    * one delete on destroy — shape and object share the same lifecycle (SSOT).
    */
-  descriptorTable: Map<
-    HandleId,
-    {
-      kind: 'buffer' | 'texture';
-      size?: number | GPUExtent3DStrict;
-      format?: GPUTextureFormat;
-      sampleCount?: number;
-      mipLevelCount?: number;
-      usage: number;
-      resource: object;
-    }
-  >;
+  descriptorTable: Map<HandleId, SnapshotResourceDescriptor & { readonly resource: object }>;
   /** @internal */
   _skipRecord: boolean;
   frameIdx: number;
@@ -236,10 +263,9 @@ interface RecorderInternal {
   capturedDevice: RhiDevice | undefined;
 }
 
-function snapshotTimeoutDetail(
+function snapshotProgressDetail(
   progress: SnapshotProgress | undefined,
-  timeoutMs: number,
-): import('../errors').CaptureTimeoutDetail {
+): NonNullable<import('../errors').CaptureFailureDetail['progress']> {
   const current = progress ?? {
     startedAt: Date.now(),
     stage: 'queue-drain' as const,
@@ -251,19 +277,26 @@ function snapshotTimeoutDetail(
     currentSizeBytes: null,
   };
   return {
+    snapshotStage: current.stage,
+    totalResources: current.totalResources,
+    completedResources: current.completedResources,
+    skippedResources: current.skippedResources,
+    currentHandleId: current.currentHandleId,
+    currentKind: current.currentKind,
+    currentSizeBytes: current.currentSizeBytes,
+    elapsedMs: Math.max(0, Date.now() - current.startedAt),
+  };
+}
+
+function snapshotTimeoutDetail(
+  progress: SnapshotProgress | undefined,
+  timeoutMs: number,
+): import('../errors').CaptureTimeoutDetail {
+  return {
     stage: 'snapshot',
     cause: 'GPU readback did not complete before the bounded snapshot timeout',
     timeoutMs,
-    progress: {
-      snapshotStage: current.stage,
-      totalResources: current.totalResources,
-      completedResources: current.completedResources,
-      skippedResources: current.skippedResources,
-      currentHandleId: current.currentHandleId,
-      currentKind: current.currentKind,
-      currentSizeBytes: current.currentSizeBytes,
-      elapsedMs: Math.max(0, Date.now() - current.startedAt),
-    },
+    progress: snapshotProgressDetail(progress),
   };
 }
 
@@ -557,18 +590,27 @@ export type CreateShaderModuleFn = (
   desc: { code: string; label?: string | undefined },
 ) => Promise<Result<ShaderModule, import('@forgeax/engine-rhi').RhiError>>;
 
+/**
+ * Synchronous shader-module factory used by the render path's immediate
+ * adapter. Keep it in the recordable backend contract so attaching RHI-debug
+ * does not silently remove the renderer's first-use fast path.
+ */
+export type CreateShaderModuleImmediateFn = (
+  device: RhiDevice,
+  desc: { code: string; label?: string | undefined },
+) => Result<ShaderModule, RhiError>;
+
 export type { RecorderInternal, SnapshotProgress };
 export {
   addSwapchainViewFormat,
   allocHandleId,
   ensureTextureCreateEvent,
-  fastHash,
   getHandleId,
   hasBootstrapDependency,
   isDepthOrStencilFormat,
   isMappableBuffer,
   isRecordingActive,
-  isSnapshottableColorTexture,
+  isSnapshottableTexture,
   promoteBufferUsage,
   pushEvent,
   pushSnapshotEvent,
@@ -578,9 +620,10 @@ export {
   retainsCaptureBootstrap,
   SNAPSHOT_TIMEOUT_MS,
   shouldRecord,
+  snapshotProgressDetail,
   snapshotStageOf,
   snapshotTimeoutDetail,
-  storeBlob,
+  storeOwnedBlob,
   TEXTURE_USAGE_BINDING,
   TEXTURE_USAGE_COPY_DST,
   TEXTURE_USAGE_COPY_SRC,

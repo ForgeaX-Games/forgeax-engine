@@ -1,13 +1,13 @@
-import { relative } from 'node:path';
+import { isAbsolute, relative } from 'node:path';
 import type { PackIndexEntry, ProviderProvenance } from '@forgeax/engine-types';
 import {
   findReservedAssetKindConflict,
   projectExternalCatalogEntries,
   projectPackageCatalog,
 } from './catalog-projection.js';
-import { loadAssetConfig } from './config.js';
 import { deriveAssetName } from './deriveAssetName.js';
 import type { PackError } from './errors.js';
+import { parsePackSourceJson, projectDirectPackJson } from './pack-authoring.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import {
   type MetaInventoryDocument,
@@ -63,7 +63,7 @@ export interface CatalogBuildResult {
 
 export type CatalogProducerVisibility = (
   input: Pick<MetaInventoryDocument, 'importer' | 'importSettings' | 'subAssets'>,
-) => boolean;
+) => boolean | Promise<boolean>;
 
 export interface CatalogImporterPolicy {
   readonly disposition: 'publish' | 'exclude' | 'missing';
@@ -77,10 +77,36 @@ export interface CatalogBuildProjectionOptions {
   readonly scanOptions?: ScanOptions;
   readonly importerPolicy: (importer: string) => CatalogImporterPolicy;
   readonly visibility?: CatalogProducerVisibility;
+  /**
+   * Project physical source paths into a stable host-owned logical identity.
+   * Scanner/declaration maps retain physical paths for I/O; only Catalog rows
+   * use this projection so symlink farms cannot change publication identity.
+   */
+  readonly sourceIdentityFor?: (sourcePath: string) => string;
 }
 
 function sourcePathFor(cwd: string, path: string): string {
   return relative(cwd, path).replace(/\\/g, '/');
+}
+
+/**
+ * Project one physical source path into the catalog's browser-safe logical
+ * locator. Physical paths remain the scanner/declaration keys; only catalog
+ * rows use this projection.
+ */
+export function catalogSourcePathFor(
+  cwd: string,
+  path: string,
+  sourceIdentityFor: CatalogBuildProjectionOptions['sourceIdentityFor'],
+): string {
+  const projected = sourceIdentityFor?.(path);
+  // A host may intentionally leave paths outside its logical roots untouched.
+  // Keep the catalog's existing cwd-relative URL contract for that fallback;
+  // an absolute physical path is a valid dependency identity, but not a
+  // browser-served catalog locator.
+  const catalogPath =
+    projected === undefined || isAbsolute(projected) ? sourcePathFor(cwd, path) : projected;
+  return catalogPath.replaceAll('\\', '/').replace(/^\.\//, '');
 }
 
 export function metaPathForGuid(
@@ -114,9 +140,9 @@ function projectMeta(
   rawPath: string,
   cwd: string,
   base: string,
-  assetPaths: Record<string, string>,
   importerPolicy: (importer: string) => CatalogImporterPolicy,
   sourceDeclaration: Extract<ScanSourceDeclaration, { readonly format: 'meta.json' }>,
+  sourceIdentityFor: CatalogBuildProjectionOptions['sourceIdentityFor'],
 ): {
   readonly entries: PackIndexEntry[];
   readonly declaration?: CatalogImportMeta;
@@ -127,22 +153,12 @@ function projectMeta(
   if (policy.disposition !== 'publish') {
     return { entries: [], error: unsupportedPolicyError(rawPath, meta.importer, policy) };
   }
-  const resolved = resolveAssetSource(rawPath, meta.source, assetPaths);
-  if (!resolved.ok) {
-    return {
-      entries: [],
-      error: {
-        code: 'catalog-meta-schema-invalid',
-        path: rawPath,
-        message: `source resolution failed: ${resolved.error.code} - ${resolved.error.hint}`,
-      },
-    };
-  }
-  const sourcePath = sourcePathFor(cwd, resolved.value);
+  const resolved = resolveAssetSource(rawPath, meta.source);
+  const sourcePath = catalogSourcePathFor(cwd, resolved, sourceIdentityFor);
   const packageUrl = `${base}/__forgeax-ddc/${meta.subAssets[0]?.guid?.toLowerCase() ?? 'pack'}.pack.json`;
   const declaration: CatalogImportMeta = {
     importer: meta.importer,
-    source: resolved.value,
+    source: resolved,
     sourceRevision: sourceDeclaration.sourceRevision,
     ...(meta.packageId === undefined ? {} : { packageId: meta.packageId }),
     ...(meta.provenance === undefined ? {} : { provenance: meta.provenance }),
@@ -172,54 +188,103 @@ function projectMeta(
   return {
     declaration,
     entries: projectExternalCatalogEntries(meta, sourcePath, packageUrl, meta.subAssets, (output) =>
-      deriveAssetName(resolved.value, meta.subAssets.length, output.name),
+      deriveAssetName(resolved, meta.subAssets.length, output.name),
     ),
   };
 }
 
-function projectSource(
+async function projectSource(
   path: string,
   cwd: string,
   base: string,
-  assetPaths: Record<string, string>,
   importerPolicy: (importer: string) => CatalogImporterPolicy,
   visibility: CatalogBuildProjectionOptions['visibility'],
   sourceDeclaration: ScanSourceDeclaration,
   declarations: Map<string, CatalogImportMeta>,
-): { readonly entries: PackIndexEntry[]; readonly error?: CatalogBuildError } {
+  sourceIdentityFor: CatalogBuildProjectionOptions['sourceIdentityFor'],
+): Promise<{ readonly entries: PackIndexEntry[]; readonly error?: CatalogBuildError }> {
   if (sourceDeclaration.format === 'pack.ts') {
-    const meta = { ...sourceDeclaration.meta, source: sourcePathFor(cwd, path) };
-    const anchorGuid = meta.subAssets.map((asset) => asset.guid.toLowerCase()).sort()[0];
-    return anchorGuid === undefined
-      ? { entries: [] }
-      : {
-          entries: projectExternalCatalogEntries(
-            meta,
-            sourcePathFor(cwd, path),
-            `${base}/__forgeax-ddc/${anchorGuid}.pack.json`,
-            meta.subAssets,
-            (output) => deriveAssetName(path, meta.subAssets.length, output.name),
-          ),
-        };
+    // A source declaration is an authoring identity and parameter contract,
+    // not a materialized output set. Dynamic build owns publication after its
+    // fixed-point worklist converges; Catalog scanning must not invent rows.
+    return { entries: [] };
   }
   if (sourceDeclaration.format === 'meta.json') {
     const policy = importerPolicy(sourceDeclaration.value.importer);
     if (
       policy.disposition === 'publish' &&
-      visibility?.({
+      (await visibility?.({
         importer: sourceDeclaration.value.importer,
         importSettings: sourceDeclaration.value.importSettings,
         subAssets: sourceDeclaration.value.subAssets,
-      }) === false
+      })) === false
     ) {
       return { entries: [] };
     }
-    const projected = projectMeta(path, cwd, base, assetPaths, importerPolicy, sourceDeclaration);
+    const projected = projectMeta(
+      path,
+      cwd,
+      base,
+      importerPolicy,
+      sourceDeclaration,
+      sourceIdentityFor,
+    );
     if (projected.declaration !== undefined) declarations.set(path, projected.declaration);
     return projected;
   }
   const parsed = sourceDeclaration.value;
-  const sourcePath = sourcePathFor(cwd, path);
+  const sourcePath = catalogSourcePathFor(cwd, path, sourceIdentityFor);
+  if (parsed.schemaVersion === '3.0.0') {
+    const authoring = parsePackSourceJson(parsed);
+    if (!authoring.ok) {
+      return {
+        entries: [],
+        error: {
+          code: 'catalog-meta-schema-invalid',
+          path,
+          message: `v3 Pack parse failed: ${authoring.error.code}`,
+          expected: 'a valid direct or instance v3 Pack document',
+          actual: authoring.error.code,
+          hint: authoring.error.hint,
+          subjects: [path],
+        },
+      };
+    }
+    if (authoring.value.format !== 'direct') return { entries: [] };
+    const projected = projectDirectPackJson(authoring.value);
+    if (!projected.ok) {
+      return {
+        entries: [],
+        error: {
+          code: 'catalog-meta-schema-invalid',
+          path,
+          message: `v3 Pack projection failed: ${projected.error.code}`,
+          expected: 'direct v3 assets to derive stable AssetGuids',
+          actual: projected.error.code,
+          hint: projected.error.hint,
+          subjects: [path],
+        },
+      };
+    }
+    const provenance = { provider: 'pack', version: '3.0.0' } satisfies ProviderProvenance;
+    return {
+      entries: projectPackageCatalog(
+        projected.value.assets.map((asset, sourceIndex) => ({
+          guid: asset.guid,
+          kind: asset.kind,
+          sourcePath,
+          sourceIndex,
+          sourceKey: asset.sourceKey,
+          refs: asset.refs,
+          execution: 'direct' as const,
+          packageId: projected.value.packageId,
+          provenance,
+          name: deriveAssetName(path, projected.value.assets.length, asset.name),
+        })),
+        `${base}/${sourcePath}`,
+      ),
+    };
+  }
   const provenance =
     parsed.provenance ??
     ({ provider: 'pack', version: parsed.schemaVersion } satisfies ProviderProvenance);
@@ -250,6 +315,14 @@ export async function buildCatalogProjection(
   roots: readonly string[],
   options: CatalogBuildProjectionOptions,
 ): Promise<CatalogBuildResult> {
+  const startedAt = performance.now();
+  const timing = (stage: string): void => {
+    if (process.env.FORGEAX_WORKSPACE_TIMING !== '1') return;
+    console.error(
+      '[forgeax.catalog-build.timing]',
+      JSON.stringify({ stage, totalMs: Math.round(performance.now() - startedAt) }),
+    );
+  };
   const empty = (
     authority: CatalogAuthority,
     diagnostics: readonly CatalogBuildError[] = [],
@@ -265,6 +338,7 @@ export async function buildCatalogProjection(
   const cwd = process.cwd();
   const base = (options.base ?? '/').replace(/\/$/, '');
   const scanned = await scanInventory(roots, options.scanOptions);
+  timing('scan-inventory');
   if (!scanned.ok) {
     const message =
       scanned.error.detail === undefined
@@ -284,26 +358,26 @@ export async function buildCatalogProjection(
     return empty('degraded', [error]);
   }
   const { paths, declarations: sourceDeclarations } = scanned.value;
-  const { paths: assetPaths } = loadAssetConfig(cwd);
   const entries: PackIndexEntry[] = [];
   const errors: CatalogBuildError[] = [];
   const declarations = new Map<string, CatalogImportMeta>();
   for (const path of paths) {
     const sourceDeclaration = sourceDeclarations.get(path);
     if (sourceDeclaration === undefined) continue;
-    const projected = projectSource(
+    const projected = await projectSource(
       path,
       cwd,
       base,
-      assetPaths,
       options.importerPolicy,
       options.visibility,
       sourceDeclaration,
       declarations,
+      options.sourceIdentityFor,
     );
     entries.push(...projected.entries);
     if (projected.error !== undefined) errors.push(projected.error);
   }
+  timing('project-catalog');
   warnErrors(errors);
   return {
     schemaVersion: 'catalog-legacy-v1',

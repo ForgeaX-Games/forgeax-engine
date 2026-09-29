@@ -61,6 +61,7 @@ function recoveryHint(code: RhiErrorCode): string {
     case 'instancing-exceeds-uniform-cap':
     case 'render-system-empty-worlds':
     case 'render-system-owner-out-of-range':
+    case 'rhi-texture-format-capability-unavailable':
       return 'inspect RhiError.expected / .hint';
   }
 }

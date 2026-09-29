@@ -122,6 +122,7 @@ async function captureWithAppFrame(
 
   let result: CaptureResult | undefined;
   let transactionError: RhiDebugError | undefined;
+  let resumedForCapture = false;
   try {
     const snapshot = await attachment.frameBoundary();
     if (!snapshot.ok) {
@@ -129,6 +130,25 @@ async function captureWithAppFrame(
     } else if (options?.signal?.aborted) {
       controller.abort();
       result = await captureResult;
+    } else if (resumeAfter) {
+      // A running App must contribute its next ordinary frame to the tape.
+      // `stepFrame(0)` would execute an artificial zero-delta update, which
+      // may skip FixedUpdate/VFX work and makes the capture unrepresentative.
+      // resume() resets the loop clock, so the next credit-admitted rAF owns
+      // the normal measured delta and its existing frame-boundary callback
+      // finalizes this one-frame capture.
+      const resumed = driver.resume();
+      if (!resumed.ok) {
+        transactionError = createRhiDebugError('capture-unavailable', {
+          stage: 'capture',
+          cause: `App capture could not resume the frame loop: ${describeFailure(resumed.error)}`,
+        });
+        controller.abort();
+        result = await captureResult;
+      } else {
+        resumedForCapture = true;
+        result = await captureResult;
+      }
     } else {
       const stepped = driver.stepFrame(0);
       if (!stepped.ok) {
@@ -151,7 +171,7 @@ async function captureWithAppFrame(
     result = await captureResult;
   } finally {
     options?.signal?.removeEventListener('abort', abortFromUser);
-    if (resumeAfter && driver.getState() === 'paused') {
+    if (resumeAfter && !resumedForCapture && driver.getState() === 'paused') {
       const resumed = driver.resume();
       if (!resumed.ok && transactionError === undefined) {
         transactionError = createRhiDebugError('capture-unavailable', {
@@ -199,6 +219,47 @@ export function createRhiInstrumentation(
     onDeviceLost() {
       attachment.deviceLost();
     },
+  };
+}
+
+/**
+ * Keep the recorder and an explicitly injected host capability on one
+ * instrumentation seam. The recorder must retain surface-device resolution,
+ * frame-boundary, and loss notification ownership, while fixture/host hooks
+ * such as submit fault injection and device-loss projection must survive the
+ * debug wrapper as well.
+ */
+export function mergeRhiInstrumentation(
+  recorder: RhiBackendInstrumentation,
+  host: RhiBackendInstrumentation | undefined,
+): RhiBackendInstrumentation {
+  if (host === undefined) return recorder;
+  const onFrameBoundary =
+    recorder.onFrameBoundary === undefined && host.onFrameBoundary === undefined
+      ? undefined
+      : () => {
+          recorder.onFrameBoundary?.();
+          host.onFrameBoundary?.();
+        };
+  const onDeviceLost =
+    recorder.onDeviceLost === undefined && host.onDeviceLost === undefined
+      ? undefined
+      : () => {
+          recorder.onDeviceLost?.();
+          host.onDeviceLost?.();
+        };
+  return {
+    ...recorder,
+    ...(host.beforeSubmit === undefined ? {} : { beforeSubmit: host.beforeSubmit }),
+    ...(host.deviceLost === undefined ? {} : { deviceLost: host.deviceLost }),
+    ...(onFrameBoundary === undefined ? {} : { onFrameBoundary }),
+    ...(onDeviceLost === undefined ? {} : { onDeviceLost }),
+    // The recorder's resolver unwraps its own device wrapper. A host resolver
+    // is retained only when no recorder resolver exists; replacing the recorder
+    // resolver would make the debug attachment unable to configure the surface.
+    ...(recorder.resolveSurfaceDevice !== undefined || host.resolveSurfaceDevice === undefined
+      ? {}
+      : { resolveSurfaceDevice: host.resolveSurfaceDevice }),
   };
 }
 

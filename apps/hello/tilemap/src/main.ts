@@ -64,13 +64,11 @@ async function main(): Promise<void> {
   };
   const atlas: TextureAsset = {
     kind: 'texture',
-    width: 32,
-    height: 32,
+    shape: { viewDimension: '2d', extent: { width: 32, height: 32 } },
     format: 'rgba8unorm-srgb',
     data: new Uint8Array(32 * 32 * 4).fill(255),
     colorSpace: 'srgb',
-    mipmap: false,
-    mipLevelCount: 1,
+    mips: { kind: 'none' },
   };
   const atlasCatalog = assets.catalog('hello-tilemap/atlas', atlas);
   const tilesetCatalog = assets.catalog('hello-tilemap/tileset', tileset);

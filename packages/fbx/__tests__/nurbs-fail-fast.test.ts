@@ -60,12 +60,15 @@ describe('NURBS fail-fast mock path', () => {
     expect(typeof err.expected).toBe('string');
     expect(err.expected.length).toBeGreaterThan(0);
 
-    // Exhaustive switch: FbxErrorCode is a closed single-member union
+    // Exhaustive switch: FbxErrorCode is a closed union
     const _check: FbxError = err;
     void _check;
     switch (err.code) {
       case 'fbx-mesh-type-unsupported':
         expect(err.detail.meshType).toBeDefined();
+        break;
+      case 'fbx-animation-target-invalid':
+      case 'fbx-lod-display-mode-unsupported':
         break;
     }
   });

@@ -19,6 +19,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { build } from 'vite';
+import { sharedShaderInputFingerprint, sharedShaderReceipt } from '../lib/shared-build-cache.mjs';
 
 const HELP = `Build the shared app-neutral LearnOpenGL inputs for CI app shards.
 
@@ -106,8 +107,17 @@ if (realpathSync(shaderRoot) !== realpathSync(engineShaderRoot)) {
   );
 }
 
+// This producer owns the shared projection. Consumers can inherit its output
+// path, including during artifact-miss recovery, but the producer must never
+// read that path after clearing it or substitute a packaged shader profile.
+delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
+
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
+
+const engineEntries = { pointShadows: true, hdrpSsao: true };
+const shaderInputFingerprint = sharedShaderInputFingerprint(root, engineEntries);
 
 await build({
   configFile: false,
@@ -123,7 +133,11 @@ await build({
         return id === VIRTUAL_ENTRY ? 'export {};' : null;
       },
     },
-    forgeaxShader(),
+    // The shared manifest is consumed by every browser shard. Keep the
+    // optional engine entries required by the real point-shadow and SSAO
+    // browser paths in that one producer-owned projection, so a shard never
+    // silently installs the graph without its post-process pipelines.
+    forgeaxShader({ engineEntries }),
     pluginPack({ roots: [assetRoot], importers: [audioImporter, gltfImporter, imageImporter] }),
   ],
   build: {
@@ -157,6 +171,11 @@ const inventory = files(output)
 const manifest = {
   schemaVersion: 1,
   producer: 'shared-app-inputs',
+  shaderBuild: sharedShaderReceipt(
+    root,
+    join(output, 'shaders/manifest.json'),
+    shaderInputFingerprint,
+  ),
   inputFingerprint: await fingerprint([assetRoot, shaderRoot]),
   inventory: ['shared-app-inputs/assets/catalog.json', 'shared-app-inputs/shaders/manifest.json'],
   payload: {
@@ -184,6 +203,7 @@ if (projectionOutput !== null) {
       {
         schemaVersion: manifest.schemaVersion,
         producer: manifest.producer,
+        shaderBuild: manifest.shaderBuild,
         inputFingerprint: manifest.inputFingerprint,
         inventory: manifest.inventory,
         payload: {

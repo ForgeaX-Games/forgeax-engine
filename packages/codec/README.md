@@ -36,6 +36,11 @@ publisher. The tarball contains the whole `pkg/` tree:
 - `basis_transcoder.mjs` + `basis_transcoder.wasm` for runtime transcode;
 - `encode/basis_encoder.mjs` + `encode/basis_encoder.wasm` for build-time encode.
 
+The runtime transcoder uses Embind AOT invokers (`DYNAMIC_EXECUTION=0`,
+`EMBIND_AOT=1`), so its glue initializes without `eval` or `new Function` in
+hosts that restrict dynamic code execution. A host-specific WASM loader must
+still pass the imports supplied by the generated glue.
+
 The shared downloader tries Node `fetch` first, then authenticated `gh` and
 platform-native `curl` (`curl.exe` on Windows) when the Node TLS/network
 handshake fails. All paths remain pinned to the current repository, the

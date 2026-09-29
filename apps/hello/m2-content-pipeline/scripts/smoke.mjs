@@ -9,7 +9,8 @@ import { decompressZstd } from '@forgeax/engine-codec';
 import { reimportReuseMeta } from '@forgeax/engine-image';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { scan } from '@forgeax/engine-pack/scanner';
-import { loadGameProjectSync, resolveDefaultScene } from '@forgeax/engine-project';
+import { discoverPluginAssets } from '@forgeax/engine-devkit/plugin-build';
+import { loadGameProjectSync } from '@forgeax/engine-project';
 
 const here = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const root = resolve(here, '..', '..', '..', '..');
@@ -20,83 +21,32 @@ function expectOk(result, label) {
   return result.value;
 }
 
-const project = loadGameProjectSync((path) => readFileSync(resolve(root, 'templates/game-default', path), 'utf8'));
-if (!project.ok || project.value.id !== 'template-default') fail(`project manifest rejected: ${project.ok ? project.value.id : project.error.code}`);
+const project = loadGameProjectSync((path) => readFileSync(resolve(root, 'apps/game-capability-lab', path), 'utf8'));
+if (!project.ok || project.value.id !== 'game-capability-lab') fail(`project manifest rejected: ${project.ok ? project.value.id : project.error.code}`);
 console.log('[m2-content] project manifest: PASS');
 
-const manifestBaseline = readFileSync(resolve(root, 'templates/game-default/forge.json'), 'utf8');
+const projectRoot = resolve(root, 'apps/game-capability-lab');
+const manifestBaseline = readFileSync(resolve(projectRoot, 'forge.json'), 'utf8');
 const manifestData = JSON.parse(manifestBaseline);
-const baselineSceneGuid = manifestData.defaultScene;
-const repairedSceneGuid = '15acc839-d847-527c-8284-bfb36d7c50de';
-const wrongKindGuid = '7b4d43d4-5b19-5903-8966-f89671d21565';
-const manifestState = { raw: manifestBaseline, trustedSelection: null };
-const resolveManifestScene = () =>
-  resolveDefaultScene({
-    read: async () => manifestState.raw,
-    resolveGuid: async (guid) => {
-      if (guid === baselineSceneGuid || guid === repairedSceneGuid) {
-        return { ok: true, value: { kind: 'scene', guid } };
-      }
-      if (guid === wrongKindGuid) {
-        return { ok: true, value: { kind: 'texture', guid } };
-      }
-      return { ok: false, error: new Error(`asset not found: ${guid}`) };
-    },
-  });
-
-const baselineResolution = await resolveManifestScene();
-if (!baselineResolution.ok || baselineResolution.value.guid !== baselineSceneGuid) {
-  fail(`project defaultScene baseline rejected: ${baselineResolution.ok ? baselineResolution.value.guid : baselineResolution.error.code}`);
+const definitions = await discoverPluginAssets({ root: projectRoot, assetRoots: ['assets'] });
+const baselineRoot = manifestData.roots.engine;
+function resolveRoot(raw) {
+  const parsed = loadGameProjectSync(() => raw);
+  if (!parsed.ok) return parsed;
+  const guid = parsed.value.roots.engine;
+  const definition = definitions.assets.get(guid);
+  return definition ? { ok: true, value: definition.definition }
+    : { ok: false, error: { code: 'plugin-definition-unavailable', detail: { guid } } };
 }
-manifestState.trustedSelection = baselineResolution.value;
-
-manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: 'not-a-guid' });
-const malformedResolution = await resolveManifestScene();
-if (
-  malformedResolution.ok ||
-  malformedResolution.error.code !== 'forge-guid-malformed' ||
-  malformedResolution.error.detail.field !== 'defaultScene' ||
-  malformedResolution.error.detail.rawInput !== 'not-a-guid' ||
-  manifestState.trustedSelection.guid !== baselineSceneGuid
-) {
-  fail(`project defaultScene malformed recovery rejected: ${malformedResolution.ok ? 'unexpected success' : malformedResolution.error.code}`);
-}
-
-manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: wrongKindGuid });
-const wrongKindResolution = await resolveManifestScene();
-if (
-  wrongKindResolution.ok ||
-  wrongKindResolution.error.code !== 'forge-scene-unresolved' ||
-  wrongKindResolution.error.detail.guid !== wrongKindGuid ||
-  manifestState.trustedSelection.guid !== baselineSceneGuid
-) {
-  fail(`project defaultScene wrong-kind recovery rejected: ${wrongKindResolution.ok ? 'unexpected success' : wrongKindResolution.error.code}`);
-}
-
-manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: repairedSceneGuid });
-const repairedResolution = await resolveManifestScene();
-if (
-  !repairedResolution.ok ||
-  repairedResolution.value.kind !== 'scene' ||
-  repairedResolution.value.guid !== repairedSceneGuid ||
-  repairedResolution.value.guid === manifestState.trustedSelection.guid
-) {
-  fail(`project defaultScene repair rejected: ${repairedResolution.ok ? repairedResolution.value.guid : repairedResolution.error.code}`);
-}
-manifestState.trustedSelection = repairedResolution.value;
-
-const resetManifestState = async () => {
-  manifestState.raw = manifestBaseline;
-  manifestState.trustedSelection = baselineResolution.value;
-  const resolution = await resolveManifestScene();
-  if (!resolution.ok || resolution.value.guid !== baselineSceneGuid || resolution.value.kind !== 'scene') {
-    fail(`project defaultScene cleanup left stale state: ${resolution.ok ? resolution.value.guid : resolution.error.code}`);
-  }
-  return resolution;
-};
-await resetManifestState();
-const cleanedResolution = await resetManifestState();
-console.log(`[m28-project] PASS malformed=${malformedResolution.error.code} wrongKind=${wrongKindResolution.error.code} repaired=${repairedResolution.value.guid} cleanup=${cleanedResolution.value.guid}`);
+const baseline = expectOk(resolveRoot(manifestBaseline), 'project root baseline');
+if (baseline.asset.kind !== 'plugin' || baseline.guid !== baselineRoot) fail('root is not the declared plugin asset');
+const malformed = resolveRoot(JSON.stringify({ ...manifestData, roots: { engine: 'not-a-guid' } }));
+if (malformed.ok) fail('malformed root GUID accepted');
+const missing = resolveRoot(JSON.stringify({ ...manifestData, roots: { engine: '01900000-0000-7000-8000-000000000999' } }));
+if (missing.ok || missing.error.code !== 'plugin-definition-unavailable') fail('missing root accepted');
+const repaired = expectOk(resolveRoot(manifestBaseline), 'repaired project root');
+if (repaired.guid !== baseline.guid || repaired.asset.program !== baseline.asset.program) fail('repair changed root definition');
+console.log(`[m28-project] PASS malformed=${malformed.error.code} missing=${missing.error.code} repaired=${repaired.guid}`);
 
 if (process.argv.includes('--m28-recovery')) process.exit(0);
 
@@ -199,9 +149,9 @@ const reused = reimportReuseMeta(decoded, imageMeta);
 if (reused[0]?.guid !== stableGuid) fail(`reimport changed GUID: ${reused[0]?.guid}`);
 const parsedGuid = AssetGuid.parse(stableGuid);
 if (!parsedGuid.ok) fail(`stable GUID is malformed: ${parsedGuid.error.code}`);
-const malformed = AssetGuid.parse('not-a-guid');
-if (malformed.ok || malformed.error.code !== 'pack-guid-malformed') fail('malformed GUID did not reject structurally');
-console.log(`[m2-content] GUID reimport: PASS stable=${stableGuid} malformed=${malformed.error.code}`);
+const malformedGuid = AssetGuid.parse('not-a-guid');
+if (malformedGuid.ok || malformedGuid.error.code !== 'pack-guid-malformed') fail('malformed GUID did not reject structurally');
+console.log(`[m2-content] GUID reimport: PASS stable=${stableGuid} malformed=${malformedGuid.error.code}`);
 
 const original = new Uint8Array(4096).fill(65);
 const compressed = expectOk(await compressZstd(original), 'zstd encode');

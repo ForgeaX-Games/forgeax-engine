@@ -24,7 +24,12 @@ import {
   RigidBodyTypeValue,
   registerPhysicsComponents,
 } from '@forgeax/engine-physics';
-import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  GlobalTransform,
+  registerPropagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 import { createRapier3DPhysicsWorld, registerPhysicsSystems } from '../rapier-physics-world-3d';
 import { loadRapier3D } from '../wasm-loader';
@@ -32,8 +37,14 @@ import { loadRapier3D } from '../wasm-loader';
 function prepareWorld(): World {
   const world = new World();
   world.components.register(Transform).unwrap();
+  world.components.register(GlobalTransform).unwrap();
   registerPhysicsComponents(world);
   return world;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: test fixture accepts the ECS spawn component tuple.
+function spawnPairedEntity(world: World, ...components: any[]) {
+  return world.spawn(...components);
 }
 
 function runPhysicsTicks(world: World, count = 1): void {
@@ -278,28 +289,26 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         world.insertResource('PhysicsWorld', pw);
 
         // Ground: static cuboid, top at y=0.
-        const ground = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, -0.5, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.cuboid, halfExtents: [10, 0.5, 10] },
-            },
-          )
-          .unwrap();
+        const ground = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, -0.5, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.cuboid, halfExtents: [10, 0.5, 10] },
+          },
+        ).unwrap();
 
         // Target: static cuboid centred at x=5 (near face x=4), well above ground.
-        const target = world
-          .spawn(
-            { component: Transform as never, data: { pos: [5, 1, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
-            },
-          )
-          .unwrap();
+        const target = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [5, 1, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+          },
+        ).unwrap();
 
         registerPhysicsSystems(world);
         for (let i = 0; i < 5; i++) {
@@ -406,19 +415,18 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
-        world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 1, 0] } },
-            {
-              component: RigidBody as never,
-              data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true },
-            },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 0.2 },
-            },
-          )
-          .unwrap();
+        spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 1, 0] } },
+          {
+            component: RigidBody as never,
+            data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true },
+          },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.2 },
+          },
+        ).unwrap();
 
         registerPhysicsSystems(world);
         world.update(1 / 60).unwrap();
@@ -465,44 +473,42 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
-        const dynamicEntity = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 5, 0] } },
-            {
-              component: RigidBody as never,
-              data: {
-                type: RigidBodyTypeValue.dynamic,
-                mass: 1,
-                linearDamping: 0,
-                angularDamping: 0,
-                gravityScale: 1,
-              },
+        const dynamicEntity = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 5, 0] } },
+          {
+            component: RigidBody as never,
+            data: {
+              type: RigidBodyTypeValue.dynamic,
+              mass: 1,
+              linearDamping: 0,
+              angularDamping: 0,
+              gravityScale: 1,
             },
-            {
-              component: Collider as never,
-              data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
-            },
-          )
-          .unwrap();
+          },
+          {
+            component: Collider as never,
+            data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
+          },
+        ).unwrap();
 
-        const staticEntity = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            {
-              component: RigidBody as never,
-              data: { type: RigidBodyTypeValue.static },
+        const staticEntity = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          {
+            component: RigidBody as never,
+            data: { type: RigidBodyTypeValue.static },
+          },
+          {
+            component: Collider as never,
+            data: {
+              shape: 0,
+              halfExtents: [10, 1, 10],
+              friction: 0.5,
+              restitution: 0,
             },
-            {
-              component: Collider as never,
-              data: {
-                shape: 0,
-                halfExtents: [10, 1, 10],
-                friction: 0.5,
-                restitution: 0,
-              },
-            },
-          )
-          .unwrap();
+          },
+        ).unwrap();
 
         const initDynamic = world.get(dynamicEntity, Transform as never);
         const initStatic = world.get(staticEntity, Transform as never);
@@ -558,46 +564,44 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         world.insertResource('PhysicsWorld', pw);
 
         // Ball: dynamic body + sphere collider dropped from y=5.
-        const ball = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 5, 0] } },
-            {
-              component: RigidBody as never,
-              data: {
-                type: RigidBodyTypeValue.dynamic,
-                mass: 1,
-                linearDamping: 0,
-                angularDamping: 0,
-                gravityScale: 1,
-              },
+        const ball = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 5, 0] } },
+          {
+            component: RigidBody as never,
+            data: {
+              type: RigidBodyTypeValue.dynamic,
+              mass: 1,
+              linearDamping: 0,
+              angularDamping: 0,
+              gravityScale: 1,
             },
-            {
-              component: Collider as never,
-              data: {
-                shape: ColliderShapeValue.sphere,
-                radius: 0.5,
-                friction: 0.5,
-                restitution: 0,
-              },
+          },
+          {
+            component: Collider as never,
+            data: {
+              shape: ColliderShapeValue.sphere,
+              radius: 0.5,
+              friction: 0.5,
+              restitution: 0,
             },
-          )
-          .unwrap();
+          },
+        ).unwrap();
 
         // Floor: a BARE Collider — NO RigidBody. Cuboid top at y = 0 + 0.5 = 0.5.
-        const floor = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            {
-              component: Collider as never,
-              data: {
-                shape: ColliderShapeValue.cuboid,
-                halfExtents: [10, 0.5, 10],
-                friction: 0.5,
-                restitution: 0,
-              },
+        const floor = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          {
+            component: Collider as never,
+            data: {
+              shape: ColliderShapeValue.cuboid,
+              halfExtents: [10, 0.5, 10],
+              friction: 0.5,
+              restitution: 0,
             },
-          )
-          .unwrap();
+          },
+        ).unwrap();
 
         // Sanity: the floor archetype genuinely has no RigidBody column.
         expect(world.get(floor, RigidBody as never).ok).toBe(false);
@@ -634,22 +638,21 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
-        const obstacle = world
-          .spawn(
-            {
-              component: Transform as never,
-              data: {
-                quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
-                scale: [2, 1, 1],
-              },
+        const obstacle = spawnPairedEntity(
+          world,
+          {
+            component: Transform as never,
+            data: {
+              quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+              scale: [2, 1, 1],
             },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
-            },
-          )
-          .unwrap();
+          },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
+          },
+        ).unwrap();
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
         world.update(1 / 60).unwrap();
@@ -683,16 +686,15 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
-        const obstacle = world
-          .spawn(
-            { component: Transform as never, data: { scale: [1, 1, 1] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
-            },
-          )
-          .unwrap();
+        const obstacle = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { scale: [1, 1, 1] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
+          },
+        ).unwrap();
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
         world.update(1 / 60).unwrap();
@@ -731,29 +733,27 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
           const world = prepareWorld();
           const pw = createRapier3DPhysicsWorld(RAPIER as never);
           world.insertResource('PhysicsWorld', pw);
-          const ball = world
-            .spawn(
-              { component: Transform as never, data: { pos: [0, 8, 0] } },
-              {
-                component: RigidBody as never,
-                data: { type: RigidBodyTypeValue.dynamic, mass: 1, gravityScale: 1 },
-              },
-              {
-                component: Collider as never,
-                data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
-              },
-            )
-            .unwrap();
-          world
-            .spawn(
-              { component: Transform as never, data: { pos: [0, 0, 0] } },
-              { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-              {
-                component: Collider as never,
-                data: { shape: 0, halfExtents, friction: 0.5, restitution: 0 },
-              },
-            )
-            .unwrap();
+          const ball = spawnPairedEntity(
+            world,
+            { component: Transform as never, data: { pos: [0, 8, 0] } },
+            {
+              component: RigidBody as never,
+              data: { type: RigidBodyTypeValue.dynamic, mass: 1, gravityScale: 1 },
+            },
+            {
+              component: Collider as never,
+              data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
+            },
+          ).unwrap();
+          spawnPairedEntity(
+            world,
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+            {
+              component: Collider as never,
+              data: { shape: 0, halfExtents, friction: 0.5, restitution: 0 },
+            },
+          ).unwrap();
           registerPhysicsSystems(world);
           for (let i = 0; i < 300; i++) {
             world.update(1 / 60).unwrap();
@@ -800,57 +800,53 @@ function rapierBodyFor(pw: any, entity: number): any | undefined {
         // Parent: a kinematic body (NO CharacterController, so the kinematic
         // mirror -- not moveAndSlide -- drives it) placed far from the origin.
         const PARENT_X = 8;
-        const parent = world
-          .spawn(
-            { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
-            },
-          )
-          .unwrap();
+        const parent = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+          },
+        ).unwrap();
 
         // Child sensor: ChildOf the parent with LOCAL pos (0,0,0), so its world
         // pos equals the parent's. This is the shape that regressed.
-        const sensor = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 1, isSensor: true },
-            },
-            { component: ChildOf as never, data: { parent } },
-            { component: CollidingEntities as never, data: { entities: [] } },
-          )
-          .unwrap();
+        const sensor = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 1, isSensor: true },
+          },
+          { component: ChildOf as never, data: { parent } },
+          { component: CollidingEntities as never, data: { entities: [] } },
+        ).unwrap();
 
         // Probe at the ORIGIN: if the sensor collider were (wrongly) pinned at
         // the origin, it would overlap this probe.
-        const originProbe = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
-            },
-          )
-          .unwrap();
+        const originProbe = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+          },
+        ).unwrap();
 
         // Probe at the PARENT world pos: the sensor must overlap THIS one once it
         // correctly follows the parent.
-        const farProbe = world
-          .spawn(
-            { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
-            },
-          )
-          .unwrap();
+        const farProbe = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+          },
+        ).unwrap();
 
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
@@ -974,8 +970,9 @@ describe('incremental physics ECS reconciliation', () => {
     };
     const result =
       options.bodyType === 'implicit'
-        ? world.spawn(transform, collider)
-        : world.spawn(
+        ? spawnPairedEntity(world, transform, collider)
+        : spawnPairedEntity(
+            world,
             transform,
             {
               component: RigidBody as never,
@@ -1104,20 +1101,20 @@ describe('incremental physics ECS reconciliation', () => {
     const world = prepareWorld();
     const pw = createRapier3DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
-    const parent = world
-      .spawn({ component: Transform as never, data: { pos: [1, 0, 0] } })
-      .unwrap();
-    const child = world
-      .spawn(
-        { component: Transform as never, data: { pos: [2, 0, 0] } },
-        { component: ChildOf as never, data: { parent } },
-        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-        {
-          component: Collider as never,
-          data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
-        },
-      )
-      .unwrap();
+    const parent = spawnPairedEntity(world, {
+      component: Transform as never,
+      data: { pos: [1, 0, 0] },
+    }).unwrap();
+    const child = spawnPairedEntity(
+      world,
+      { component: Transform as never, data: { pos: [2, 0, 0] } },
+      { component: ChildOf as never, data: { parent } },
+      { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+      {
+        component: Collider as never,
+        data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+      },
+    ).unwrap();
     const unrelated = spawnBox(world, { pos: [20, 0, 0] });
     registerPropagateTransforms(world);
     registerPhysicsSystems(world);
@@ -1148,26 +1145,27 @@ describe('incremental physics ECS reconciliation', () => {
     const pw = createRapier3DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
     const root = spawnBox(world, { bodyType });
-    const parent = world
-      .spawn({ component: Transform as never, data: { pos: [1, 0, 0] } })
-      .unwrap();
-    const child = world
-      .spawn(
-        { component: Transform as never, data: { pos: [-1, 0, 0] } },
-        { component: ChildOf as never, data: { parent } },
-        { component: RigidBody as never, data: { type: bodyType } },
-        {
-          component: Collider as never,
-          data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
-        },
-      )
-      .unwrap();
+    const parent = spawnPairedEntity(world, {
+      component: Transform as never,
+      data: { pos: [1, 0, 0] },
+    }).unwrap();
+    const child = spawnPairedEntity(
+      world,
+      { component: Transform as never, data: { pos: [-1, 0, 0] } },
+      { component: ChildOf as never, data: { parent } },
+      { component: RigidBody as never, data: { type: bodyType } },
+      {
+        component: Collider as never,
+        data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+      },
+    ).unwrap();
     registerPropagateTransforms(world);
     registerPhysicsSystems(world);
     runPhysicsTicks(world);
 
-    const rootWorld = world.get(root as never, Transform as never).unwrap().world as Float32Array;
-    const childWorld = world.get(child, Transform as never).unwrap().world as Float32Array;
+    const rootWorld = world.get(root as never, GlobalTransform as never).unwrap()
+      .world as Float32Array;
+    const childWorld = world.get(child, GlobalTransform as never).unwrap().world as Float32Array;
     expect(Array.from(rootWorld)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     expect(Array.from(childWorld)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     expect(rapierBodyFor(pw, root)?.translation().x).toBeCloseTo(0, 5);
@@ -1216,16 +1214,17 @@ describe('incremental physics ECS reconciliation', () => {
     const ensureSpy = vi.spyOn(pw, 'ensureBody');
     world.set(entity as never, Collider as never, { halfExtents: [3, 1, 1] }).unwrap();
     runPhysicsTicks(world);
-    expect(removeSpy).toHaveBeenCalledTimes(1);
-    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(ensureSpy).not.toHaveBeenCalled();
     expect(rapierBodyFor(pw, entity)?.collider(0).halfExtents().x).toBeCloseTo(3, 5);
 
     removeSpy.mockClear();
     ensureSpy.mockClear();
     world.removeComponent(entity as never, Collider as never).unwrap();
     runPhysicsTicks(world);
-    expect(pw.hasBody(entity)).toBe(false);
-    expect(removeSpy).toHaveBeenCalledTimes(1);
+    expect(pw.hasBody(entity)).toBe(true);
+    expect(rapierBodyFor(pw, entity)?.numColliders()).toBe(0);
+    expect(removeSpy).not.toHaveBeenCalled();
 
     world
       .addComponent(entity as never, {
@@ -1256,6 +1255,70 @@ describe('incremental physics ECS reconciliation', () => {
     runPhysicsTicks(world);
     expect(rapierBodyFor(pw, entity)?.bodyType()).toBe(RAPIER.RigidBodyType.KinematicPositionBased);
     expect(pw.getBodyCount()).toBe(1);
+  });
+
+  it('keeps a body-only derived publication intact when its authored collider is added and removed', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.dynamic });
+    world.removeComponent(entity as never, Collider as never).unwrap();
+    world.set(entity as never, RigidBody as never, { gravityScale: 0 }).unwrap();
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+    expect(rapierBodyFor(pw, entity)?.numColliders()).toBe(0);
+    pw.admitDerivedShapeCandidate(
+      pw
+        .prepareDerivedShapeCandidate({
+          entity,
+          revision: 1,
+          sourceKey: 'body-only',
+          worldIdentity: world,
+          bodyType: 'dynamic',
+          velocityPolicy: 'preserve',
+          constraints: [],
+          seams: [],
+          massProperties: {
+            mode: 'explicit',
+            mass: 2,
+            centerOfMass: [0, 0, 0],
+            principalInertia: [1, 1, 1],
+          },
+          shapes: [
+            {
+              id: 'voxel',
+              revision: 1,
+              cells: [[0, 0, 0]],
+              origin: [3, 0, 0],
+              voxelSize: [1, 1, 1],
+            },
+          ],
+        })
+        .unwrap(),
+    ).unwrap();
+    runPhysicsTicks(world);
+    const body = rapierBodyFor(pw, entity);
+    const derivedHandle = body.collider(0).handle;
+    world
+      .addComponent(entity as never, {
+        component: Collider as never,
+        data: { shape: ColliderShapeValue.sphere, radius: 0.5 },
+      })
+      .unwrap();
+    runPhysicsTicks(world);
+    expect(rapierBodyFor(pw, entity)?.handle).toBe(body.handle);
+    expect(body.numColliders()).toBe(2);
+    expect(pw.raw.getCollider(derivedHandle)?.isValid()).toBe(true);
+    expect(pw.getDerivedBodyMass(entity)).toBeCloseTo(2);
+    world.removeComponent(entity as never, Collider as never).unwrap();
+    runPhysicsTicks(world);
+    expect(body.numColliders()).toBe(1);
+    expect(body.collider(0).handle).toBe(derivedHandle);
+    expect(pw.getDerivedPublication(entity)?.revision).toBe(1);
+    expect(pw.getDerivedBodyMass(entity)).toBeCloseTo(2);
+    pw.dispose();
   });
 
   it('switches kinematic pose ownership when CharacterController is added or removed', async () => {
@@ -1418,7 +1481,9 @@ describe('incremental physics ECS reconciliation', () => {
     expect(rapierBodyFor(pw, replacement)?.translation().x).toBeCloseTo(11, 5);
   });
 
-  it('falls back to a full reconcile after projection journal overflow', async () => {
+  it('coalesces more than 65k writes into one final component-version sync', {
+    timeout: 20_000,
+  }, async () => {
     const RAPIER = await loadOrSkip();
     if (!RAPIER) return;
     const world = prepareWorld();
@@ -1439,9 +1504,9 @@ describe('incremental physics ECS reconciliation', () => {
     }
     runPhysicsTicks(world);
 
-    expect(removeSpy).toHaveBeenCalledTimes(1);
-    expect(ensureSpy).toHaveBeenCalledTimes(1);
-    expect(syncSpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(syncSpy).toHaveBeenCalledTimes(1);
     expect(pw.getBodyCount()).toBe(1);
     expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(finalX, 5);
   });
@@ -1506,17 +1571,16 @@ describe('incremental physics ECS reconciliation', () => {
       cc?: Record<string, number>,
       bodyType: number = RigidBodyTypeValue.kinematic,
     ): number {
-      const entity = world
-        .spawn(
-          { component: Transform as never, data: { pos: [pos[0], pos[1], pos[2]] } },
-          { component: RigidBody as never, data: { type: bodyType } },
-          {
-            component: Collider as never,
-            data: { shape: 2, radius: 0.3, halfHeight: 0.5, friction: 0.5, restitution: 0 },
-          },
-          { component: CharacterController as never, data: cc ?? {} },
-        )
-        .unwrap();
+      const entity = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [pos[0], pos[1], pos[2]] } },
+        { component: RigidBody as never, data: { type: bodyType } },
+        {
+          component: Collider as never,
+          data: { shape: 2, radius: 0.3, halfHeight: 0.5, friction: 0.5, restitution: 0 },
+        },
+        { component: CharacterController as never, data: cc ?? {} },
+      ).unwrap();
       return entity as unknown as number;
     }
 
@@ -1527,16 +1591,15 @@ describe('incremental physics ECS reconciliation', () => {
         friction: 0.5,
         restitution: 0,
       };
-      const entity = world
-        .spawn(
-          {
-            component: Transform as never,
-            data: { pos: [box.pos[0], box.pos[1], box.pos[2]] },
-          },
-          { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
-          { component: Collider as never, data },
-        )
-        .unwrap();
+      const entity = spawnPairedEntity(
+        world,
+        {
+          component: Transform as never,
+          data: { pos: [box.pos[0], box.pos[1], box.pos[2]] },
+        },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+        { component: Collider as never, data },
+      ).unwrap();
       return entity as unknown as number;
     }
 
@@ -1677,16 +1740,15 @@ describe('incremental physics ECS reconciliation', () => {
         // collectathon guardian attack-sensor whose physics body stayed at world
         // origin). A sensor reports overlaps but must NEVER act as a solid wall
         // for the KCC -- before the fix this froze the character in place.
-        world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-            {
-              component: Collider as never,
-              data: { shape: ColliderShapeValue.sphere, radius: 1.5, isSensor: 1 },
-            },
-          )
-          .unwrap();
+        spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 1.5, isSensor: 1 },
+          },
+        ).unwrap();
 
         world.update(1 / 60).unwrap();
         world.update(1 / 60).unwrap();
@@ -2079,7 +2141,7 @@ describe('incremental physics ECS reconciliation', () => {
         const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
-        // The kinematic mirror drives the collider from Transform.world (so a
+        // The kinematic mirror drives the collider from GlobalTransform.world (so a
         // ChildOf collider follows its parent), which propagateTransforms
         // populates; register it (createApp always does, and physicsSyncBackend
         // declares `after: propagateTransforms`). For this root platform
@@ -2088,16 +2150,15 @@ describe('incremental physics ECS reconciliation', () => {
         registerPhysicsSystems(world);
 
         // Platform: kinematic body + collider, NO CharacterController.
-        const platform = world
-          .spawn(
-            { component: Transform as never, data: { pos: [0, 0, 0] } },
-            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-            {
-              component: Collider as never,
-              data: { shape: 0, halfExtents: [1, 0.5, 1] },
-            },
-          )
-          .unwrap() as unknown as number;
+        const platform = spawnPairedEntity(
+          world,
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: 0, halfExtents: [1, 0.5, 1] },
+          },
+        ).unwrap() as unknown as number;
 
         // Move the platform via Transform; syncBackend should mirror it.
         world.set(platform as never, Transform as never, { pos: [5, 2, 0] });
@@ -2275,30 +2336,28 @@ describe('incremental physics ECS reconciliation', () => {
       registerPhysicsSystems(world);
 
       // A "player" kinematic body + CollidingEntities, sitting at the origin.
-      const player = world
-        .spawn(
-          { component: Transform as never, data: { pos: [0, 0, 0] } },
-          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-          {
-            component: Collider as never,
-            data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
-          },
-          { component: CollidingEntities as never, data: { entities: [] } },
-        )
-        .unwrap();
+      const player = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
+        },
+        { component: CollidingEntities as never, data: { entities: [] } },
+      ).unwrap();
 
       // A "Core" kinematic SENSOR overlapping the player.
-      const core = world
-        .spawn(
-          { component: Transform as never, data: { pos: [0, 0, 0] } },
-          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-          {
-            component: Collider as never,
-            data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
-          },
-          { component: CollidingEntities as never, data: { entities: [] } },
-        )
-        .unwrap();
+      const core = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
+        },
+        { component: CollidingEntities as never, data: { entities: [] } },
+      ).unwrap();
 
       world.update(1 / 60).unwrap();
       // A few ticks: tick 1 builds bodies (ensureBody), the next steps + drains.
@@ -2313,6 +2372,43 @@ describe('incremental physics ECS reconciliation', () => {
       expect(Array.from(coreSet.value.entities as Uint32Array)).toContain(player as number);
     });
 
+    it('skips collision participants without CollidingEntities without reading a missing component', async () => {
+      const RAPIER = await loadOrNull();
+      if (!RAPIER) return;
+      const world = prepareWorld();
+      const pw = createRapier3DPhysicsWorld(RAPIER);
+      world.insertResource('PhysicsWorld', pw);
+      registerPhysicsSystems(world);
+
+      const subscriber = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        { component: Collider as never, data: { shape: ColliderShapeValue.sphere, radius: 0.5 } },
+        { component: CollidingEntities as never, data: { entities: [] } },
+      ).unwrap();
+      const plain = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.sphere, radius: 0.5, isSensor: true },
+        },
+      ).unwrap();
+
+      for (let i = 0; i < 5; i++) world.update(1 / 60).unwrap();
+      expect(pw.getCollisionPairs().get(subscriber)).toContain(plain);
+      expect(world.hasComponent(plain, CollidingEntities)).toBe(false);
+
+      const get = vi.spyOn(world, 'get');
+      pw.writebackCollidingEntities(world, CollidingEntities as never);
+      expect(get).not.toHaveBeenCalledWith(plain, CollidingEntities);
+      get.mockRestore();
+      const colliding = world.get(subscriber, CollidingEntities as never);
+      expect(colliding.ok && Array.from(colliding.value.entities as Uint32Array)).toContain(plain);
+    });
+
     it('despawning a collided sensor clears it from the survivor CollidingEntities', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
@@ -2321,28 +2417,26 @@ describe('incremental physics ECS reconciliation', () => {
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems(world);
 
-      const player = world
-        .spawn(
-          { component: Transform as never, data: { pos: [0, 0, 0] } },
-          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-          {
-            component: Collider as never,
-            data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
-          },
-          { component: CollidingEntities as never, data: { entities: [] } },
-        )
-        .unwrap();
-      const core = world
-        .spawn(
-          { component: Transform as never, data: { pos: [0, 0, 0] } },
-          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-          {
-            component: Collider as never,
-            data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
-          },
-          { component: CollidingEntities as never, data: { entities: [] } },
-        )
-        .unwrap();
+      const player = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
+        },
+        { component: CollidingEntities as never, data: { entities: [] } },
+      ).unwrap();
+      const core = spawnPairedEntity(
+        world,
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
+        },
+        { component: CollidingEntities as never, data: { entities: [] } },
+      ).unwrap();
 
       world.update(1 / 60).unwrap();
       for (let i = 0; i < 4; i++) world.update(1 / 60).unwrap();

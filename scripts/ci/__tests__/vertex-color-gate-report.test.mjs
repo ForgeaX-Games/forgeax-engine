@@ -20,6 +20,7 @@ const gateIds = [
   'smoke-fleet-0',
   'smoke-fleet-1',
   'smoke-fleet-2',
+  'smoke-fleet-3',
   'full-local-gate',
 ];
 

@@ -1,11 +1,11 @@
 export const REAL_UI_ASSETS = Object.freeze({
   hud: Object.freeze({
-    guid: '019f8354-6386-4386-849d-f2ab4b96229c',
+    guid: '9e976cdd-1923-57d9-b08c-4ab0bd18a16b',
     name: 'hud.pack.json',
     marker: 'data-ui-slot="score"',
   }),
   settings: Object.freeze({
-    guid: '019f8354-6386-4387-849d-f2ab4b9622a0',
+    guid: 'b0ac90e0-bd8f-5875-9b22-eda3b885c21b',
     name: 'settings.pack.json',
     marker: 'data-ui-setting="music"',
   }),

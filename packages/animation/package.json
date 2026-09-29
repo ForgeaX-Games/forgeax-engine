@@ -15,7 +15,11 @@
       "types": "./dist/target-id.d.ts",
       "import": "./dist/target-id.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./animated-bounds": {
+      "types": "./dist/animated-bounds.d.ts",
+      "import": "./dist/animated-bounds.mjs"
+    }
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

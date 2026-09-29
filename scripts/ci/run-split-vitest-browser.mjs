@@ -3,31 +3,176 @@
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runGroups } from '../lib/run-bounded-groups.mjs';
+import { readMemoryPressureDiagnostics } from '../lib/runner-resources.mjs';
 import { isRetryableOutput, runBrowserCommand } from './run-browser-gate-with-retry.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '../..');
-const defaultGroupSize = 4;
+// Regular groups pay one fresh Vite/Chrome startup. Keep the startup boundary
+// for the genuinely cold GPU/asset owners, but let contract-only browser
+// files share the normal bounded group so CI spends its budget on assertions
+// instead of repeatedly booting identical browsers.
+const defaultGroupSize = 8;
 const defaultMaxWorkers = 1;
+const defaultGroupConcurrency = 1;
+const maxGroupConcurrency = 3;
+const browserGroupTimeoutMs = 300_000;
+const directLightBrowserGroupTimeoutMs = 420_000;
+// Enclose the existing 300 s Surface case with bounded startup/cleanup time.
+const surfaceProvenanceBrowserGroupTimeoutMs = 360_000;
+const browserNodeHeapArg = '--max-old-space-size=4096';
 const defaultShardCount = 1;
 const defaultShardIndex = 0;
+const defaultShardStrategy = 'round-robin';
 const entityVisibilityBrowserTest =
   'apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts';
+const r32floatCapabilityGenerationTest =
+  'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts';
 const advancedLightingBrowserFiles = new Set([
   'apps/learn-render/5.advanced-lighting/6.hdr/src/__tests__/onerror-gate.browser.test.ts',
   'apps/learn-render/5.advanced-lighting/7.bloom/src/__tests__/onerror-gate.browser.test.ts',
   'apps/learn-render/5.advanced-lighting/8.deferred-shading/src/__tests__/onerror-gate.browser.test.ts',
   'apps/learn-render/5.advanced-lighting/9.ssao/src/__tests__/onerror-gate.browser.test.ts',
 ]);
-const bloomBrowserFile =
-  'apps/learn-render/5.advanced-lighting/7.bloom/src/__tests__/onerror-gate.browser.test.ts';
+const iblIrradianceBrowserFile =
+  'apps/learn-render/6.pbr/2.ibl-irradiance/src/__tests__/onerror-gate.browser.test.ts';
+const iblSpecularBrowserFile =
+  'apps/learn-render/6.pbr/3.ibl-specular/src/__tests__/onerror-gate.browser.test.ts';
+const transmissionBrowserFile =
+  'apps/learn-render/6.pbr/4.transmission-refraction/src/__tests__/onerror-gate.browser.test.ts';
+const topologyBrowserFile = 'apps/hello/topology/src/__tests__/topology.browser.test.ts';
+const directLightBrowserFile =
+  'apps/parity/color-lighting/cases/direct-light/__tests__/direct-light.browser.test.ts';
+const instancingStaticBrowserFile =
+  'apps/parity/instancing-static/src/__tests__/instances.browser.test.ts';
+const thinWrapperBrowserFile = 'packages/app/__tests__/thin-wrapper.browser.test.ts';
+const solarAtmosphereCalibrationBrowserFile =
+  'packages/runtime/src/__tests__/solar-atmosphere-calibration.browser.test.ts';
+const surfaceProvenanceBrowserFile =
+  'packages/runtime/src/__tests__/surface-standard-pipeline.browser.test.ts';
 const browserProcessIsolatedFiles = new Set([
   ...advancedLightingBrowserFiles,
-  'packages/app/__tests__/thin-wrapper.browser.test.ts',
-  'packages/app/__tests__/worker-resize.browser.test.ts',
-  'packages/runtime/src/__tests__/render-feature-prepared-graphics.browser.test.ts',
+  iblIrradianceBrowserFile,
+  iblSpecularBrowserFile,
+  transmissionBrowserFile,
+  topologyBrowserFile,
+  directLightBrowserFile,
+  instancingStaticBrowserFile,
+  // createApp(canvas) performs the first real WebGPU renderer construction.
+  // This owner exceeded its 30 s budget in a mixed renderer group on CI.
+  // Give it a fresh process to bound shared native state; the original real
+  // renderer assertions and test deadline still decide whether it is healthy.
+  thinWrapperBrowserFile,
+  // Both mixed-group attempts missed the 15 s bootstrap observation, while
+  // the unchanged triangle passed alone. Keep that deadline in a fresh process.
+  'apps/learn-render/1.getting-started/2.hello-triangle/src/__tests__/onerror-gate.browser.test.ts',
+  // This six-test solar calibration owns several real WebGPU render journeys.
+  // The b323 Linux/lavapipe runs completed in 239-244 s and nearly filled the
+  // ordinary 300 s group budget when seven other files shared its process.
+  // Give it a fresh process while retaining the same six assertions and
+  // owner-level 300 s timeout.
+  solarAtmosphereCalibrationBrowserFile,
+  // This owner requires a complete catalog before rendering. Its existing
+  // Surface-only input closure avoids cooking unrelated scene fixtures.
+  surfaceProvenanceBrowserFile,
+  // The complete hot-reload/recovery journey measured 139 s alone; its
+  // eight-file runtime group exhausted the unchanged 300 s deadline twice.
+  'packages/runtime/src/__tests__/material-publication.browser.test.ts',
+  // Six Canvas update/recovery/replay journeys measured 222 s alone; the
+  // mixed eight-file group exceeded 300 s. Keep the same bound in isolation.
+  'packages/runtime/src/__tests__/canvas-texture.browser.test.ts',
+  // CI 36040095295 exhausted the mixed runtime group's 300 s budget twice.
+  // Preserve this complete publication journey and the same process bound.
+  'packages/runtime/src/__tests__/render-publication.browser.test.ts',
+  // Three 60-frame LOD journeys exhausted the mixed group's 300 s budget twice.
+  // Keep every pixel oracle and the same deadline in a fresh process.
+  'packages/runtime/src/__tests__/lod-transition.browser.test.ts',
+  // Normal/bump pixel and replay evidence measured 186 s alone after its mixed
+  // group reached 300 s. Preserve the complete journey in one fresh process.
+  'packages/runtime/src/__tests__/normal-bump.browser.test.ts',
+  // Five barrel-output journeys consumed 77 s of test work alone. Replacing
+  // their eighth neighbor still hit 300 s; give the complete owner one process.
+  'packages/runtime/src/__tests__/barrel-distortion-output.browser.test.ts',
+  // The 60-frame SSR case exceeded 30 s twice in its mixed group; all nine
+  // cases passed alone. Keep the original per-case and process deadlines.
+  'packages/render/src/__tests__/ssr-gpu-dispatch.browser.test.ts',
+  // Four live captures plus fresh-device per-work replays exhausted the
+  // ordinary mixed-group budget. Preserve the 300 s bound in a fresh process.
+  'packages/runtime/src/__tests__/standard-gbuffer-replay.browser.test.ts',
+  // The complete displacement journey measured 151 s alone; its mixed group
+  // exhausted 300 s. Preserve every case and replay in a fresh bounded process.
+  'packages/runtime/src/__tests__/standard-displacement.browser.test.ts',
+  // Both decal paths capture and replay on fresh devices. Their mixed runtime
+  // group exhausted 300 s; keep every oracle inside the same bound alone.
+  'packages/runtime/src/__tests__/decals.browser.test.ts',
+  // Six captures and fresh-device replays take 75 s alone; the mixed runtime
+  // group exhausted 300 s. Keep the complete lens journey in its own process.
+  'packages/runtime/src/__tests__/lens-effects.browser.test.ts',
+
+  // Split/minimap/monitor captures and fresh-device replay exhausted the
+  // eight-file group on both attempts; retain the complete 60-frame journey.
+  'packages/runtime/src/__tests__/multi-camera.browser.test.ts',
+  // The local/transferred publication journey took 71 s inside a runtime
+  // group that repeatedly exhausted 300 s; retain its complete comparison.
+  'packages/runtime/src/__tests__/render-publication.browser.test.ts',
+  // These full RHI replay journeys were still unfinished after the mixed
+  // runtime group spent its deadline on the other rendering owners.
+  'packages/runtime/src/__tests__/normal-bump.browser.test.ts',
+  'packages/runtime/src/__tests__/outline.browser.test.ts',
+  // The clipping color/depth/shadow/replay journey passed in 64 s, but its
+  // eight-file runtime group exhausted the 300 s bound on both CI attempts.
+  'packages/runtime/src/__tests__/clipping-planes.browser.test.ts',
+  // All fifteen journeys pass in 383 s on software WebGPU, beyond the 300 s
+  // group bound. Each scene/resolution retains all five filters independently.
+  'packages/runtime/src/__tests__/shadow-contact-column.browser.test.ts',
+  'packages/runtime/src/__tests__/shadow-contact-centimeter-1024.browser.test.ts',
+  'packages/runtime/src/__tests__/shadow-contact-centimeter-2048.browser.test.ts',
+  // The two 50k pressure runs and two real Worker/device-loss recoveries
+  // take about 250 s locally before unrelated files are added.
+  'packages/app/__tests__/render-worker.browser.test.ts',
+  'packages/app/__tests__/render-worker-contract.browser.test.ts',
+  // Real multi-camera capture, fresh-device replay and child replacement share
+  // the unchanged 300 s group bound in one process.
+  'packages/app/__tests__/render-worker-multi-camera.browser.test.ts',
+  'packages/app/__tests__/worker-policy.browser.test.ts',
+  // Each content group keeps both tiers, 300 submitted frames, and real child replacement.
+  // Eleven cases measured 585 s together; split semantic owners retain the 300 s bound.
+  'packages/app/__tests__/render-worker-deformation.browser.test.ts',
+  'packages/app/__tests__/render-worker-geometry.browser.test.ts',
+  'packages/app/__tests__/render-worker-media.browser.test.ts',
+  'packages/app/__tests__/render-worker-tiles.browser.test.ts',
+  // Fresh VFX consumer reconstruction and tape replay exceed the shared 300 s group.
+  'packages/runtime/src/__tests__/vfx-mesh-lighting.browser.test.ts',
+  // Two host-loss cycles hit the unchanged 20 s recovery deadline in a mixed
+  // GPU group; the complete journey passes in a fresh process (103 s measured).
+  'packages/runtime/src/__tests__/wave1-rendering-recovery.browser.test.ts',
+  'packages/app/__tests__/render-worker-environment.browser.test.ts',
 ]);
-const excludedDirectories = new Set(['.git', 'artifacts', 'dist', 'node_modules']);
+const renderingGroupSize = 4;
+function isRenderingBrowserFile(file) {
+  return (
+    file.startsWith('packages/runtime/src/__tests__/') ||
+    file === 'packages/ui/src/preview/__tests__/capture-determinism.browser.test.ts'
+  );
+}
+const assetColdOwnerFiles = new Set([
+  iblIrradianceBrowserFile,
+  iblSpecularBrowserFile,
+  transmissionBrowserFile,
+  topologyBrowserFile,
+]);
+const instancingStaticBrowserGroupTimeoutMs = 900_000;
+const colorLightingCasePrefix = 'apps/parity/color-lighting/cases/';
+const colorLightingCaseGroupSize = 4;
+const colorLightingCaseSeconds = 18;
+const excludedDirectories = new Set([
+  '.git',
+  '.forgeax-harness',
+  'artifacts',
+  'dist',
+  'node_modules',
+]);
 
 function parsePositiveInt(value, name, { max = Number.POSITIVE_INFINITY } = {}) {
   const parsed = Number(value);
@@ -37,14 +182,25 @@ function parsePositiveInt(value, name, { max = Number.POSITIVE_INFINITY } = {}) 
   return parsed;
 }
 
-function parseArgs(argv) {
-  const valueOptions = new Set(['--group-size', '--max-workers', '--shard-count', '--shard-index']);
+export function parseArgs(argv) {
+  const valueOptions = new Set([
+    '--file',
+    '--group-concurrency',
+    '--group-size',
+    '--max-workers',
+    '--shard-count',
+    '--shard-index',
+    '--shard-strategy',
+  ]);
   const options = {
     dryRun: false,
+    files: [],
+    groupConcurrency: defaultGroupConcurrency,
     groupSize: defaultGroupSize,
     maxWorkers: defaultMaxWorkers,
     shardCount: defaultShardCount,
     shardIndex: defaultShardIndex,
+    shardStrategy: defaultShardStrategy,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -55,8 +211,15 @@ function parseArgs(argv) {
     }
     const [key, inlineValue] = argument.split('=', 2);
     const value = inlineValue ?? (valueOptions.has(key) ? argv[++index] : undefined);
-    if (key === '--group-size') {
-      options.groupSize = parsePositiveInt(value, '--group-size', { max: 12 });
+    if (key === '--file') {
+      if (!value) throw new Error('--file needs an exact repository test path');
+      options.files.push(value);
+    } else if (key === '--group-concurrency') {
+      options.groupConcurrency = parsePositiveInt(value, '--group-concurrency', {
+        max: maxGroupConcurrency,
+      });
+    } else if (key === '--group-size') {
+      options.groupSize = parsePositiveInt(value, '--group-size', { max: 24 });
     } else if (key === '--max-workers') {
       options.maxWorkers = parsePositiveInt(value, '--max-workers', { max: 6 });
     } else if (key === '--shard-count') {
@@ -66,6 +229,11 @@ function parseArgs(argv) {
       if (!Number.isInteger(parsed) || parsed < 0 || parsed > 31)
         throw new Error(`--shard-index must be an integer from 0 to 31, got ${value}`);
       options.shardIndex = parsed;
+    } else if (key === '--shard-strategy') {
+      if (value !== 'round-robin' && value !== 'balanced') {
+        throw new Error(`--shard-strategy must be round-robin or balanced, got ${value}`);
+      }
+      options.shardStrategy = value;
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -77,7 +245,97 @@ function parseArgs(argv) {
   return options;
 }
 
-function browserTestFiles(directory = rootDir, relativeDirectory = '') {
+// Browser groups are intentionally ordered for readable logs, but a simple
+// groupIndex % shardCount assignment can put the long owners on the same
+// runner. Keep every test and process boundary, and place groups with a
+// deterministic longest-processing-time scheduler over estimated seconds.
+// Estimates come from the per-group wall times of runs 36110279881 (serial)
+// and 36123229770 (two groups at once): one fresh Vite/Chrome startup plus
+// a per-file cost. Unlisted files are contract-sized; the listed owners were
+// measured well above that default.
+const browserGroupStartupSeconds = 18;
+const defaultBrowserFileSeconds = 5;
+const runtimeBrowserTestPrefix = 'packages/runtime/src/__tests__/';
+const runtimeBrowserFileSeconds = new Map([
+  ['surface-standard-pipeline', 135],
+  ['solar-atmosphere-calibration', 130],
+  ['vfx-mesh-lighting', 110],
+  ['canvas-texture', 95],
+  ['wave1-shadow-diagnostic', 70],
+  ['wave1-rendering-p0', 45],
+  ['oit', 45],
+]);
+const renderWorkerBrowserFile =
+  /^packages\/app\/__tests__\/(?:render-worker[a-z-]*|worker-policy)\.browser\.test\.ts$/;
+export function browserFileWeight(file) {
+  if (renderWorkerBrowserFile.test(file)) return 75;
+  if (file.startsWith(runtimeBrowserTestPrefix)) {
+    const name = file.slice(runtimeBrowserTestPrefix.length).replace(/\.browser\.test\.ts$/, '');
+    return runtimeBrowserFileSeconds.get(name) ?? 20;
+  }
+  if (file === directLightBrowserFile) return 50;
+  if (file === instancingStaticBrowserFile) return 40;
+  if (file.startsWith(colorLightingCasePrefix)) return colorLightingCaseSeconds;
+  if (advancedLightingBrowserFiles.has(file)) return 10;
+  return defaultBrowserFileSeconds;
+}
+
+export function browserGroupWeight(group) {
+  return group.reduce(
+    (seconds, file) => seconds + browserFileWeight(file),
+    browserGroupStartupSeconds,
+  );
+}
+
+// Concurrent lanes start the heaviest owners first so no long group is left
+// for the tail after the light groups have drained; a serial lane keeps the
+// stable roster order.
+export function browserGroupRunOrder(groups, selectedIndexes, concurrency) {
+  if (concurrency <= 1) return undefined;
+  return selectedIndexes
+    .map((_index, position) => position)
+    .sort(
+      (left, right) =>
+        browserGroupWeight(groups[selectedIndexes[right]]) -
+          browserGroupWeight(groups[selectedIndexes[left]]) || left - right,
+    );
+}
+
+// CI runs serial work after Vitest on two browser shards: shard 0 owns
+// discovery, MSAA, FXAA and multiplayer smokes (about 220 s measured in run
+// 36123229770) and shard 1 owns the Runtime Pack Worker gate (about 270 s).
+// While Vitest runs `concurrency` groups at once, one tail second displaces
+// `concurrency` group-seconds, so the reservation scales with concurrency.
+export const ciBrowserShardTailSeconds = Object.freeze([220, 270]);
+
+export function assignBrowserGroupsToShards(
+  groups,
+  shardCount,
+  strategy = defaultShardStrategy,
+  { tailSeconds = [], concurrency = 1 } = {},
+) {
+  if (strategy === 'round-robin') {
+    return groups.map((_group, groupIndex) => groupIndex % shardCount);
+  }
+  const totals = Array.from({ length: shardCount }, (_value, shard) =>
+    shard < tailSeconds.length ? tailSeconds[shard] * concurrency : 0,
+  );
+  const assignment = Array(groups.length).fill(0);
+  const ranked = groups
+    .map((group, index) => ({ index, weight: browserGroupWeight(group) }))
+    .sort((left, right) => right.weight - left.weight || left.index - right.index);
+  for (const { index, weight } of ranked) {
+    let selected = 0;
+    for (let shard = 1; shard < shardCount; shard += 1) {
+      if (totals[shard] < totals[selected]) selected = shard;
+    }
+    assignment[index] = selected;
+    totals[selected] += weight;
+  }
+  return assignment;
+}
+
+export function browserTestFiles(directory = rootDir, relativeDirectory = '') {
   const files = [];
   const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
     left.name.localeCompare(right.name),
@@ -122,30 +380,51 @@ function planGroups(files, groupSize) {
   const regular = files.filter(
     (file) => !file.startsWith('apps/preview/') && !browserProcessIsolatedFiles.has(file),
   );
+  const colorLightingCases = regular.filter((file) => file.startsWith(colorLightingCasePrefix));
+  const rendering = regular.filter(isRenderingBrowserFile);
+  const ordinaryRegular = regular.filter(
+    (file) => !file.startsWith(colorLightingCasePrefix) && !isRenderingBrowserFile(file),
+  );
 
   // These owners create a real WebGPU device or a multi-pass pipeline whose
   // cold start has exceeded the ordinary Vitest budget on persistent runners.
   // Vitest's historical-duration scheduler can otherwise make their
-  // app/renderer lifecycles contend with neighboring files. Keep the stable
-  // advanced-lighting owners in one fresh process so Vite's dependency
-  // optimizer and the WebGPU device are paid for once, but give Bloom its own
-  // process: its multi-pass bootstrap has a materially different cold path and
-  // previously consumed the shared 60s test budget before the app became
-  // observable. The test files retain their own bounded budgets and real
-  // WebGPU assertions, while ordinary browser files keep four-per-group
-  // throughput.
-  const sharedAdvancedLighting = isolated.filter(
-    (file) => advancedLightingBrowserFiles.has(file) && file !== bloomBrowserFile,
-  );
+  // app/renderer lifecycles contend with neighboring files. Each advanced
+  // lighting owner gets its own fresh process: HDR, Bloom, deferred shading,
+  // and SSAO all create multi-pass WebGPU pipelines, and sharing even two of
+  // them has consumed the 60s test budget or stalled teardown before the app
+  // became observable. The direct-light parity producer is also isolated: it
+  // renders eight bounded captures (60 frames locally, 24 in the CI
+  // lightweight profile) and keeps its own outer budget. Ordinary browser
+  // files keep the caller-supplied bounded group size for throughput.
+  const isolatedAdvancedLighting = isolated
+    .filter((file) => advancedLightingBrowserFiles.has(file))
+    .map((file) => [file]);
+  // These asset consumers use the on-demand Pack path and do not
+  // own a long frame loop; share one process so their cold Vite startup is
+  // paid once while the heavier renderer owners retain their boundaries.
+  // Topology requests the Catalog but only draws procedural geometry. Full
+  // eager asset cooking consumed its 120s test deadline before rendering.
+  const assetColdOwners = isolated.filter((file) => assetColdOwnerFiles.has(file));
   const isolatedGroups = [
-    ...(sharedAdvancedLighting.length > 0 ? [sharedAdvancedLighting] : []),
-    ...(isolated.includes(bloomBrowserFile) ? [[bloomBrowserFile]] : []),
-    ...isolated.filter((file) => !advancedLightingBrowserFiles.has(file)).map((file) => [file]),
+    ...isolatedAdvancedLighting,
+    ...(assetColdOwners.length > 0 ? [assetColdOwners] : []),
+    ...isolated
+      .filter((file) => !advancedLightingBrowserFiles.has(file) && !assetColdOwnerFiles.has(file))
+      .map((file) => [file]),
   ];
   return [
     ...(preview.length > 0 ? [preview] : []),
     ...isolatedGroups,
-    ...chunk(regular, groupSize),
+    // The color-lighting cases perform multiple live captures. Keep their
+    // fresh-process boundary small enough for the regular 300s budget while
+    // retaining the caller's larger group size for ordinary contract files.
+    ...chunk(colorLightingCases, colorLightingCaseGroupSize),
+    // Runtime rendering and Preview capture owners perform real WebGPU journeys.
+    // Multiple eight-file combinations exhausted 300 s after roster additions.
+    // Bound this whole family instead of isolating each newly displaced file.
+    ...chunk(rendering, Math.min(groupSize, renderingGroupSize)),
+    ...chunk(ordinaryRegular, groupSize),
   ];
 }
 
@@ -159,72 +438,132 @@ function resolveCliPath() {
   return cliPath;
 }
 
+export function withBrowserHeapLimit(environment) {
+  const inherited = environment.NODE_OPTIONS?.trim() ?? '';
+  if (/(^|\s)--max-old-space-size(?:=|\s)/.test(inherited)) return environment;
+  return {
+    ...environment,
+    NODE_OPTIONS: [inherited, browserNodeHeapArg].filter(Boolean).join(' '),
+  };
+}
+
+export function browserProducerReadiness(group, requestedReadiness) {
+  const previewGroup = group.some((file) => file.startsWith('apps/preview/'));
+  return previewGroup ||
+    group.includes(surfaceProvenanceBrowserFile) ||
+    requestedReadiness === 'before-consume'
+    ? 'before-consume'
+    : 'on-demand';
+}
+
 async function runGroup({ cliPath, group, groupIndex, groupCount, maxWorkers }) {
   process.stderr.write(`[vitest] browser group ${groupIndex}/${groupCount}: ${group.join(', ')}\n`);
-  const previewGroup = group.some((file) => file.startsWith('apps/preview/'));
-  const isolatedColdOwner = group.length === 1 && browserProcessIsolatedFiles.has(group[0]);
-  // Isolated cold owners already have a fresh Vitest process and should not
-  // pay the full Pack producer scan before importing their one SUT. Their
-  // asset GUIDs are still validated by the same runtime import transport;
-  // `on-demand` only moves the producer work behind the first real request.
-  // Preview remains before-consume because its contract asserts a complete
-  // template catalog before the consumer starts.
-  const producerReadiness = previewGroup
-    ? 'before-consume'
-    : isolatedColdOwner || process.env.FORGEAX_BROWSER_PACK_READINESS === 'on-demand'
-      ? 'on-demand'
-      : 'before-consume';
+  const groupTimeoutMs = group.includes(instancingStaticBrowserFile)
+    ? instancingStaticBrowserGroupTimeoutMs
+    : group.includes(directLightBrowserFile)
+      ? directLightBrowserGroupTimeoutMs
+      : group.includes(surfaceProvenanceBrowserFile)
+        ? surfaceProvenanceBrowserGroupTimeoutMs
+        : browserGroupTimeoutMs;
+  // Every group has a fresh Vitest process. A before-consume producer pass
+  // cooks the whole browser catalog, including Sponza, into that process's
+  // heap (about 4 GB and 30-40 s per group), so ordinary groups resolve their
+  // asset GUIDs through the same runtime import transport on first request.
+  // Preview and Surface provenance remain before-consume because their
+  // contracts assert a complete catalog before the consumer starts.
+  const producerReadiness = browserProducerReadiness(
+    group,
+    process.env.FORGEAX_BROWSER_PACK_READINESS,
+  );
   const command = [
     process.execPath,
     cliPath,
     'run',
     '--config',
-    'vitest.browser.config.ts',
+    'config/vitest.browser.config.ts',
     '--project=browser',
+    '--passWithNoTests=false',
     `--maxWorkers=${maxWorkers}`,
     ...group,
   ];
-  const environment = {
+  const environment = withBrowserHeapLimit({
     ...process.env,
     FORGEAX_BROWSER_ENTITY_VISIBILITY: '0',
+    FORGEAX_BROWSER_CROSS_ORIGIN_ISOLATED: group.includes(
+      'packages/app/__tests__/worker-policy.browser.test.ts',
+    )
+      ? '1'
+      : '0',
+    FORGEAX_BROWSER_PREVIEW_ONLY: group.every((file) => file.startsWith('apps/preview/'))
+      ? '1'
+      : '0',
+    FORGEAX_BROWSER_SURFACE_ONLY: group.includes(surfaceProvenanceBrowserFile) ? '1' : '0',
     FORGEAX_BROWSER_PACK_READINESS: producerReadiness,
     FORGEAX_TOOL_PREVIEW: '1',
-  };
-  const first = await runBrowserCommand(command, { cwd: rootDir, env: environment });
+  });
+  const run = () =>
+    runBrowserCommand(command, {
+      cwd: rootDir,
+      env: environment,
+      timeoutMs: groupTimeoutMs,
+      label: `Vitest browser group ${groupIndex}/${groupCount} files=${group.join(',')}`,
+    });
+  const first = await run();
   if (first.status === 0) return;
-  if (!isRetryableOutput('vitest', first.output)) {
-    throw new Error(
-      `Vitest browser group ${groupIndex} failed with status ${first.status}; files=${group.join(', ')}`,
+  if (first.signal === 'SIGKILL') {
+    process.stderr.write(
+      `[vitest] browser group ${groupIndex} memory-pressure=${JSON.stringify(readMemoryPressureDiagnostics())}\n`,
     );
+  }
+  if (first.cancelled || (!first.timedOut && !isRetryableOutput('vitest', first.output))) {
+    throw new Error(`Vitest browser group ${groupIndex} failed; ${first.failure}`);
   }
 
   process.stderr.write(
-    `::warning::Vitest browser group ${groupIndex}/${groupCount} reported declared runner instability; retrying only this group once with a fresh process\n`,
+    `::warning::Vitest browser group ${groupIndex}/${groupCount} reported ${first.timedOut ? 'a bounded timeout' : 'a retry signature (cause unclassified)'}; retrying only this group once with a fresh process\n`,
   );
-  const second = await runBrowserCommand(command, { cwd: rootDir, env: environment });
+  const second = await run();
   if (second.status !== 0) {
     throw new Error(
-      `Vitest browser group ${groupIndex} failed after one isolated retry with status ${second.status}; files=${group.join(', ')}`,
+      `Vitest browser group ${groupIndex} failed after one isolated retry; ${second.failure}`,
     );
   }
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const files = browserTestFiles();
+  let files = browserTestFiles();
+  if (!files.includes(r32floatCapabilityGenerationTest))
+    files.push(r32floatCapabilityGenerationTest);
+  if (options.files.length) {
+    for (const file of options.files)
+      if (!files.includes(file)) throw new Error(`browser file is not in the gate roster: ${file}`);
+    files = [...new Set(options.files)];
+    console.log('[vitest] DIAGNOSTIC selection; full browser CI is still required');
+  }
   const groups = planGroups(files, options.groupSize);
   if (groups.length === 0) throw new Error('no browser test files were discovered');
-  const selectedGroups = groups.filter(
-    (_group, groupIndex) => groupIndex % options.shardCount === options.shardIndex,
+  const shardAssignment = assignBrowserGroupsToShards(
+    groups,
+    options.shardCount,
+    options.shardStrategy,
+    {
+      tailSeconds: process.env.FORGEAX_BROWSER_FIXED_SMOKE === '1' ? ciBrowserShardTailSeconds : [],
+      concurrency: options.groupConcurrency,
+    },
   );
-  if (selectedGroups.length === 0)
+  const selectedGroups = groups.filter(
+    (_group, groupIndex) => shardAssignment[groupIndex] === options.shardIndex,
+  );
+  if (selectedGroups.length === 0) {
     throw new Error(
       `browser shard ${options.shardIndex + 1}/${options.shardCount} selected no groups from ${groups.length}`,
     );
+  }
 
   if (options.dryRun) {
     for (const [index, group] of groups.entries()) {
-      if (index % options.shardCount !== options.shardIndex) continue;
+      if (shardAssignment[index] !== options.shardIndex) continue;
       process.stdout.write(
         `group-${String(index + 1).padStart(2, '0')} (${group.length} files): ${group.join(', ')}\n`,
       );
@@ -232,25 +571,56 @@ async function main() {
     return;
   }
 
-  const cliPath = resolveCliPath();
-  for (const [index, group] of groups.entries()) {
-    if (index % options.shardCount !== options.shardIndex) continue;
-    await runGroup({
-      cliPath,
-      group,
-      groupIndex: index + 1,
-      groupCount: groups.length,
-      maxWorkers: options.maxWorkers,
-    });
+  // Every browser group requests the same point-shadow profile. Produce it
+  // from verified shared inputs or the SDK source compiler before opening browsers.
+  const profileInputs = path.join(rootDir, 'node_modules/.cache/forgeax-build/browser-shaders');
+  {
+    const prepared = await runBrowserCommand(
+      [
+        process.execPath,
+        'scripts/forgeax/prepare-shader-release-inputs.mjs',
+        '--build',
+        '--profile',
+        'point-ssao',
+        '--input',
+        profileInputs,
+        ...(process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST
+          ? ['--shared-input-manifest', process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST]
+          : []),
+      ],
+      { cwd: rootDir, label: 'browser point-shadow shader producer' },
+    );
+    if (prepared.status !== 0)
+      throw new Error(`browser shader preparation failed; ${prepared.failure}`);
   }
+
+  const cliPath = resolveCliPath();
+  const selectedIndexes = groups
+    .map((_group, index) => index)
+    .filter((index) => shardAssignment[index] === options.shardIndex);
+  await runGroups({
+    groups: selectedIndexes,
+    concurrency: options.groupConcurrency,
+    order: browserGroupRunOrder(groups, selectedIndexes, options.groupConcurrency),
+    runGroupImpl: (index) =>
+      runGroup({
+        cliPath,
+        group: groups[index],
+        groupIndex: index + 1,
+        groupCount: groups.length,
+        maxWorkers: options.maxWorkers,
+      }),
+  });
   process.stdout.write(
-    `[vitest] split browser passed: groups=${groups.length}, selected=${selectedGroups.length}, files=${files.length}, shard=${options.shardIndex + 1}/${options.shardCount}\n`,
+    `[vitest] split browser passed: groups=${groups.length}, selected=${selectedGroups.length}, files=${files.length}, shard=${options.shardIndex + 1}/${options.shardCount}, strategy=${options.shardStrategy}, groupConcurrency=${options.groupConcurrency}\n`,
   );
 }
 
-try {
-  await main();
-} catch (error) {
-  process.stderr.write(`[vitest] split browser failed: ${error.message}\n`);
-  process.exitCode = 1;
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await main();
+  } catch (error) {
+    process.stderr.write(`[vitest] split browser failed: ${error.message}\n`);
+    process.exitCode = 1;
+  }
 }

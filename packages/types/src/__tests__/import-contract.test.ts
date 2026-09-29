@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   IMPORT_ERROR_HINTS as DIRECT_IMPORT_ERROR_HINTS,
   ImportError as DirectImportError,
+  parseConservativeAnimatedBounds as directParseConservativeAnimatedBounds,
+  readConservativeAnimatedBounds as directReadConservativeAnimatedBounds,
 } from '../import.js';
 import type {
   ImportedArtifactBody,
@@ -9,12 +11,29 @@ import type {
   ImportResult,
   SourceDependency,
 } from '../index.js';
-import { IMPORT_ERROR_HINTS, ImportError } from '../index.js';
+import {
+  IMPORT_ERROR_HINTS,
+  ImportError,
+  parseConservativeAnimatedBounds,
+  readConservativeAnimatedBounds,
+} from '../index.js';
 
 describe('generic import contract', () => {
   it('keeps the main entry and import module on one runtime contract', () => {
     expect(ImportError).toBe(DirectImportError);
     expect(IMPORT_ERROR_HINTS).toBe(DIRECT_IMPORT_ERROR_HINTS);
+    expect(parseConservativeAnimatedBounds).toBe(directParseConservativeAnimatedBounds);
+    expect(readConservativeAnimatedBounds).toBe(directReadConservativeAnimatedBounds);
+  });
+
+  it('keeps producer bounds parsing behavior on the public barrel', () => {
+    const bounds = [[-2, -1, -3, 2, 1, 3]];
+    expect(parseConservativeAnimatedBounds(bounds[0])).toEqual(
+      Float32Array.of(-2, -1, -3, 2, 1, 3),
+    );
+    expect(readConservativeAnimatedBounds({ conservativeAnimatedBounds: bounds }, 0)).toEqual(
+      Float32Array.of(-2, -1, -3, 2, 1, 3),
+    );
   });
 
   it('models a product with asset-local artifacts and normalized source dependencies', () => {

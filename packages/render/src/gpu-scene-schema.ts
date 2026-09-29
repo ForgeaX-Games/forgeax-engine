@@ -1,5 +1,13 @@
+import { STANDARD_PIPELINE_PARAM_SCHEMA } from '@forgeax/engine-shader';
+import { derive, type NumericParamType } from '@forgeax/engine-types';
+
 export type GpuSceneScalar = 'u32' | 'i32' | 'f32';
-export type GpuSceneFieldType = GpuSceneScalar | 'vec4<f32>' | 'mat4x4<f32>';
+export type GpuSceneFieldType =
+  | GpuSceneScalar
+  | 'vec2<f32>'
+  | 'vec3<f32>'
+  | 'vec4<f32>'
+  | 'mat4x4<f32>';
 
 export interface GpuSceneField {
   readonly name: string;
@@ -29,6 +37,8 @@ const TYPE_LAYOUT: Readonly<
   u32: { size: 4, alignment: 4 },
   i32: { size: 4, alignment: 4 },
   f32: { size: 4, alignment: 4 },
+  'vec2<f32>': { size: 8, alignment: 8 },
+  'vec3<f32>': { size: 12, alignment: 16 },
   'vec4<f32>': { size: 16, alignment: 16 },
   'mat4x4<f32>': { size: 64, alignment: 16 },
 };
@@ -62,7 +72,66 @@ export function gpuSceneWgsl(layout: GpuSceneTableLayout): string {
   return `struct ${layout.name} {\n${fields}\n};`;
 }
 
+function gpuSceneTypeForNumeric(type: NumericParamType): GpuSceneFieldType {
+  switch (type) {
+    case 'f32':
+      return 'f32';
+    case 'i32':
+      return 'i32';
+    case 'u32':
+      return 'u32';
+    case 'vec3':
+      return 'vec3<f32>';
+    case 'vec4':
+    case 'color':
+      return 'vec4<f32>';
+    case 'vec2':
+      return 'vec2<f32>';
+  }
+}
+
+/**
+ * Project the canonical Standard material UBO into the GPU Scene storage row.
+ * The compiler-generated `MaterialParameters` struct, the row packer, and the
+ * shadow alpha-mask reader all consume this projection, so a new root numeric
+ * field or coordinate pair cannot silently create a second hand-written ABI.
+ */
+function deriveStandardMaterialFields(): readonly GpuSceneField[] {
+  const derived = derive(STANDARD_PIPELINE_PARAM_SCHEMA);
+  const fields = [
+    ...derived.numericMembers.map((member) => ({
+      offset: member.offset,
+      field: { name: member.name, type: gpuSceneTypeForNumeric(member.type) },
+    })),
+    ...derived.coordinateRecords.flatMap((record) => [
+      {
+        offset: record.offset,
+        field: { name: record.transformMember, type: 'vec4<f32>' as const },
+      },
+      {
+        offset: record.offset + 16,
+        field: { name: record.metadataMember, type: 'vec4<f32>' as const },
+      },
+    ]),
+  ];
+  fields.sort((left, right) => left.offset - right.offset);
+  return fields.map(({ field }) => field);
+}
+
 export const GPU_SCENE_SCHEMAS = Object.freeze({
+  lod: {
+    name: 'GpuSceneLod',
+    fields: [
+      { name: 'generation', type: 'u32' },
+      { name: 'level', type: 'u32' },
+      { name: 'firstIndex', type: 'u32' },
+      { name: 'indexCount', type: 'u32' },
+      { name: 'baseVertex', type: 'i32' },
+      { name: 'screenCoverage', type: 'f32' },
+      { name: 'hysteresis', type: 'f32' },
+      { name: 'ready', type: 'u32' },
+    ],
+  },
   primitive: {
     name: 'GpuScenePrimitive',
     fields: [
@@ -109,16 +178,7 @@ export const GPU_SCENE_SCHEMAS = Object.freeze({
   },
   material: {
     name: 'GpuSceneMaterial',
-    fields: [
-      { name: 'params0', type: 'vec4<f32>' },
-      { name: 'params1', type: 'vec4<f32>' },
-      { name: 'params2', type: 'vec4<f32>' },
-      { name: 'params3', type: 'vec4<f32>' },
-      { name: 'resource0', type: 'u32' },
-      { name: 'resource1', type: 'u32' },
-      { name: 'resource2', type: 'u32' },
-      { name: 'resource3', type: 'u32' },
-    ],
+    fields: deriveStandardMaterialFields(),
   },
 } satisfies Readonly<Record<string, GpuSceneTableSchema>>);
 

@@ -6,12 +6,11 @@ export const TEST_ATLAS_GUID = 'test/atlas';
 export function makeTestTexture(seed = 0): TextureAsset {
   return {
     kind: 'texture',
-    width: 32,
-    height: 32,
-    format: 'rgba8unorm',
+    shape: { viewDimension: '2d', extent: { width: 32, height: 32 } },
+    format: 'rgba8unorm-srgb',
     data: new Uint8Array(32 * 32 * 4).fill(seed),
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 

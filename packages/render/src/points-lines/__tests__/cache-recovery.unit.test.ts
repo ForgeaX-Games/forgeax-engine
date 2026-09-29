@@ -132,7 +132,7 @@ describe('Points/Lines expansion cache and LKG recovery', () => {
 
     expect(uploads).toBe(1);
     expect(changed.geometry).toBe(first.geometry);
-    expect(plan.conservativeMarginPx).toBe(4.5);
+    expect(plan.conservativeMarginPx).toBe(18);
     expect(changed.geometry.vertices).toEqual(first.geometry.vertices);
   });
 
@@ -153,5 +153,27 @@ describe('Points/Lines expansion cache and LKG recovery', () => {
     expect(preparation.inspect()).toMatchObject({ status: 'rebuild-pending', liveBytes: 0 });
     expect(preparation.prepare(snapshot(), mesh()).ok).toBe(true);
     expect(preparation.inspect()).toMatchObject({ status: 'resident', lastKnownGood: true });
+  });
+
+  it('abandons lost-device handles without invoking the dead-device destroy path', () => {
+    let destroys = 0;
+    const preparation = new PointsLinesPreparation({
+      cache: new PointsLinesExpansionCache(),
+      adapter: {
+        create: () => ok('lost-device-resource'),
+        upload: () => ok(64),
+        validate: () => ok(undefined),
+        destroy: () => {
+          destroys += 1;
+        },
+      },
+    });
+
+    expect(preparation.prepare(snapshot(), mesh()).ok).toBe(true);
+    preparation.abandonForDeviceLoss();
+    preparation.abandonForDeviceLoss();
+
+    expect(destroys).toBe(0);
+    expect(preparation.inspect()).toMatchObject({ status: 'rebuild-pending', liveBytes: 0 });
   });
 });

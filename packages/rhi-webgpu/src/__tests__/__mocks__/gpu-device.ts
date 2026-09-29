@@ -179,6 +179,7 @@ export interface MockCommandEncoder {
 /** Mock render pass encoder. */
 export interface MockRenderPassEncoder {
   readonly [MOCK_BRAND]: 'render-pass-encoder';
+  executeBundles(bundles: Iterable<unknown>): void;
   setPipeline(pipeline: unknown): void;
   setBindGroup(...args: unknown[]): void;
   setIndexBuffer(...args: unknown[]): void;
@@ -445,6 +446,7 @@ function makeDevice(captured: MockCapture[], failures: MockFailures): MockDevice
         beginRenderPass(_descriptor) {
           const pass: MockRenderPassEncoder = {
             [MOCK_BRAND]: 'render-pass-encoder' as const,
+            executeBundles() {},
             setPipeline() {},
             setBindGroup() {},
             setIndexBuffer() {},

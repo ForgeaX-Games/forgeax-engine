@@ -21,7 +21,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const variants: Array<{ texture: number; atlas: AtlasTexture }> = [];
   for (let index = 0; index < atlases.length; index += 1) {
     const atlas = atlases[index]!;
-    const texture = { kind: 'texture' as const, width: atlas.size, height: atlas.size, format: 'rgba8unorm-srgb' as const, data: atlas.pixels, colorSpace: 'srgb' as const, mipmap: false };
+    const texture = {
+      kind: 'texture' as const,
+      shape: { viewDimension: '2d' as const, extent: { width: atlas.size, height: atlas.size } },
+      format: 'rgba8unorm-srgb' as const,
+      data: atlas.pixels,
+      colorSpace: 'srgb' as const,
+      mips: { kind: 'none' as const },
+    };
     const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
     variants.push({ texture: unwrapHandle(textureHandle), atlas });
   }

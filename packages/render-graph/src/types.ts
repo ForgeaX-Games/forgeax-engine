@@ -1,6 +1,8 @@
 import type {
   Buffer,
   ComputePassDescriptor,
+  QuerySet,
+  RenderPassDescriptor,
   RhiCommandEncoder,
   RhiComputePassEncoder,
   RhiDevice,
@@ -10,6 +12,7 @@ import type {
   TextureView,
 } from '@forgeax/engine-rhi';
 import type { RenderGraphError, Result } from './errors.js';
+import type { ColorValueDomain } from './pipeline/color-value-domain.js';
 
 declare const graphTextureBrand: unique symbol;
 declare const graphTextureViewBrand: unique symbol;
@@ -44,10 +47,14 @@ export type GraphExtent =
 export interface GraphTextureDescriptor {
   readonly format: TextureFormat;
   readonly size: GraphExtent;
+  /** Additional RHI usage required by an external diagnostic consumer such as readback. */
+  readonly usage?: number | undefined;
   readonly mipLevelCount?: number | undefined;
   readonly sampleCount?: number | undefined;
   readonly dimension?: GPUTextureDimension | undefined;
   readonly viewFormats?: readonly TextureFormat[] | undefined;
+  /** Explicit semantic color domain; never inferred from the attachment format. */
+  readonly domain?: ColorValueDomain | undefined;
 }
 
 export interface ImportedTextureDescriptor extends GraphTextureDescriptor {
@@ -92,6 +99,9 @@ export type GraphTextureAccess =
   | 'storage-read'
   | 'storage-write'
   | 'storage-read-write'
+  | 'sampled-storage-read-write'
+  /** Compute dispatches fully write before sampling; no incoming contents are consumed. */
+  | 'sampled-storage-write'
   | 'color-attachment'
   | 'depth-stencil-read'
   | 'depth-stencil-write'
@@ -133,6 +143,8 @@ export interface RasterGraphPass<FrameCtx> {
   readonly accesses: readonly GraphAccess[];
   readonly colorAttachments: readonly RasterColorAttachment<FrameCtx>[];
   readonly depthStencilAttachment?: RasterDepthStencilAttachment | undefined;
+  /** Producer-owned query set, resolved once per execution when frame-dependent. */
+  readonly occlusionQuerySet?: QuerySet | ((frame: FrameCtx) => QuerySet | undefined) | undefined;
   readonly executeIf?: ((frame: FrameCtx) => boolean) | undefined;
   encode(context: {
     readonly pass: RhiRenderPassEncoder;
@@ -174,6 +186,31 @@ export interface GraphAccessInfo {
   readonly usage: GraphBufferAccess | GraphTextureAccess;
 }
 
+export type CompiledResourceByteSizeUnknownReason =
+  | 'imported-owner'
+  | 'format-or-layout-unknown'
+  | 'not-allocated';
+
+/** Detached physical allocation facts for one compiled graph resource. */
+export type CompiledResourceDescriptor =
+  | {
+      readonly kind: 'texture';
+      readonly format: TextureFormat;
+      /** Explicit semantic color domain retained in detached graph facts. */
+      readonly domain?: ColorValueDomain | undefined;
+      /** Authored extent retained so consumers can validate the allocation contract. */
+      readonly size: GraphExtent;
+      readonly width: number;
+      readonly height: number;
+      readonly depthOrArrayLayers: number;
+      readonly mipLevelCount: number;
+      readonly sampleCount: number;
+    }
+  | {
+      readonly kind: 'buffer';
+      readonly size: number;
+    };
+
 export interface CompiledRenderGraphInfo {
   readonly passes: readonly {
     readonly name: string;
@@ -186,10 +223,83 @@ export interface CompiledRenderGraphInfo {
     readonly label: string;
     readonly kind: GraphResourceKind;
     readonly origin: GraphResourceOrigin;
+    readonly descriptor: CompiledResourceDescriptor;
     readonly firstUse: number | null;
     readonly lastUse: number | null;
     readonly derivedUsage: number;
+    /** Stable identity of the physical RHI allocation across shared generations. */
+    readonly physicalAllocationKey?: string | undefined;
+    readonly allocationState?: 'live' | 'pending-retirement' | 'released' | undefined;
+    /** Descriptor-derived byte size when the format is uncompressed and known. */
+    readonly byteSize?: number | undefined;
+    /** Why byteSize is absent; no zero is fabricated for an unknown owner/format. */
+    readonly byteSizeUnknownReason?: CompiledResourceByteSizeUnknownReason | undefined;
+    /** Texture format retained for producer-owned resource inspection. */
+    readonly format?: TextureFormat | undefined;
+    /** Texture allocation facts retained for capability/lifetime inspection. */
+    readonly dimension?: GPUTextureDimension | undefined;
+    readonly extent?:
+      | { readonly width: number; readonly height: number; readonly depthOrArrayLayers: number }
+      | undefined;
   }[];
+  /** Monotonic graph generation assigned when this graph was compiled. */
+  readonly generation: number;
+  /**
+   * Graph-owned logical allocation facts. Imported resources are counted only
+   * as references; their physical bytes stay with the importing owner.
+   */
+  readonly resourceAllocation?: RenderGraphResourceAllocationInspection | undefined;
+}
+
+/**
+ * RenderGraph-owned logical allocation facts. Byte totals include only
+ * descriptor-derived sizes known by this package; physical GPU residency and
+ * imported-resource bytes remain unknown by contract.
+ */
+export interface RenderGraphResourceAllocationInspection {
+  readonly unit: 'engine-allocation-bytes';
+  readonly physicalResidency: 'unknown';
+  readonly liveBytes: number;
+  readonly pendingRetirementBytes: number;
+  readonly peakBytes: number;
+  readonly successfulAllocationCount: number;
+  readonly successfulAllocationBytes: number;
+  readonly pendingRetirementCount: number;
+  readonly retiredBytes: number;
+  readonly failedAllocationRollbacks: number;
+  readonly failedAllocationRollbackBytes: number;
+  readonly unknownByteSizeCount: number;
+  readonly importedResourceCount: number;
+}
+
+/** One graph generation included in the renderer-wide replacement ledger. */
+export interface RenderGraphGenerationAllocationEntry {
+  readonly generation: number;
+  /** A graph may be both the current active graph and an unsubmitted candidate. */
+  readonly roles: readonly ('active' | 'candidate' | 'retiring')[];
+  readonly retirement: 'active' | 'pending' | 'failed';
+  readonly allocation: RenderGraphResourceAllocationInspection;
+}
+
+/**
+ * Renderer-wide logical allocation facts across graph generations. Current
+ * live and pending bytes are summed across the generations that overlap;
+ * peakBytes is captured from simultaneous owner events instead of summing
+ * historical per-graph peaks. This does not estimate physical VRAM or include
+ * imported owner bytes.
+ */
+export interface RenderGraphGenerationAllocationInspection {
+  readonly unit: 'engine-allocation-bytes';
+  readonly physicalResidency: 'unknown';
+  readonly availability: 'complete' | 'partial' | 'unavailable';
+  readonly unavailableGenerationCount: number;
+  readonly entries: readonly RenderGraphGenerationAllocationEntry[];
+  readonly liveBytes: number;
+  readonly pendingRetirementBytes: number;
+  /** Peak simultaneous logical bytes observed by this renderer owner. */
+  readonly peakBytes: number;
+  readonly failedRetirementCount: number;
+  readonly failedRetirementBytes: number;
 }
 
 export interface RenderGraphFrame {
@@ -200,17 +310,48 @@ export interface RenderGraphPassExecution {
   readonly name: string;
   readonly kind: GraphPassKind;
   readonly executionIndex: number;
+  /**
+   * The frame-resolved depth view used by an active raster pass. This is
+   * absent for non-raster, no-depth, and skipped passes.
+   */
+  readonly resolvedDepthStencilAttachmentView?: TextureView | undefined;
 }
 
 export type RenderGraphPassRunner = (pass: RenderGraphPassExecution, encode: () => void) => void;
 
+/**
+ * The graph-neutral boundary for observing and decorating an actual pass.
+ * Render owns the policy supplied here; the graph only preserves pass
+ * provenance and applies the decorated descriptor at the real pass-open
+ * boundary. Timestamp policy and acceptance remain outside the graph.
+ */
+export interface RenderGraphPassInstrumentationScope {
+  readonly renderPassDescriptor?: (descriptor: RenderPassDescriptor) => RenderPassDescriptor;
+  readonly computePassDescriptor?: (descriptor: ComputePassDescriptor) => ComputePassDescriptor;
+  readonly beforeCopy?: (encoder: RhiCommandEncoder) => void;
+  readonly afterCopy?: (encoder: RhiCommandEncoder) => void;
+}
+
+export interface RenderGraphPassInstrumentation<FrameCtx extends RenderGraphFrame> {
+  begin(
+    pass: RenderGraphPassExecution,
+    frame: FrameCtx,
+  ): RenderGraphPassInstrumentationScope | undefined;
+}
+
 export interface RenderGraphCompileOptions {
   readonly device: RhiDevice;
   readonly surfaceSize: { readonly width: number; readonly height: number };
+  /** Share identical graph-created textures with a live graph on the same device. */
+  readonly reuseResourcesFrom?: CompiledRenderGraph<RenderGraphFrame> | undefined;
 }
 
 export interface CompiledRenderGraph<FrameCtx extends RenderGraphFrame> {
-  execute(frame: FrameCtx, runPass?: RenderGraphPassRunner): Result<void, RenderGraphError>;
+  execute(
+    frame: FrameCtx,
+    runPass?: RenderGraphPassRunner,
+    instrumentation?: RenderGraphPassInstrumentation<FrameCtx>,
+  ): Result<void, RenderGraphError>;
   inspect(): CompiledRenderGraphInfo;
   retire(): Promise<Result<void, RenderGraphError>>;
 }

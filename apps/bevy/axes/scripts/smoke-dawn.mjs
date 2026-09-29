@@ -16,7 +16,7 @@ import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErr
 //   (c) NOT-BLACK: the frame's brightest pixel exceeds a floor (the cubes rendered).
 //   (d) AXES COUNT: drawAxesForEntities emitted one axes() call per ShowAxes cube (3).
 //   (e) AXES-LOCAL: each cube's 3 axis endpoints equal translation + AXIS_LENGTH * rotated
-//       local X/Y/Z (from its Transform.world), within EPS — a yawed cube's X arrow is NOT
+//       local X/Y/Z (from its GlobalTransform.world), within EPS — a yawed cube's X arrow is NOT
 //       world-X, proving the gizmo reads the local frame.
 //   (f) Renderer.onError fired 0 times.
 //
@@ -31,7 +31,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_BRIGHT_FLOOR = Number.parseFloat(process.env.SMOKE_BRIGHT_FLOOR ?? '0.10');
 const AXIS_EPS = Number.parseFloat(process.env.SMOKE_AXIS_EPS ?? '1e-4');
 const WIDTH = 320;

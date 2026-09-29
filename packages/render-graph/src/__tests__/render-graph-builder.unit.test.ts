@@ -1,6 +1,7 @@
 import type {
   Buffer,
   ComputePassDescriptor,
+  QuerySet,
   RhiCommandEncoder,
   RhiComputePassEncoder,
   RhiDevice,
@@ -10,7 +11,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 import { RenderGraphBuilder } from '../builder.js';
 import { ok } from '../errors.js';
-import type { RenderGraphFrame } from '../types.js';
+import type { RenderGraphFrame, RenderGraphPassInstrumentation } from '../types.js';
 
 interface Frame extends RenderGraphFrame {
   readonly imported: Buffer;
@@ -119,6 +120,37 @@ describe('RenderGraphBuilder resource and temporal contracts', () => {
     expect(mutation.ok).toBe(false);
     if (!mutation.ok) expect(mutation.error.code).toBe('builder-sealed');
     if (compiled.ok) expect(compiled.value.inspect().passes).toEqual([]);
+  });
+
+  it('deep freezes compiled texture extent objects', () => {
+    const graph = new RenderGraphBuilder<Frame>();
+    const texture = value(
+      graph.createTexture('sized', {
+        format: 'rgba8unorm',
+        size: { width: 7, height: 5, depthOrArrayLayers: 2 },
+      }),
+    );
+    const view = graph.view(texture).unwrap();
+    graph.addRasterPass('write-sized', {
+      accesses: [{ resource: view, usage: 'color-attachment' }],
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+      encode: () => undefined,
+    });
+    const compiled = graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    const resource = compiled.value.inspect().resources.find(({ label }) => label === 'sized');
+    expect(resource).toBeDefined();
+    if (resource?.descriptor.kind !== 'texture') return;
+    expect(Object.isFrozen(resource.descriptor)).toBe(true);
+    expect(Object.isFrozen(resource.descriptor.size)).toBe(true);
+    const snapshot = JSON.stringify(resource);
+    try {
+      (resource.descriptor.size as { width: number }).width = 99;
+    } catch {
+      // Frozen snapshots reject mutation in strict mode.
+    }
+    expect(JSON.stringify(resource)).toBe(snapshot);
   });
 
   it('accepts imported first-read and rejects graph-created first-read', () => {
@@ -234,7 +266,7 @@ describe('RenderGraphBuilder resource and temporal contracts', () => {
     const encoder = {
       ...mockEncoder(),
       beginRenderPass: (descriptor: GPURenderPassDescriptor) => {
-        clearValue = descriptor.colorAttachments[0]?.clearValue;
+        clearValue = Array.from(descriptor.colorAttachments)[0]?.clearValue;
         return { end: () => undefined } as never;
       },
     } as unknown as RhiCommandEncoder;
@@ -248,6 +280,51 @@ describe('RenderGraphBuilder resource and temporal contracts', () => {
       }).ok,
     ).toBe(true);
     expect(clearValue).toEqual({ r: 0.25, g: 0, b: 0, a: 1 });
+  });
+
+  it('resolves a frame-owned occlusion query set at execution time', () => {
+    const graph = new RenderGraphBuilder<Frame & { readonly querySet?: QuerySet }>();
+    const texture = value(
+      graph.importTexture(
+        'surface',
+        { format: 'rgba8unorm', size: 'surface', usage: 0x10 },
+        (frame) => frame.importedTexture as Texture,
+      ),
+    );
+    const view = value(
+      graph.importView(
+        texture,
+        { label: 'surface.view' },
+        (frame) => frame.importedView as TextureView,
+      ),
+    );
+    graph.addRasterPass('present', {
+      accesses: [{ resource: view, usage: 'color-attachment' }],
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+      occlusionQuerySet: (frame) => frame.querySet,
+      encode: () => undefined,
+    });
+    const compiled = value(
+      graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }),
+    );
+    const observed: Array<QuerySet | undefined> = [];
+    const encoder = {
+      ...mockEncoder(),
+      beginRenderPass: (descriptor: { readonly occlusionQuerySet?: QuerySet }) => {
+        observed.push(descriptor.occlusionQuerySet);
+        return { end: () => undefined } as never;
+      },
+    } as unknown as RhiCommandEncoder;
+    const querySet = { id: 3 } as unknown as QuerySet;
+    const base = {
+      encoder,
+      imported: {} as Buffer,
+      importedTexture: {} as Texture,
+      importedView: {} as TextureView,
+    };
+    expect(compiled.execute(base).ok).toBe(true);
+    expect(compiled.execute({ ...base, querySet }).ok).toBe(true);
+    expect(observed).toEqual([undefined, querySet]);
   });
 
   it('rejects importView for a graph-created texture', () => {
@@ -402,6 +479,71 @@ describe('RenderGraphBuilder resource and temporal contracts', () => {
 });
 
 describe('RenderGraphBuilder capability, execution, and lifecycle contracts', () => {
+  it('distinguishes an internally initialized sampled/storage chain from incoming read-write data', async () => {
+    for (const usage of ['sampled-storage-write', 'sampled-storage-read-write'] as const) {
+      const graph = new RenderGraphBuilder<Frame>();
+      const texture = graph
+        .createTexture('chain', { format: 'rgba16float', size: 'surface' })
+        .unwrap();
+      const view = graph.view(texture).unwrap();
+      graph
+        .addComputePass('chain', { accesses: [{ resource: view, usage }], encode: () => undefined })
+        .unwrap();
+      graph
+        .addComputePass('consume', {
+          accesses: [{ resource: view, usage: 'sampled-read' }],
+          encode: () => undefined,
+        })
+        .unwrap();
+      const compiled = graph.compile({
+        device: mockDevice(),
+        surfaceSize: { width: 4, height: 4 },
+      });
+      expect(compiled.ok).toBe(usage === 'sampled-storage-write');
+      if (compiled.ok) {
+        expect(compiled.value.inspect().resources[0]?.derivedUsage).toBe(0x0c);
+        await compiled.value.retire();
+      } else expect(compiled.error.code).toBe('uninitialized-read');
+      const unavailableGraph = new RenderGraphBuilder<Frame>();
+      const unavailableTexture = unavailableGraph
+        .createTexture('chain', {
+          format: 'rgba16float',
+          size: 'surface',
+        })
+        .unwrap();
+      unavailableGraph
+        .addComputePass('chain', {
+          accesses: [{ resource: unavailableGraph.view(unavailableTexture).unwrap(), usage }],
+          encode: () => undefined,
+        })
+        .unwrap();
+      const unavailable = unavailableGraph.compile({
+        device: mockDevice({ caps: caps({ storageTexture: false }) }),
+        surfaceSize: { width: 4, height: 4 },
+      });
+      expect(unavailable.ok).toBe(false);
+      if (!unavailable.ok) expect(unavailable.error.code).toBe('capability-missing');
+    }
+  });
+
+  it('rejects write-then-sample declarations outside ordered compute dispatches', () => {
+    const graph = new RenderGraphBuilder<Frame>();
+    const texture = graph
+      .createTexture('chain', { format: 'rgba16float', size: 'surface' })
+      .unwrap();
+    const view = graph.view(texture).unwrap();
+    graph
+      .addRasterPass('invalid-chain', {
+        accesses: [{ resource: view, usage: 'sampled-storage-write' }],
+        colorAttachments: [],
+        encode: () => undefined,
+      })
+      .unwrap();
+    const result = graph.compile({ device: mockDevice(), surfaceSize: { width: 4, height: 4 } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('access-conflict');
+  });
+
   it('derives storage usage for a write-only buffer producer', () => {
     const graph = new RenderGraphBuilder<Frame>();
     const buffer = value(graph.createBuffer('produced', { size: 16 }));
@@ -414,6 +556,29 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
     );
     expect(compiled.inspect().resources).toContainEqual(
       expect.objectContaining({ label: 'produced', derivedUsage: 0x0080 }),
+    );
+  });
+
+  it('keeps declared created-texture usage alongside graph-derived usage', () => {
+    const graph = new RenderGraphBuilder<Frame>();
+    const texture = value(
+      graph.createTexture('readback-target', {
+        format: 'rgba8unorm',
+        size: 'surface',
+        usage: 0x01,
+      }),
+    );
+    const view = value(graph.view(texture));
+    graph.addRasterPass('write', {
+      accesses: [{ resource: view, usage: 'color-attachment' }],
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+      encode: () => undefined,
+    });
+    const compiled = value(
+      graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }),
+    );
+    expect(compiled.inspect().resources).toContainEqual(
+      expect.objectContaining({ label: 'readback-target', derivedUsage: 0x11 }),
     );
   });
 
@@ -468,6 +633,96 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
       'end-compute',
       'after-compute',
     ]);
+  });
+
+  it('applies pass timestamp instrumentation at the real raster and compute boundaries', () => {
+    const graph = new RenderGraphBuilder<Frame>();
+    const texture = value(
+      graph.importTexture(
+        'surface',
+        { format: 'rgba8unorm', size: 'surface', usage: 0x10 },
+        (frame) => frame.importedTexture as Texture,
+      ),
+    );
+    const view = value(
+      graph.importView(
+        texture,
+        { label: 'surface.view' },
+        (frame) => frame.importedView as TextureView,
+      ),
+    );
+    graph.addRasterPass('timed-raster', {
+      accesses: [{ resource: view, usage: 'color-attachment' }],
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+      encode: () => undefined,
+    });
+    graph.addComputePass('timed-compute', {
+      accesses: [],
+      encode: () => undefined,
+    });
+    const compiled = value(
+      graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }),
+    );
+    const querySet = {} as QuerySet;
+    const rasterWrites = {
+      querySet,
+      beginningOfPassWriteIndex: 4,
+      endOfPassWriteIndex: 5,
+    } as const;
+    const computeWrites = {
+      querySet,
+      beginningOfPassWriteIndex: 6,
+      endOfPassWriteIndex: 7,
+    } as const;
+    let rasterDescriptor: { readonly timestampWrites?: unknown } | undefined;
+    const computeDescriptors: Array<{ readonly timestampWrites?: unknown }> = [];
+    const encoder = {
+      ...mockEncoder(),
+      beginRenderPass: (descriptor: { readonly timestampWrites?: unknown }) => {
+        rasterDescriptor = descriptor;
+        return { end: () => undefined } as never;
+      },
+      beginComputePass: (descriptor: ComputePassDescriptor = {}) => {
+        computeDescriptors.push(descriptor);
+        return {
+          setPipeline: () => undefined,
+          setBindGroup: () => undefined,
+          dispatchWorkgroups: () => undefined,
+          dispatchWorkgroupsIndirect: () => undefined,
+          end: () => undefined,
+        } as unknown as RhiComputePassEncoder;
+      },
+    } as unknown as RhiCommandEncoder;
+    const instrumentation: RenderGraphPassInstrumentation<Frame> = {
+      begin: (pass) =>
+        pass.kind === 'raster'
+          ? {
+              renderPassDescriptor: (descriptor) => ({
+                ...descriptor,
+                timestampWrites: rasterWrites,
+              }),
+            }
+          : {
+              computePassDescriptor: (descriptor) => ({
+                ...descriptor,
+                timestampWrites: computeWrites,
+              }),
+            },
+    };
+    const executed = compiled.execute(
+      {
+        encoder,
+        imported: {} as Buffer,
+        importedTexture: {} as Texture,
+        importedView: {} as TextureView,
+      },
+      undefined,
+      instrumentation,
+    );
+    expect(executed.ok).toBe(true);
+    expect(rasterDescriptor?.timestampWrites).toBe(rasterWrites);
+    expect(computeDescriptors).toHaveLength(1);
+    expect(computeDescriptors[0]?.timestampWrites).toBe(computeWrites);
   });
 
   it('reports a graph-owned compute pass begin failure to the pass owner', () => {
@@ -613,6 +868,107 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
     expect(destroyed).toHaveLength(1);
   });
 
+  it('uses array-layer and 3d depth semantics when projecting mip bytes', () => {
+    const compile = (dimension: GPUTextureDimension) => {
+      const graph = new RenderGraphBuilder<Frame>();
+      const texture = value(
+        graph.createTexture(`${dimension}-texture`, {
+          format: 'rgba8unorm',
+          size: { width: 4, height: 4, depthOrArrayLayers: 4 },
+          dimension,
+          mipLevelCount: 3,
+        }),
+      );
+      const view = value(
+        graph.view(texture, { dimension: dimension === '3d' ? '3d' : '2d-array' }),
+      );
+      graph.addRasterPass('write', {
+        accesses: [{ resource: view, usage: 'color-attachment' }],
+        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+        encode: () => undefined,
+      });
+      return value(graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }));
+    };
+
+    expect(compile('2d').inspect().resources[0]?.byteSize).toBe(336);
+    expect(compile('3d').inspect().resources[0]?.byteSize).toBe(292);
+  });
+
+  it('projects two bytes per texel for 16-bit single-channel formats', () => {
+    for (const format of ['r16float', 'r16unorm', 'r16snorm', 'r16uint', 'r16sint'] as const) {
+      const graph = new RenderGraphBuilder<Frame>();
+      const texture = value(graph.createTexture(format, { format, size: { width: 4, height: 3 } }));
+      const view = value(graph.view(texture));
+      graph.addRasterPass('write', {
+        accesses: [{ resource: view, usage: 'color-attachment' }],
+        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }],
+        encode: () => undefined,
+      });
+      const compiled = value(
+        graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }),
+      );
+      expect(compiled.inspect().resources[0]?.byteSize, format).toBe(24);
+      expect(compiled.inspect().resourceAllocation?.unknownByteSizeCount, format).toBe(0);
+    }
+  });
+
+  it('projects graph-owned allocation bytes and keeps imported ownership explicit', async () => {
+    let resolveFence: (() => void) | undefined;
+    const fence = new Promise<void>((resolve) => {
+      resolveFence = resolve;
+    });
+    const graph = new RenderGraphBuilder<Frame>();
+    const created = value(graph.createBuffer('created', { size: 32 }));
+    const imported = value(
+      graph.importBuffer('imported', { size: 64, usage: 0x0004 }, (frame) => frame.imported),
+    );
+    graph.addCopyPass('seed', {
+      accesses: [
+        { resource: created, usage: 'copy-dst' },
+        { resource: imported, usage: 'copy-src' },
+      ],
+      encode: () => undefined,
+    });
+    const device = mockDevice({
+      queue: { onSubmittedWorkDone: () => fence } as never,
+    });
+    const compiled = value(graph.compile({ device, surfaceSize: { width: 1, height: 1 } }));
+    const info = compiled.inspect();
+    const createdInfo = info.resources.find(({ label }) => label === 'created');
+    const importedInfo = info.resources.find(({ label }) => label === 'imported');
+    expect(createdInfo?.byteSize).toBe(32);
+    expect(importedInfo?.byteSize).toBeUndefined();
+    expect(importedInfo?.byteSizeUnknownReason).toBe('imported-owner');
+    expect(info.resourceAllocation).toMatchObject({
+      unit: 'engine-allocation-bytes',
+      physicalResidency: 'unknown',
+      liveBytes: 32,
+      pendingRetirementBytes: 0,
+      peakBytes: 32,
+      successfulAllocationCount: 1,
+      successfulAllocationBytes: 32,
+      importedResourceCount: 1,
+      unknownByteSizeCount: 0,
+    });
+
+    const retiring = compiled.retire();
+    await Promise.resolve();
+    expect(compiled.inspect().resourceAllocation).toMatchObject({
+      liveBytes: 0,
+      pendingRetirementBytes: 32,
+      pendingRetirementCount: 1,
+      peakBytes: 32,
+    });
+    resolveFence?.();
+    expect((await retiring).ok).toBe(true);
+    expect(compiled.inspect().resourceAllocation).toMatchObject({
+      liveBytes: 0,
+      pendingRetirementBytes: 0,
+      pendingRetirementCount: 0,
+      retiredBytes: 32,
+    });
+  });
+
   it('destroys graph-created resources once and never destroys imported resources', async () => {
     const destroyedBuffers: Buffer[] = [];
     const device = mockDevice({
@@ -644,6 +1000,37 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
     expect(compiled.execute({ imported: {} as Buffer, encoder: mockEncoder() }).ok).toBe(false);
   });
 
+  it('retains graph allocation tokens when destruction refuses or throws', async () => {
+    for (const destroy of [
+      () => ({ ok: false, error: { code: 'webgpu-runtime-error' } }) as never,
+      () => {
+        throw new Error('destroy refused');
+      },
+    ]) {
+      const graph = new RenderGraphBuilder<Frame>();
+      const created = value(graph.createBuffer('created', { size: 32 }));
+      graph.addCopyPass('seed', {
+        accesses: [{ resource: created, usage: 'copy-dst' }],
+        encode: () => undefined,
+      });
+      const compiled = value(
+        graph.compile({
+          device: mockDevice({ destroyBuffer: destroy }),
+          surfaceSize: { width: 1, height: 1 },
+        }),
+      );
+
+      const result = await compiled.retire();
+      expect(result.ok).toBe(false);
+      expect(compiled.inspect().resourceAllocation).toMatchObject({
+        liveBytes: 0,
+        pendingRetirementBytes: 32,
+        pendingRetirementCount: 1,
+        retiredBytes: 0,
+      });
+    }
+  });
+
   it('keeps a failed retirement result stable across repeated calls', async () => {
     const graph = new RenderGraphBuilder<Frame>();
     const created = value(graph.createBuffer('created', { size: 16 }));
@@ -669,5 +1056,38 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
     expect(first.ok).toBe(false);
     expect(second).toBe(first);
     if (!second.ok) expect(second.error.code).toBe('resource-retire-failed');
+  });
+});
+
+it('refuses MRT beyond the device attachment limit before allocation', () => {
+  const graph = new RenderGraphBuilder<Frame>();
+  const views = [0, 1].map((index) =>
+    value(
+      graph.view(
+        value(graph.createTexture(`color-${index}`, { format: 'rgba8unorm', size: 'surface' })),
+      ),
+    ),
+  );
+  value(
+    graph.addRasterPass('mrt', {
+      accesses: views.map((resource) => ({ resource, usage: 'color-attachment' as const })),
+      colorAttachments: views.map((view) => ({
+        view,
+        loadOp: 'clear' as const,
+        storeOp: 'store' as const,
+      })),
+      encode() {},
+    }),
+  );
+  const result = graph.compile({
+    device: mockDevice({ caps: caps({ maxColorAttachments: 1 }) }),
+    surfaceSize: { width: 16, height: 16 },
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: 'capability-missing',
+      detail: { passName: 'mrt', capability: 'color-attachments' },
+    },
   });
 });

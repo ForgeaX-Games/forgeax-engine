@@ -12,7 +12,7 @@
         "required": ["evidenceKind", "colorDomain", "frameCount", "epsilon", "sourceFixtureHash", "producers"],
         "properties": {
           "colorDomain": { "enum": ["linearHdr", "displayEncoded"] },
-          "frameCount": { "const": 300 },
+          "frameCount": { "const": 60 },
           "epsilon": {
             "type": "object",
             "additionalProperties": false,
@@ -34,10 +34,76 @@
           }
         }
       }
+    },
+    {
+      "if": { "properties": { "evidenceKind": { "const": "rect-area-ltc" } } },
+      "then": {
+        "required": ["evidenceKind", "colorDomain", "frameCount", "epsilon", "sourceFixtureHash", "producers", "falsifier"],
+        "properties": {
+          "colorDomain": { "const": "linearHdr" },
+          "frameCount": { "const": 60 },
+          "epsilon": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rgb"],
+            "properties": { "rgb": { "type": "number", "minimum": 0, "maximum": 0.05 } }
+          },
+          "sourceFixtureHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "producers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["browser", "dawn"],
+            "properties": {
+              "browser": { "$ref": "#/$defs/rectAreaProducer" },
+              "dawn": { "$ref": "#/$defs/rectAreaProducer" }
+            }
+          },
+          "falsifier": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reverseFront", "zeroLtc"],
+            "properties": {
+              "reverseFront": { "$ref": "#/$defs/rectAreaFalsifier" },
+              "zeroLtc": { "$ref": "#/$defs/rectAreaFalsifier" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "evidenceKind": { "const": "extended-lighting" } } },
+      "then": {
+        "required": ["evidenceKind", "colorDomain", "frameCount", "epsilon", "sourceFixtureHash", "producers", "falsifier"],
+        "properties": {
+          "colorDomain": { "const": "linearHdr" },
+          "frameCount": { "const": 60 },
+          "epsilon": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rgb"],
+            "properties": { "rgb": { "type": "number", "minimum": 0, "maximum": 0.05 } }
+          },
+          "sourceFixtureHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "producers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["browser", "dawn"],
+            "properties": {
+              "browser": { "$ref": "#/$defs/extendedLightingProducer" },
+              "dawn": { "$ref": "#/$defs/extendedLightingProducer" }
+            }
+          },
+          "falsifier": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/extendedLightingFalsifier" }
+          }
+        }
+      }
     }
   ],
   "properties": {
-    "evidenceKind": { "enum": ["vertex-color"] },
+    "evidenceKind": { "enum": ["vertex-color", "rect-area-ltc", "extended-lighting"] },
     "caseId": { "type": "string", "minLength": 1 },
     "width": { "type": "integer", "minimum": 1 },
     "height": { "type": "integer", "minimum": 1 },
@@ -57,6 +123,7 @@
     "epsilon": { "type": "object" },
     "sourceFixtureHash": { "type": "string" },
     "producers": { "type": "object" },
+    "falsifier": { "oneOf": [{ "type": "object" }, { "type": "array" }] },
     "artifacts": {
       "type": "array",
       "minItems": 3,
@@ -75,6 +142,89 @@
         "adapterId": { "type": "string", "minLength": 1 },
         "pinnedCommit": { "type": "string", "minLength": 1 },
         "buildIdentity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rectAreaProducer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observed", "verdict", "confidence"],
+      "properties": {
+        "status": { "enum": ["not-run", "unavailable", "complete", "failed"] },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["notRun", "failed", "passed"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "bytes": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "rawHash": { "type": ["string", "null"], "pattern": "^[0-9a-f-]{8,}$" },
+        "pixels": { "type": ["array", "null"], "items": { "type": "number" } },
+        "validation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rectAreaFalsifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observed", "verdict", "confidence"],
+      "properties": {
+        "status": { "enum": ["not-run", "unavailable", "complete", "failed"] },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["notRun", "failed", "passed"] },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
+    },
+    "extendedLightingReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "byteLength"],
+      "properties": {
+        "status": { "enum": ["not-run", "ready", "recovered"] },
+        "byteLength": { "const": 160 }
+      }
+    },
+    "extendedLightingResourceReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "topology", "resourceCount", "uploadBytes"],
+      "properties": {
+        "status": { "enum": ["not-run", "candidate", "accepted", "lkg", "recovered"] },
+        "topology": { "const": "extendedLighting" },
+        "resourceCount": { "type": "integer", "minimum": 0 },
+        "uploadBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "extendedLightingProducer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observed", "verdict", "confidence", "identity", "numericRoi", "recordReceipt", "resourceReceipt"],
+      "properties": {
+        "status": { "enum": ["not-run", "unavailable", "complete", "failed"] },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["notRun", "failed", "passed"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "identity": { "type": "string", "minLength": 1 },
+        "numericRoi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["analyticMax", "roiMax", "epsilon", "colorDomain"],
+          "properties": {
+            "analyticMax": { "type": "number", "minimum": 0 },
+            "roiMax": { "type": "number", "minimum": 0 },
+            "epsilon": { "type": "number", "minimum": 0 },
+            "colorDomain": { "const": "linearHdr" }
+          }
+        },
+        "recordReceipt": { "$ref": "#/$defs/extendedLightingReceipt" },
+        "resourceReceipt": { "$ref": "#/$defs/extendedLightingResourceReceipt" }
+      }
+    },
+    "extendedLightingFalsifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "observed", "verdict", "confidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["not-run", "unavailable", "complete", "failed"] },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["notRun", "failed", "passed"] },
+        "confidence": { "enum": ["high", "medium", "low"] }
       }
     },
     "artifact": {

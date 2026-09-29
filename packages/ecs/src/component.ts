@@ -392,12 +392,15 @@ export type ManagedArrayElementValue<T extends ManagedArrayElementType> = T exte
  *
  * The 4 buffer/array keywords (`'buffer'` / `'buffer<N>'` / `'array<T>'` /
  * `'array<T, N>'`) all resolve directly to a concrete TypedArray (or
- * Uint8Array for the byte-only buffer family). The materialised value is a
- * read-only snapshot: for fixed `buffer<N>` / `array<T,N>` it aliases the
- * inline column buffer (feat-20260602); for variable `buffer` / `array<T>`
- * it aliases the BufferPool slot bytes (plan-strategy §2.2 D-R3 contract).
- * Mutation flows through `world.set` / `world.push` / `world.pop`
- * not direct assignment to the returned TypedArray.
+ * Uint8Array for the byte-only buffer family). At the public `world.get`
+ * boundary, a relationship-target `array<entity>` is a detached `Uint32Array`
+ * snapshot. Other public array fields retain their existing transient live
+ * TypedArray alias: fixed `buffer<N>` / `array<T,N>` values alias the inline
+ * column buffer (feat-20260602), while variable `buffer` / `array<T>` values
+ * alias the BufferPool slot bytes. Internal `readRow`, `_getArrayView`, and
+ * `materializeArrayView` paths always use the live zero-copy alias. Mutation
+ * flows through `world.set` / `world.push` / `world.pop`, not direct
+ * assignment to a returned TypedArray.
  *
  * The `'string'` arm resolves to a native JS `string` (D-R1 / AC-13): the
  * dispatch routes the column u32 through `UniqueRefStore.resolve(handle)`
@@ -930,7 +933,7 @@ export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
  * same meaning): scene collect skips a `transient` field just as it skips a
  * `transient` component. Granularity is sunk to the field level so a component
  * can persist most of its fields while excluding a derived/reconstructable one
- * (e.g. `Transform.world`). Absent means the field participates in
+ * (e.g. `GlobalTransform.world`). Absent means the field participates in
  * serialization.
  */
 export interface FieldReflection {
@@ -998,6 +1001,12 @@ export interface DefineComponentOptions {
    * rebuilt by the mirror hook after instantiateScene).
    */
   readonly transient?: boolean;
+  /**
+   * Components materialized automatically when this component is added.
+   * Explicit data for a required component wins; the ECS appends only missing
+   * identities at the spawn/add boundary, never from a frame system.
+   */
+  readonly requires?: readonly Component[];
   /**
    * Component-level open metadata namespace. Entries are copied into
    * `Component.meta` at registration; the ECS core assigns no meaning to any
@@ -1171,7 +1180,11 @@ export function defineComponent<const N extends string, const S extends FieldsIn
   registerComponentDefinition(token, {
     fields: frozenFields,
     defaults: frozenDefaults,
-    policy: { transient: options?.transient ?? false, meta },
+    policy: {
+      transient: options?.transient ?? false,
+      meta,
+      requires: Object.freeze([...(options?.requires ?? [])]),
+    },
   });
   return Object.freeze(token);
 }

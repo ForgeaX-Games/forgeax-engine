@@ -21,6 +21,8 @@ exercise the GPU path and pixel-readback gate.
 ## One-line tilemap composition
 
 ~~~ts
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
 const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
 const tilemap = world.spawn(
   { component: Tilemap, data: { cols: 8, rows: 8, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle } },
@@ -32,6 +34,11 @@ world.spawn(
   { component: ChildOf, data: { parent: tilemap } },
 );
 ~~~
+
+`Transform` stores authored local pose and declares `GlobalTransform` as a
+required transient world-pose column. The generic ECS structural boundary adds
+that requirement for raw spawns, component adds, and deferred commands; scene
+asset and mount helpers do not need a second completion path.
 
 `TileLayer.tiles` is a row-major `Uint32Array`; zero is empty and non-zero
 values index the tileset entries. The extract system owns derived cell entity
@@ -48,7 +55,7 @@ array and call `markTileLayerDirty(world, layer)` to rebuild the derived set.
 - The smoke is intentionally the stronger atlas consumer: it uploads four
   colored quadrants and checks the rebuild through Dawn readback.
 
-This is a focused tilemap/render-feature oracle. `templates/game-default`
+This is a focused tilemap/render-feature oracle. `templates/game-3d`
 currently owns a coherent 3D target-range gameplay loop and has no 2D camera,
 map input, map state, or authored tileset boundary. It therefore remains a
 focused `apps/hello` consumer rather than being copied into the template.

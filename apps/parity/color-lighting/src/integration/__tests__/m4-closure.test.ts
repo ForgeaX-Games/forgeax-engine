@@ -62,8 +62,8 @@ describe('M4 direct-light closure gate', () => {
       expect(merged.value.report.attachmentEvidence.missingPipelineIds).toEqual([]);
       expect(merged.value.report.attachmentEvidence.producers).toHaveLength(2);
       expect(merged.value.report.attachmentEvidence.producers.map((entry) => entry.pipelineId)).toEqual([
-        'forgeax::urp',
-        'forgeax::hdrp',
+        'forgeax::standard',
+        'forgeax::standard',
       ]);
       expect(merged.value.report.attachmentEvidence.producers.map((entry) => entry.runtimeId)).toEqual([
         'browser',

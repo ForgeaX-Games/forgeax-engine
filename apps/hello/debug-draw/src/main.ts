@@ -36,7 +36,7 @@ function buildViewProj(): Mat4 {
   const target = vec3.create(0, 0, 0);
   const up = vec3.create(0, 1, 0);
   const view = mat4.lookAt(mat4.create(), cameraPos, target, up);
-  const proj = mat4.perspective(mat4.create(), Math.PI / 4, 1, 0.1, 100);
+  const proj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 1, 0.1, 100);
   const vp = mat4.create();
   mat4.multiply(vp, proj, view);
   return vp;
@@ -82,7 +82,7 @@ async function runLow(): Promise<void> {
   const fcamPos = vec3.create(0, 1, 2);
   const fcamTarget = vec3.create(0, 0, 0);
   const fcamView = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
-  const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+  const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
   const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
   dd.frustum(fcamViewProj, [1, 1, 0, 1]);
 
@@ -297,7 +297,7 @@ async function runRuntime(): Promise<void> {
   let rollMode: 'base' | 'roll' = 'base';
   const updateHud = (): void => {
     document.getElementById('debug-draw-hud')!.textContent =
-      `debug-draw: runtime (createApp + app.debugDraw) camera=${cameraPan ? 'pan' : 'base'} viewport=${viewportMode} zoom=${zoomMode} clip=${clipMode} roll=${rollMode}`;
+      `debug-draw: mode=runtime state=ready (createApp + app.debugDraw) camera=${cameraPan ? 'pan' : 'base'} viewport=${viewportMode} zoom=${zoomMode} clip=${clipMode} roll=${rollMode}`;
   };
   const setCameraPan = (pan: boolean): void => {
     const result = app.world.set(cameraEntity, Transform, { pos: [...(pan ? cameraPositions.pan : cameraPositions.base)] });
@@ -378,7 +378,7 @@ async function runRuntime(): Promise<void> {
         const fcamPos = vec3.create(0, 1, 2);
         const fcamTarget = vec3.create(0, 0, 0);
         const fcamView = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
-        const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+        const fcamProj = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
         const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
         ddRuntime.frustum(fcamViewProj, [1, 1, 0, 1]);
       },
@@ -400,8 +400,8 @@ async function runRuntime(): Promise<void> {
 //
 // Visual contract:
 //   always  — all 4 shapes visible on black background (depth ignored)
-//   less-equal — depth buffer cleared to 1.0 (far plane); PSO has
-//     depthStencil with less-equal compare. All shapes pass (depth<=1.0).
+//   less-equal — logical distance comparison; native Reverse-Z depth clears
+//     to 0.0 and uses greater-equal, so all in-range shapes pass.
 //     Shape positions offset from always-mode for visual distinction.
 //     Genuine z-occlusion requires a prior depth-write pass.
 // ---------------------------------------------------------------------------
@@ -469,17 +469,17 @@ async function runDepth(): Promise<void> {
   ddAlways.sphere(vec3.create(0, 0, 0), 0.5, [0, 1, 0, 1]);
   ddAlways.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
   const fcamViewA = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
-  const fcamProjA = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+  const fcamProjA = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
   ddAlways.frustum(mat4.multiply(mat4.create(), fcamProjA, fcamViewA), [1, 1, 0, 1]);
 
   // === less-equal mode shapes (offset positions for visual distinction) ===
-  // Depth cleared to 1.0 (far plane); all shapes pass less-equal.
+  // Depth cleared to 0.0 (far plane); all shapes pass the nearer comparison.
   // Shape positions differ from always-mode to produce visually distinct PNGs.
   ddLessEqual.line(vec3.create(-1.5, 0.2, -0.5), vec3.create(1.5, 0.2, 0.5), [1, 0, 0, 1]);
   ddLessEqual.sphere(vec3.create(0, -0.2, 0), 0.5, [0, 1, 0, 1]);
   ddLessEqual.aabb(vec3.create(-0.4, -0.4, 0.6), vec3.create(0.4, 0.4, 1.4), [0, 0, 1, 1]);
   const fcamViewL = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
-  const fcamProjL = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+  const fcamProjL = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
   ddLessEqual.frustum(mat4.multiply(mat4.create(), fcamProjL, fcamViewL), [1, 1, 0, 1]);
 
   // Render always-mode (PNG 1) — no depth, flat overlay on black
@@ -527,7 +527,7 @@ async function runDepth(): Promise<void> {
       }],
       depthStencilAttachment: {
         view: _depthTex.createView() as unknown as TextureView,
-        depthClearValue: 1.0,
+        depthClearValue: 0.0,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
       },
@@ -583,7 +583,7 @@ async function runStandardTonemap(): Promise<void> {
         const fcamPosH = vec3.create(0, 1, 2);
         const fcamTargetH = vec3.create(0, 0, 0);
         const fcamViewH = mat4.lookAt(mat4.create(), fcamPosH, fcamTargetH, upH);
-        const fcamProjH = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+        const fcamProjH = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 3, 1, 0.5, 3);
         const fcamViewProjH = mat4.multiply(mat4.create(), fcamProjH, fcamViewH);
         debugDraw.frustum(fcamViewProjH, [1, 1, 0, 1]);
       },
@@ -610,9 +610,9 @@ async function main(): Promise<void> {
       await runEmpty();
       break;
     case 'runtime':
-      document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: runtime (createApp + app.debugDraw)';
+      document.getElementById('debug-draw-hud')!.textContent =
+        'debug-draw: mode=runtime state=initializing (createApp + app.debugDraw)';
       await runRuntime();
-      document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: runtime (createApp + app.debugDraw) camera=base';
       break;
     case 'cap-recovery':
       await runCapRecovery();

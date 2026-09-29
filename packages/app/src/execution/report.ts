@@ -2,10 +2,20 @@ import type { AudioState } from '@forgeax/engine-audio';
 import { EXECUTION_REPORT_SCHEMA_VERSION } from './schema';
 import type {
   ExecutionCapabilities,
+  ExecutionFrameInspection,
   ExecutionReport,
-  ExecutionRequestedTier,
   ExecutionSelection,
 } from './types';
+
+export function createExecutionFrameInspection(): ExecutionFrameInspection {
+  return {
+    submitted: 0,
+    completed: 0,
+    inFlight: 0,
+    highWater: 0,
+    throttledTicks: 0,
+  };
+}
 
 export function executionAudioReport(state?: AudioState): ExecutionReport['audio'] {
   const error = state?.lastError ?? null;
@@ -26,19 +36,15 @@ export function executionAudioReport(state?: AudioState): ExecutionReport['audio
 }
 
 export function createExecutionReport(
-  requestedTier: ExecutionRequestedTier,
   capabilities: ExecutionCapabilities,
-  selection?: ExecutionSelection,
+  workers: ExecutionSelection,
 ): ExecutionReport {
   return {
     schemaVersion: EXECUTION_REPORT_SCHEMA_VERSION,
-    requestedTier,
-    actualTier: selection?.actualTier ?? null,
-    selectionReason: selection?.selectionReason ?? null,
-    sharedEvidencePassed: selection?.sharedEvidencePassed ?? false,
+    workers,
     capabilities,
     engine: {
-      realm: selection?.actualTier === 'main-serial' ? 'host' : 'worker',
+      realm: workers.engine.enabled ? 'worker' : 'host',
       health: 'idle',
     },
     world: {
@@ -54,6 +60,7 @@ export function createExecutionReport(
       dispatched: 0,
       completed: 0,
     },
+    frame: createExecutionFrameInspection(),
     performance: {
       hostFrameMs: null,
       engineUpdateMs: null,

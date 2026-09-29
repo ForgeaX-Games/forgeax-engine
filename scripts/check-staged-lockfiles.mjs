@@ -15,7 +15,46 @@ if (r.status !== 0) {
 const staged = new Set(r.stdout.split(/\r?\n/).filter(Boolean));
 const pnpmStaged = staged.has('pnpm-lock.yaml');
 const bunStaged = staged.has('bun.lock');
+
+const lockfiles = ['pnpm-lock.yaml', 'bun.lock'];
+
+function changedLockfiles(...args) {
+  const result = runGit(['diff', ...args, '--name-only', '--', ...lockfiles]);
+  if (result.status !== 0) return undefined;
+  return new Set(result.stdout.split(/\r?\n/).filter(Boolean));
+}
+
+function isImmediateParentClosure(missingLockfile) {
+  const parent = runGit(['rev-parse', '-q', '--verify', 'HEAD^']);
+  if (parent.status !== 0) {
+    return false;
+  }
+
+  const parentCommit = parent.stdout.trim();
+  const parentDelta = changedLockfiles(parentCommit, 'HEAD');
+  if (parentDelta === undefined || parentDelta.size !== 1 || !parentDelta.has(missingLockfile)) {
+    return false;
+  }
+
+  const stagedLockfile = missingLockfile === 'pnpm-lock.yaml' ? 'bun.lock' : 'pnpm-lock.yaml';
+  const stagedDelta = changedLockfiles('--cached', 'HEAD');
+  if (stagedDelta === undefined || stagedDelta.size !== 1 || !stagedDelta.has(stagedLockfile)) {
+    return false;
+  }
+
+  const closedDelta = changedLockfiles('--cached', parentCommit);
+  return (
+    closedDelta !== undefined &&
+    closedDelta.size === lockfiles.length &&
+    lockfiles.every((lockfile) => closedDelta.has(lockfile))
+  );
+}
+
 if (pnpmStaged !== bunStaged) {
+  const missingLockfile = pnpmStaged ? 'bun.lock' : 'pnpm-lock.yaml';
+  if (isImmediateParentClosure(missingLockfile)) {
+    process.exit(0);
+  }
   let pnpmCovered = pnpmStaged;
   let bunCovered = bunStaged;
   const mergeHead = runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD']);

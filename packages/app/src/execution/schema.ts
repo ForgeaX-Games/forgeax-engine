@@ -1,11 +1,6 @@
-import {
-  EXECUTION_CAPABILITY_NAMES,
-  EXECUTION_REQUESTED_TIERS,
-  EXECUTION_TIERS,
-  type ExecutionReport,
-} from './types';
+import { EXECUTION_CAPABILITY_NAMES, EXECUTION_WORKERS, type ExecutionReport } from './types';
 
-export const EXECUTION_REPORT_SCHEMA_VERSION = 1 as const;
+export const EXECUTION_REPORT_SCHEMA_VERSION = 2 as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -34,30 +29,56 @@ export function isExecutionReport(value: unknown): value is ExecutionReport {
   if (
     !hasExactKeys(value, [
       'schemaVersion',
-      'requestedTier',
-      'actualTier',
-      'selectionReason',
-      'sharedEvidencePassed',
+      'workers',
       'capabilities',
       'engine',
       'world',
       'kernelDispatch',
+      'frame',
       'performance',
       'audio',
       'fault',
+      ...('render' in value ? ['render'] : []),
     ])
   ) {
     return false;
   }
   const report = value as unknown as Partial<ExecutionReport>;
   if (report.schemaVersion !== EXECUTION_REPORT_SCHEMA_VERSION) return false;
-  if (!EXECUTION_REQUESTED_TIERS.includes(report.requestedTier as never)) return false;
-  if (report.actualTier !== null && !EXECUTION_TIERS.includes(report.actualTier as never)) {
-    return false;
+  if (!isRecord(report.workers) || !hasExactKeys(report.workers, EXECUTION_WORKERS)) return false;
+  for (const worker of EXECUTION_WORKERS) {
+    const decision = report.workers[worker];
+    if (
+      !isRecord(decision) ||
+      !hasExactKeys(decision, ['requested', 'enabled', 'reason', 'missingCapabilities'])
+    )
+      return false;
+    if (decision.requested !== 'auto' && typeof decision.requested !== 'boolean') return false;
+    if (
+      typeof decision.enabled !== 'boolean' ||
+      !['enabled', 'disabled', 'engine-disabled', 'capability-unavailable'].includes(
+        decision.reason,
+      )
+    )
+      return false;
+    if (
+      !Array.isArray(decision.missingCapabilities) ||
+      !decision.missingCapabilities.every((name) => EXECUTION_CAPABILITY_NAMES.includes(name))
+    )
+      return false;
+    if (decision.enabled !== (decision.reason === 'enabled')) return false;
+    if ((decision.requested === false) !== (decision.reason === 'disabled')) return false;
+    if (decision.requested === true && !decision.enabled) return false;
+    if ((decision.reason === 'capability-unavailable') !== decision.missingCapabilities.length > 0)
+      return false;
+    if (worker !== 'engine' && !report.workers.engine.enabled && decision.enabled) return false;
+    if (
+      decision.reason === 'engine-disabled' &&
+      (worker === 'engine' || report.workers.engine.enabled)
+    )
+      return false;
   }
-  if (typeof report.sharedEvidencePassed !== 'boolean' || report.capabilities === undefined) {
-    return false;
-  }
+  if (report.capabilities === undefined) return false;
   if (
     !EXECUTION_CAPABILITY_NAMES.every((name) => {
       const fact = report.capabilities?.[name];
@@ -65,13 +86,36 @@ export function isExecutionReport(value: unknown): value is ExecutionReport {
     })
   )
     return false;
+  if (report.render !== undefined) {
+    const render = report.render;
+    if (
+      !isRecord(render) ||
+      !hasExactKeys(render, ['epoch', 'state', 'submittedFrame', 'completedFrame'])
+    )
+      return false;
+    if (
+      !report.workers.render.enabled ||
+      !['alive', 'rebuilding', 'failed', 'stopped'].includes(render.state)
+    )
+      return false;
+    if (
+      !Number.isSafeInteger(render.epoch) ||
+      render.epoch < 1 ||
+      !Number.isSafeInteger(render.submittedFrame) ||
+      !Number.isSafeInteger(render.completedFrame) ||
+      render.completedFrame < 0 ||
+      render.submittedFrame < render.completedFrame
+    )
+      return false;
+  }
   const engine = report.engine;
   const world = report.world;
   const dispatch = report.kernelDispatch;
+  const frame = report.frame;
   const performance = report.performance;
   const audio = report.audio;
   if (!isRecord(engine) || !hasExactKeys(engine, ['realm', 'health'])) return false;
-  if (!['host', 'worker'].includes(engine.realm as string)) return false;
+  if (engine.realm !== (report.workers.engine.enabled ? 'worker' : 'host')) return false;
   if (!['idle', 'starting', 'running', 'stopped', 'faulted'].includes(engine.health as string)) {
     return false;
   }
@@ -104,6 +148,23 @@ export function isExecutionReport(value: unknown): value is ExecutionReport {
   )
     return false;
   if (!Number.isInteger(dispatch.dispatched) || !Number.isInteger(dispatch.completed)) return false;
+  if (
+    !isRecord(frame) ||
+    !hasExactKeys(frame, ['submitted', 'completed', 'inFlight', 'highWater', 'throttledTicks'])
+  )
+    return false;
+  if (
+    !['submitted', 'completed', 'inFlight', 'highWater', 'throttledTicks'].every(
+      (key) => Number.isInteger(frame[key]) && (frame[key] as number) >= 0,
+    )
+  )
+    return false;
+  if (
+    frame.completed > frame.submitted ||
+    frame.inFlight !== frame.submitted - frame.completed ||
+    frame.highWater < frame.inFlight
+  )
+    return false;
   if (
     !isRecord(performance) ||
     !hasExactKeys(performance, ['hostFrameMs', 'engineUpdateMs', 'kernelWaitMs', 'hostAudioMs'])

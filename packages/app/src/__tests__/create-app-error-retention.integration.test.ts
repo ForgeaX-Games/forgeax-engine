@@ -13,6 +13,7 @@ function makeRenderer(): {
   const draw = vi.fn(() => ({ ok: true as const, value: undefined }));
   let listener: ((event: { readonly kind: 'error'; readonly error: RhiError }) => void) | undefined;
   const renderer = {
+    state: () => 'alive' as const,
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true as const, value: undefined }),
     draw,

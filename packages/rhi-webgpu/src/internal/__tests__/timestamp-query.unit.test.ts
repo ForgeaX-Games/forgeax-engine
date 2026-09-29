@@ -1,88 +1,120 @@
-import { RhiError } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
 import { createMockGpu } from '../../__tests__/__mocks__/gpu-device';
 import { makeRhiDevice } from '../../device';
 
-async function timestampEncoder(writeTimestamp?: (querySet: unknown, queryIndex: number) => void) {
-  const gpu = createMockGpu();
-  const adapter = await gpu.requestAdapter();
-  if (adapter === null) throw new Error('mock adapter should exist');
-  const raw = await adapter.requestDevice();
-  const features = raw.features as unknown as Set<GPUFeatureName>;
-  features.add('timestamp-query');
-  const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
-  raw.createCommandEncoder = (descriptor) => {
-    const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<string, unknown>;
-    if (writeTimestamp !== undefined) encoder.writeTimestamp = writeTimestamp;
-    return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
-  };
-  const { device } = makeRhiDevice(raw as unknown as GPUDevice);
-  const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
-  if (!querySet.ok) throw new Error('timestamp query set should be created');
-  const encoder = device.createCommandEncoder();
-  if (!encoder.ok) throw new Error('command encoder should be created');
-  return { encoder: encoder.value, querySet: querySet.value };
-}
-
-describe('timestamp query raw write seam', () => {
-  it('forwards a callable raw writeTimestamp exactly once', async () => {
-    const calls: Array<{ querySet: unknown; queryIndex: number }> = [];
-    const { encoder, querySet } = await timestampEncoder((rawQuerySet, queryIndex) => {
-      calls.push({ querySet: rawQuerySet, queryIndex });
+describe('timestamp query pass descriptor forwarding', () => {
+  it('maps an opaque QuerySet in a compute-pass timestampWrites descriptor', async () => {
+    const gpu = createMockGpu();
+    const adapter = await gpu.requestAdapter();
+    if (adapter === null) throw new Error('mock adapter should exist');
+    const raw = await adapter.requestDevice();
+    (raw.features as unknown as Set<GPUFeatureName>).add('timestamp-query');
+    let rawQuerySet: unknown;
+    const originalCreateQuerySet = raw.createQuerySet.bind(raw);
+    raw.createQuerySet = (descriptor) => {
+      const result = originalCreateQuerySet(descriptor);
+      rawQuerySet = result;
+      return result;
+    };
+    let captured: GPUComputePassDescriptor | undefined;
+    const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+    raw.createCommandEncoder = (descriptor) => {
+      const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<
+        string,
+        unknown
+      >;
+      const originalBegin = encoder.beginComputePass as (
+        passDescriptor?: GPUComputePassDescriptor,
+      ) => unknown;
+      encoder.beginComputePass = (passDescriptor?: GPUComputePassDescriptor) => {
+        captured = passDescriptor;
+        return originalBegin.call(encoder, passDescriptor);
+      };
+      return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
+    };
+    const { device } = makeRhiDevice(raw as unknown as GPUDevice);
+    const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+    expect(querySet.ok).toBe(true);
+    if (!querySet.ok) return;
+    const encoder = device.createCommandEncoder();
+    expect(encoder.ok).toBe(true);
+    if (!encoder.ok) return;
+    const pass = encoder.value.beginComputePass({
+      label: 'timestamp-pass',
+      timestampWrites: {
+        querySet: querySet.value,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
     });
-
-    encoder.writeTimestamp(querySet, 1);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.querySet).toBeDefined();
-    expect(calls[0]?.queryIndex).toBe(1);
-  });
-
-  it('returns a structured refusal when capability-positive raw writeTimestamp is missing', async () => {
-    const { encoder, querySet } = await timestampEncoder();
-
-    expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
-    try {
-      encoder.writeTimestamp(querySet, 0);
-    } catch (error) {
-      expect(error).toMatchObject({
-        code: 'webgpu-runtime-error',
-        expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
-      });
-      expect((error as RhiError).hint).toContain('timestamp-query');
-    }
-  });
-
-  it('returns a structured refusal when raw writeTimestamp throws', async () => {
-    const { encoder, querySet } = await timestampEncoder(() => {
-      throw new Error('raw timestamp failure');
+    pass.end();
+    expect(captured).toMatchObject({
+      label: 'timestamp-pass',
+      timestampWrites: {
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
     });
-
-    expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
-    try {
-      encoder.writeTimestamp(querySet, 0);
-    } catch (error) {
-      expect(error).toMatchObject({
-        code: 'webgpu-runtime-error',
-        expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
-      });
-      expect((error as RhiError).hint).toContain('raw timestamp failure');
-    }
+    expect(rawQuerySet).toBeDefined();
+    expect(captured?.timestampWrites?.querySet).toBe(rawQuerySet);
   });
 
-  it('refuses timestamp writes after encoder.finish with a lifecycle error', async () => {
-    const { encoder, querySet } = await timestampEncoder(() => {});
-    const finish = encoder.finish();
-    expect(finish.ok).toBe(true);
-
-    expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
-    try {
-      encoder.writeTimestamp(querySet, 0);
-    } catch (error) {
-      expect(error).toMatchObject({
-        code: 'command-encoder-finished',
-        expected: 'command encoder must not be finished before recording new commands',
-      });
-    }
+  it('maps an opaque QuerySet in a render-pass timestampWrites descriptor', async () => {
+    const gpu = createMockGpu();
+    const adapter = await gpu.requestAdapter();
+    if (adapter === null) throw new Error('mock adapter should exist');
+    const raw = await adapter.requestDevice();
+    (raw.features as unknown as Set<GPUFeatureName>).add('timestamp-query');
+    let captured: GPURenderPassDescriptor | undefined;
+    const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+    raw.createCommandEncoder = (descriptor) => {
+      const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<
+        string,
+        unknown
+      >;
+      const originalBegin = encoder.beginRenderPass as (
+        passDescriptor: GPURenderPassDescriptor,
+      ) => unknown;
+      encoder.beginRenderPass = (passDescriptor: GPURenderPassDescriptor) => {
+        captured = passDescriptor;
+        return originalBegin.call(encoder, passDescriptor);
+      };
+      return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
+    };
+    const { device } = makeRhiDevice(raw as unknown as GPUDevice);
+    const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+    expect(querySet.ok).toBe(true);
+    if (!querySet.ok) return;
+    const texture = device.createTexture({
+      size: [1, 1, 1],
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+    expect(texture.ok).toBe(true);
+    if (!texture.ok) return;
+    const view = device.createTextureView(texture.value, {});
+    expect(view.ok).toBe(true);
+    if (!view.ok) return;
+    const encoder = device.createCommandEncoder();
+    expect(encoder.ok).toBe(true);
+    if (!encoder.ok) return;
+    const pass = encoder.value.beginRenderPass({
+      label: 'timestamp-raster',
+      colorAttachments: [{ view: view.value, loadOp: 'clear', storeOp: 'store' }],
+      timestampWrites: {
+        querySet: querySet.value,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
+    });
+    pass.end();
+    expect(captured).toMatchObject({
+      label: 'timestamp-raster',
+      timestampWrites: {
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
+    });
+    expect(captured?.timestampWrites?.querySet).toBeDefined();
   });
 });

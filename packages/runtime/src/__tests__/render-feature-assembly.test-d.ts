@@ -19,7 +19,7 @@ const feature = {
     const count: number = data.visibleCount;
     void count;
     void context;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [] });
   },
 } satisfies RenderFeature<TestFrameData>;
 

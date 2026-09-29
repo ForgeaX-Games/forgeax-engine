@@ -1,14 +1,15 @@
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 function noWorkFeature(identity: string): RenderFeature<{ readonly empty: true }> {
   return {
     identity,
     extract: () => ok({ empty: true }),
-    plan: () => ok({ resources: [], passes: [] }),
+    plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
   };
 }
 
@@ -16,14 +17,43 @@ function failedFeature(identity: string): RenderFeature<{ readonly empty: true }
   return {
     identity,
     extract: () => err(new RenderFeatureStageFailedError(identity, 0, 'extract', 'next-frame')),
-    plan: () => ok({ resources: [], passes: [] }),
+    plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
   };
 }
 
 describe('render feature zero-work boundaries', () => {
+  it('acknowledges only submitted plans and never repeats an acknowledgment', () => {
+    const submitted: number[] = [];
+    const host = createRenderFeatureHost([
+      {
+        identity: 'synthetic.receipt',
+        extract: (context) => ok(context.frameNumber),
+        plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
+        onFrameSubmitted: (frame: number) => {
+          submitted.push(frame);
+        },
+      },
+    ]).unwrap();
+    const frame = (frameNumber: number) =>
+      runSingleViewFeatureFrame(host, {
+        worlds: [],
+        owner: 0,
+        frameNumber,
+        caps: {} as never,
+      });
+    const rejected = frame(1);
+    rejected.onAborted();
+    const accepted = frame(2);
+    expect(submitted).toEqual([]);
+    accepted.onSubmitted();
+    accepted.onSubmitted();
+    expect(submitted).toEqual([2]);
+    expect(rejected.plans).toHaveLength(1);
+    host.dispose();
+  });
   it('keeps an empty registry free of work, errors, and proxy noise', () => {
     const host = createRenderFeatureHost([]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 11,
@@ -37,7 +67,7 @@ describe('render feature zero-work boundaries', () => {
 
   it('keeps empty data and zero-pass features as an empty plan', () => {
     const host = createRenderFeatureHost([noWorkFeature('synthetic.empty')]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 12,
@@ -60,7 +90,7 @@ describe('render feature zero-work boundaries', () => {
     ]).unwrap();
     host.setStatus('synthetic.disabled', 'disabled');
 
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 13,

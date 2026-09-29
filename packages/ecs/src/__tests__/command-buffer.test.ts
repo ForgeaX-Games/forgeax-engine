@@ -1,9 +1,10 @@
+import { err } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { createCommandBuffer, flushCommands } from '../commands';
 import { defineComponent } from '../component';
 import { Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
-import { CommandFailedError, SystemFailedError } from '../errors';
+import { CommandFailedError, SharedKernelFailureError, SystemFailedError } from '../errors';
 import { defineRelationship } from '../relationship-index';
 import { Update } from '../schedule-token';
 import { World } from '../world';
@@ -143,11 +144,12 @@ describe('CommandBuffer terminal lifecycle', () => {
     const failed = world.update();
     expect(failed.ok).toBe(false);
     expect(world.execution.health).toBe('poisoned');
-    const replacement = world.spawn().unwrap();
+    const replacementWorld = new World();
+    replacementWorld.spawn().unwrap();
     const stale = world.get(pending as EntityHandle, CommandPosition);
     expect(stale.ok).toBe(false);
     if (!stale.ok) expect(stale.error.code).toBe('stale-entity');
-    expect(replacement).not.toBe(pending);
+    expect(replacementWorld.identity).not.toBe(world.identity);
   });
 
   it('reports the last committed command when a later flush write unexpectedly fails', () => {
@@ -175,5 +177,29 @@ describe('CommandBuffer terminal lifecycle', () => {
       expect(failure.detail.lastCommittedCommand).toEqual({ index: 0, kind: 'despawn' });
     }
     expect(world.execution.health).toBe('poisoned');
+  });
+
+  it('poisons on a first-command materialization failure without reclaiming its row', () => {
+    const world = new World();
+    const buffer = createCommandBuffer(world, { systemName: 'flush', scheduleName: Update.name });
+    const pending = buffer.spawn({ component: CommandPosition, data: { x: 7 } });
+    const injected = new SharedKernelFailureError(
+      'World.materializeEntity',
+      world.identity,
+      new Error('post-write materialization fault'),
+      true,
+    );
+    const materialize = world[worldInternal].materializePendingEntity;
+    vi.spyOn(world[worldInternal], 'materializePendingEntity').mockImplementationOnce(
+      (entity, componentDatas) => {
+        const result = materialize(entity, componentDatas);
+        return result.ok ? err(injected) : result;
+      },
+    );
+
+    expect(() => flushCommands(buffer, world)).toThrow(SystemFailedError);
+    expect(world.execution.health).toBe('poisoned');
+    expect(world.execution.fault?.partialWrite).toBe(true);
+    expect(world.hasComponent(pending, CommandPosition)).toBe(true);
   });
 });

@@ -57,6 +57,7 @@ async function main() {
 
   console.log('Computing content key (src/**/*.rs + Cargo.{toml,lock} + rust-toolchain.toml + build.sh)...');
   const { sha256, assetName } = await resolveAsset();
+  const expectedSourceContentKey = `sha256-${sha256}`;
   console.log(`  content SHA256: ${sha256}`);
   console.log(`  asset name:     ${assetName}`);
 
@@ -80,7 +81,7 @@ async function main() {
   console.log(`Extracting into ${PKG_DIR} ...`);
   await extractTarball(TMP_TARBALL, PKG_DIR);
   await rm(TMP_TARBALL, { force: true });
-  await verifyProvenance();
+  await verifyProvenance({ expectedSourceContentKey });
 
   const members = await readdir(PKG_DIR);
   console.log(`  pkg/ now holds: ${members.join(', ')}`);

@@ -21,8 +21,7 @@ import type { ParamSchemaEntry } from '../index';
 
 // Fixture: post-D-8 standard-pbr paramSchema. Per orchestrator Q3 the user
 // region carries 3 textures (baseColor / metallicRoughness / normal); emissive
-// + occlusion are appended later via `appendInjection(bgl, 'lightmap')` and so
-// do NOT appear in the user-region paramSchema. mrAOMap consolidates the
+// + occlusion are engine-owned Standard textures and so do NOT appear in the user-region paramSchema. mrAOMap consolidates the
 // metallic-roughness-AO channels (selected per-fragment via the 4 channel
 // f32 fields below).
 const STANDARD_PBR_SIDECAR: readonly ParamSchemaEntry[] = [
@@ -98,7 +97,7 @@ describe('channelMap -> 4 f32 split (D-8) — standard-pbr sidecar', () => {
     // 3 texture + 3 auto-paired filtering sampler = 6 trailing entries.
     expect(out.bglEntries.length).toBe(1 + 3 * 2);
     // userRegionBindingEnd == 7 (1 UBO + 6 sampler/tex); emissive + occlusion
-    // are appended via appendInjection(bgl, 'lightmap') after this region.
+    // are engine-owned and live outside this region.
     expect(out.userRegionBindingEnd).toBe(7);
   });
 

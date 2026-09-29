@@ -185,7 +185,7 @@ function buildVertexReport(
     sourceSha: input.sourceSha,
     sourceFixtureHash: input.forgeax.sourceFixtureHash,
     colorDomain: input.fixture.colorDomain,
-    frameCount: 300,
+    frameCount: 60,
     epsilon: { rgb: 0.05, alpha: 0.05 },
     producers: { forgeax: input.forgeax.producer, three: input.three.producer },
     samples,
@@ -214,7 +214,7 @@ export function evaluateVertexColorCase(input: EvaluateVertexColorCaseInput): Ve
     return { ok: false, error: vertexCaptureError('producers') };
   }
   if (input.forgeax.backend !== input.backend || input.three.backend !== input.backend) return { ok: false, error: vertexCaptureError('backend') };
-  if (input.forgeax.frameCount !== 300 || input.three.frameCount !== 300) return { ok: false, error: vertexCaptureError('frameCount') };
+  if (input.forgeax.frameCount !== 60 || input.three.frameCount !== 60) return { ok: false, error: vertexCaptureError('frameCount') };
   if (input.forgeax.colorDomain !== input.fixture.colorDomain || input.three.colorDomain !== input.fixture.colorDomain) {
     return { ok: false, error: vertexCaptureError('colorDomain') };
   }

@@ -11,7 +11,7 @@
 // the real WebGL2 rendering surface because CI's lavapipe driver provides
 // Vulkan, not GL. This browser test runs in Chrome Beta (real browser engine)
 // and covers the createRenderer resolution path without navigator.gpu. A full
-// 300-frame navigator.gpu-absent smoke script is deferred-to-PR per
+// 60-frame navigator.gpu-absent smoke script is deferred-to-PR per
 // plan-strategy RK-4.
 
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';

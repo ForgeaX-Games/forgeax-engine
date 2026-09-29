@@ -6,14 +6,14 @@ import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, PointLight, SkyboxBackground, Skylight, TONEMAP_ACES_FILMIC } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 
-export function buildSpecularTintWorld(world: World, equirect: Handle<'EquirectAsset', 'shared'>, specularTintTexture: number, aspect: number): void {
+export function buildSpecularTintWorld(world: World, equirect: Handle<'EquirectAsset', 'shared'>, specularColorTexture: number, aspect: number): void {
   const sphereGeometry = createSphereGeometry(1.05, 48, 32);
   if (!sphereGeometry.ok) throw new Error(`specular tint sphere failed: ${sphereGeometry.error.code}`);
   const sphere = world.allocSharedRef('MeshAsset', sphereGeometry.value);
   const base = { baseColor: [0, 0, 0, 1] as const, metallic: 0, roughness: 0.08 };
-  const neutral = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularTint: [1, 1, 1] }));
-  const solid = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularTint: [1, 0.08, 0.65] }));
-  const mapped = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularTintTexture }));
+  const neutral = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularColor: [1, 1, 1] }));
+  const solid = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularColor: [1, 0.08, 0.65] }));
+  const mapped = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ ...base, specularColorTexture }));
   for (const [x, material] of [[-2.15, neutral], [0, solid], [2.15, mapped]] as const) {
     world.spawn({ component: Transform, data: { pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }, { component: MeshFilter, data: { assetHandle: sphere } }, { component: MeshRenderer, data: { materials: [material] } });
   }

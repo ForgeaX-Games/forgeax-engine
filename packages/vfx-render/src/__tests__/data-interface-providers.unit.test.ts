@@ -17,6 +17,10 @@ function provider(token: VfxDataInterfaceProvider['token']): VfxDataInterfacePro
         kind: token.slice(4) as VfxDataInterfaceProvider['kind'],
         bindingType: token === 'vfx:scene-depth' ? 'sampled-depth' : 'uniform',
         generation,
+        resource:
+          token === 'vfx:scene-depth'
+            ? { kind: 'texture-view', value: {} }
+            : { kind: 'buffer', value: {}, size: 16, usage: 'uniform' },
       }),
   };
 }

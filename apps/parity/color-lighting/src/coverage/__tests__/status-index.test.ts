@@ -53,7 +53,7 @@ describe('status index visual association', () => {
       backends: {
         'browser-webgpu': 'pass',
         dawn: 'not-executed',
-        'webkit-webgl2': 'not-executed',
+        'chromium-webgl2': 'not-executed',
       },
       missingPipelineIds: ['hdrp'],
     });
@@ -63,7 +63,7 @@ describe('status index visual association', () => {
     expect(index.missingCaseIds).toContain('transparent-hdr-hdrp');
     expect(index.missingMatrixCaseIds).toContain('ibl-constant-environment');
     expect(index.missingMatrixCaseIds).not.toContain('positive-minimal');
-    expect(index.missingBackendIds).toEqual(['dawn', 'webkit-webgl2']);
+    expect(index.missingBackendIds).toEqual(['dawn', 'chromium-webgl2']);
     expect(index.missingPipelineIds).toEqual(['hdrp']);
     expect(isPublicParityComplete(index)).toBe(false);
   });
@@ -72,7 +72,7 @@ describe('status index visual association', () => {
     const completeBackendStatus = {
       'browser-webgpu': 'pass',
       dawn: 'pass',
-      'webkit-webgl2': 'pass',
+      'chromium-webgl2': 'pass',
     } as const;
     const completeCaseBackendStatuses = Object.fromEntries(
       PARITY_CASE_AUTHORITY.map((entry) => [entry.caseId, completeBackendStatus]),
@@ -95,7 +95,7 @@ describe('status index visual association', () => {
       backends: {
         'browser-webgpu': 'pass',
         dawn: 'pass',
-        'webkit-webgl2': 'pass',
+      'chromium-webgl2': 'pass',
       },
       missingPipelineIds: [],
     });

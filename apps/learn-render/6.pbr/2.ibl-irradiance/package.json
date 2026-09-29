@@ -14,8 +14,11 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-6-pbr-2-ibl-irradiance smoke",
     "rhiDebug": {
-      "riskFamilies": ["materials-textures"]
+      "riskFamilies": [
+        "materials-textures"
+      ]
     },
     "metrics": {
       "bundle-size": {
@@ -31,8 +34,8 @@
         "reason": "pixel-parity bench drives parity-forgeax vs parity-threejs; learn-render entries land as bench:pixel-parity placeholders only"
       },
       "gate": {
-        "enabled": false,
-        "reason": "smoke driver passes locally (macOS dawn meanAbsDelta < 0.05) but reference PNG was baked on macOS GPU; Linux dawn in CI drifts past the 0.05 threshold. Cross-GPU pixel parity at this tightness is environment-sensitive — relaxing the threshold or re-baking per-environment is a feat-scope follow-up. The smoke command itself is still runnable via `pnpm -F @forgeax/app-learn-render-6-pbr-2-ibl-irradiance smoke` for local verification."
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/app-learn-render-6-pbr-2-ibl-irradiance smoke"
       },
       "spike-report": {
         "enabled": false,
@@ -66,7 +69,7 @@
     "playwright": "^1.50.0",
     "jpeg-js": "^0.4.4",
     "upng-js": "^2.1.0",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

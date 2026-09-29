@@ -25,7 +25,7 @@ const feature = {
   plan(data, context) {
     const count: number = data.count;
     const caps = context.caps;
-    const targets = context.targets;
+    const targets = context.views.map((view) => view.targets);
     const frame = context.frame;
     const generation = context.generation;
     void count;
@@ -50,7 +50,7 @@ const feature = {
     context.staging;
     // @ts-expect-error plan descriptors replace prepared graphics callbacks
     context.graphics;
-    return ok({ resources: [], passes: [] });
+    return ok({ work: [] });
   },
 } satisfies RenderFeature<Frame>;
 

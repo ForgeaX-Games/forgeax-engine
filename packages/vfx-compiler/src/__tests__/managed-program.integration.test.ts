@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { cookParticleCodeProgram } from '../code-program.js';
 
 const source = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'bolt',

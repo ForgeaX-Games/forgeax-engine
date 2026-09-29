@@ -28,8 +28,8 @@ export function create(): Frustum {
 }
 
 /**
- * Extract 6 frustum planes (left, right, bottom, top, near, far) from a
- * combined view-projection matrix (column-major, right-handed).
+ * Extract 6 frustum planes (left, right, bottom, top, lower-Z, upper-Z) from a
+ * combined WebGPU [0,1] view-projection matrix (column-major, right-handed).
  *
  * Uses Gribb/Hartmann method: each plane = sum or difference of VP rows,
  * then normalized so (nx, ny, nz) is a unit vector and d is the signed
@@ -136,11 +136,12 @@ export function fromViewProjection(out: Frustum, vp: Mat4Like): Frustum {
   out[14] = nz;
   out[15] = d;
 
-  // Near plane: row3 + row2
-  nx = m3 + m2;
-  ny = m7 + m6;
-  nz = m11 + m10;
-  d = m15 + m14;
+  // Lower Z clip plane: row2 (WebGPU 0 <= z <= w).
+  // This is the near plane for forward Z and the far plane for Reverse-Z.
+  nx = m2;
+  ny = m6;
+  nz = m10;
+  d = m14;
   len = Math.sqrt(nx * nx + ny * ny + nz * nz);
   if (len > 0) {
     const il = 1 / len;
@@ -154,7 +155,7 @@ export function fromViewProjection(out: Frustum, vp: Mat4Like): Frustum {
   out[18] = nz;
   out[19] = d;
 
-  // Far plane: row3 - row2
+  // Upper Z clip plane: row3 - row2 (near for Reverse-Z).
   nx = m3 - m2;
   ny = m7 - m6;
   nz = m11 - m10;

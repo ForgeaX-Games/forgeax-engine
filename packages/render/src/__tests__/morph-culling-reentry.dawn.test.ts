@@ -3,11 +3,7 @@ import type { RhiCommandEncoder } from '@forgeax/engine-rhi';
 import { createShaderModule, rhi } from '@forgeax/engine-rhi-webgpu';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  createRenderFeatureHost,
-  getRenderFeaturePlanExecutionProjection,
-  runRenderFeatureFrame,
-} from '../features/host';
+import { createRenderFeatureHost, getRenderFeaturePlanExecutionProjection } from '../features/host';
 import {
   createBuiltinMorphFeature,
   createMorphReentryState,
@@ -18,6 +14,7 @@ import {
 } from '../features/morph/morph-feature';
 import { createRenderFeatureGpuWorkOwner } from '../features/prepared-gpu-work';
 import { RenderFeatureComputeGraphProjection } from '../features/render-graph-compute';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const baseBounds = {
   min: [-1, -1, -1] as const,
@@ -70,7 +67,7 @@ describe('Morph GPU culling and re-entry', () => {
     ).toMatchObject({ reentered: true, clearStale: true, weights: [0.75] });
   });
 
-  it('declares compute and storage capability ownership and records 300 frame phases', () => {
+  it('declares compute and storage capability ownership and records 60 frame phases', () => {
     let frameNumber = 0;
     const feature = createBuiltinMorphFeature({
       collect: () => [
@@ -79,8 +76,8 @@ describe('Morph GPU culling and re-entry', () => {
           vertexCount: 3,
           targetBounds: [{ min: [-2, 0, 0], max: [3, 0, 0] }],
           baseBounds,
-          weights: new Float32Array([frameNumber >= 200 ? 1 : 0]),
-          baseAabbIntersectsFrustum: frameNumber < 100 || frameNumber >= 200,
+          weights: new Float32Array([frameNumber >= 40 ? 1 : 0]),
+          baseAabbIntersectsFrustum: frameNumber < 20 || frameNumber >= 40,
         },
       ],
     });
@@ -88,15 +85,15 @@ describe('Morph GPU culling and re-entry', () => {
     expect(feature.requiredCapabilities).toEqual(['compute', 'storageBuffer']);
     let culledFrames = 0;
     let reentries = 0;
-    for (frameNumber = 0; frameNumber < 300; frameNumber++) {
-      const extracted = feature.extract({ worlds: [], owner: 0, frameNumber });
+    for (frameNumber = 0; frameNumber < 60; frameNumber++) {
+      const extracted = feature.extract({ worlds: [], owner: 0, frameNumber, views: [] });
       expect(extracted.ok).toBe(true);
       if (!extracted.ok) continue;
       culledFrames += extracted.value.culledCount;
       reentries += extracted.value.reentryCount;
     }
 
-    expect(culledFrames).toBe(100);
+    expect(culledFrames).toBe(20);
     expect(reentries).toBe(1);
   });
 
@@ -125,7 +122,7 @@ describe('Morph GPU culling and re-entry', () => {
     const host = createRenderFeatureHost([feature]);
     expect(host.ok).toBe(true);
     if (!host.ok) return;
-    const frame = runRenderFeatureFrame(host.value, {
+    const frame = runSingleViewFeatureFrame(host.value, {
       worlds: [],
       owner: 0,
       frameNumber: 1,

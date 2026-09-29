@@ -13,9 +13,11 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   DirectionalLight,
+  Materials,
   MeshFilter,
   MeshRenderer,
   PointLight,
+  PointLightShadow,
   SpotLight,
 } from '@forgeax/engine-render';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
@@ -29,33 +31,31 @@ import type {
 } from '@forgeax/engine-types';
 import { srgbChannelToLinear } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  extractFrame,
-  extractFrames,
-  prepareExtractContext,
-} from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame, extractFrames } from '../../../render/src/render-system-extract-tail';
+import { PersistentRenderScene } from '../../../render/src/scene/render-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from render-system-extract.test.ts ───
 {
   // w9 -- render-system-extract consumer migration unit tests (M3, AC-07 / AC-15).
   //
-  // Post-migration extract reads the single resolved `Transform.world` mat4
+  // Post-migration extract reads the single resolved `GlobalTransform.world` mat4
   // (written by propagateTransforms) for every world-space consumer; the legacy
   // GlobalTransform-column-switch + per-snapshot `mat4.compose` are gone.
   //
   // Five consumer classes covered:
   //   1. mesh-walk     -> RenderableSnapshot.transform.world is the 16-float
   //      column-major world mat4 (parent x child), copied straight from the
-  //      Transform.world view; no per-snapshot compose.
+  //      GlobalTransform.world view; no per-snapshot compose.
   //   2. frustum cull  -> the cull AABB follows the world mat4 (a child placed
   //      off-screen by its parent is culled; in-screen is kept) -- same-source
   //      with the rendered world (AC-05 carried forward).
   //   3. camera view   -> CameraSnapshot.position is the world-space translation
-  //      (mat4.getTranslation of Transform.world); a child camera reflects
+  //      (mat4.getTranslation of GlobalTransform.world); a child camera reflects
   //      parent x child.
   //   4. light position -> point / spot light position is the world-space
-  //      translation extracted from Transform.world (mat4.getTranslation).
+  //      translation extracted from GlobalTransform.world (mat4.getTranslation).
   //   5. AC-15 zero-materialization -> the mesh-walk reads world through the
   //      column-level array view; it does NOT call `world.get` per renderable
   //      to materialize a `{}` whole-component object.
@@ -178,6 +178,163 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       for (const renderable of frame.renderables) expect(renderable.material).toBe(first);
     });
 
+    it('projects the cooked Standard artifact identity into extraction and dispatch', () => {
+      const world = new World();
+      spawnCamera(world);
+      const assets = new AssetRegistry(makeMockShaderRegistry());
+      const mesh = registerMesh(world);
+      const materialGuid = '019ffa97-4000-7000-8000-000000000101';
+      const cookedShaderId = 'sha256:rusted-iron-cooked-specialization';
+      const cookedShadowShaderId = 'sha256:rusted-iron-cooked-shadow-specialization';
+      const materialContext = {
+        backend: 'webgpu' as const,
+        capability: 'storage-buffer' as const,
+        pipeline: 'forward' as const,
+        geometry: 'mesh' as const,
+        pass: 'forward' as const,
+        profile: 'forgeax-material-wgsl-v1' as const,
+        toolchain: 'naga-oil' as const,
+        instrumentation: 'none' as const,
+      };
+      const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        kind: 'material',
+        passes: [
+          {
+            name: 'forward',
+            program: {
+              module: 'forgeax_material::standard',
+              moduleSlots: { surface: 'game_3d::rusted_iron_surface' },
+            },
+            renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+          },
+          {
+            name: 'shadow-caster',
+            program: {
+              module: 'forgeax_material::standard',
+              moduleSlots: { surface: 'game_3d::rusted_iron_surface' },
+            },
+            renderState: { tags: { LightMode: 'ShadowCaster' }, queue: 1000 },
+          },
+        ],
+        parameters: [
+          { name: 'baseColor', type: 'color' },
+          { name: 'metallic', type: 'f32' },
+          { name: 'roughness', type: 'f32' },
+        ],
+        values: { baseColor: [0.4, 0.45, 0.47, 1], metallic: 0.8, roughness: 0.25 },
+      });
+      vi.spyOn(assets, 'getMaterialProjectionForPayload').mockReturnValue({
+        materialGuid,
+        publicationGeneration: 1,
+        specializationKey: cookedShaderId,
+        artifactHash: 'sha256:rusted-iron-artifact',
+        passes: [
+          {
+            name: 'forward',
+            module: 'forgeax_material::standard',
+            moduleSlots: { surface: 'game_3d::rusted_iron_surface' },
+            artifactHash: 'sha256:rusted-iron-artifact',
+            programs: [
+              {
+                context: materialContext,
+                specializationKey: cookedShaderId,
+                artifactHash: 'sha256:rusted-iron-forward-artifact',
+              },
+            ],
+          },
+          {
+            name: 'shadow-caster',
+            module: 'forgeax_material::standard',
+            moduleSlots: { surface: 'game_3d::rusted_iron_surface' },
+            artifactHash: 'sha256:rusted-iron-artifact',
+            programs: [
+              {
+                context: { ...materialContext, pass: 'shadow' as const },
+                specializationKey: cookedShadowShaderId,
+                artifactHash: 'sha256:rusted-iron-shadow-artifact',
+              },
+            ],
+          },
+        ],
+        runtimeValues: {},
+        staticSelection: [],
+      });
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, -2] } },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [material] } },
+        )
+        .unwrap();
+
+      const frame = extractFrame(world, prepareExtractContext(world, { assets, materialContext }));
+      expect(frame.renderables[0]?.material.materialShaderId).toBe(cookedShaderId);
+      const materialDispatch = frame.dispatch.filter((entry) => entry.materialHandle === material);
+      expect(materialDispatch).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            tags: {
+              LightMode: 'Forward',
+              SurfaceKind: 'standard',
+              SurfaceModule: 'game_3d::rusted_iron_surface',
+              GeometryVariant: 'rigid',
+            },
+            materialShaderId: cookedShaderId,
+          }),
+          expect.objectContaining({
+            tags: { LightMode: 'ShadowCaster' },
+            materialShaderId: cookedShadowShaderId,
+          }),
+        ]),
+      );
+    });
+
+    it('keeps custom Standard Surface fields in the extracted material ABI', () => {
+      const world = new World();
+      spawnCamera(world);
+      const assets = new AssetRegistry(makeMockShaderRegistry());
+      const mesh = registerMesh(world);
+      const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        Materials.standard({
+          surfaceModule: 'game_3d::rusted_iron_surface',
+          parameters: [
+            { name: 'ironColor', type: 'color' },
+            { name: 'rustDark', type: 'color' },
+            { name: 'rustBright', type: 'color' },
+            { name: 'noiseScale', type: 'f32' },
+          ],
+          values: {
+            ironColor: [0.4, 0.45, 0.47, 1],
+            rustDark: [0.42, 0.085, 0.018, 1],
+            rustBright: [0.95, 0.34, 0.055, 1],
+            noiseScale: 1.85,
+          },
+        }),
+      );
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, -2] } },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [material] } },
+        )
+        .unwrap();
+
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
+      const snapshot = frame.renderables[0]?.material;
+      const schemaNames = snapshot?.materialParamSchema?.map((entry) => entry.name) ?? [];
+
+      expect(schemaNames).toEqual(
+        expect.arrayContaining(['ironColor', 'rustDark', 'rustBright', 'noiseScale']),
+      );
+      expect(snapshot?.paramSnapshot).toMatchObject({
+        ironColor: [0.4, 0.45, 0.47].map(srgbChannelToLinear).concat(1),
+        rustDark: [0.42, 0.085, 0.018].map(srgbChannelToLinear).concat(1),
+        rustBright: [0.95, 0.34, 0.055].map(srgbChannelToLinear).concat(1),
+        noiseScale: 1.85,
+      });
+    });
+
     it('mesh-walk: RenderableSnapshot.transform.world is the resolved world mat4 (parent x child), zero per-snapshot compose', () => {
       const world = new World();
       world
@@ -209,7 +366,23 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(w?.[12]).toBeCloseTo(12, 5);
       expect(w?.[13]).toBeCloseTo(3, 5);
       expect(w?.[14]).toBeCloseTo(0, 5);
-      // The snapshot world must equal the entity's Transform.world column byte-for-byte.
+      // The snapshot world must equal the entity's GlobalTransform.world column byte-for-byte.
+    });
+
+    it('mesh-walk: unbound MeshFilter shared handle emits no renderable', () => {
+      const world = new World();
+      spawnCamera(world);
+      const entity = world
+        .spawn(
+          { component: Transform, data: identity() },
+          { component: MeshFilter, data: {} },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+      expect(world.get(entity, MeshFilter).unwrap().assetHandle).toBe(0);
+      expect(propagateTransforms(world).ok).toBe(true);
+      const frame = extractFrame(world, prepareExtractContext(world));
+      expect(frame.renderables).toHaveLength(0);
     });
 
     it('mesh-walk: flat root world mat4 equals compose(local)', () => {
@@ -384,6 +557,65 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       expect(frame.renderables).toHaveLength(0);
       expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
+    });
+
+    it('retains off-camera casters only for shadow dispatch and only inside a light frustum', () => {
+      const world = new World();
+      spawnCamera(world);
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 2] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+      const light = world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
+          { component: PointLight, data: { intensity: 10, range: 10 } },
+          { component: PointLightShadow, data: { nearPlane: 0.1, farPlane: 10 } },
+        )
+        .unwrap();
+      propagateTransforms(world).unwrap();
+      const frame = extractFrame(world, prepareExtractContext(world));
+      expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
+      expect(frame.renderables).toHaveLength(1);
+      expect(frame.dispatch.map((entry) => entry.tags.LightMode)).toEqual(['ShadowCaster']);
+      expect(frame.dispatch.every((entry) => entry.renderableIndex === 0)).toBe(true);
+      world.set(light, PointLightShadow, { farPlane: 1 }).unwrap();
+      expect(extractFrame(world, prepareExtractContext(world)).renderables).toHaveLength(0);
+      world.despawn(light).unwrap();
+      expect(extractFrame(world, prepareExtractContext(world)).renderables).toHaveLength(0);
+    });
+
+    it('persistent composition retains shadow-only casters lit from another World', () => {
+      const sceneWorld = new World();
+      spawnCamera(sceneWorld);
+      sceneWorld
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 2] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+      const lightWorld = new World();
+      lightWorld
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
+          { component: PointLight, data: { intensity: 10, range: 10 } },
+          { component: PointLightShadow, data: { nearPlane: 0.1, farPlane: 10 } },
+        )
+        .unwrap();
+      for (const world of [sceneWorld, lightWorld]) propagateTransforms(world).unwrap();
+      const worlds = [sceneWorld, lightWorld];
+      const owner = { cameraOwner: 0, resourceOwner: 0 };
+      const scene = new PersistentRenderScene();
+      const frame = scene.extractComposition(worlds, owner, 0, () =>
+        extractFrames(worlds, owner, undefined, undefined, undefined, { cull: 'none' }),
+      );
+      expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
+      expect(frame.renderables).toHaveLength(1);
+      expect(frame.dispatch.map((entry) => entry.tags.LightMode)).toEqual(['ShadowCaster']);
     });
 
     it('cross-world extract keeps frustum culling against the surfaced camera-owner camera', () => {
@@ -574,7 +806,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   ): { handle: Handle<'MaterialAsset', 'shared'>; guid: AssetGuid } {
     const asset: MaterialAsset = {
       kind: 'material',
-      passes,
+      ...(passes === undefined ? {} : { passes }),
       values: values ?? {},
     } as unknown as MaterialAsset;
     if (parentGuid !== undefined) {
@@ -1193,12 +1425,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       'TextureAsset',
       {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([255, 255, 255, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       },
     );
   }
@@ -1211,12 +1442,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const textureGuid = AssetGuid.random();
       assets.catalog(textureGuid, {
         kind: 'texture',
-        width: 1,
-        height: 1,
+        shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
         format: 'rgba8unorm',
         data: new Uint8Array([255, 255, 255, 255]),
         colorSpace: 'linear',
-        mipmap: false,
+        mips: { kind: 'none' },
       } satisfies TextureAsset);
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',

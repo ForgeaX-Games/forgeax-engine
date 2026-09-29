@@ -17,9 +17,13 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG = join(SCRIPT_DIR, '..', 'pkg');
 const presenceMarkers = [join(PKG, 'wgpu_wasm.js'), join(PKG, 'provenance.json')];
 const { verifyProvenance } = await import('./provenance.mjs');
+let ready = false;
 if (presenceMarkers.every(existsSync)) {
   try {
-    await verifyProvenance();
+    const { resolveAsset } = await import('./content-key.mjs');
+    const source = await resolveAsset();
+    await verifyProvenance({ expectedSourceContentKey: `sha256-${source.sha256}` });
+    ready = true;
     process.stdout.write('[wgpu-wasm] pkg/ WASM and provenance already present -- skipping fetch.\n');
     process.exit(0);
   } catch (error) {
@@ -32,6 +36,7 @@ process.exit(
   ensureWasm({
     pkgLabel: 'wgpu-wasm',
     presenceMarkers,
+    ready,
     fetchScript: join(SCRIPT_DIR, 'fetch-wasm.mjs'),
     skipEnv: 'FORGEAX_SKIP_WGPU_WASM_FETCH',
     buildHint:

@@ -108,6 +108,7 @@ export function importUiSource(source: UiSource): ImportResult<UiAsset> {
   };
 }
 export function createUiImporter(): {
+  readonly key: 'ui';
   import(context: ImportContext): Promise<ImportResult<UiAsset>>;
   finalize(
     product: import('@forgeax/engine-types').ImportProduct<unknown>,
@@ -115,6 +116,7 @@ export function createUiImporter(): {
   ): ImportProductFinalizeResult;
 } {
   return {
+    key: 'ui',
     async import(context) {
       const source = await context.readSource();
       if (!source.ok) return importFailure(`unable to read UI source: ${String(source.error)}`);

@@ -24,7 +24,7 @@
 // The 3-frame budget keeps the test inside the dawn project default
 // timeout (vitest defaults: 5s per test) while still walking three full
 // queue.submit + drawIndexed cycles (charter F1: minimum signal for a
-// stable real-GPU loop, not the 300-frame smoke gate).
+// stable real-GPU loop, not the 60-frame smoke gate).
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -43,8 +43,8 @@ import {
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
-import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import type { SceneAsset } from '@forgeax/engine-types';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOX_GLTF_PATH = resolve(HERE, '..', '..', 'assets', 'box.gltf');
@@ -57,9 +57,10 @@ const TARGET_FRAMES = 3;
 const CLEAR_COLOR: readonly [number, number, number] = [0.05, 0.05, 0.08];
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = URL.createObjectURL(
+  new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
+);
+afterAll(() => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
 
 interface SubAssetEntry {
   readonly guid: string;
@@ -186,7 +187,7 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
 
     let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
@@ -277,9 +278,8 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
       scale: [n.transform.scale[0], n.transform.scale[1], n.transform.scale[2]],
     });
 
-    const sceneNodes: SceneEntity[] = [
-      {
-        localId: 0 as LocalEntityId,
+    const sceneEntities = {
+      'node-0': {
         components: {
           Transform: transformOf(meshNode),
           // MeshFilter.assetHandle pinned to HANDLE_CUBE = 1 (the engine
@@ -289,8 +289,7 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
           MeshRenderer: { materials: [matHandle] },
         },
       },
-      {
-        localId: 1 as LocalEntityId,
+      'node-1': {
         components: {
           Transform: transformOf(cameraNode),
           Camera: {
@@ -301,8 +300,8 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
           },
         },
       },
-    ];
-    const sceneAsset: SceneAsset = { kind: 'scene', entities: sceneNodes };
+    };
+    const sceneAsset: SceneAsset = { kind: 'scene', entities: sceneEntities };
     assets.catalog<SceneAsset>(sceneGuid, sceneAsset);
 
     const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuid);
@@ -380,7 +379,7 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
     expect(meshedRenderCount).toBeGreaterThanOrEqual(1);
 
     // No RhiError fired during the 3-frame loop. Stays loose at >=0 ;
-    // strict zero-error on the smoke gate is the 300-frame harness in
+    // strict zero-error on the smoke gate is the 60-frame harness in
     // apps/hello/gltf/scripts/smoke-dawn.mjs.
     expect(renderErrors.length).toBe(0);
   });

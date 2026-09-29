@@ -18,5 +18,38 @@
       "glsl": null,
       "bindings": "[]"
     }
+  ],
+  "materialShaders": [
+    {
+      "identifier": "forgeax::default-standard-pbr",
+      "sourcePath": "default-standard-pbr.wgsl",
+      "composedWgsl": "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }",
+      "paramSchema": "[]",
+      "variants": [],
+      "directEntry": "vs_main",
+      "sceneIndexEntry": "vs_scene_index",
+      "materialRow": { "byteLength": 384, "fields": ["baseColor", "alphaCutoff"] },
+      "resourceSlots": [],
+      "uvSets": [],
+      "vertexInputs": [
+        { "semantic": "position", "location": 0, "format": "float32x3" },
+        { "semantic": "normal", "location": 1, "format": "float32x3" },
+        { "semantic": "uv", "location": 2, "format": "float32x2" },
+        { "semantic": "tangent", "location": 3, "format": "float32x4" }
+      ],
+      "alphaMask": { "cutoff": "alphaCutoff", "source": "baseColor.a" },
+      "reflection": {
+        "layoutIdentity": "standard-pbr/material-row-v1",
+        "resourceSlots": [],
+        "vertexInputs": [
+          { "semantic": "position", "location": 0, "format": "float32x3" },
+          { "semantic": "normal", "location": 1, "format": "float32x3" },
+          { "semantic": "uv", "location": 2, "format": "float32x2" },
+          { "semantic": "tangent", "location": 3, "format": "float32x4" }
+        ]
+      },
+      "receiptIdentity": "standard-pbr/material-row-v1",
+      "generation": 1
+    }
   ]
 }

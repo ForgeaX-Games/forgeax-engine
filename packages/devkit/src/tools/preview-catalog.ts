@@ -1,38 +1,24 @@
-import type { PluginCatalog, ToolPlugin } from '@forgeax/engine-plugin';
 import { bindPreviewHost, type NativePreviewHost } from '@forgeax/engine-preview';
-import materialPreviewPlugin from '@forgeax/engine-preview/material';
-import meshPreviewPlugin from '@forgeax/engine-preview/mesh';
-import texturePreviewPlugin from '@forgeax/engine-preview/texture';
-import vfxPreviewPlugin from '@forgeax/engine-preview/vfx';
-import type { ToolDescriptor } from '@forgeax/engine-tool-runtime';
+import materialPreviewPlugin, { materialPreview } from '@forgeax/engine-preview/material';
+import meshPreviewPlugin, { meshPreview } from '@forgeax/engine-preview/mesh';
+import texturePreviewPlugin, { texturePreview } from '@forgeax/engine-preview/texture';
+import vfxPreviewPlugin, { vfxPreview } from '@forgeax/engine-preview/vfx';
+import type { ToolContribution, ToolDescriptor } from '@forgeax/engine-tool-runtime';
 
 export const nativePreviewPlugins = [
-  ['@forgeax/engine-preview/material', materialPreviewPlugin],
-  ['@forgeax/engine-preview/mesh', meshPreviewPlugin],
-  ['@forgeax/engine-preview/vfx', vfxPreviewPlugin],
-  ['@forgeax/engine-preview/texture', texturePreviewPlugin],
+  ['@forgeax/engine-preview/material', materialPreviewPlugin, materialPreview],
+  ['@forgeax/engine-preview/mesh', meshPreviewPlugin, meshPreview],
+  ['@forgeax/engine-preview/vfx', vfxPreviewPlugin, vfxPreview],
+  ['@forgeax/engine-preview/texture', texturePreviewPlugin, texturePreview],
 ] as const;
-
-export const nativePreviewTools = nativePreviewPlugins.flatMap(([, plugin]) => plugin.tools);
+export const nativePreviewTools = nativePreviewPlugins.map(
+  ([, , tool]) => tool as ToolContribution,
+);
 export const nativePreviewDescriptors: readonly ToolDescriptor[] = nativePreviewTools.map(
   ({ descriptor }) => descriptor,
 );
-
-export function createNativePreviewCatalog(
-  host: NativePreviewHost,
-  selectedName?: string,
-): PluginCatalog {
-  return new Map(
-    nativePreviewPlugins
-      .filter(([name]) => selectedName === undefined || name === selectedName)
-      .map(([name, plugin]) => [
-        name,
-        {
-          realm: 'host' as const,
-          load: async () => ({
-            default: bindPreviewHost(plugin as ToolPlugin, host),
-          }),
-        },
-      ]),
-  );
+export function createNativePreviewPlugin(host: NativePreviewHost, name: string) {
+  const selected = nativePreviewPlugins.find(([candidate]) => candidate === name);
+  if (!selected) throw new TypeError(`unknown preview plugin ${name}`);
+  return bindPreviewHost(selected[1], host);
 }

@@ -158,7 +158,7 @@ interface GlyphTextData {
  */
 export function glyphTextLayoutSystem(
   world: World,
-  gpuStore: GpuResidencyCache,
+  gpuStore: Pick<GpuResidencyCache, 'updateMesh'>,
 ): Result<void, TextError> {
   resetFontConcurrency();
 
@@ -200,7 +200,7 @@ function collectGlyphEntities(world: World): EntityHandle[] {
  */
 function processEntity(
   world: World,
-  gpuStore: GpuResidencyCache,
+  gpuStore: Pick<GpuResidencyCache, 'updateMesh'>,
   entity: EntityHandle,
 ): TextError | null {
   const gtRes = world.get(entity, GlyphText);

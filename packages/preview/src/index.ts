@@ -1,5 +1,6 @@
 export {
   isResourcePreviewSize,
+  type NativePreviewPlugin,
   RESOURCE_PREVIEW_DEFAULT_SIZE,
   RESOURCE_PREVIEW_MAX_SIZE,
   RESOURCE_PREVIEW_MIN_SIZE,

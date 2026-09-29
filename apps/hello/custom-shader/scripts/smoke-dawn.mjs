@@ -3,27 +3,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 import { createMaterialLoader } from '@forgeax/engine-assets-runtime';
 import { create, globals } from 'webgpu';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_PATH = resolve(APP_ROOT, 'assets', 'pulse-material.pack.json');
-const FRAME_COUNT = 300;
+const FRAME_COUNT = Math.max(60, Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function stableJson(value) {
-  if (Array.isArray(value)) return value.map(stableJson);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableJson(entry)]),
-    );
-  }
-  return value;
 }
 
 function readFixture() {
@@ -41,7 +30,12 @@ async function assertRuntimeReadiness(fixture) {
       return {
         guid,
         record,
-        artifact: { bytes: record.artifact.bytes },
+        artifacts: Object.fromEntries(
+          record.programs.map(({ artifact }) => [
+            artifact.path,
+            { bytes: new Uint8Array(artifact.bytes), digest: artifact.digest },
+          ]),
+        ),
       };
     },
     loadReference: async () => true,
@@ -58,12 +52,14 @@ async function assertRuntimeReadiness(fixture) {
   const root = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd02');
   const derived = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd03');
   assert(root.status === 'Ready' && derived.status === 'Ready', 'runtime cooked records are not ready');
-  assert(root.artifact.digest === derived.artifact.digest, 'root and derived cooked artifacts differ');
+  assert(root.artifactDigest === derived.artifactDigest, 'root and derived cooked program sets differ');
   assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'specialization inputs differ');
-  assert(
-    JSON.stringify(stableJson(root.record.resolved.values)) === JSON.stringify(stableJson(derived.record.resolved.values)),
-    'runtime-resolved material values differ',
-  );
+  assert(root.record.receipt.identity.layoutIdentity === derived.record.receipt.identity.layoutIdentity, 'material layouts differ');
+  assert(root.record.receipt.identity.programIdentity === derived.record.receipt.identity.programIdentity, 'material programs differ');
+  assert(root.record.receipt.identity.pipelineIdentity === derived.record.receipt.identity.pipelineIdentity, 'material pipelines differ');
+  assert(root.record.receipt.identity.materialPublicationIdentity !== derived.record.receipt.identity.materialPublicationIdentity, 'material publication identities did not capture the child override');
+  assert(JSON.stringify(derived.record.resolved.values.baseColor) === JSON.stringify([0.2, 0.55, 0.95, 1]), 'derived material value override is missing');
+  assert(JSON.stringify(root.record.resolved.values.baseColor) !== JSON.stringify(derived.record.resolved.values.baseColor), 'derived material value override did not diverge from root');
   return { root, derived };
 }
 
@@ -123,8 +119,8 @@ console.log(
     frames: FRAME_COUNT,
     backend: 'dawn-webgpu',
     pixel,
-    rootArtifactDigest: parity.root.artifact.digest,
-    derivedArtifactDigest: parity.derived.artifact.digest,
+    rootArtifactDigest: parity.root.artifactDigest,
+    derivedArtifactDigest: parity.derived.artifactDigest,
     materialIdentity: {
       materialGuid: parity.root.materialGuid,
       layoutIdentity: parity.root.record.receipt.identity.layoutIdentity,
@@ -138,3 +134,4 @@ console.log(
     values: parity.root.record.resolved.values,
   }),
 );
+emitSmokeReceipt('hello-custom-shader/direct-dawn', FRAME_COUNT);

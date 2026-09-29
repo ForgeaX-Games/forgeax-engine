@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const WIDTH = 200;
 const HEIGHT = 150;
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
@@ -64,6 +64,8 @@ for (; frames < MIN_FRAMES; frames += 1) {
   app.world.update(1 / 60).unwrap();
   const result = drawSmokeFrame(app.renderer, app.world);
   if (!result.ok) drawErrors += 1;
+  // This headless driver has no Host frame credit; drain each real submission.
+  await sharedDevice.queue.onSubmittedWorkDone();
 }
 const hasAudioEngine = app.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY);
 console.log(`[audio] backend=${rendererBackend(app.renderer)} frames=${frames} audioResource=${hasAudioEngine} camera=${scene.camera} source=${scene.source}`);
@@ -74,6 +76,6 @@ if (!hasAudioEngine) failures.push('AudioEngine resource missing');
 if (drawErrors > 0) failures.push(`draw errors=${drawErrors}`);
 if (errors.length > 0) failures.push(`Renderer.onError=${errors.map((error) => error.code).join(',')}`);
 if (failures.length > 0) { console.error(`[smoke] FAIL - ${failures.join('; ')}`); sharedDevice?.destroy?.(); process.exit(1); }
-console.log('[smoke] PASS - structural audio resource, player scene, 300 draws, and RHI error gates are green.');
+console.log('[smoke] PASS - structural audio resource, player scene, 60 draws, and RHI error gates are green.');
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from '../shader-manifest-url.fixture';
 // user-handle-mesh-render.dawn.test.ts -- T-M2-1 V-3 punt regression lock.
 //
 // Background (plan-decisions.md D-3 / requirements §10 V-3 / AC-10 / AC-11):
@@ -81,9 +82,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () => {
   it('allocSharedRef user-handle (>=1024) renders non-clear-color center pixel', async () => {

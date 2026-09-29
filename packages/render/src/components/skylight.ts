@@ -40,7 +40,10 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * Skylight ambient environment light.
  *
  * A single Skylight entity provides ambient lighting for all StandardMaterial
- * surfaces. Two modes share one component:
+ * surfaces. When Atmosphere is selected and equirect is omitted, the same sky
+ * cube supplies diffuse and roughness-filtered specular IBL. Color/intensity
+ * still scale the result; without Atmosphere the solid-color behavior applies.
+ * Two authored inputs share one component:
  *
  * - **Solid-color ambient (no equirect).** Omit `equirect` for a constant
  *   ambient = `color` * `intensity` applied immediately, with no async GPU

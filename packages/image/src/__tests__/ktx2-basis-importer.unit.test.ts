@@ -97,11 +97,10 @@ describe.skipIf(!pkgBuilt)('KTX2/Basis source importer', () => {
     if (!result.ok) return;
     expect(result.value.assets[0]?.payload).toMatchObject({
       kind: 'texture',
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm',
       colorSpace: 'linear',
-      mipmap: false,
+      mips: { kind: 'none' },
     });
     expect(result.value.assets[0]?.artifacts.body?.assetCodec).toMatchObject({
       name: 'basis',

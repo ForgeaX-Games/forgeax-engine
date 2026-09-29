@@ -76,11 +76,11 @@ checkItemAny(
   'registerStatesPlugin',
 );
 
-// (5) skills/forgeax-engine-cli/SKILL.md — forgeax-engine-remote-state plugin
+// (5) skills/forgeax-engine-cli/SKILL.md — unified live state inspection
 checkItemAny(
   'item-05 cli-skill',
   join(SKILLS_DIR, 'forgeax-engine-cli/SKILL.md'),
-  'forgeax-engine-remote-state',
+  'forgeax dev eval',
 );
 
 // (6) packages/state/README.md — SSOT for state package API

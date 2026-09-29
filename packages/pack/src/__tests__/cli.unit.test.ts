@@ -266,7 +266,7 @@ async function writeSolidPng(
       await rm(tempDir, { recursive: true, force: true });
     });
 
-    describe('cli-asset (forgeax-engine-remote-asset plugin bin)', () => {
+    describe('cli-asset (forgeax asset plugin bin)', () => {
       describe('subcommand routing (a)', () => {
         it('routes scan as a known subcommand and returns 0 on empty roots', async () => {
           const io = makeIO();
@@ -439,6 +439,93 @@ async function writeSolidPng(
           const io = makeIO();
           const code = await runCliAsset(['verify'], { ...ctxFor(io), cwd: subDir });
           expect(code).toBe(1);
+        });
+
+        it('verify emits one structured source/output report', async () => {
+          const guid = '019e2cc6-0c86-79da-aa76-b0984c86d45d';
+          await writeFile(join(tempDir, 'hero.png'), 'source', 'utf-8');
+          await writeFile(
+            join(tempDir, 'hero.png.meta.json'),
+            JSON.stringify({
+              schemaVersion: '1.0.0',
+              kind: 'external-asset-package',
+              importer: 'image',
+              source: 'hero.png',
+              importSettings: {},
+              subAssets: [{ guid, sourceIndex: 0, kind: 'texture' }],
+            }),
+            'utf-8',
+          );
+          const io = makeIO();
+          const code = await runCliAsset(['verify'], { ...ctxFor(io), cwd: tempDir });
+          expect(code).toBe(0);
+          expect(io.stdout).toHaveLength(1);
+          const report = JSON.parse(io.stdout[0] as string);
+          expect(report.schemaVersion).toBe('asset-verification-v1');
+          expect(report.assets[0]).toMatchObject({
+            guid,
+            type: 'texture',
+            source: { role: 'author' },
+            output: { status: 'unproduced', availability: 'unknown', freshness: 'unknown' },
+            producer: { state: 'not-run' },
+          });
+          expect(report.scope).toMatchObject({
+            sourceCount: 1,
+            assetLimit: 256,
+            truncated: false,
+            scriptablePackSourceCount: 0,
+          });
+          expect(report.summary).toMatchObject({
+            assetCount: 1,
+            emittedAssetCount: 1,
+            materialCount: 0,
+            unproducedAssetCount: 1,
+            unknownAssetCount: 0,
+            unmaterializedScriptablePackCount: 0,
+          });
+        });
+
+        it('reports published package rows with their declared dependencies', async () => {
+          const guid = '019e2cc6-0c86-79da-aa76-b0984c86d45e';
+          const dependency = '019e2cc6-0c86-79da-aa76-b0984c86d45f';
+          await writeFile(
+            join(tempDir, 'published.pack.json'),
+            JSON.stringify({
+              schemaVersion: '1.0.0',
+              kind: 'internal-text-package',
+              packageId: '019e2cc6-0c86-79da-aa76-b0984c86d450',
+              assets: [
+                {
+                  guid,
+                  kind: 'scene',
+                  execution: 'cooked',
+                  payload: {},
+                  refs: [dependency],
+                  artifacts: {
+                    scene: { path: 'artifacts/scene.bin', mediaType: 'application/octet-stream' },
+                  },
+                },
+              ],
+            }),
+            'utf-8',
+          );
+          const io = makeIO();
+          const code = await runCliAsset(['verify'], { ...ctxFor(io), cwd: tempDir });
+          expect(code).toBe(0);
+          const report = JSON.parse(io.stdout[0] as string);
+          expect(report.assets[0]).toMatchObject({
+            guid,
+            dependencies: [dependency],
+            output: {
+              status: 'produced',
+              availability: 'unknown',
+              freshness: 'unknown',
+              packagePath: join(tempDir, 'published.pack.json'),
+              artifactPaths: ['artifacts/scene.bin'],
+            },
+            producer: { state: 'published' },
+          });
+          expect(report.summary).toMatchObject({ assetCount: 1, emittedAssetCount: 1 });
         });
       });
     });

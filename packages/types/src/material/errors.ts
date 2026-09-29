@@ -1,9 +1,12 @@
 export const MATERIAL_ERROR_CODES = [
+  'material-output-contract-invalid',
   'material-parent-not-found',
   'material-circular-inheritance',
+  'material-child-contract-invalid',
   'material-no-effective-pass',
   'material-value-unknown',
   'material-value-type-mismatch',
+  'material-parameter-type-unsupported',
   'material-contract-program-mismatch',
   'shader-module-id-missing',
   'shader-module-id-duplicate',
@@ -16,6 +19,12 @@ export const MATERIAL_ERROR_CODES = [
   'material-derived-interface-mismatch',
   'material-texture-coordinate-invalid',
   'material-payload-bounds',
+  'material-transmission-contract-invalid',
+  'material-physical-contract-invalid',
+  'material-tangent-required',
+  'material-surface-slot-missing',
+  'material-surface-abi-mismatch',
+  'material-surface-forbidden-interface',
 ] as const;
 
 export type MaterialErrorCode = (typeof MATERIAL_ERROR_CODES)[number];
@@ -37,6 +46,14 @@ export interface MaterialCircularInheritanceDetail {
   readonly chain: readonly string[];
 }
 
+export interface MaterialChildContractInvalidDetail {
+  readonly code: 'material-child-contract-invalid';
+  readonly material: string;
+  readonly parent: string;
+  readonly forbidden: readonly ('colorSpace' | 'passes' | 'parameters' | 'surface')[];
+  readonly action: 'remove-forbidden-fields';
+}
+
 export interface MaterialNoEffectivePassDetail {
   readonly code: 'material-no-effective-pass';
   readonly material: string;
@@ -54,6 +71,15 @@ export interface MaterialValueTypeMismatchDetail {
   readonly parameter: string;
   readonly expectedType: string;
   readonly actualType: string;
+}
+
+export interface MaterialParameterTypeUnsupportedDetail {
+  readonly code: 'material-parameter-type-unsupported';
+  readonly stage: 'cook' | 'runtime';
+  readonly material: string;
+  readonly parameter: string;
+  readonly type: string;
+  readonly action: 'use-supported-type';
 }
 
 export interface MaterialContractProgramMismatchDetail {
@@ -118,6 +144,18 @@ export interface GltfMaterialUvSetMissingDetail {
   readonly availableSets: readonly number[];
 }
 
+export interface MaterialInterfaceFacts {
+  readonly group?: number;
+  readonly binding?: number;
+  readonly resourceKind?: string;
+  readonly member?: string;
+  readonly type?: string;
+  readonly offset?: number;
+  readonly size?: number;
+  readonly alignment?: number;
+  readonly span?: number;
+}
+
 export interface MaterialDerivedInterfaceMismatchDetail {
   readonly code: 'material-derived-interface-mismatch';
   readonly stage: 'compile' | 'cook' | 'extract' | 'record';
@@ -127,6 +165,12 @@ export interface MaterialDerivedInterfaceMismatchDetail {
   readonly actualIdentity?: string;
   readonly parameter?: string;
   readonly action: 'recook';
+  readonly pass?: string;
+  readonly module?: string;
+  readonly source?: string;
+  readonly context?: Readonly<Record<string, string>>;
+  readonly expected?: MaterialInterfaceFacts;
+  readonly actual?: MaterialInterfaceFacts;
 }
 
 export interface MaterialTextureCoordinateInvalidDetail {
@@ -152,12 +196,103 @@ export interface MaterialPayloadBoundsDetail {
   readonly action: 'stop-draw';
 }
 
+export interface MaterialTransmissionContractInvalidDetail {
+  readonly code: 'material-transmission-contract-invalid';
+  readonly material: string;
+  readonly parameter:
+    | 'transmission'
+    | 'ior'
+    | 'thickness'
+    | 'attenuationColor'
+    | 'attenuationDistance'
+    | 'transmissionTexture'
+    | 'thicknessTexture';
+  readonly reason: 'non-finite' | 'range' | 'shape' | 'blend' | 'depth-write';
+  readonly actual?: unknown;
+}
+
+export type MaterialPhysicalLayer =
+  | 'clearcoat'
+  | 'anisotropy'
+  | 'sheen'
+  | 'iridescence'
+  | 'specular'
+  | 'diffuseTransmission'
+  | 'root';
+
+export interface MaterialPhysicalContractInvalidDetail {
+  readonly code: 'material-physical-contract-invalid';
+  readonly material: string;
+  readonly layer: MaterialPhysicalLayer;
+  readonly missing?: readonly string[];
+  readonly conflicting?: readonly string[];
+  readonly pass?: string;
+  readonly reason: 'incomplete-layer' | 'child-parameter' | 'deferred-pass';
+}
+
+export interface MaterialTangentRequiredDetail {
+  readonly code: 'material-tangent-required';
+  readonly material: string;
+  readonly mesh: string;
+  readonly layer: string;
+  readonly uv: string;
+  readonly attributes: readonly string[];
+  readonly reason: string;
+}
+
+export interface MaterialSurfaceSlotMissingDetail {
+  readonly code: 'material-surface-slot-missing';
+  readonly material: string;
+  readonly pass: string;
+  readonly source: string;
+  readonly slot: 'surface';
+  readonly action: 'add-surface-slot';
+}
+
+export interface MaterialSurfaceAbiMismatchDetail {
+  readonly code: 'material-surface-abi-mismatch';
+  readonly material: string;
+  readonly pass: string;
+  readonly source: string;
+  readonly slot: 'surface';
+  readonly expected: string;
+  readonly actual: string;
+  readonly action: 'repair-surface-export';
+}
+
+export interface MaterialSurfaceForbiddenInterfaceDetail {
+  readonly code: 'material-surface-forbidden-interface';
+  readonly material: string;
+  readonly pass: string;
+  readonly source: string;
+  readonly slot: 'surface';
+  readonly interface:
+    | 'fragment-entry'
+    | 'vertex-entry'
+    | 'compute-entry'
+    | 'resource-binding'
+    | 'engine-entry'
+    | 'vertex-position-mutation';
+  readonly action: 'remove-forbidden-interface';
+}
+
+export interface MaterialOutputContractInvalidDetail {
+  readonly code: 'material-output-contract-invalid';
+  readonly material: string;
+  readonly pass: string;
+  readonly location: number;
+  readonly reason: string;
+}
+
 interface MaterialErrorDetailByCode {
+  readonly 'material-output-contract-invalid': MaterialOutputContractInvalidDetail;
   readonly 'material-parent-not-found': MaterialParentNotFoundDetail;
   readonly 'material-circular-inheritance': MaterialCircularInheritanceDetail;
+  readonly 'material-child-contract-invalid': MaterialChildContractInvalidDetail;
   readonly 'material-no-effective-pass': MaterialNoEffectivePassDetail;
   readonly 'material-value-unknown': MaterialValueUnknownDetail;
   readonly 'material-value-type-mismatch': MaterialValueTypeMismatchDetail;
+  readonly 'material-parameter-type-unsupported': MaterialParameterTypeUnsupportedDetail;
   readonly 'material-contract-program-mismatch': MaterialContractProgramMismatchDetail;
   readonly 'shader-module-id-missing': ShaderModuleIdMissingDetail;
   readonly 'shader-module-id-duplicate': ShaderModuleIdDuplicateDetail;
@@ -170,6 +305,12 @@ interface MaterialErrorDetailByCode {
   readonly 'material-derived-interface-mismatch': MaterialDerivedInterfaceMismatchDetail;
   readonly 'material-texture-coordinate-invalid': MaterialTextureCoordinateInvalidDetail;
   readonly 'material-payload-bounds': MaterialPayloadBoundsDetail;
+  readonly 'material-transmission-contract-invalid': MaterialTransmissionContractInvalidDetail;
+  readonly 'material-physical-contract-invalid': MaterialPhysicalContractInvalidDetail;
+  readonly 'material-tangent-required': MaterialTangentRequiredDetail;
+  readonly 'material-surface-slot-missing': MaterialSurfaceSlotMissingDetail;
+  readonly 'material-surface-abi-mismatch': MaterialSurfaceAbiMismatchDetail;
+  readonly 'material-surface-forbidden-interface': MaterialSurfaceForbiddenInterfaceDetail;
 }
 
 export type MaterialErrorDetail = MaterialErrorDetailByCode[MaterialErrorCode];
@@ -195,6 +336,14 @@ const MATERIAL_ERROR_POLICY = {
     expected: 'the parent chain is acyclic',
     hint: 'remove the repeated GUID from the parent chain',
   },
+  'material-output-contract-invalid': {
+    expected: 'ordered named color outputs with valid formats and independent blend/write states',
+    hint: 'repair the material output declaration and bind matching RenderGraph attachments',
+  },
+  'material-child-contract-invalid': {
+    expected: 'a parent-bearing material child contains only parent and authored values',
+    hint: 'remove colorSpace, passes, parameters, and surface from the child; let the MaterialTable root provide the effective contract',
+  },
   'material-no-effective-pass': {
     expected: 'the resolved material has at least one pass',
     hint: 'add a pass to the root material or an inherited parent',
@@ -206,6 +355,10 @@ const MATERIAL_ERROR_POLICY = {
   'material-value-type-mismatch': {
     expected: 'each value matches its declared parameter type',
     hint: 'change the value to the declared parameter type',
+  },
+  'material-parameter-type-unsupported': {
+    expected: 'each material parameter uses a producer-supported ABI type',
+    hint: 'replace the boolean parameter with a supported numeric, vector, color, or texture type and recook the material',
   },
   'material-contract-program-mismatch': {
     expected: 'the program satisfies the material contract',
@@ -254,6 +407,31 @@ const MATERIAL_ERROR_POLICY = {
   'material-payload-bounds': {
     expected: 'every material payload write stays within the derived payload',
     hint: 'repair the derived payload owner before submitting the draw',
+  },
+  'material-transmission-contract-invalid': {
+    expected: 'transmission material values satisfy finite ranges and Forward depth rules',
+    hint: 'repair the named transmission value or pass state before publishing the material',
+  },
+  'material-physical-contract-invalid': {
+    expected: 'the Standard physical contract contains complete declared layers and valid passes',
+    hint: 'repair the root parameters or pass policy and derive the material again',
+  },
+  'material-tangent-required': {
+    expected: 'the physical material tangent input is complete and valid before draw admission',
+    hint: 'provide a finite tangent: vec4 or repair the named normal, UV, and triangle topology inputs',
+  },
+  'material-surface-slot-missing': {
+    expected: 'the Standard material pass has one surface module slot',
+    hint: 'add moduleSlots.surface to the Standard pass and recook the material',
+  },
+  'material-surface-abi-mismatch': {
+    expected:
+      'the Surface module exports evaluate_surface with the input and output types required by its selected material model',
+    hint: 'repair the authored Surface export to the producer-reported ABI and recook the material',
+  },
+  'material-surface-forbidden-interface': {
+    expected: 'the Surface module declares no stage entry, resource binding, or vertex mutation',
+    hint: 'remove the forbidden interface from the Surface source and recook the material',
   },
 } satisfies {
   readonly [C in MaterialErrorCode]: {

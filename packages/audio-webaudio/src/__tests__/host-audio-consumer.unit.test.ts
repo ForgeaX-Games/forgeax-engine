@@ -1,3 +1,4 @@
+import { createAudioIntentBackend } from '@forgeax/engine-audio';
 import { describe, expect, it, vi } from 'vitest';
 import { createHostAudioConsumer } from '../host-audio-consumer';
 import { WebAudioEngine } from '../web-audio-engine';
@@ -191,5 +192,137 @@ describe('HostAudioConsumer', () => {
     expect(error?.code).toBe('decode-failed');
     expect(error?.hint).toContain('source bytes');
     expect(error?.detail).toMatchObject({ code: 'decode-failed' });
+  });
+});
+
+describe('Host lifecycle budgets and error ownership', () => {
+  it('retains a first publication when the pending-play budget rejects its play', async () => {
+    const engine = new WebAudioEngine();
+    const firstDecode = deferred<AudioBuffer>();
+    const bufferA = {} as AudioBuffer;
+    const bufferB = {} as AudioBuffer;
+    const decode = vi
+      .spyOn(engine, 'decode')
+      .mockReturnValueOnce(firstDecode.promise)
+      .mockResolvedValueOnce(bufferB);
+    const play = vi.spyOn(engine, 'play').mockImplementation(() => {});
+    const consumer = createHostAudioConsumer(engine, { maxPendingPlays: 1 });
+    const backend = createAudioIntentBackend({
+      emit: (intent) => consumer.consume(intent),
+      state: () => consumer.state(),
+    });
+    const clipA = {
+      kind: 'audio' as const,
+      sourceKey: 'A',
+      mediaType: 'audio/wav' as const,
+      bytes: Uint8Array.of(1),
+    };
+    const clipB = {
+      kind: 'audio' as const,
+      sourceKey: 'B',
+      mediaType: 'audio/wav' as const,
+      bytes: Uint8Array.of(2),
+    };
+
+    backend.play(1, clipA, PLAY_OPTIONS);
+    backend.play(2, clipB, PLAY_OPTIONS);
+    firstDecode.resolve(bufferA);
+    await flushDecode();
+    backend.stop(1);
+    backend.play(2, clipB, PLAY_OPTIONS);
+    await flushDecode();
+
+    expect(decode).toHaveBeenCalledTimes(2);
+    expect(decode).toHaveBeenLastCalledWith(Uint8Array.of(2));
+    expect(play).toHaveBeenLastCalledWith(2, bufferB, PLAY_OPTIONS);
+    backend.destroy();
+  });
+
+  it('does not clear another source failure when an unrelated decode succeeds', async () => {
+    const engine = new WebAudioEngine();
+    vi.spyOn(engine, 'decode')
+      .mockRejectedValueOnce(new Error('broken A'))
+      .mockResolvedValue({} as AudioBuffer);
+    vi.spyOn(engine, 'play').mockImplementation(() => {});
+    const consumer = createHostAudioConsumer(engine);
+    consumer.consume({
+      kind: 'play',
+      entityId: 1,
+      sourceKey: 'A',
+      bytes: Uint8Array.of(1),
+      options: PLAY_OPTIONS,
+    });
+    await vi.waitFor(() => expect(consumer.state().lastError?.code).toBe('decode-failed'));
+    const failure = consumer.state().lastError;
+    consumer.consume({
+      kind: 'play',
+      entityId: 2,
+      sourceKey: 'B',
+      bytes: Uint8Array.of(2),
+      options: PLAY_OPTIONS,
+    });
+    await flushDecode();
+    expect(consumer.state().lastError).toBe(failure);
+    consumer.consume({ kind: 'play', entityId: 3, sourceKey: 'A', options: PLAY_OPTIONS });
+    await vi.waitFor(() => expect(consumer.state().lastError).toBeNull());
+    consumer.dispose();
+  });
+
+  it('bounds retained publications and releases pending entity slots after churn', async () => {
+    const engine = new WebAudioEngine();
+    const decode = vi
+      .spyOn(engine, 'decode')
+      .mockResolvedValue({ length: 1, numberOfChannels: 1 } as AudioBuffer);
+    const play = vi.spyOn(engine, 'play').mockImplementation(() => {});
+    const consumer = createHostAudioConsumer(engine, {
+      maxCachedBytes: 8,
+      maxCachedSources: 1,
+      maxPendingPlays: 1,
+    });
+    for (let entityId = 0; entityId < 100; entityId++) {
+      consumer.consume({
+        kind: 'play',
+        entityId,
+        sourceKey: 'clip',
+        ...(entityId === 0 ? { bytes: Uint8Array.of(1) } : {}),
+        options: PLAY_OPTIONS,
+      });
+      await flushDecode();
+      expect(play).toHaveBeenCalledTimes(entityId + 1);
+      consumer.consume({ kind: 'stop', entityId });
+    }
+    expect(decode).toHaveBeenCalledTimes(1);
+    consumer.consume({
+      kind: 'play',
+      entityId: 101,
+      sourceKey: 'other',
+      bytes: Uint8Array.of(2),
+      options: PLAY_OPTIONS,
+    });
+    expect(consumer.state().lastError?.detail).toMatchObject({
+      reason: expect.stringContaining('budget'),
+    });
+    expect(decode).toHaveBeenCalledTimes(1);
+    consumer.dispose();
+  });
+
+  it('refuses a decoded sample allocation beyond its retained-byte budget', async () => {
+    const engine = new WebAudioEngine();
+    vi.spyOn(engine, 'decode').mockResolvedValue({
+      length: 100,
+      numberOfChannels: 2,
+    } as AudioBuffer);
+    const play = vi.spyOn(engine, 'play').mockImplementation(() => {});
+    const consumer = createHostAudioConsumer(engine, { maxCachedBytes: 32 });
+    consumer.consume({
+      kind: 'play',
+      entityId: 1,
+      sourceKey: 'large',
+      bytes: Uint8Array.of(1),
+      options: PLAY_OPTIONS,
+    });
+    await vi.waitFor(() => expect(consumer.state().lastError?.code).toBe('decode-failed'));
+    expect(play).not.toHaveBeenCalled();
+    consumer.dispose();
   });
 });

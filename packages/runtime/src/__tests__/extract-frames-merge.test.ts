@@ -39,11 +39,8 @@ import type {
   SkylightSnapshot,
   SpotLightSnapshot,
 } from '../../../render/src/render-system-extract';
-import {
-  extractFrame,
-  extractFrames,
-  prepareExtractContext,
-} from '../../../render/src/render-system-extract';
+import { prepareExtractContext } from '../../../render/src/render-system-extract';
+import { extractFrame, extractFrames } from '../../../render/src/render-system-extract-tail';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -161,62 +158,39 @@ function simulateMerge(
   // AC-04: lights — point[]/spot[] concat; directional first-hit in worlds[] order; directionalCount sum
   const point: PointLightSnapshot[] = [];
   const spot: SpotLightSnapshot[] = [];
+  const rect: ExtractedLights['rect'][number][] = [];
   let directional: DirectionalLightSnapshot | undefined;
   let directionalCount = 0;
   for (const f of frames) {
     for (const p of f.lights.point) point.push(p);
     for (const s of f.lights.spot) spot.push(s);
+    for (const r of f.lights.rect) rect.push(r);
     if (directional === undefined && f.lights.directional !== undefined) {
       directional = f.lights.directional;
     }
     directionalCount += f.lights.directionalCount;
   }
+  const firstDirectionalLights = frames.find(
+    (frame) => frame.lights.directional !== undefined,
+  )?.lights;
   const lights: ExtractedLights = {
     directional,
     directionalCount,
     point,
     spot,
-    lightViewProj:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.lightViewProj
-        : undefined,
-    splitPlanes:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.splitPlanes
-        : undefined,
-    cascadeCount:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.cascadeCount
-        : undefined,
-    cascadeBlend:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.cascadeBlend
-        : undefined,
-    shadowMapSize:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.shadowMapSize
-        : undefined,
-    depthBias:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.depthBias
-        : undefined,
-    normalBias:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.normalBias
-        : undefined,
-    pcfKernelSize:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.pcfKernelSize
-        : undefined,
+    rect,
+    lightViewProj: firstDirectionalLights?.lightViewProj,
+    splitPlanes: firstDirectionalLights?.splitPlanes,
+    cascadeCount: firstDirectionalLights?.cascadeCount,
+    cascadeBlend: firstDirectionalLights?.cascadeBlend,
+    shadowMapSize: firstDirectionalLights?.shadowMapSize,
+    depthBias: firstDirectionalLights?.depthBias,
+    normalBias: firstDirectionalLights?.normalBias,
+    directionalShadowQuality: firstDirectionalLights?.directionalShadowQuality,
+    directionalShadowError: firstDirectionalLights?.directionalShadowError,
     pointShadow: frames.flatMap((f) => f.lights.pointShadow),
-    directionalCsmConfig:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.directionalCsmConfig
-        : undefined,
-    directionalCsmDirection:
-      directional !== undefined
-        ? frames.find((f) => f.lights.directional !== undefined)?.lights.directionalCsmDirection
-        : undefined,
+    directionalCsmConfig: firstDirectionalLights?.directionalCsmConfig,
+    directionalCsmDirection: firstDirectionalLights?.directionalCsmDirection,
   };
 
   // AC-05: singletons from owner world only
@@ -433,6 +407,36 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     expect(frameB.lights.directionalCount).toBe(1);
   });
 
+  it('AC-04: first directional owner error is preserved across the merge', () => {
+    const worldA = new World();
+    worldA
+      .spawn(
+        { component: Transform, data: identityTransform() },
+        {
+          component: DirectionalLight,
+          data: {
+            direction: [0, -1, 0],
+            shadowFilter: 4,
+            shadowAngularRadius: 999,
+            maxPenumbraTexels: 32,
+          },
+        },
+      )
+      .unwrap();
+
+    const worldB = makeWorldWithDirectionalLight();
+    const frameA = extractFrame(worldA, prepareExtractContext(worldA));
+    const frameB = extractFrame(worldB, prepareExtractContext(worldB));
+
+    expect(frameA.lights.directionalShadowError?.code).toBe('shadow-invalid-config');
+    expect(frameB.lights.directionalShadowError).toBeUndefined();
+    const merged = simulateMerge([frameA, frameB], 0);
+    expect(merged.lights.directionalShadowError?.detail).toMatchObject({
+      field: 'shadowAngularRadius',
+      actual: 999,
+    });
+  });
+
   // ── AC-05: singleton resources from owner only ─────────────────────────────
 
   it('AC-05: skylight is taken from owner world only, non-owner ignored', () => {
@@ -624,6 +628,9 @@ describe('extractFrames cross-world directional CSM (bug-20260710)', () => {
     }
     // splitPlanes reach the component shadowDistance on the last cascade.
     expect(frame.lights.splitPlanes).toBeDefined();
+    expect(frame.lights.splitPlanes).toHaveLength(16);
+    expect(frame.lights.splitPlanes?.[1]).toBeGreaterThan(0);
+    expect(frame.lights.splitPlanes?.[2]).toBeGreaterThan(0);
   });
 
   it('single world (camera + light together) still yields non-zero lightViewProj', () => {
@@ -652,5 +659,6 @@ describe('extractFrames cross-world directional CSM (bug-20260710)', () => {
     for (let i = 0; i < (frame.lights.cascadeCount ?? 0); i++) {
       expect(isNonZeroMat(lvp?.[i])).toBe(true);
     }
+    expect(frame.lights.splitPlanes).toHaveLength(16);
   });
 });

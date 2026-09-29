@@ -168,7 +168,7 @@ export interface RealmCapabilityInput {
 }
 
 export function createRealmCapabilityMatrix(input: RealmCapabilityInput): RealmCapabilityMatrix {
-  const realms = (['build', 'host', 'engine'] as const).reduce(
+  const realms = (['build', 'host', 'engine', 'frontend'] as const).reduce(
     (result, realm) => {
       const supported = input.supported[realm];
       result[realm] = supported

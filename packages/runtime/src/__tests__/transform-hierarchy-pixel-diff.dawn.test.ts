@@ -1,3 +1,4 @@
+import { shaderManifestUrl } from './shader-manifest-url.fixture';
 // transform-hierarchy-pixel-diff.dawn.test.ts -
 // feat-20260531-render-consume-global-transform-hierarchy / M3 / w13.
 //
@@ -7,7 +8,7 @@
 // through renderer.attach, spawns a non-identity parent + a ChildOf
 // child + a static reference sphere, then proves moving the PARENT moves the
 // CHILD's rendered world position (the child gets no Transform write of its
-// own between frames; the only change is the parent's resolved Transform.world
+// own between frames; the only change is the parent's resolved GlobalTransform.world
 // mat4 propagated down the ChildOf edge). This is the vitest-dawn-project
 // counterpart to the CI
 // smoke step so `pnpm test:dawn` exercises the visual-evidence path
@@ -41,9 +42,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
-  JSON.stringify(ENGINE_MANIFEST),
-)}`;
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 
 async function doReadPixels(device: GPUDevice, renderTarget: GPUTexture): Promise<Uint8Array> {
   const bytesPerPixel = 4;
@@ -154,7 +153,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
     if (device === undefined) throw new Error('GPUDevice not captured');
 
     // Single World wires the consume path through renderer.attach so the
-    // child's resolved Transform.world mat4 is derived each frame. feat-20260614
+    // child's resolved GlobalTransform.world mat4 is derived each frame. feat-20260614
     // M8: the material is a per-World column handle minted via allocSharedRef
     // (AssetRegistry has no handle concept).
     const world = new World();

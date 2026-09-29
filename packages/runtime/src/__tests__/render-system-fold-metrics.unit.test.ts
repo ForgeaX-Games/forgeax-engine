@@ -25,7 +25,7 @@
 // Constraints from plan-strategy §2 D-3 / research F-5 / N-3:
 //   - Counter key = `render.instancing.foldedDraws` (verbatim).
 //   - Lives on `EngineMetrics` (runtime counter, dot-namespace); does NOT
-//     touch forgeax-metrics.schema.json (N-3: that schema closes the 5
+//     touch schemas/forgeax-metrics.schema.json (N-3: that schema closes the 5
 //     CI MetricKind, unrelated to runtime counters).
 //   - Semantics: count of instanced drawIndexed emitted this frame; not
 //     entity count, not pre-filter bucket count.

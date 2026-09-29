@@ -122,7 +122,10 @@ export class SpawnDataUnknownFieldError extends Error {
     this.detail = { component: componentName, field: fieldName, knownFields: sortedKnown };
   }
 }
-export type QuerySpanUnavailableReason = 'optional-data' | 'row-change-filter' | 'sparse-component';
+export type QuerySpanUnavailableReason =
+  | 'optional-data'
+  | 'sparse-component'
+  | 'relationship-component';
 
 export class QueryDescriptorConflictError extends Error {
   override readonly name = 'QueryDescriptorConflictError';

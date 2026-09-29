@@ -7,7 +7,11 @@
 #define_import_path forgeax_hdrp::cluster_forward
 
 #import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot, evalSpotShadowed}
+#import forgeax_pbr::lighting_attenuation::{projectSpotUv}
 #import forgeax_view::common::{view}
+#ifdef PROJECTOR_AVAILABLE
+#import forgeax_view::common::{projectorTexture, projectorSampler}
+#endif
 #ifdef POINT_SHADOW_AVAILABLE
 #import forgeax_pbr::lighting_punctual::{evalPointShadowed}
 #endif
@@ -16,13 +20,15 @@
 
 const KIND_POINT: u32 = 0u;
 const KIND_SPOT: u32 = 1u;
+const PROJECTOR_ONLY_TILE: i32 = -2;
 
 // LightSlot is the byte-frozen 64B std430/std140 transport contract.
 // [0..2] position, [3] invRangeSquared
 // [4..6] colorTimesIntensity, [7] cosInner
 // [8..10] direction, [11] cosOuter
 // [12] raw kind u32, [13] shadow identity i32
-// [14..15] point near/far f32 bits; spot keeps these lanes zero.
+// [14] point near / spot shadow intensity f32 bits
+// [15] point far / spot PCF kernel width f32 bits
 struct LightSlot {
   position        : vec4<f32>,
   color           : vec4<f32>,
@@ -31,6 +37,23 @@ struct LightSlot {
 };
 
 const LIGHTSLOT_BYTE_SIZE: u32 = 64u;
+
+fn sampleClusterSpotProjector(lightViewProj : mat4x4<f32>, worldPos : vec3<f32>) -> vec3<f32> {
+#ifdef PROJECTOR_AVAILABLE
+  let clip = lightViewProj * vec4<f32>(worldPos, 1.0);
+  // The projector is a cookie, not an extra cone. A fragment that cannot be
+  // projected (or lies outside the tile) keeps the analytic Spot contribution
+  // intact, matching Three's SpotLightNode fail-open map gate.
+  if (abs(clip.w) < 1e-6) { return vec3<f32>(1.0); }
+  let uv = projectSpotUv(lightViewProj, worldPos);
+  if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+    return vec3<f32>(1.0);
+  }
+  return textureSampleLevel(projectorTexture, projectorSampler, uv, 0.0).rgb;
+#else
+  return vec3<f32>(1.0);
+#endif
+}
 
 struct ClusterUniform {
   grid         : vec4<u32>,
@@ -96,14 +119,15 @@ fn evaluate_cluster_light(
   alpha_sq   : f32,
   f0         : vec3<f32>,
 ) -> vec3<f32> {
-  let kind = light.kind_and_shadow.x;
+  // The low byte is the closed kind; Spot packs its PCF width above it.
+  let kind = light.kind_and_shadow.x & 0xffu;
   if (kind == KIND_POINT) {
 #ifdef POINT_SHADOW_AVAILABLE
     let layer = bitcast<i32>(light.kind_and_shadow.y);
     if (layer >= 0) {
       return evalPointShadowed(
         light.position.xyz, light.color.xyz, light.position.w,
-        world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0,
+        world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0, vec3<f32>(0.0),
         layer,
         bitcast<f32>(light.kind_and_shadow.z),
         bitcast<f32>(light.kind_and_shadow.w),
@@ -113,25 +137,41 @@ fn evaluate_cluster_light(
 #endif
     return evalPoint(
       light.position.xyz, light.color.xyz, light.position.w,
-      world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0,
+      world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0, vec3<f32>(0.0),
     );
   }
   if (kind == KIND_SPOT) {
     let tile = bitcast<i32>(light.kind_and_shadow.y);
     if (tile >= 0) {
+      let projector = sampleClusterSpotProjector(view.spotLightViewProj[tile], world_pos);
       return evalSpotShadowed(
         light.position.xyz, light.direction.xyz, light.color.xyz,
         // LightSlot packs cosInner in color.w and cosOuter in direction.w;
         // keep the evaluator's named cone order intact at the decode boundary.
         light.color.w, light.direction.w, light.position.w,
-        world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0,
+        world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0, vec3<f32>(0.0),
         view.spotLightViewProj[tile], tile, 0.005, 0.05,
-      );
+        clamp(
+          round(select(3.0, bitcast<f32>(light.kind_and_shadow.w),
+            bitcast<f32>(light.kind_and_shadow.w) > 0.5)),
+          1.0,
+          5.0,
+        ),
+        clamp(bitcast<f32>(light.kind_and_shadow.z), 0.0, 1.0),
+      ) * projector;
+    }
+    if (tile == PROJECTOR_ONLY_TILE) {
+      let projector = sampleClusterSpotProjector(view.spotLightViewProj[0], world_pos);
+      return evalSpot(
+        light.position.xyz, light.direction.xyz, light.color.xyz,
+        light.color.w, light.direction.w, light.position.w,
+        world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0, vec3<f32>(0.0),
+      ) * projector;
     }
     return evalSpot(
       light.position.xyz, light.direction.xyz, light.color.xyz,
       light.color.w, light.direction.w, light.position.w,
-      world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0,
+      world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0, vec3<f32>(0.0),
     );
   }
   return vec3<f32>(0.0);

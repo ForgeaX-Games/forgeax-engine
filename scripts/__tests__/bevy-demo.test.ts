@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runNodeSmoke } from '../bevy-demo.mjs';
+import { autoSmokeConcurrency, runNodeSmoke, runSmokeStages } from '../bevy-demo.mjs';
 
 const repoRoot = resolve(__dirname, '..', '..');
 const script = resolve(repoRoot, 'scripts/bevy-demo.mjs');
@@ -34,6 +34,24 @@ afterEach(() => {
 });
 
 describe('bevy-demo.mjs', () => {
+  it('drains depth-of-field frames while preserving the 60-frame pixel falsifier', () => {
+    const source = readFileSync(
+      join(repoRoot, 'apps/bevy/depth-of-field/scripts/smoke-dawn.mjs'),
+      'utf8',
+    );
+    expect(source).toMatch(/async function drawFrames\(count\)/);
+    expect(source).toMatch(
+      /drawSmokeFrame\(renderer, world\);\s*if \(!result\.ok\) failures \+= 1;\s*await sharedDevice\.queue\.onSubmittedWorkDone\(\);/,
+    );
+    expect(source.match(/drawErrors \+= await drawFrames\(/g)).toHaveLength(3);
+    expect(source).toContain(
+      "Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60)",
+    );
+    expect(source).toContain('const offPixels = await capturePixels()');
+    expect(source).toContain('const onPixels = await capturePixels()');
+    expect(source).toContain('diff.mean <= 0.05 || diff.changedPixels <= 100');
+  });
+
   it('creates a partial app with the standard package, Vite, and smoke shell', () => {
     const root = tempRoot();
     const result = run(root, 'new', spec(root));
@@ -193,6 +211,37 @@ describe('bevy-demo.mjs', () => {
     expect(result.stderr).toContain('apps/hello/implemented-demo/package.json');
   });
 
+  it('accepts an own smoke* script outside apps/bevy and rejects another package', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'hello', 'aggregate-demo');
+    mkdirSync(app, { recursive: true });
+    const write = (smoke: string) =>
+      writeFileSync(
+        join(app, 'package.json'),
+        JSON.stringify({
+          name: '@forgeax/hello-aggregate-demo',
+          description: 'Aggregate smoke demo.',
+          scripts: { smoke: 'node scripts/custom.mjs', 'smoke:all': 'pnpm run smoke' },
+          forgeax: {
+            bevyExample: { name: 'aggregate_demo', category: 'Animation', status: 'implemented' },
+            smokeInvocation: smoke,
+            metrics: { gate: { command: smoke } },
+          },
+        }),
+      );
+
+    write('pnpm --filter @forgeax/hello-aggregate-demo smoke:all');
+    expect(run(root, 'validate').status).toBe(0);
+
+    write('pnpm --filter @forgeax/hello-other smoke:all');
+    const foreign = run(root, 'validate');
+    expect(foreign.status).toBe(1);
+    expect(foreign.stderr).toContain('bevy-demo-projection-stale');
+
+    write('pnpm --filter @forgeax/hello-aggregate-demo smoke:missing');
+    expect(run(root, 'validate').stderr).toContain('bevy-demo-projection-stale');
+  });
+
   it('rejects the generated scaffold smoke on an implemented app', () => {
     const root = tempRoot();
     const app = join(root, 'apps', 'bevy', 'implemented-demo');
@@ -319,6 +368,19 @@ describe('bevy-demo.mjs', () => {
     expect(result).toEqual({ status: 0, signal: 'SIGKILL' });
   });
 
+  it('reaps when the lifecycle exit notice arrives before PASS output', async () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(app, 'scripts', 'smoke-dawn.mjs'),
+      "process.exit(0);\nconsole.log('[smoke] PASS');\n",
+    );
+
+    const result = await runNodeSmoke(root, { dir: app });
+    expect(result).toEqual({ status: 0, signal: 'SIGKILL' });
+  });
+
   it('rejects a standard smoke that reports PASS but exits nonzero', async () => {
     const root = tempRoot();
     const app = join(root, 'apps', 'bevy', 'implemented-demo');
@@ -396,6 +458,73 @@ describe('bevy-demo.mjs', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toMatch(/auto concurrency=\d+/);
     expect(result.stdout).toMatch(/completed \(dry run\) with concurrency=\d+/);
+  });
+
+  it('caps auto smoke concurrency for an 8 CPU, 16 GB cgroup', () => {
+    expect(autoSmokeConcurrency({ cpus: 8, memoryBytes: 16 * 1024 ** 3 })).toBe(2);
+  });
+
+  it('builds with bounded workers before serializing native smoke children', async () => {
+    const apps = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const events: string[] = [];
+    let activeBuilds = 0;
+    let maxActiveBuilds = 0;
+    let activeSmokes = 0;
+    let maxActiveSmokes = 0;
+    const smokeOrder: string[] = [];
+
+    await runSmokeStages('root', apps, 2, {
+      build: async (_root, app) => {
+        activeBuilds += 1;
+        maxActiveBuilds = Math.max(maxActiveBuilds, activeBuilds);
+        events.push(`build:start:${app.id}`);
+        await Promise.resolve();
+        events.push(`build:end:${app.id}`);
+        activeBuilds -= 1;
+      },
+      smoke: async (_root, app) => {
+        activeSmokes += 1;
+        maxActiveSmokes = Math.max(maxActiveSmokes, activeSmokes);
+        events.push(`smoke:start:${app.id}`);
+        smokeOrder.push(app.id);
+        await Promise.resolve();
+        events.push(`smoke:end:${app.id}`);
+        activeSmokes -= 1;
+      },
+    });
+
+    const firstSmoke = events.findIndex((event) => event.startsWith('smoke:start:'));
+    expect(firstSmoke).toBeGreaterThan(-1);
+    expect(events.slice(0, firstSmoke).every((event) => event.startsWith('build:'))).toBe(true);
+    expect(maxActiveBuilds).toBe(2);
+    expect(maxActiveSmokes).toBe(1);
+    expect(smokeOrder).toEqual(['a', 'b', 'c']);
+  });
+
+  it('runs the default direct Dawn smoke runner after the build phase', async () => {
+    const root = tempRoot();
+    const appDir = join(root, 'apps', 'bevy', 'direct-smoke');
+    mkdirSync(join(appDir, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(appDir, 'scripts', 'smoke-dawn.mjs'),
+      "console.log('[smoke] PASS'); setInterval(() => {}, 1000);\n",
+    );
+    const events: string[] = [];
+    await runSmokeStages(
+      root,
+      [
+        {
+          dir: appDir,
+          pkg: {
+            name: '@forgeax/bevy-direct-smoke',
+            scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
+          },
+        },
+      ],
+      1,
+      { build: async () => events.push('build') },
+    );
+    expect(events).toEqual(['build']);
   });
 
   it('selects one deterministic group without changing package order', () => {

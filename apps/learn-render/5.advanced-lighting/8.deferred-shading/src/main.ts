@@ -149,7 +149,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       standardProfile: {
         ...DEFAULT_STANDARD_PROFILE,
         lightCount: STANDARD_LIGHT_COUNT,
-        lighting: 'clustered',
+        renderPath: 'deferred',
       },
     },
     forgeaxBundlerAdapter(),

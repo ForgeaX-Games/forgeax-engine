@@ -1,7 +1,6 @@
 import { createApp } from '@forgeax/engine-app';
 import { createProfiler, buildProfileModel, validateProfileCapture } from '@forgeax/engine-profiler';
 import {
-  Time,
   Update,
   World,
 } from '@forgeax/engine-ecs';
@@ -9,6 +8,8 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import {
   Camera,
+  DEFAULT_STANDARD_PROFILE,
+  DirectionalLight,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -19,6 +20,10 @@ import {
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   PERF_WORKLOAD_SEED,
+  DIRECTIONAL_LIGHT_CAST_SHADOW,
+  DIRECTIONAL_LIGHT_COLOR,
+  DIRECTIONAL_LIGHT_DIRECTION,
+  DIRECTIONAL_LIGHT_INTENSITY,
   type WorkloadOptions,
   cubePositions,
   mulberry32,
@@ -31,6 +36,7 @@ import {
 const PROFILE_FRAME_LIMIT = 180;
 const PROFILE_EVENT_LIMIT = 8192;
 const CUBE_SCALE = [0.32, 0.32, 0.32] as const;
+const FIXED_DELTA_SECONDS = 1 / 60;
 
 function errorText(error: unknown): string {
   if (typeof error !== 'object' || error === null) return String(error);
@@ -38,7 +44,32 @@ function errorText(error: unknown): string {
   return `${String(record.code ?? 'unknown')}: ${String(record.hint ?? record.message ?? error)}`;
 }
 
+function errorDetailText(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return '';
+  const detail = (error as { readonly detail?: unknown }).detail;
+  if (detail === undefined) return '';
+  try {
+    return `; detail: ${JSON.stringify(detail, (_key, value: unknown) => {
+      if (typeof value !== 'object' || value === null) return value;
+      const record = value as { readonly code?: unknown; readonly expected?: unknown; readonly hint?: unknown; readonly detail?: unknown };
+      if (record.code !== undefined || record.expected !== undefined || record.hint !== undefined) {
+        return {
+          code: record.code,
+          expected: record.expected,
+          hint: record.hint,
+          ...(record.detail === undefined ? {} : { detail: record.detail }),
+        };
+      }
+      return value;
+    })}`;
+  } catch {
+    return '; detail: <unserializable>';
+  }
+}
+
 export interface PerfEvidence {
+  readonly backend: 'webgpu';
+  readonly bootstrapMs: number;
   readonly workloadFingerprint: string;
   readonly seed: number;
   readonly requestedCounts: WorkloadOptions;
@@ -46,6 +77,13 @@ export interface PerfEvidence {
     readonly cubeCount: number;
     readonly pointLightCount: number;
     readonly spotLightCount: number;
+    readonly directionalBaseline: {
+      readonly count: number;
+      readonly direction: readonly [number, number, number];
+      readonly color: readonly [number, number, number];
+      readonly intensity: number;
+      readonly shadowCasterCount: number;
+    };
     readonly meshHandleMatches: number;
     readonly materialHandleMatches: number;
     readonly positionChecksum: string;
@@ -54,11 +92,13 @@ export interface PerfEvidence {
   processedCubeCount: number;
   processedCubeTotal: number;
   cameraRotationRadians: number;
+  frameIntervalsMs: number[];
   cubeUpdateSamplesMs: number[];
   appRendererErrors: Array<{ readonly code: string; readonly hint: string }>;
   profileCapture: unknown;
   profileSummary: unknown;
   profileOverhead: { readonly profilerEventObjectAllocations: number };
+  rendererInspection: unknown;
 }
 
 declare global {
@@ -71,6 +111,9 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (canvas === null) throw new Error('[perf-10k-cubes-lights] missing <canvas id="app">');
 
 const params = new URLSearchParams(window.location.search);
+// Short harnesses (the 60-frame Dawn smoke) close the profile window inside their frame budget.
+const requestedProfileFrames = Number.parseInt(params.get('profileFrames') ?? '', 10);
+const profileFrameLimit = requestedProfileFrames > 0 ? requestedProfileFrames : PROFILE_FRAME_LIMIT;
 const parsed = parseWorkloadOptions(params);
 if (!parsed.ok) {
   console.error(`[perf-10k-cubes-lights] ${parsed.error.code}: ${parsed.error.hint}`);
@@ -79,6 +122,7 @@ if (!parsed.ok) {
 }
 
 async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): Promise<void> {
+  const bootstrapStart = performance.now();
   const profilerAllocations = { profilerEventObjectAllocations: 0 };
   const profilingEnabled = params.get('profile') !== '0';
   const profiler = profilingEnabled ? createProfiler({ allocationReport: profilerAllocations }) : undefined;
@@ -86,6 +130,10 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     target,
     {
       ...(profiler === undefined ? {} : { profiler }),
+      standardProfile: {
+        ...DEFAULT_STANDARD_PROFILE,
+        lightCount: 32,
+      },
       time: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.1 },
     },
     forgeaxBundlerAdapter(),
@@ -97,7 +145,10 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
   const app = appResult.value;
   const errors: PerfEvidence['appRendererErrors'] = [];
   app.onError((error) => {
-    const record = { code: error.code, hint: error.hint };
+    const record = {
+      code: error.code,
+      hint: `${error instanceof Error ? error.message : errorText(error)}${errorDetailText(error)}`,
+    };
     errors.push(record);
     console.error(`[perf-10k-cubes-lights] engine error ${record.code}: ${record.hint}`);
   });
@@ -130,6 +181,18 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
       )
       .unwrap();
   }
+
+  app.world
+    .spawn({
+      component: DirectionalLight,
+      data: {
+        direction: [...DIRECTIONAL_LIGHT_DIRECTION],
+        color: [...DIRECTIONAL_LIGHT_COLOR],
+        intensity: DIRECTIONAL_LIGHT_INTENSITY,
+        castShadow: DIRECTIONAL_LIGHT_CAST_SHADOW,
+      },
+    })
+    .unwrap();
 
   const lightRandom = mulberry32(PERF_WORKLOAD_SEED ^ 0x9e3779b9);
   for (let index = 0; index < options.pointLightCount; index++) {
@@ -187,6 +250,8 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
 
   const postSpawn = inspectSpawnedWorld(app.world, materialHandle);
   const evidence: PerfEvidence = {
+    backend: 'webgpu',
+    bootstrapMs: performance.now() - bootstrapStart,
     workloadFingerprint: workloadFingerprint(options),
     seed: PERF_WORKLOAD_SEED,
     requestedCounts: options,
@@ -195,31 +260,49 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     processedCubeCount: 0,
     processedCubeTotal: 0,
     cameraRotationRadians: 0,
+    frameIntervalsMs: [],
     cubeUpdateSamplesMs: [],
     appRendererErrors: errors,
     profileCapture: null,
     profileSummary: null,
     profileOverhead: profilerAllocations,
+    rendererInspection: null,
   };
   Object.assign(globalThis, { __forgeaxPerf: evidence });
-  const capture = profiler?.startCapture({ frameLimit: PROFILE_FRAME_LIMIT, eventLimit: PROFILE_EVENT_LIMIT });
+  const capture = profiler?.startCapture({ frameLimit: profileFrameLimit, eventLimit: PROFILE_EVENT_LIMIT });
   if (capture !== undefined && !capture.ok) {
     console.error(`[perf-10k-cubes-lights] profiler ${errorText(capture.error)}`);
     return;
   }
   let elapsed = 0;
+  let lastFrameAt: number | undefined;
   app.world
     .addSystem(Update, {
       name: 'perf-10k-cubes-rotate',
       queries: [{ write: [Transform], with: [MeshFilter, MeshRenderer] }],
-      fn: (world, results) => {
+      fn: (_world, results) => {
+        const frameAt = performance.now();
+        if (lastFrameAt !== undefined) evidence.frameIntervalsMs.push(frameAt - lastFrameAt);
+        lastFrameAt = frameAt;
         const start = performance.now();
-        elapsed += world.getResource(Time).delta;
+        elapsed += FIXED_DELTA_SECONDS;
         let processed = 0;
-        for (const row of results[0] ?? []) {
-          const angle = elapsed * (0.35 + (processed % 17) * 0.013) + processed * 0.0007;
-          row.mut(Transform).quat.set(yawQuaternion(angle));
-          processed += 1;
+        const spans = results[0]?.spans();
+        if (spans === undefined || !spans.ok) {
+          throw spans?.error ?? new Error('Transform query did not expose contiguous spans.');
+        }
+        for (const span of spans.value) {
+          const quaternions = span.mut(Transform).quat;
+          for (let index = 0; index < span.length; index += 1) {
+            const angle = elapsed * (0.35 + (processed % 17) * 0.013) + processed * 0.0007;
+            const half = angle * 0.5;
+            const offset = index * 4;
+            quaternions[offset] = 0;
+            quaternions[offset + 1] = Math.sin(half);
+            quaternions[offset + 2] = 0;
+            quaternions[offset + 3] = Math.cos(half);
+            processed += 1;
+          }
         }
         evidence.frameProgress += 1;
         evidence.processedCubeCount = processed;
@@ -232,7 +315,22 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
         if (latest !== undefined) {
           evidence.profileCapture = latest;
           const model = buildProfileModel(latest);
-          evidence.profileSummary = model.ok ? model.value.summary : model.error;
+          evidence.profileSummary = model.ok
+            ? { summary: model.value.summary, phases: model.value.phases }
+            : model.error;
+        }
+        // Capture the previous frame's renderer-owned facts once, after the
+        // profiler window has closed. Calling inspect() every frame would
+        // perturb the workload we are measuring.
+        if (evidence.frameProgress === profileFrameLimit + 1) {
+          const inspection = app.renderer.inspect();
+          evidence.rendererInspection = {
+            frustumStats: inspection.frustumStats,
+            visibilityStats: inspection.visibilityStats,
+            renderScene: inspection.renderScene,
+            standardLighting: inspection.standardLighting,
+            perFramePassNames: inspection.perFramePassNames,
+          };
         }
       },
     })
@@ -279,10 +377,29 @@ function inspectSpawnedWorld(
   }
   const pointLightCount = [...world.query({ with: [PointLight] }).unwrap()].length;
   const spotLightCount = [...world.query({ with: [SpotLight] }).unwrap()].length;
+  const directionalRows = [...world.query({ read: [DirectionalLight] }).unwrap()];
+  const directional = directionalRows[0]?.get(DirectionalLight);
+  const direction: [number, number, number] = [
+    directional?.direction[0] ?? 0,
+    directional?.direction[1] ?? 0,
+    directional?.direction[2] ?? 0,
+  ];
+  const color: [number, number, number] = [
+    directional?.color[0] ?? 0,
+    directional?.color[1] ?? 0,
+    directional?.color[2] ?? 0,
+  ];
   return {
     cubeCount,
     pointLightCount,
     spotLightCount,
+    directionalBaseline: {
+      count: directionalRows.length,
+      direction,
+      color,
+      intensity: directional?.intensity ?? 0,
+      shadowCasterCount: directionalRows.filter((row) => row.get(DirectionalLight).castShadow).length,
+    },
     meshHandleMatches,
     materialHandleMatches,
     positionChecksum: positionsChecksum(positions),

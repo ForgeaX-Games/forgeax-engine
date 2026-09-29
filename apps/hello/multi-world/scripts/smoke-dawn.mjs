@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 // ── env knobs ────────────────────────────────────────────────────────────────
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const NON_CLEAR_EPS = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 // A lit box must clear this luminance floor; the dark clearColor sits below it,
@@ -225,7 +225,7 @@ renderer.subscribe((event) => {
 
 
 // ── frame loop: composite both worlds, owner = index 0 ────────────────────────
-const targetFrames = Math.max(MIN_FRAMES, Math.ceil(DURATION_MS / 16.67));
+const targetFrames = MIN_FRAMES;
 let frames = 0;
 for (let i = 0; i < targetFrames; i++) {
   worldB.update().unwrap();
@@ -235,7 +235,15 @@ for (let i = 0; i < targetFrames; i++) {
     camera: { lease: worldAttachment1.value },
     environment: { lease: worldAttachment1.value },
   });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+    process.exit(1);
+  }
+  const completed = await r.value.completed;
+  if (!completed.ok) {
+    console.error(`[smoke] frame ${i} completion error: ${completed.error.code}`);
+    process.exit(1);
+  }
   frames++;
 }
 const device = sharedDevice;

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
+import { observeViteHttpReadiness } from '../../../../scripts/lib/vite-http-readiness.mjs';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
@@ -17,27 +19,17 @@ const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-picking', 'dev'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-let portUrl;
-viteProc.stdout.on('data', (chunk) => {
-  const text = chunk.toString();
-  process.stdout.write(`[vite] ${text}`);
-  portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1];
+const viteReadiness = observeViteHttpReadiness(viteProc, {
+  timeoutEnvName: 'FORGEAX_PICKING_SERVER_READINESS_TIMEOUT_MS',
 });
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
 try {
-  const deadline = Date.now() + 30_000;
-  while (!portUrl && Date.now() < deadline) await sleep(200);
-  if (!portUrl) throw new Error('vite did not become ready in 30s');
+  const { origin: portUrl, elapsedMs: serverReadyElapsedMs } = await viteReadiness.wait();
 
   const browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: [
-      '--enable-unsafe-webgpu',
-      '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-      '--ignore-gpu-blocklist',
-    ],
+    channel: process.env.FORGEAX_CHROME_CHANNEL ?? browserLaunch.channel,
+    args: [...browserLaunch.args, ...(process.env.CI ? ['--use-angle=swiftshader'] : [])],
   });
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
@@ -52,7 +44,12 @@ try {
 
     await page.goto(portUrl, { waitUntil: 'networkidle', timeout: 30_000 });
     await page.waitForSelector('#app', { timeout: 10_000 });
-    await page.waitForTimeout(2_000);
+    if (!logs.includes('[picking] Standard pipeline active')) {
+      await page.waitForEvent('console', {
+        predicate: message => message.text() === '[picking] Standard pipeline active',
+        timeout: 60_000,
+      });
+    }
 
     const beforePath = resolve(ARTIFACT_DIR, 'before-click.png');
     const hitPath = resolve(ARTIFACT_DIR, 'after-hit.png');
@@ -121,7 +118,7 @@ try {
     }
 
     console.log(`[smoke-browser] artifacts: before=${beforePath} hit=${hitPath} miss=${missPath} moved=${movedPath} camera=${cameraPath}`);
-    console.log(`[smoke-browser] PASS - real browser pointer hit/miss plus live vertex transform and camera recovery are GREEN; changedPixels=${changedPixels}.`);
+    console.log(`[smoke-browser] PASS - real browser pointer hit/miss plus live vertex transform and camera recovery are GREEN; changedPixels=${changedPixels}; serverReadyElapsedMs=${serverReadyElapsedMs}.`);
   } finally {
     await browser.close();
   }

@@ -1,10 +1,17 @@
-export const WORKLOAD_VERSION = 1 as const;
+export const WORKLOAD_VERSION = 3 as const;
 export const PERF_WORKLOAD_SEED = 0x010c0b35 as const;
 export const CUBE_COUNT_DEFAULT = 10_000 as const;
-export const CUBE_COUNT_MAX = 10_000 as const;
+export const CUBE_COUNT_MAX = 100_000 as const;
 export const LIGHT_COUNT_MAX = 256 as const;
 export const POINT_LIGHT_COUNT_DEFAULT = 16 as const;
 export const SPOT_LIGHT_COUNT_DEFAULT = 16 as const;
+/** Three r184 and ForgeaX both use inverse-square punctual attenuation. */
+export const PUNCTUAL_DECAY_EXPONENT = 2 as const;
+/** Fixed sun shared by the Engine and Three.js pressure consumers. */
+export const DIRECTIONAL_LIGHT_DIRECTION = [0.4, -0.8, -0.4] as const;
+export const DIRECTIONAL_LIGHT_COLOR = [1, 1, 1] as const;
+export const DIRECTIONAL_LIGHT_INTENSITY = 1 as const;
+export const DIRECTIONAL_LIGHT_CAST_SHADOW = false as const;
 export const VOLUME_MIN = [-24, -16, -24] as const;
 export const VOLUME_MAX = [24, 16, 24] as const;
 
@@ -63,7 +70,7 @@ export function parseWorkloadOptions(source: URLSearchParams): WorkloadResult<Wo
           ok: false,
           error: {
             code: 'workload-count-out-of-range',
-            expected: 'cubes must be an integer in [1, 10000]',
+            expected: `cubes must be an integer in [1, ${CUBE_COUNT_MAX}]`,
             hint: 'Use at least one cube; the pressure consumer never substitutes a clear-only scene.',
             detail: { parameter: 'cubes', value: source.get('cubes') ?? undefined },
           },
@@ -97,7 +104,8 @@ export function createWorkloadOptions(): WorkloadResult<WorkloadOptions> {
 
 export function workloadFingerprint(options: WorkloadOptions): string {
   const bounds = `${VOLUME_MIN.join(',')}..${VOLUME_MAX.join(',')}`;
-  const identity = `perf-10k-cubes-lights/v${WORKLOAD_VERSION}|seed=${PERF_WORKLOAD_SEED}|bounds=${bounds}|mesh=HANDLE_CUBE|material=shared-standard-pbr|camera=center-yaw|cubes=${options.cubeCount}|pointLights=${options.pointLightCount}|spotLights=${options.spotLightCount}`;
+  const directional = `dir(${DIRECTIONAL_LIGHT_DIRECTION.join(',')}),color(${DIRECTIONAL_LIGHT_COLOR.join(',')}),intensity(${DIRECTIONAL_LIGHT_INTENSITY}),shadow(${DIRECTIONAL_LIGHT_CAST_SHADOW ? 1 : 0})`;
+  const identity = `perf-10k-cubes-lights/v${WORKLOAD_VERSION}|seed=${PERF_WORKLOAD_SEED}|bounds=${bounds}|mesh=HANDLE_CUBE|material=shared-standard-pbr|camera=center-yaw|directional=${directional}|punctualDecay=${PUNCTUAL_DECAY_EXPONENT}|cubes=${options.cubeCount}|pointLights=${options.pointLightCount}|spotLights=${options.spotLightCount}`;
   return `${identity}|hash=${fnv1a32(identity)}`;
 }
 

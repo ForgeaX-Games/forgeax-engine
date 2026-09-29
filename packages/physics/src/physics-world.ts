@@ -5,6 +5,20 @@
 // AI users obtain it via `world.getResource<PhysicsWorld>('PhysicsWorld')`.
 
 import type { Vec2, Vec3 } from '@forgeax/engine-math';
+import type { Result } from '@forgeax/engine-types';
+import type {
+  DerivedPhysicsCandidate,
+  DerivedPhysicsCandidateInput,
+  DerivedPhysicsError,
+  DerivedPhysicsFailure,
+  DerivedPhysicsMotion,
+  DerivedPhysicsPublication,
+  DerivedPhysicsSnapshot,
+  DerivedShapeState,
+  PhysicsConstraintInput,
+  PhysicsContactObservation,
+  PhysicsVector,
+} from './derived-physics.js';
 
 /**
  * Raycast hit result — returned by `PhysicsWorld.raycast()`.
@@ -65,7 +79,7 @@ export interface PhysicsWorld {
    * (unlike `world.set(entity, Transform, { translation: ... })` on
    * dynamic bodies, which would cause a velocity spike).
    *
-   * @param entity - the entity (must have RigidBody + Collider).
+   * @param entity - the entity with a registered native body.
    * @param position - new world-space position.
    */
   teleport(entity: number, position: Vec3): void;
@@ -105,7 +119,7 @@ export interface PhysicsWorld {
    *
    * Returns `true` after `ensureBody` has created a Rapier body for the entity
    * (which happens asynchronously via WASM fire-and-forget load + tick pipeline).
-   * Always returns `false` for entities that have no `RigidBody` + `Collider`.
+   * A RigidBody-only 3D entity is a native body even before derived shapes arrive.
    *
    * AI-user contract: before calling `moveAndSlide` inside a per-frame driver,
    * guard with `if (!pw.hasBody(entity)) return;` to avoid `body-not-found`
@@ -113,6 +127,94 @@ export interface PhysicsWorld {
    * `physicsSyncBackend` tick that builds the body.
    */
   hasBody(entity: number): boolean;
+
+  /**
+   * Prepare a replacement set of local derived shapes without making it
+   * queryable. The Rapier 3D implementation backs these shapes with one
+   * native world and one ECS body; 2D backends may omit this optional seam.
+   */
+  prepareDerivedShapeCandidate?: (
+    input: DerivedPhysicsCandidateInput,
+  ) => Result<DerivedPhysicsCandidate, DerivedPhysicsError>;
+  /**
+   * Queue a prepared candidate. The optional synchronous geometry commit runs
+   * after fallible native preparation, before step/publication. It must either
+   * commit its complete ECS binding or return failure without changing it.
+   * Returned failure restores old physics; a thrown callback has uncertain ECS
+   * writes and requires rebuild. Reentrant physics access is refused.
+   */
+  admitDerivedShapeCandidate?: (
+    candidate: DerivedPhysicsCandidate,
+    commitGeometry?: () => Result<void, Error>,
+  ) => Result<DerivedPhysicsCandidate, DerivedPhysicsError>;
+  /**
+   * Queue one bounded replacement across distinct bodies. Native preparation
+   * completes for every member before the single geometry callback; any member
+   * failure rolls the group back. A thrown callback or failed rollback requires
+   * rebuilding the PhysicsWorld. Preparation/candidate budgets remain shared.
+   */
+  admitDerivedShapeCandidates?: (
+    candidates: readonly DerivedPhysicsCandidate[],
+    commitGeometry?: () => Result<void, Error>,
+  ) => Result<readonly DerivedPhysicsCandidate[], DerivedPhysicsError>;
+  /** Borrowed ordering proof, present only inside the paired geometry commit. */
+  getDerivedAdmission?: (
+    entity?: number,
+  ) =>
+    | { readonly entity: number; readonly revision: number; readonly fixedStep: number }
+    | undefined;
+  /** Cancel a candidate that has not been published. */
+  cancelDerivedShapeCandidate?: (
+    candidate: DerivedPhysicsCandidate,
+  ) => Result<void, DerivedPhysicsError>;
+  /** Invalidate pending candidates without touching the last committed state. */
+  invalidateDerivedShapeCandidates?: (reason?: string) => void;
+  /** Read the most recent fixed-step publication for one body. */
+  getDerivedPublication?: (entity: number) => DerivedPhysicsPublication | undefined;
+  /** Read the structured failure from the latest rejected admission, if any. */
+  getDerivedFailure?: (entity: number) => DerivedPhysicsFailure | undefined;
+  /** Read the committed body type without exposing a native Rapier body. */
+  getDerivedBodyType?: (entity: number) => 'static' | 'dynamic' | 'kinematic' | undefined;
+  /** Read whether a native admission failure requires a full World rebuild. */
+  getDerivedRecoveryState?: () => 'ready' | 'rebuild-required';
+  /** Read detached mass evidence without exposing a native body handle. */
+  getDerivedBodyMass?: (entity: number) => number | undefined;
+  /** Read the committed world-space COM and velocities for one derived body. */
+  getDerivedMotion?: (entity: number) => DerivedPhysicsMotion | undefined;
+  /**
+   * Apply a world-space impulse at a world-space point on the exact committed
+   * dynamic body revision. Call after syncBackend and before stepSimulation.
+   * Rejects queued admission, stale identity and invalid vectors; never moves
+   * the pose directly. A partially failed native write requires World recovery.
+   * The caller bounds impulse magnitude, normally maxForce * FixedTime.delta.
+   */
+  applyDerivedImpulse?: (input: {
+    readonly entity: number;
+    readonly sourceKey: string;
+    readonly revision: number;
+    readonly impulse: PhysicsVector;
+    readonly point: PhysicsVector;
+  }) => Result<void, DerivedPhysicsError>;
+  /** Read the currently committed local shape identities for one body. */
+  getDerivedShapes?: (entity: number) => readonly DerivedShapeState[];
+  /** Read detached contact observations from the latest fixed-step drain. */
+  getContactObservations?: () => readonly PhysicsContactObservation[];
+  /** Complete the fixed-step publication after ECS writeback/contact sync. */
+  finalizeDerivedFixedStep?: () => void;
+  /** Capture portable, committed input for explicit rebuild/recovery. */
+  captureDerivedPhysicsState?: () => DerivedPhysicsSnapshot;
+  /** Restore a previously captured input through normal candidate admission. */
+  restoreDerivedPhysicsState?: (
+    snapshot: DerivedPhysicsSnapshot,
+  ) => Result<readonly DerivedPhysicsCandidate[], DerivedPhysicsError>;
+  /** Create/update/remove constraints in the same solver as ordinary bodies. */
+  createDerivedConstraint?: (
+    input: PhysicsConstraintInput,
+  ) => Result<{ readonly id: string; readonly revision: number }, DerivedPhysicsError>;
+  updateDerivedConstraint?: (
+    input: PhysicsConstraintInput,
+  ) => Result<{ readonly id: string; readonly revision: number }, DerivedPhysicsError>;
+  removeDerivedConstraint?: (id: string) => Result<void, DerivedPhysicsError>;
 }
 
 /** 2D raycast hit result. */

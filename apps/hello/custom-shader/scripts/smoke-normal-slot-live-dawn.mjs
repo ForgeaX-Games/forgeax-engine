@@ -38,18 +38,6 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function stableJson(value) {
-  if (Array.isArray(value)) return value.map(stableJson);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableJson(entry)]),
-    );
-  }
-  return value;
-}
-
 function materialFromRecord(record, baseColorHandle, normalHandle) {
   return {
     kind: 'material',
@@ -139,7 +127,20 @@ let cookedByGuid = new Map(
 const { createMaterialLoader, MaterialGenerationCache } =
   await import('@forgeax/engine-assets-runtime');
 const loader = createMaterialLoader({
-  loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
+  loadPublication: async (guid) => {
+    const record = cookedByGuid.get(guid.toLowerCase());
+    if (record === undefined) return undefined;
+    return {
+      guid,
+      record,
+      artifacts: Object.fromEntries(
+        record.programs.map(({ artifact }) => [
+          artifact.path,
+          { bytes: new Uint8Array(artifact.bytes), digest: artifact.digest },
+        ]),
+      ),
+    };
+  },
   loadReference: async () => true,
 });
 const materialCache = new MaterialGenerationCache();
@@ -150,7 +151,9 @@ const loadCachedMaterial = (guid) =>
   materialCache.resolve(guid, 'my-game::pulse-material', () =>
     materialCache.loadWithGeneration(guid, materialDependencies, async (generation) => {
       lastMaterialGeneration = generation;
-      const loaded = await loader.load({ guid, specializationKey: 'my-game::pulse-material' });
+      const record = cookedByGuid.get(guid.toLowerCase());
+      assert(record !== undefined, `cooked material ${guid} is absent`);
+      const loaded = await loader.load({ guid, specializationKey: record.specializationKey });
       assert(loaded.status === 'Ready', `material ${guid} is not runtime-ready`);
       if (destabilizeMaterialLoad) materialCache.bump(materialDependencies[0]);
       return { generation, value: loaded };
@@ -161,12 +164,14 @@ const derivedResult = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678ab
 assert(rootResult.ok && derivedResult.ok, 'inheritance material generations are not runtime-ready');
 const root = rootResult.value;
 const derived = derivedResult.value;
-assert(root.artifact.digest === derived.artifact.digest, 'root and derived cooked artifacts differ');
+assert(root.artifactDigest === derived.artifactDigest, 'root and derived cooked program sets differ');
 assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'inheritance specialization inputs differ');
-assert(
-  JSON.stringify(stableJson(root.record.resolved.values)) === JSON.stringify(stableJson(derived.record.resolved.values)),
-  'inheritance runtime-resolved material values differ',
-);
+assert(root.record.receipt.identity.layoutIdentity === derived.record.receipt.identity.layoutIdentity, 'inheritance material layouts differ');
+assert(root.record.receipt.identity.programIdentity === derived.record.receipt.identity.programIdentity, 'inheritance material programs differ');
+assert(root.record.receipt.identity.pipelineIdentity === derived.record.receipt.identity.pipelineIdentity, 'inheritance material pipelines differ');
+assert(root.record.receipt.identity.materialPublicationIdentity !== derived.record.receipt.identity.materialPublicationIdentity, 'inheritance publication identities did not capture the child override');
+assert(JSON.stringify(derived.record.resolved.values.baseColor) === JSON.stringify([0.2, 0.55, 0.95, 1]), 'inheritance derived value override is missing');
+assert(JSON.stringify(root.record.resolved.values.baseColor) !== JSON.stringify(derived.record.resolved.values.baseColor), 'inheritance derived value override did not diverge from root');
 
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
@@ -239,15 +244,16 @@ const manifest = `data:application/json,${encodeURIComponent(readFileSync(MANIFE
 const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: manifest });
 assert(constructed.ok, constructed.ok ? undefined : `${constructed.error.code}: ${constructed.error.hint}`);
 const renderer = constructed.value.renderer;
+renderer.subscribe((event) => { if (event.kind === 'error') console.error(`[normal-slot-live] renderer error: ${JSON.stringify(event.error)}`); });
 assert(renderer.inspect().capabilities.backendKind === 'webgpu', `unexpected backend: ${renderer.inspect().capabilities.backendKind}`);
 
 const world = new World();
 const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const baseColorTexturePayload = {
-  kind: 'texture', width: 2, height: 2, format: 'rgba8unorm-srgb',
+  kind: 'texture', shape: { viewDimension: '2d', extent: { width: 2, height: 2 } }, format: 'rgba8unorm-srgb',
   data: new Uint8Array([255, 96, 32, 255, 32, 96, 255, 255, 32, 96, 255, 255, 255, 96, 32, 255]),
-  colorSpace: 'srgb', mipmap: false,
+  colorSpace: 'srgb', mips: { kind: 'none' },
 };
 const normalTexturePayload = {
   ...baseColorTexturePayload,
@@ -311,7 +317,10 @@ const materialValues = normalMaterial.values;
 if (materialValues !== undefined) materialValues.time = 0;
 const errors = [];
 renderer.subscribe((event) => {
-  if (event.kind === 'error') errors.push(event.error.code);
+  if (event.kind === 'error') {
+    errors.push(event.error.code);
+    console.error(JSON.stringify(event.error));
+  }
 });
 
 async function readback(label) {
@@ -356,7 +365,7 @@ async function drawFrame(label) {
     camera: { lease: worldAttachment1.value },
     environment: { lease: worldAttachment1.value },
   });
-  assert(result.ok, `${label} draw failed: ${result.ok ? '' : result.error.code}`);
+  assert(result.ok, `${label} draw failed: ${result.ok ? '' : JSON.stringify(result.error)}`);
   await sharedDevice.queue.onSubmittedWorkDone();
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -404,7 +413,7 @@ if (m36Mode) {
   materialCache.bump(materialDependencies[1]);
   const fresh = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd03');
   assert(fresh.ok, `Dawn fresh recook failed: ${fresh.ok ? '' : fresh.error.code}`);
-  assert(fresh.value.artifact.digest !== derived.artifact.digest, 'Dawn recook kept the stale digest');
+  assert(fresh.value.artifactDigest !== derived.artifactDigest, 'Dawn recook kept the stale digest');
   assert(materialCache.generationError('01935b00-7d8c-7c4e-9f12-345678abcd03') === undefined, 'Dawn stale diagnostic survived recook');
   const freshMaterialHandle = world.allocSharedRef(
     'MaterialAsset',
@@ -420,10 +429,10 @@ if (m36Mode) {
       code: m36Stale.error.code,
       detail: m36Stale.error.detail,
       published: false,
-      artifactDigest: derived.artifact.digest,
+      artifactDigest: derived.artifactDigest,
     },
     fresh: {
-      artifactDigest: fresh.value.artifact.digest,
+      artifactDigest: fresh.value.artifactDigest,
       inputDigest: fresh.value.record.receipt.identity.cookIdentity,
       generation: lastMaterialGeneration,
       allocationRelease: { ok: allocationRelease.ok },
@@ -454,7 +463,10 @@ if (delta !== undefined) {
   } else if (inheritanceFalsify) {
     assert(delta.changedPixels === 0 && delta.meanRgbDelta === 0, `inheritance falsifier unexpectedly changed rendered pixels: ${JSON.stringify(delta)}`);
   } else {
-    assert(delta.changedPixels > 0 && delta.meanRgbDelta > 0.001, `normal-slot live rebind was not visually discriminative: ${JSON.stringify(delta)}`);
+    assert(
+      delta.changedPixels > 0 && delta.meanRgbDelta > 0.001,
+      `normal-slot live rebind was not visually discriminative: ${JSON.stringify(delta)}`,
+    );
   }
 }
 assert(errors.length === 0, `renderer errors: ${errors.join(',')}`);
@@ -523,7 +535,7 @@ const output = {
     twoSlotSwap,
     inheritanceBacked: inheritanceLive,
     sourceDerivedGuid: derived.record.guid,
-    sourceArtifactDigest: derived.artifact.digest,
+    sourceArtifactDigest: derived.artifactDigest,
     sourceCookInputDigest: derived.record.receipt.identity.cookIdentity,
   },
   before: { sha256: before.sha256, centerPixel: before.centerPixel },
@@ -531,8 +543,8 @@ const output = {
   after: { sha256: after.sha256, centerPixel: after.centerPixel, width: after.width, height: after.height },
   resize: { enabled: resizeRebuild, before: [WIDTH, HEIGHT], after: [after.width, after.height] },
   delta,
-  rootArtifactDigest: root.artifact.digest,
-  derivedArtifactDigest: derived.artifact.digest,
+  rootArtifactDigest: root.artifactDigest,
+  derivedArtifactDigest: derived.artifactDigest,
   rootCookInputDigest: root.record.receipt.identity.cookIdentity,
   derivedCookInputDigest: derived.record.receipt.identity.cookIdentity,
 };

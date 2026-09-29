@@ -22,10 +22,7 @@ import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { Materials, renderComponentsPlugin } from '@forgeax/engine-render';
 import { scenePlugin } from '@forgeax/engine-scene';
-import {
-  type LocalEntityId,
-  type SceneAsset,
-} from '@forgeax/engine-types';
+import type { SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import roomPack from '../assets/room.pack.json';
 
@@ -127,8 +124,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     const sceneEntry = (roomPack as { assets: Array<{
       kind: string;
-      payload: { nodes: Array<{
-        localId: number;
+      payload: { entities: Record<string, {
         components: Record<string, Record<string, unknown>>;
       }> };
     }> }).assets.find((a) => a.kind === 'scene');
@@ -156,7 +152,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     };
     const sceneAsset: SceneAsset = {
       kind: 'scene',
-      entities: sceneEntry.payload.nodes.map((n) => {
+      entities: Object.fromEntries(Object.entries(sceneEntry.payload.entities).map(([key, n]) => {
         const components: Record<string, Record<string, unknown>> = {};
         for (const [name, data] of Object.entries(n.components)) {
           // Replace refs index numbers with GUID strings for handle-type
@@ -194,11 +190,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           }
           components[name] = resolved;
         }
-        return {
-          localId: n.localId as LocalEntityId,
-          components,
-        };
-      }),
+        return [key, { components }];
+      })),
     };
     // The SceneAsset is catalogued under the scene GUID so loadByGuid
     // resolves through the dev / fallback path (synchronous Map lookup).

@@ -1,4 +1,14 @@
-import { materialNormalScale } from './material-normal-scale.js';
+import {
+  type MaterialCookRasterContext,
+  materialProgramContextForPass,
+} from '@forgeax/engine-pack/material-cook';
+import { buildPlanarReflectionView } from './capture/planar-view';
+import { LensEffects, resolveLensEffects } from './components/lens-effects';
+import { Outline, resolveOutline } from './components/outline';
+import { PlanarReflection, PlanarReflectionInvalidError } from './components/planar-reflection';
+import { supportsGpuShadowRenderState } from './material-render-state';
+import type { LightTextureSource } from './prepare/extended-lighting/spot-modifiers';
+import { computeProjectionMatrix } from './record/helpers';
 // @forgeax/engine-runtime - RenderSystem Extract stage (D-S2 + plan-strategy R-15
 // fallback split). Pure ECS query phase: walks Camera / DirectionalLight /
 // the merged-MeshRenderer renderable archetype and produces SoA-free snapshot
@@ -27,7 +37,7 @@ import { materialNormalScale } from './material-normal-scale.js';
 //                                   fire; no renderable; no dispatch.
 //     - case B (material === 0)   : missing-spec sentinel; defaultMaterial
 //                                   Snapshot fills the slot. No fire.
-//     - case C (handle unresolved): assets.get(handle).err with the entity
+//     - case C (non-zero handle unresolved): assets.get(handle).err with the entity
 //                                   carrying the full T+MF+MR renderable
 //                                   archetype -> structured RhiError(
 //                                   `asset-not-registered`) routed through
@@ -61,8 +71,8 @@ import { materialNormalScale } from './material-normal-scale.js';
 //                               material; hint literal: `'pass
 //                               undefined or omit field to request
 //                               default material'` (AC-10).
-//   - case C dangling-ref     : `assets.get(handle).err` (strict path,
-//                               isRenderable === true) ->
+//   - case C dangling-ref     : `assets.get(handle).err` for a non-zero
+//                               handle (strict path, isRenderable === true) ->
 //                               `RhiError({ code: 'asset-not-
 //                               registered', detail: { assetHandle },
 //                               hint: 'register material via
@@ -73,62 +83,47 @@ import { materialNormalScale } from './material-normal-scale.js';
 //                               entity skipped from
 //                               RenderableSnapshot[] +
 //                               MaterialDispatchSnapshot[]; mirrors
-//                               `MeshFilter.assetHandle` dangling path
+//                               `MeshFilter.assetHandle` dangling path. A
+//                               scalar shared<T> slot 0 is the unbound,
+//                               non-renderable state and is skipped
 //                               (charter proposition 5; AC-11).
 //
-// feat-20260514-ecs-children-instances-managed-buffer-array M3 / w15:
-//   The legacy `Instances { buffer, count }` form (cross-coupled with the
-//   deleted `AssetRegistry.createInstancedBuffer` triplet + the retired
-//   `InstancedBufferAsset` POD) is gone. Per-entity instance transforms now
-//   live inside the ECS `Instances { transforms: 'array<f32>' }` column;
-//   extract materialises a `Float32Array` snapshot per Instances-bearing
-//   entity (via `world.get(e, Instances).transforms`) so the record stage
-//   can upload to a per-entity GPU storage buffer cached by entity packed
-//   u32.
-//
-// feat-20260515-buffer-array-vocab-collapse M3 / w15: the component-level
-// `arrayStride` hook on `Instances.transforms` was retired (decision section
-// 2.3 stride responsibility migration -- AI users gate at the set / push
-// call sites + RenderSystem extract entry holds a defensive fail-fast).
-// The extract entry checks `transforms.length % 16 === 0` directly after
-// the `world.get(entity, Instances)` snapshot is taken; violations route
-// `InstanceTransformsStrideMismatchError`
-// (`code: 'instance-transforms-stride-mismatch'`,
-// `detail: { actualLength, expectedStride: 16 }`) through the World
-// Layer-3 ErrorHandler and the renderable is skipped. The record stage
-// trusts the invariant and does not re-check.
+// World owns Instances.transforms. Extraction borrows the managed array during
+// the read phase and retains a detached projection only when its values change.
+// RenderScene accepts that projection with the source publication; recording
+// owns device residency, upload revisions and backend-specific chunking.
+// SpriteInstances remains the independent 2D component and snapshot contract.
 
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
+  materialParametersToParamSchema as projectMaterialParametersToParamSchema,
   resolveAssetHandle,
+  runtimeMaterialShaderId,
+  selectMaterialPassProgram,
   walkMaterialPassesOverSharedRefs,
 } from '@forgeax/engine-assets-runtime';
-import type { Component, ComponentSchema, EntityHandle, World } from '@forgeax/engine-ecs';
 import {
-  InstanceTransformsStrideMismatchError,
-  readRenderArrayView,
-  routeWorldError,
-  SpawnLightInvalidBoundsError,
-  SpriteInstancesCountMismatchError,
-  SpriteInstancesMutuallyExclusiveWithInstancesError,
-  SpriteInstancesRequiresSpriteShaderError,
-} from '@forgeax/engine-ecs/projection';
-import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
+  type Component,
+  type ComponentSchema,
+  type EntityHandle,
+  type Query,
+  Time,
+  type World,
+} from '@forgeax/engine-ecs';
+import { readRenderArrayView, routeWorldError } from '@forgeax/engine-ecs/projection';
+import { type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { AssetGuid, type AssetGuid as AssetGuidBytes } from '@forgeax/engine-pack/guid';
 import { RhiError } from '@forgeax/engine-rhi';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import {
-  MorphWeights,
-  projectHierarchy,
-  type SceneHierarchySnapshot,
-  Transform,
-} from '@forgeax/engine-scene';
-import {
-  JointCountMismatchError,
-  JointEntityDanglingError,
-  SkeletonResolveFailedError,
-  Skin,
-  SkinInstancesCoexistForbiddenError,
-} from '@forgeax/engine-skinning';
+  DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+  DEFAULT_STANDARD_SURFACE_MODULE,
+  type MaterialShaderArtifact,
+  rayMaterialNeedsCoverage,
+  STANDARD_PIPELINE_PARAM_SCHEMA,
+  standardSampleReuseMask,
+  standardTextureMask,
+} from '@forgeax/engine-shader';
 import type {
   Asset,
   Handle,
@@ -136,73 +131,101 @@ import type {
   MaterialColorParameterSchema,
   MaterialParameter,
   MaterialPass,
+  MaterialProgramAbi,
   MaterialRenderState,
+  MaterialSurfaceModel,
   MaterialTextureCoordinates,
   MaterialTextureValue,
-  MeshAsset,
+  MeshLodLevel,
   ParamSchemaEntry,
-  PrimitiveTopology,
-  SkeletonAsset,
+  TextureAsset,
 } from '@forgeax/engine-types';
 import {
-  ASSET_ERROR_HINTS,
-  AssetError,
   derive,
   materialGuidText,
   materialValuesToLinearRuntime,
   toShared,
 } from '@forgeax/engine-types';
+import { buildCubeCameraFaceViews } from './capture/cube-views';
 import {
   antialiasFromF32,
-  bloomEnabledFromF32,
+  BarrelDistortion,
+  CAMERA_EXPOSURE_MODE_MANUAL,
   Camera,
+  CameraView,
+  CubeCamera,
+  cameraExposureFromColumns,
   cameraProjectionFromF32,
-  DirectionalLight,
-  Instances,
-  Layer,
-  Lines,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  PointLightShadow,
-  Points,
-  PostProcessParams,
-  pointShapeFromU32,
-  SkyboxBackground,
-  Skylight,
-  SortKey,
-  SpotLight,
-  SpriteInstances,
-  SpriteRegionOverride,
+  cubeCameraUpdateIntentFromF32,
+  DynamicResolution,
+  Fog,
+  MotionBlur,
+  ReflectionProbe,
+  reflectionProbeUpdateIntentFromF32,
+  ScreenSpaceReflection,
   tonemapFromF32,
   tonemapToU32,
+  transparencyFromF32,
+  validateCameraBloom,
+  validateDynamicResolutionCamera,
 } from './components';
-import { GlyphText } from './components/glyph-text';
-import { computeInvRangeSquared, degToCos } from './components/light-helpers';
+import { validateBarrelDistortionParameters } from './components/barrel-distortion';
+import { ClippingPlanes, extractClippingPlanes } from './components/clipping-planes';
+import { DepthOfField } from './components/depth-of-field';
+import type { DirectionalShadowQuality } from './components/directional-shadow-filter';
+import type { LightValidationError } from './components/light-helpers';
+import { selectEnvironment } from './environment/frame';
+import { ShadowInvalidConfigError } from './errors/render';
 import {
-  MaterialSkinAttrMissingError,
-  ShadowInvalidConfigError,
-  SkinMaterialMismatchError,
-} from './errors/render';
+  type DirectionalShadowCascadeFit,
+  projectDirectionalShadow,
+} from './extract/directional-shadow-projection';
+import type {
+  EnvironmentFrame,
+  FogCandidate,
+  FogFrame,
+  FogSelectionFailure,
+} from './extract/environment';
+import type { GpuDrivenDrawSnapshot } from './extract/gpu-driven';
 import { resolveVisibility, type VisibilitySnapshot } from './extract/visibility';
+import {
+  depthOfFieldRequestFailure,
+  resolveDepthOfFieldParams,
+} from './features/depth-of-field/depth-of-field-params';
+import { resolveMotionBlurParams } from './features/motion-blur/motion-blur-params';
 import type {
   RenderFeatureHiddenEntityReport,
   RenderFeatureWorldVisibilitySnapshot,
 } from './features/types';
-import { ensureGlyphMeshMaterialSlots } from './glyph-text-layout-system';
-import {
-  type MeshMaterialBindingDiagnostic,
-  type MeshMaterialBindingSource,
-  resolveMeshMaterialBindings,
+import type { InstanceCollectionId, InstanceProjectionStore } from './instances';
+import type {
+  MeshMaterialBindingDiagnostic,
+  MeshMaterialBindingSource,
 } from './mesh-material-bindings';
-import { isStandardPbrMaterialShader } from './pbr-pipeline';
-import { expandPointsLinesBounds } from './points-lines/bounds';
-import type { PointsLinesRetainedSnapshot, PointsLinesStyle } from './points-lines/snapshot';
-import { type CameraSnapshot, STANDARD_TONEMAP_FEATURE_ID } from './render-contract';
+import {
+  isCanonicalStandardPbrMaterialShader,
+  isStandardPbrMaterialShader,
+  isStandardPbrSkinMaterialShader,
+} from './pbr-pipeline';
+import type { PointsLinesRetainedSnapshot } from './points-lines/snapshot';
+import type { ReflectionProbeFact } from './reflection/projection';
+import type { CameraSnapshot, CubeCameraSnapshot } from './render-contract';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
-import type { SkinPaletteSlice } from './systems/skin-palette-types';
+import type { SkinPaletteReceipt } from './systems/skin-palette-types';
+import type { RenderTarget } from './targets/contracts';
+import { resolveRenderTargetMaterialSource } from './targets/material-source';
+import { isCanvasTextureSource, type MaterialTextureSource } from './textures/canvas-texture';
+import { resolveSelectedVolumetricLight } from './volume/capability';
+import {
+  type ValidatedVolumetricFog,
+  type VolumeDensityBinding,
+  VolumetricFog,
+  type VolumetricFogAuthoring,
+} from './volume/component';
+import { extractVolumetricFog } from './volume/extract';
+import type { VolumeProjectorTuple } from './volume/temporal';
 
 /**
  * DirectionalLightSnapshot — sun-like infinite light variant of the
@@ -215,9 +238,12 @@ import type { SkinPaletteSlice } from './systems/skin-palette-types';
  */
 export interface DirectionalLightSnapshot {
   readonly kind: 'directional';
+  readonly entity?: EntityHandle;
   readonly direction: Vec3;
   readonly color: Vec3;
   readonly intensity: number;
+  /** Screen-space contact shadow ray length in meters; 0 disables it. */
+  readonly contactShadowLength: number;
 }
 
 /**
@@ -228,29 +254,34 @@ export interface DirectionalLightSnapshot {
  */
 export interface PointLightSnapshot {
   readonly kind: 'point';
+  readonly entity?: EntityHandle | number;
+  /** World identity stamped by the composited extract owner. */
+  readonly worldId?: number;
   readonly position: Vec3;
   readonly color: Vec3;
   readonly intensity: number;
   readonly invRangeSquared: number;
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M1 / T-M1-8 + M4 / T-M4-4:
-   * cube_array atlas layer index for this light's shadow map (0..3 for shadow
-   * casters; sentinel `-1` for non-shadow lights). Default `-1` per
+   * cube_array atlas layer index for this light's shadow map (0..capacity-1
+   * for admitted shadow casters; sentinel `-1` for non-admitted lights).
+   * Default `-1` per
    * plan-strategy §D-2 — record stage / shader skips shadow sampling when the
    * lane equals the sentinel. Joined with `pointShadow[]` by entity at the
    * end of extract; HDRP record stage threads `shadowAtlasLayer + shadowNear +
-   * shadowFar` through `packLightSlot` as the §D-8 pad-lane payload.
+   * shadowFar` through the unified direct-light metadata payload.
    */
   readonly shadowAtlasLayer?: number;
   /**
    * Per-face perspective near plane (matches `PointLightShadow.nearPlane`).
-   * Used by HDRP `evalPointShadowed` for depth-ref reconstruction; rides
-   * `LightSlot.kind_and_pad.z` (byte 56..60) on the std430 std layout.
+   * Used by HDRP `evalPointShadowed` for depth-ref reconstruction; URP keeps
+   * the projection constants in its dedicated shadow-parameter buffer.
    */
   readonly shadowNear?: number;
   /**
    * Per-face perspective far plane (matches `PointLightShadow.farPlane`).
-   * Rides `LightSlot.kind_and_pad.w` (byte 60..64).
+   * It is consumed with the shadow atlas layer through the shared
+   * shadow-parameter buffer; DirectLightSlot carries only the layer identity.
    */
   readonly shadowFar?: number;
 }
@@ -272,23 +303,27 @@ export interface PointLightSnapshot {
  *
  * `mapSize` / `nearPlane` / `farPlane` ride here so record stage can size the
  * cube atlas faces and feed shader the proj constants without re-querying ECS.
- * `shadowAtlasLayer` is assigned by extract in spawn order (0 .. cap-1) so the
- * downstream LightSlot / packPointLight packers carry the layer index in
- * pointPadW (T-M1-8 will rename to shadowAtlasLayer).
+ * `shadowAtlasLayer` is assigned by extract in spawn order up to the renderer
+ * atlas capacity; over-budget requests retain the sentinel `-1` so the
+ * downstream DirectLightSlot packing carries no invalid layer identity.
  */
 export interface PointShadowSnapshot {
   /** Spawning entity index (joins PointLight + PointLightShadow + Transform). */
   readonly entity: number;
+  /** World identity stamped by the composited extract owner. */
+  readonly worldId?: number;
   /** World-space light position (sourced from companion Transform). */
   readonly position: Vec3;
   /** PointLightShadow.mapSize (per-face cube square dimension; 512 default). */
   readonly mapSize: number;
   readonly nearPlane: number;
   readonly farPlane: number;
+  readonly depthBias: number;
+  readonly normalBias: number;
   /**
-   * Atlas layer assigned by extract in spawn order (0..cap-1, where cap=4
-   * matches PointLightShadow cardinality). Sentinel -1 is reserved by the
-   * shader-side LightSlot for no-shadow lights (T-M1-8).
+   * Atlas layer assigned by extract in spawn order while capacity remains.
+   * Sentinel -1 is used for a request that cannot be admitted and is
+   * reserved by the shader-side DirectLightSlot metadata for no-shadow lights.
    */
   readonly shadowAtlasLayer: number;
   /**
@@ -311,10 +346,17 @@ export interface PointShadowSnapshot {
  * is false, dir degenerates, or the light is clipped). shadowAtlasTile
  * (i32 sentinel -1) is the allocated tile index 0..3 or -1 for unassigned
  * (plan-strategy D-4). mapSize / nearPlane / farPlane are the source
- * component shadow parameters carried through to the record stage.
+ * component shadow parameters carried through to the record stage. The
+ * author-facing `shadowIntensity` remains in [0,1] and is copied unchanged;
+ * shader consumers apply it only to shadow visibility, never to candela
+ * radiance.
  */
 export interface SpotLightSnapshot {
   readonly kind: 'spot';
+  /** Entity identity is branded in extracted frames; numeric fixtures remain compatible. */
+  readonly entity?: EntityHandle | number;
+  /** World identity stamped by the composited extract owner. */
+  readonly worldId?: number;
   readonly position: Vec3;
   readonly direction: Vec3;
   readonly color: Vec3;
@@ -322,6 +364,27 @@ export interface SpotLightSnapshot {
   readonly invRangeSquared: number;
   readonly cosInner: number;
   readonly cosOuter: number;
+  /** Shared asset identities projected from the authored modifier fields. */
+  readonly iesProfileHandle?: number;
+  readonly cookieHandle?: number;
+  /** Resource-array slice identities; absent means the modifier falls back. */
+  readonly iesProfileSlice?: number;
+  readonly cookieSlice?: number;
+  /** Resolved authored payloads; absent means the renderer keeps identity LKG. */
+  readonly iesProfileData?: Uint8Array;
+  readonly cookieSource?: LightTextureSource;
+  /** Aspect-only UV matrix paired with `cookieSlice`; upload is dirty-ranged. */
+  readonly cookieMatrix?: Float32Array;
+  /**
+   * Legacy projector payload projected into the shared Cookie array lane when
+   * the adapter exposes the extended-lighting topology. The projector keeps
+   * its lightViewProj sampling semantics; only the texture transport is
+   * shared with authored Cookie resources.
+   */
+  readonly projectorSlice?: number;
+  readonly projectorSource?: LightTextureSource;
+  readonly projectorMatrix?: Float32Array;
+  readonly rollDeg?: number;
   // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
   readonly castShadow: boolean;
   readonly lightViewProj: Float32Array | undefined;
@@ -329,15 +392,126 @@ export interface SpotLightSnapshot {
   readonly nearPlane: number;
   readonly farPlane: number;
   readonly shadowAtlasTile: number;
+  /** Fraction of sampled shadow visibility to retain; 1 = fully opaque shadow. */
+  readonly shadowIntensity?: number;
+  readonly depthBias?: number;
+  readonly normalBias?: number;
+  readonly pcfKernelSize?: number;
+  /** Authoritative TextureAsset projector resolved from the SpotLight handle. */
+  readonly projectorHandle?: Handle<'TextureAsset', 'shared'>;
+  readonly projectorAsset?: TextureAsset;
+  readonly projectorGuid?: string;
+  readonly projectorGeneration?: number;
+  readonly projectorRevision?: number;
+}
+
+/** RectArea direct-light snapshot carried by the unified slot contract. */
+export interface RectAreaDirectLightSnapshot {
+  readonly kind: 'rect-area';
+  readonly position: Vec3;
+  readonly color: Vec3;
+  readonly intensity: number;
+  readonly invRangeSquared: number;
+  readonly halfWidth: number;
+  readonly halfHeight: number;
+  readonly axisX: Vec3;
+  readonly axisY: Vec3;
+  readonly shadowAtlasTile?: number;
+  /** Slot of the authored `RectAreaLight.sourceTexture` handle. */
+  readonly sourceTextureHandle?: number;
+  /**
+   * Light-texture array slice and the source that fills it (CPU mip chain or
+   * GPU resample). The slice is shared with Spot Cookies and projectors of
+   * the same asset; absent means the emitter is uniform (texture factor 1).
+   */
+  readonly cookieSlice?: number;
+  readonly cookieSource?: LightTextureSource;
+}
+
+/** Normalized world-space frame used by Rect extraction, culling, and BRDF. */
+export interface RectAreaWorldFrame {
+  readonly center: Vec3;
+  readonly axisX: Vec3;
+  readonly axisY: Vec3;
+  readonly normal: Vec3;
+  readonly halfWidth: number;
+  readonly halfHeight: number;
+}
+
+/** Build the single normalized Rect frame shared by direct and cluster paths. */
+export function buildRectAreaWorldFrame(input: {
+  readonly center: ArrayLike<number>;
+  readonly axisX: ArrayLike<number>;
+  readonly axisY: ArrayLike<number>;
+  readonly width: number;
+  readonly height: number;
+}): RectAreaWorldFrame {
+  const center = vec3.create(input.center[0] ?? 0, input.center[1] ?? 0, input.center[2] ?? 0);
+  const axisX = vec3.normalize(
+    vec3.create(),
+    vec3.create(input.axisX[0] ?? 0, input.axisX[1] ?? 0, input.axisX[2] ?? 0),
+  );
+  const axisY = vec3.normalize(
+    vec3.create(),
+    vec3.create(input.axisY[0] ?? 0, input.axisY[1] ?? 0, input.axisY[2] ?? 0),
+  );
+  const normal = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), axisX, axisY));
+  normal[0] = normal[0] === 0 ? 0 : (normal[0] ?? 0);
+  normal[1] = normal[1] === 0 ? 0 : (normal[1] ?? 0);
+  normal[2] = normal[2] === 0 ? 0 : (normal[2] ?? 0);
+  return {
+    center,
+    axisX,
+    axisY,
+    normal,
+    halfWidth: Math.max(0, input.width * 0.5),
+    halfHeight: Math.max(0, input.height * 0.5),
+  };
+}
+
+/** Return true only on the authored front side of a one-sided Rect. */
+export function rectAreaFacesPoint(frame: RectAreaWorldFrame, point: ArrayLike<number>): boolean {
+  const toPoint = vec3.create(
+    (point[0] ?? 0) - (frame.center[0] ?? 0),
+    (point[1] ?? 0) - (frame.center[1] ?? 0),
+    (point[2] ?? 0) - (frame.center[2] ?? 0),
+  );
+  return vec3.dot(frame.normal, toPoint) > 0;
+}
+
+/** Project a world point onto the finite authored Rect boundary. */
+export function closestPointOnRectArea(frame: RectAreaWorldFrame, point: ArrayLike<number>): Vec3 {
+  const toPoint = vec3.create(
+    (point[0] ?? 0) - (frame.center[0] ?? 0),
+    (point[1] ?? 0) - (frame.center[1] ?? 0),
+    (point[2] ?? 0) - (frame.center[2] ?? 0),
+  );
+  const localX = Math.min(
+    frame.halfWidth,
+    Math.max(-frame.halfWidth, vec3.dot(toPoint, frame.axisX)),
+  );
+  const localY = Math.min(
+    frame.halfHeight,
+    Math.max(-frame.halfHeight, vec3.dot(toPoint, frame.axisY)),
+  );
+  return vec3.create(
+    (frame.center[0] ?? 0) + (frame.axisX[0] ?? 0) * localX + (frame.axisY[0] ?? 0) * localY,
+    (frame.center[1] ?? 0) + (frame.axisX[1] ?? 0) * localX + (frame.axisY[1] ?? 0) * localY,
+    (frame.center[2] ?? 0) + (frame.axisX[2] ?? 0) * localX + (frame.axisY[2] ?? 0) * localY,
+  );
 }
 
 /**
- * LightSnapshot — discriminated union of the three KHR_lights_punctual
+ * LightSnapshot — discriminated union of the directional and punctual
  * variants. AI users + the record stage perform an exhaustive switch on
  * `kind`; missing arms are caught at compile time (no `default`,
  * `assertNever`-style guards). Plan-strategy R-10.
  */
-export type LightSnapshot = DirectionalLightSnapshot | PointLightSnapshot | SpotLightSnapshot;
+export type LightSnapshot =
+  | DirectionalLightSnapshot
+  | PointLightSnapshot
+  | SpotLightSnapshot
+  | RectAreaDirectLightSnapshot;
 
 /**
  * ExtractedLights — three-bucket output of the extractFrame three-query
@@ -356,6 +530,7 @@ export interface ExtractedLights {
   readonly directionalCount: number;
   readonly point: readonly PointLightSnapshot[];
   readonly spot: readonly SpotLightSnapshot[];
+  readonly rect: readonly RectAreaDirectLightSnapshot[];
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: per-cascade light-view-
    * projection matrices (one per cascade, length 4 pre-allocated). Each matrix
@@ -370,6 +545,7 @@ export interface ExtractedLights {
    * unused slots are 0.0f. Undefined when castShadow=false or no directional
    * light.
    */
+  /** Four vec4 lanes: split, worldUnitsPerTexel, lightDepthWorldSpan, reserved. */
   readonly splitPlanes: Float32Array | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: effective cascade count
@@ -405,19 +581,17 @@ export interface ExtractedLights {
    * undefined otherwise.
    */
   readonly normalBias: number | undefined;
-  /**
-   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
-   * pcfKernelSize from the merged DirectionalLight (PCF kernel width, odd>=1).
-   * Populated when castShadow=true on the first-hit directional light;
-   * undefined otherwise.
-   */
-  readonly pcfKernelSize: number | undefined;
+  /** Accepted closed Directional filter projected from the first query result. */
+  readonly directionalShadowQuality: DirectionalShadowQuality | undefined;
+  /** Structured author-config failure; the candidate is withheld from record. */
+  readonly directionalShadowError: LightValidationError | undefined;
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M1 / T-M1-7:
    * shadow-casting point lights (PointLight + PointLightShadow + Transform
    * archetype join). Each entry carries the per-light 6-face VP matrices and
    * the assigned cube_array atlas layer (0..3 in spawn order; sentinel -1 is
-   * reserved by the shader-side LightSlot for no-shadow point lights).
+   * reserved by the shader-side DirectLightSlot metadata for no-shadow point
+   * lights).
    *
    * Empty array when no PointLightShadow components exist (zero-cost gate per
    * AC-09; record stage skips atlas allocation + shadow pass dispatch).
@@ -477,6 +651,17 @@ export interface SkylightSnapshot {
   readonly entityHandle: number;
 }
 
+/** Local diffuse probe facts; specular remains owned by Skylight/ReflectionProbe. */
+export interface LightProbeSnapshot {
+  readonly identity: string;
+  /** World identity stamped by the composited extract owner. */
+  readonly worldId?: number;
+  readonly position: readonly [number, number, number];
+  readonly radius: number;
+  readonly irradiance: Float32Array;
+  readonly admitted: boolean;
+}
+
 /**
  * SkyboxSnapshot -- extract-stage view of one SkyboxBackground entity
  * (feat-20260531-skybox-env-background M2 / w5).
@@ -499,9 +684,48 @@ export interface SkyboxSnapshot {
   readonly entityHandle: number;
 }
 
+/**
+ * Resource-owner projection for an ECS VolumetricFog collection.
+ *
+ * The renderer carries the validated authoring facts and the source POD all
+ * the way to the record stage.  No profile flag or source/catalog byte is
+ * allowed to enable the graph: `status: 'available'` is produced only after
+ * the ECS component, its shared TextureAsset, and the volume validator all
+ * agree on every linear 3D density owner.
+ */
+export interface ExtractedVolumetricFog {
+  readonly additional?: readonly ExtractedVolumetricFog[];
+  readonly status: 'off' | 'available' | 'degraded';
+  readonly fog?: ValidatedVolumetricFog;
+  readonly densityHandle?: Handle<'TextureAsset', 'shared'>;
+  readonly densityAsset?: TextureAsset;
+  readonly guid?: string;
+  readonly generation?: number;
+  readonly digest?: string;
+  readonly worldId?: number;
+  /** Canonical simulation time projected from this World for authored medium motion. */
+  readonly worldTimeSeconds?: number;
+  /** Required same-World light selected by the authoring component. */
+  readonly lightEntity?: EntityHandle;
+  readonly lightKind?: 'directional' | 'point' | 'spot';
+  /** Optional Point+Spot pair identities consumed by the volume integrator. */
+  readonly pointLightEntity?: EntityHandle;
+  readonly spotLightEntity?: EntityHandle;
+  /** Accepted projector tuple shared by surface and volume when authored. */
+  readonly projector?: VolumeProjectorTuple;
+  /** The resolved projector payload shared with the surface light snapshot. */
+  readonly projectorHandle?: Handle<'TextureAsset', 'shared'>;
+  readonly projectorAsset?: TextureAsset;
+}
+
 export interface RenderableSnapshot {
+  /** Authored hierarchical visibility; retained hidden rows remain addressable. */
+  readonly authorVisible?: boolean;
   readonly assetHandle: number;
   readonly transform: TransformSnapshot;
+  /** Producer-authored lower-detail references projected from MeshAsset. */
+  readonly lods?: readonly MeshLodLevel[];
+  readonly lodHysteresis?: number;
   /** Finite producer-owned local bounds retained for persistent CPU view work. */
   readonly localAabb?: Float32Array;
   /** Indexed single-submesh facts consumed by the first GPU-driven rigid lane. */
@@ -598,15 +822,60 @@ export interface RenderableSnapshot {
    * draw to `forgeax::pbr-skin` pipeline + set the palette dynamic offset.
    * Absent (`undefined`) means the entity is not skinned.
    */
-  readonly skin?: SkinPaletteSlice;
+  readonly skin?: SkinPaletteReceipt;
+  /** Source pose waiting for the receiving Renderer to assign a palette. */
+  readonly skinPose?: import('./systems/skin-palette-types').SkinPose;
+  /** Joint identities consumed by the retained scene dependency index. */
+  readonly skinJointEntities?: readonly number[];
+  /**
+   * Present when the entity carries `CapsuleShadow`: world-space capsules for
+   * the directional capsule lane, or the entity-level reason it keeps
+   * rasterizing its mesh into the cascades instead.
+   */
+  readonly capsuleShadow?: import('./capsule-shadow/world-capsules').CapsuleShadowSnapshot;
+  /** Present when the entity declares `Mobility static`: shadow caches skip observation. */
+  readonly mobility?: 'static';
+  /** Present when `ShadowParticipation.receive` is false: surface skips shadow sampling. */
+  readonly shadowReceiver?: false;
+  /** Source pass ownership retained with the scene record across view changes. */
+  readonly shadowCasterPasses?: readonly Omit<
+    ShadowCasterMembership,
+    'worldEntity' | 'renderableIndex'
+  >[];
   /**
    * ECS-owned morph weights. Presence selects the Standard Pipeline CPU
    * specialized deformation lane; the asset remains the source of target
    * deltas and the record stage only receives this frozen POD snapshot.
    */
   readonly morph?: MorphSnapshot;
+  /** Renderer-owned previous-frame facts attached during temporal projection. */
+  readonly temporal?: RenderableTemporalSnapshot;
   /** Detached M2 authoring facts for the optional Points/Lines projection. */
   readonly pointsLines?: PointsLinesRetainedSnapshot;
+  /** Renderer-owned per-object probe record uploaded at group(3) binding(1). */
+  readonly probeBlendRecord?: import('./scene/probe-blend-record').ProbeBlendRecord;
+}
+
+export type RenderablePreviousSource = 'last-submitted' | 'current-seed';
+export type RenderableReactiveReason =
+  | 'new-slot'
+  | 'generation-reuse'
+  | 'reentered'
+  | 'geometry-revision'
+  | 'material-revision'
+  | 'skinning-deformation'
+  | 'morph-deformation';
+export interface RenderableTemporalSnapshot {
+  readonly previousSource: RenderablePreviousSource;
+  /** True only when current and previous geometry belong to one stable source identity. */
+  readonly motionValid: boolean;
+  /** Color-history invalidation is independent from motion validity. */
+  readonly reactive: boolean;
+  readonly reactiveReasons: readonly RenderableReactiveReason[];
+  readonly previousTransform: TransformSnapshot;
+  readonly previousInstances: InstancesSnapshot | undefined;
+  readonly previousSkin: SkinPaletteReceipt | undefined;
+  readonly previousMorphWeights: Float32Array | undefined;
 }
 
 export interface MorphSnapshot {
@@ -614,22 +883,24 @@ export interface MorphSnapshot {
   readonly targetCount: number;
 }
 
-export interface GpuDrivenDrawSnapshot {
-  readonly kind: 'indexed' | 'non-indexed';
-  readonly first: number;
-  readonly count: number;
-  readonly baseVertex: number;
-  readonly materialSlot: number;
-  readonly topology: PrimitiveTopology;
-  readonly pipelineClass: string;
-  readonly materialResourceClass: string;
-}
+export type { GpuDrivenDrawSnapshot } from './extract/gpu-driven';
 
 export interface InstancesSnapshot {
+  /** Renderer-owned collection identity. */
+  readonly collectionId?: InstanceCollectionId;
   /** Packed column-major mat4 transforms (16 f32 per instance). */
   readonly transforms: Float32Array;
+  /** Monotonic per-ordinal identity generations, when the collection owns them. */
+  readonly generations?: Uint32Array;
   /** Number of instances (transforms.length / 16). */
   readonly instanceCount: number;
+  /** Collection revision captured by this detached frame snapshot. */
+  readonly revision?: number;
+  /** Coalesced matrix ordinals dirtied since the previous authoring update. */
+  readonly dirtyRanges?: readonly {
+    readonly start: number;
+    readonly end: number;
+  }[];
   /** Stable per-entity GPU buffer cache key (the packed Entity u32). */
   readonly cacheKey: number;
   /**
@@ -675,7 +946,7 @@ export interface SpriteInstancesSnapshot {
 /**
  * TransformSnapshot: extract-stage view of one entity's resolved world
  * transform (feat-20260601 D-3). Holds the single `world` mat4 (column-major
- * 16 floats, copied from the entity's `Transform.world` view written by
+ * 16 floats, copied from the entity's `GlobalTransform.world` view written by
  * propagateTransforms). The record stage copies these 16 floats straight into
  * the mesh SSBO slot (zero `mat4.compose`); position / scale consumers derive
  * from the mat4 via `mat4.getTranslation` / basis-column lengths.
@@ -710,10 +981,12 @@ export interface MaterialSnapshot {
   readonly baseColor: Vec3;
   readonly metallic: number;
   readonly roughness: number;
-  readonly clearcoat?: number | undefined;
-  readonly clearcoatRoughness?: number | undefined;
-  /** Authored Standard PBR specular tint in linear runtime color space. */
-  readonly specularTint?: readonly [number, number, number] | undefined;
+  /** Root-owned Surface model, independent of the cooked program byte identity. */
+  readonly surfaceModel?: MaterialSurfaceModel | undefined;
+  /** Whether this material publishes a Deferred pass consumed before the forward-only lane. */
+  readonly deferredPass?: boolean | undefined;
+  /** Authored Standard PBR specular color in linear runtime color space. */
+  readonly specularColor?: readonly [number, number, number] | undefined;
   /**
    * Schema-driven material shader identifier (feat-20260523 M4-T05).
    * Populated when the material asset uses the schema-driven path
@@ -724,6 +997,15 @@ export interface MaterialSnapshot {
    * discriminator (M4-T06).
    */
   readonly materialShaderId?: string | undefined;
+  readonly materialProgramKeys?: Readonly<Record<string, string>> | undefined;
+  /** Accepted ray program and conservative coverage semantics from the same effective material. */
+  readonly materialRay?:
+    | { readonly programKey: string; readonly evaluateCoverage: boolean }
+    | undefined;
+  /** Producer-selected scene-index program keys, when a cooked publication carries them. */
+  readonly materialSceneIndexProgramKeys?:
+    | Readonly<Record<string, MaterialSceneIndexProgramKey>>
+    | undefined;
   /**
    * Stable source handle for the material asset. Record uses this only for
    * same-frame assembly reuse; GPU bind-group validity still comes from the
@@ -745,6 +1027,8 @@ export interface MaterialSnapshot {
   readonly paramSnapshot?: Readonly<Record<string, number | number[] | string>> | undefined;
   /** Effective MaterialAsset parameter contract used to lay out this snapshot. */
   readonly materialParamSchema?: readonly ParamSchemaEntry[] | undefined;
+  /** Authored texture presence, separate from the shared GPU layout schema. */
+  readonly standardTextureMask?: number | undefined;
   /** Authored per-slot UV set and KHR texture transform metadata. */
   readonly textureCoordinates?: ReadonlyMap<string, MaterialTextureCoordinates> | undefined;
   /**
@@ -759,11 +1043,15 @@ export interface MaterialSnapshot {
    *
    * Populated by iterating `textureFieldNames`; absent keys mean the
    * paramValue was missing / mis-typed (record falls back to default white).
-   * `emissiveTexture` / `occlusionTexture` are NOT here — they live in the
-   * engine-injection lightmap region (their named fields below feed
-   * `appendInjection('lightmap')`, not the user-region).
+   * `emissiveTexture` / `occlusionTexture` are included here as ordinary
+   * Standard user-region fields; the production layout does not duplicate
+   * them in an engine injection region.
    */
   readonly textureHandles?: ReadonlyMap<string, Handle<'TextureAsset', 'shared'>> | undefined;
+  /** Explicitly authored texture fields that must resolve before GPU admission. */
+  readonly authoredTextureFields?: ReadonlySet<string> | undefined;
+  /** Runtime target or Canvas sources; never projected as TextureAsset handles. */
+  readonly textureSources?: ReadonlyMap<string, MaterialTextureSource> | undefined;
   /**
    * User-region texture field names whose paramValue resolved to a VideoAsset
    * (kind `'video'`) rather than a static TextureAsset
@@ -782,6 +1070,8 @@ export interface MaterialSnapshot {
   readonly videoTextureFields?: ReadonlyMap<string, Handle<'VideoAsset', 'shared'>> | undefined;
   /** Authored sampler handles keyed by their matching texture parameter. */
   readonly samplerHandles?: ReadonlyMap<string, Handle<'SamplerAsset', 'shared'>> | undefined;
+  /** Explicitly authored sampler fields that must resolve before GPU admission. */
+  readonly authoredSamplerFields?: ReadonlySet<string> | undefined;
   readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   /**
    * PBR metallic-roughness texture handle (present for PBR/sprite/skin
@@ -809,7 +1099,7 @@ export interface MaterialSnapshot {
    */
   readonly normalTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   /** Scalar applied to tangent-space normal XY after the normal texture sample. */
-  readonly normalScale?: number | undefined;
+  readonly normalScale?: readonly [number, number] | undefined;
   readonly emissive?: readonly [number, number, number] | undefined;
   readonly emissiveIntensity?: number | undefined;
   readonly emissiveTexture?: Handle<'TextureAsset', 'shared'> | undefined;
@@ -828,12 +1118,9 @@ export interface MaterialSnapshot {
    * from the legacy `shadingModel` discriminant (feat-20260625 M2 D-3,
    * finalised in w15; `shadingModel` field removed in tweak-20260701 M1).
    *
-   * Extract derives this from the first pass's `renderState.blend !==
-   * undefined` (post-feat-20260626-collapse: blend presence is the
-   * single SSOT for "this material is transparent on the geometry
-   * pipeline cache key"). Multi-pass materials whose mix of opaque +
-   * transparent passes need finer routing should split into separate
-   * MaterialAsset entries (the normal forgeax pattern).
+   * This describes the primary-pass snapshot for consumers that need a
+   * material summary. Actual draw routing and the LDR split read the selected
+   * DispatchEntry.renderState, so mixed opaque/transparent Passes remain valid.
    *
    * Type is `boolean | undefined` (derived): `undefined` means "no
    * passes / unknown"; consumers must read `=== true` / `!== true` to
@@ -842,7 +1129,16 @@ export interface MaterialSnapshot {
   readonly transparent?: boolean | undefined;
 }
 
-interface MaterialCacheChainIdentity {
+/**
+ * One producer-selected scene-index program, retaining the effective Pass
+ * kind so record does not infer shadow/depth semantics from an authored name.
+ */
+export interface MaterialSceneIndexProgramKey {
+  readonly specializationKey: string;
+  readonly pass: 'forward' | 'shadow' | 'depth';
+}
+
+export interface MaterialCacheChainIdentity {
   readonly asset: MaterialAsset;
   readonly parentGuid: string | undefined;
 }
@@ -861,7 +1157,7 @@ export interface MaterialSnapshotCacheEntry {
 export type MaterialSnapshotCache = Map<number, MaterialSnapshotCacheEntry>;
 export type MaterialSnapshotCachesByWorld = WeakMap<World, MaterialSnapshotCache>;
 
-function gpuDrivenMaterialResourceClass(material: MaterialSnapshot): string {
+export function gpuDrivenMaterialResourceClass(material: MaterialSnapshot): string {
   const textures = [...(material.textureHandles?.entries() ?? [])]
     .map(([name, handle]) => [name, Number(handle)] as const)
     .sort(([left], [right]) => left.localeCompare(right));
@@ -923,13 +1219,13 @@ export function sortDispatchByQueue<E extends { readonly queue: number }>(
   return entries.slice().sort((a, b) => a.queue - b.queue);
 }
 
-const DEFAULT_FORWARD_PASS: MaterialPass = {
+export const DEFAULT_FORWARD_PASS: MaterialPass = {
   name: 'forward',
   program: { module: 'forgeax::default-unlit', vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
   renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
 };
 
-function appendMaterialDispatchEntries(
+export function appendMaterialDispatchEntries(
   pendingDispatch: DispatchEntry[],
   passes: readonly MaterialPass[],
   entity: EntityHandle,
@@ -938,6 +1234,7 @@ function appendMaterialDispatchEntries(
   layer: number,
   paramSnapshot: Readonly<Record<string, number | number[] | string>> | undefined,
   passIndexOffset = 0,
+  materialProgramKeys?: Readonly<Record<string, string>>,
 ): void {
   const matchedPasses = selectPasses(passes, {});
   for (let pIdx = 0; pIdx < matchedPasses.length; pIdx++) {
@@ -948,6 +1245,11 @@ function appendMaterialDispatchEntries(
       readonly queue?: number;
       readonly stencilReference?: number;
     };
+    const authoredShaderId = runtimeMaterialShaderId(pass.program.module, pass.name);
+    const dispatchShaderId =
+      materialProgramKeys === undefined ? authoredShaderId : materialProgramKeys[pass.name];
+    if (materialProgramKeys !== undefined && dispatchShaderId === undefined)
+      throw new Error(`Missing published material program for Pass ${pass.name}`);
     pendingDispatch.push({
       entityIndex: entity,
       materialHandle,
@@ -955,14 +1257,30 @@ function appendMaterialDispatchEntries(
       passIndex: passIndexOffset + pIdx,
       queue: passState.queue ?? 2000,
       layer,
-      tags: passState.tags ?? {},
-      renderState: pipelineRenderState(passState),
+      // Cooked Forward/Deferred artifacts have different byte identities.
+      // Temporal still projects their shared authored geometry/opacity once.
+      tags:
+        materialProgramKeys !== undefined &&
+        isCanonicalStandardPbrMaterialShader(authoredShaderId) &&
+        passState.tags?.SurfaceKind !== 'full-custom'
+          ? {
+              ...passState.tags,
+              SurfaceKind: 'standard',
+              ...(pass.program.moduleSlots?.surface === undefined
+                ? {}
+                : { SurfaceModule: pass.program.moduleSlots.surface }),
+              GeometryVariant:
+                passState.tags?.GeometryVariant ??
+                (isStandardPbrSkinMaterialShader(authoredShaderId) ? 'skinned' : 'rigid'),
+            }
+          : (passState.tags ?? {}),
+      renderState: pipelineRenderState(passState, pass.outputs),
       // Material module identity is already closed in the cooked program.
       // It must never become a draw-time define map.
       defines: undefined,
       vertexEntry: pass.program.vertexEntry,
       fragmentEntry: pass.program.fragmentEntry,
-      materialShaderId: runtimeMaterialShaderId(pass.program.module, pass.name),
+      materialShaderId: dispatchShaderId,
       paramSnapshot,
       ...(passState.stencilReference !== undefined && {
         stencilReference: passState.stencilReference,
@@ -972,8 +1290,23 @@ function appendMaterialDispatchEntries(
 }
 
 export interface ExtractedFrame {
+  readonly projectedDecals?: readonly import('./decals/extract').ProjectedDecalSnapshot[];
   readonly cameras: CameraSnapshot[];
+  /** Auxiliary target cameras selected after the display camera is fixed. */
+  readonly auxiliaryCameras: readonly CameraSnapshot[];
+  /** Cube capture intents extracted beside the display camera in one pass. */
+  readonly cubeCameras: readonly CubeCameraSnapshot[];
+  /** Reflection probe facts projected from the same World extraction. */
+  readonly reflectionProbes?: readonly ReflectionProbeFact[];
   readonly lights: ExtractedLights;
+  /** Resource-owner environment facts selected once at the extract boundary. */
+  readonly environment: EnvironmentFrame | undefined;
+  /** False when the resource-owner world failed environment/fog selection. */
+  readonly environmentReady: boolean;
+  /** One resource-owner volume projection; absent means no authored fog. */
+  readonly volumetricFog?: ExtractedVolumetricFog;
+  /** Resource-owner CloudLayer facts selected once at the extract boundary. */
+  readonly cloudLayer?: import('./cloud/extract').ExtractedCloudLayer;
   readonly renderables: RenderableSnapshot[];
   /**
    * Single dispatch list sorted by queue value (ascending, stable sort).
@@ -981,10 +1314,21 @@ export interface ExtractedFrame {
    * three-bucket model per plan-strategy D-3.
    */
   readonly dispatch: DispatchEntry[];
+  readonly shadowCasterEntityKeys: ReadonlySet<number>;
+  /** ShadowCaster ownership keyed by concrete draw item and pass. */
+  readonly shadowCasterDrawKeys: ReadonlySet<string>;
+  /** Structured ShadowCaster ownership facts retained for exact residual routing. */
+  readonly shadowCasterMembership?: readonly ShadowCasterMembership[];
   readonly skylight: SkylightSnapshot | undefined;
   readonly skylightCount: number;
+  /** World-local diffuse probe candidates; never a direct-light slot. */
+  readonly lightProbes?: readonly LightProbeSnapshot[];
   readonly skybox: SkyboxSnapshot | undefined;
   readonly skyboxCount: number;
+  /** Resource-owner Fog facts selected once at the frame boundary. */
+  readonly fog: FogFrame | undefined;
+  /** Last invalid Fog update retained alongside the current valid/LKG frame. */
+  readonly fogFailure?: FogSelectionFailure;
   /**
    * feat-20260528-frustum-culling M3 / w11: frustum culling statistics
    * collected during the extract phase. `total` is the count of entities
@@ -994,6 +1338,8 @@ export interface ExtractedFrame {
   readonly frustumStats: { readonly culled: number; readonly total: number };
   /** Candidate entities rejected by author visibility before resource parsing. */
   readonly visibilityStats: { readonly explicitlyHidden: number };
+  /** Detached material-source probe accounting for this extraction. */
+  readonly materialTextureSources?: MaterialTextureSourceStats;
   /**
    * Per-frame post-process params snapshot collected from PostProcessParams
    * entities (D-1: data-driven params channel). Maps shader id to the
@@ -1008,6 +1354,94 @@ export interface ExtractedFrame {
   readonly featureVisibilitySnapshots: readonly RenderFeatureWorldVisibilitySnapshot[];
   /** Built-in hidden candidates, retained for host-side producer deduplication. */
   readonly hiddenEntityReports: readonly RenderFeatureHiddenEntityReport[];
+}
+
+/** Extracted ownership fact for one concrete ShadowCaster pass. */
+export interface ShadowCasterMembership {
+  readonly worldEntity: number;
+  readonly renderableIndex: number;
+  readonly drawItemIndex: number;
+  readonly materialHandle: number;
+  readonly passIndex: number;
+  readonly materialShaderId?: string;
+  /** Selected authored ShadowCaster entry points, when published. */
+  readonly vertexEntry?: string;
+  readonly fragmentEntry?: string;
+  readonly renderState?: MaterialRenderState;
+  readonly cpuReason?: ShadowCasterCpuReason;
+  /** Producer-owned result of the complete ShadowCaster admission check. */
+  readonly gpuDrivenEligible?: boolean;
+}
+
+/** Producer evidence for a concrete ShadowCaster pass that remains on CPU. */
+export type ShadowCasterCpuReason =
+  | 'transparent'
+  | 'morph'
+  | 'unsupported-shader'
+  | 'unsupported-render-state'
+  | 'missing-skin-bounds'
+  | 'missing-gpu-draw'
+  | 'unprepared'
+  | 'prepared-contract'
+  | 'multi-pass';
+
+export type CameraTargetUpdate = 'once' | 'on-demand' | 'continuous';
+
+export interface CameraTargetCandidate {
+  readonly worldId: number;
+  readonly entityKey: number;
+  readonly target?: RenderTarget;
+  readonly requestVersion: number;
+  readonly update: CameraTargetUpdate;
+}
+
+export interface CameraTargetRejection {
+  readonly entityKey: number;
+  readonly reason: 'budget' | 'display-target' | 'duplicate-target';
+}
+
+export interface CameraTargetSelection {
+  readonly display: CameraTargetCandidate | undefined;
+  readonly auxiliary: readonly CameraTargetCandidate[];
+  readonly rejected: readonly CameraTargetRejection[];
+}
+
+export function selectCameraTargetViews(
+  candidates: readonly CameraTargetCandidate[],
+  options: { readonly displayEntityKey?: number; readonly budget: number },
+): CameraTargetSelection {
+  const display = candidates.find(
+    (candidate) =>
+      candidate.entityKey === options.displayEntityKey && candidate.target === undefined,
+  );
+  const rejected: CameraTargetRejection[] = [];
+  const ordered = candidates
+    .filter((candidate) => candidate.target !== undefined)
+    .sort((left, right) => left.worldId - right.worldId || left.entityKey - right.entityKey);
+  const auxiliary: CameraTargetCandidate[] = [];
+  const seenTargets = new Set<RenderTarget>();
+  for (const candidate of ordered) {
+    const duplicate = candidate.target !== undefined && seenTargets.has(candidate.target);
+    if (candidate.target !== undefined) seenTargets.add(candidate.target);
+    if (candidate.entityKey === options.displayEntityKey) {
+      rejected.push({ entityKey: candidate.entityKey, reason: 'display-target' });
+      continue;
+    }
+    if (candidate.target === undefined || duplicate) {
+      rejected.push({ entityKey: candidate.entityKey, reason: 'duplicate-target' });
+      continue;
+    }
+    if (auxiliary.length >= Math.max(0, options.budget)) {
+      rejected.push({ entityKey: candidate.entityKey, reason: 'budget' });
+      continue;
+    }
+    auxiliary.push(candidate);
+  }
+  return {
+    display,
+    auxiliary: Object.freeze(auxiliary),
+    rejected: Object.freeze(rejected),
+  };
 }
 
 /**
@@ -1030,7 +1464,7 @@ type ArrayFieldView = ArrayLike<number>;
  * receives a detached array snapshot and routes failures through the same
  * projection owner.
  */
-type WorldInternalView = {
+export type WorldInternalView = {
   _routeError(error: unknown, ctx: RenderErrorContext): void;
   _getArrayView<N extends string, S extends ComponentSchema>(
     entity: EntityHandle,
@@ -1039,9 +1473,9 @@ type WorldInternalView = {
   ): ArrayFieldView | undefined;
 };
 
-const Severity = Object.freeze({ Error: 'error', Warning: 'warning' } as const);
+export const Severity = Object.freeze({ Error: 'error', Warning: 'warning' } as const);
 
-function createWorldInternalView(world: World): WorldInternalView {
+export function createWorldInternalView(world: World): WorldInternalView {
   return {
     _routeError(error, ctx) {
       routeWorldError(world, error, { systemName: ctx.systemName });
@@ -1052,22 +1486,25 @@ function createWorldInternalView(world: World): WorldInternalView {
   };
 }
 
-/**
- * The user-region texture fields the built-in standard-PBR material declares.
- * Used as the fallback texture-field set when the shader id is not registered
- * (cross-worktree shader-late-register, plan R-4) so a built-in material still
- * resolves its user-region textures. Mirrors `derive(default-standard-pbr).textureFieldNames`.
- */
-const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
-  'baseColorTexture',
-  'metallicRoughnessTexture',
-  'normalTexture',
-  'specularTintTexture',
+export function resolveCameraTarget(
+  world: World,
+  raw: number | undefined,
+): RenderTarget | undefined {
+  if (raw === undefined || raw <= 0) return undefined;
+  const resolved = world.sharedRefs.resolve<'RenderTarget', RenderTarget>(
+    toShared<'RenderTarget'>(Math.round(raw)),
+  );
+  return resolved.ok ? resolved.value : undefined;
+}
+
+/** Full authored map vocabulary when a Standard shader has not registered yet. */
+export const BUILTIN_MATERIAL_TEXTURE_FIELDS: readonly string[] = [
+  ...derive(DEFAULT_STANDARD_PBR_PARAM_SCHEMA).textureFieldNames,
 ];
-const BUILTIN_USER_REGION_TEXTURE_FIELD_SET = new Set(BUILTIN_USER_REGION_TEXTURE_FIELDS);
+const BUILTIN_MATERIAL_TEXTURE_FIELD_SET = new Set(BUILTIN_MATERIAL_TEXTURE_FIELDS);
 const BUILTIN_BASE_COLOR_TEXTURE_FIELD_SET = new Set(['baseColorTexture']);
 
-function materialTextureFields(
+export function materialTextureFields(
   shaderId: string | undefined,
   fields: ReadonlySet<string> | undefined,
 ): ReadonlySet<string> | undefined {
@@ -1077,7 +1514,7 @@ function materialTextureFields(
     shaderId === 'forgeax::default-standard-pbr-skin' ||
     shaderId === 'forgeax::pbr-skin'
   ) {
-    return BUILTIN_USER_REGION_TEXTURE_FIELD_SET;
+    return BUILTIN_MATERIAL_TEXTURE_FIELD_SET;
   }
   if (
     shaderId === 'forgeax::default-unlit' ||
@@ -1089,40 +1526,241 @@ function materialTextureFields(
   return fields;
 }
 
-/**
- * The authored material surface uses the module IDs declared by built-in WGSL
- * sources. Runtime pipeline caches still use the existing engine registration
- * IDs, so this small projection keeps authored identity and renderer lookup
- * identity in one place during the migration.
- */
-function runtimeMaterialShaderId(
-  module: string | undefined,
-  passName?: string,
-): string | undefined {
-  if (
-    passName === 'shadow-caster' &&
-    (module === 'forgeax_material::standard' ||
-      module === 'forgeax_material::unlit' ||
-      module === 'forgeax::default-standard-pbr' ||
-      module === 'forgeax::default-unlit')
-  ) {
-    return 'forgeax::default-shadow-caster';
+function declaredMaterialTextureFields(
+  shaderId: string | undefined,
+  paramSchema: readonly ParamSchemaEntry[] | undefined,
+  assets: AssetRegistry,
+): ReadonlySet<string> | undefined {
+  return materialTextureFields(
+    shaderId,
+    paramSchema !== undefined
+      ? derive(paramSchema).textureFieldNames
+      : shaderId !== undefined
+        ? assets.materialShaderTextureFieldNames(shaderId)
+        : undefined,
+  );
+}
+
+/** Preserve authored-vs-default intent for the GPU resource readiness gate. */
+export function collectAuthoredMaterialTextureFields(
+  values: Readonly<Record<string, unknown>>,
+  shaderId: string | undefined,
+  paramSchema: readonly ParamSchemaEntry[] | undefined,
+  assets: AssetRegistry,
+): ReadonlySet<string> | undefined {
+  const fields = declaredMaterialTextureFields(shaderId, paramSchema, assets);
+  if (fields === undefined) return undefined;
+  const authored = new Set<string>();
+  for (const field of fields) {
+    if (Object.hasOwn(values, field)) authored.add(field);
   }
-  switch (module) {
-    case 'forgeax_material::standard':
-      return 'forgeax::default-standard-pbr';
-    case 'forgeax_material::unlit':
-      return 'forgeax::default-unlit';
-    case 'forgeax_material::sprite':
-      return 'forgeax::sprite';
-    case 'forgeax_material::sprite-lit':
-      return 'forgeax::sprite-lit';
-    default:
-      return module;
+  return authored.size === 0 ? undefined : authored;
+}
+
+/** Preserve explicit sampler intent; omitted samplers use the default sampler. */
+export function collectAuthoredMaterialSamplerFields(
+  values: Readonly<Record<string, unknown>>,
+  textureFields: ReadonlySet<string> | undefined,
+): ReadonlySet<string> | undefined {
+  const authored = new Set<string>();
+  for (const field of textureFields ?? []) {
+    if (materialTextureValue(values[field])?.sampler !== undefined) authored.add(field);
+  }
+  if (Object.hasOwn(values, 'sampler') && values.sampler !== undefined) {
+    authored.add('baseColorTexture');
+  }
+  return authored.size === 0 ? undefined : authored;
+}
+
+export { runtimeMaterialShaderId } from '@forgeax/engine-assets-runtime';
+
+/**
+ * Select the runtime identity for one resolved material. A cooked publication
+ * owns the composed material artifact identity; the authored pass module is
+ * the built-in fallback used before that publication is ready.
+ */
+export function materialProgramKeysForMaterial(
+  material: MaterialAsset,
+  assets: AssetRegistry,
+  context: MaterialCookRasterContext | undefined,
+): Readonly<Record<string, string>> | undefined {
+  return materialProgramKeysForAddress(material, assets, context, 'direct');
+}
+
+/** Raster remains usable without a ray program; a ray consumer must refuse that absence. */
+export function materialRayForMaterial(
+  material: MaterialAsset,
+  assets: AssetRegistry,
+  context: MaterialCookRasterContext | undefined,
+  effective: Parameters<typeof rayMaterialNeedsCoverage>[0],
+): MaterialSnapshot['materialRay'] {
+  if (
+    context === undefined ||
+    context.backend === 'webgl2' ||
+    context.capability !== 'storage-buffer' ||
+    context.geometry !== 'mesh' ||
+    context.instrumentation !== 'none'
+  )
+    return undefined;
+  const projection = assets.getMaterialProjectionForPayload(material);
+  const pass = projection?.passes.find((entry) => entry.name.toLowerCase() === 'forward');
+  if (projection === undefined || pass === undefined) return undefined;
+  try {
+    const selected = selectMaterialPassProgram(projection, pass.name, {
+      backend: context.backend,
+      capability: 'storage-buffer',
+      pipeline: 'ray',
+      geometry: 'mesh',
+      pass: 'ray-hit',
+      profile: 'forgeax-material-ray-v1',
+      toolchain: context.toolchain,
+      instrumentation: 'none',
+    });
+    return {
+      programKey: selected.specializationKey,
+      evaluateCoverage: rayMaterialNeedsCoverage(effective),
+    };
+  } catch (error) {
+    if (
+      isMissingMaterialProgram(error) &&
+      (error as { detail?: { matches?: number } }).detail?.matches === 0
+    )
+      return undefined;
+    throw error;
   }
 }
 
-function pipelineRenderState(
+/**
+ * Return the exact direct/scene-index programs selected for one renderer
+ * context.  The selection result is kept next to the key projection so
+ * consumers that validate a mesh contract can inspect the producer ABI
+ * without rebuilding pass/context matching from payload order.
+ */
+export interface MaterialProgramSelection {
+  readonly pass: string;
+  readonly context: MaterialCookRasterContext;
+  readonly specializationKey: string;
+  readonly abi?: MaterialProgramAbi;
+}
+
+export function materialProgramSelectionsForMaterial(
+  material: MaterialAsset,
+  assets: AssetRegistry,
+  context: MaterialCookRasterContext | undefined,
+  address: 'direct' | 'scene-index' = 'direct',
+): readonly MaterialProgramSelection[] | undefined {
+  const projection = assets.getMaterialProjectionForPayload(material);
+  if (projection === undefined) return undefined;
+  if (context === undefined)
+    throw new Error('Published material selection requires renderer-owned compiler context');
+  return projection.passes.map((pass) => {
+    const mode = String(
+      (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode ?? pass.name,
+    );
+    const selectedContext = materialProgramContextForPass(context, mode);
+    const selected = selectMaterialPassProgram(projection, pass.name, selectedContext, address);
+    return {
+      pass: pass.name,
+      context: selectedContext,
+      specializationKey: selected.specializationKey,
+      ...(selected.abi === undefined ? {} : { abi: selected.abi }),
+    };
+  });
+}
+
+/** Resolve the producer's scene-index program key for each cooked Pass. */
+export function materialSceneIndexProgramKeysForMaterial(
+  material: MaterialAsset,
+  assets: AssetRegistry,
+  context: MaterialCookRasterContext | undefined,
+): Readonly<Record<string, MaterialSceneIndexProgramKey>> | undefined {
+  const projection = assets.getMaterialProjectionForPayload(material);
+  if (projection === undefined) return undefined;
+  if (context === undefined)
+    throw new Error('Published material selection requires renderer-owned compiler context');
+  const entries: Record<string, MaterialSceneIndexProgramKey> = {};
+  for (const pass of projection.passes) {
+    const mode = String(
+      (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode ?? pass.name,
+    );
+    const selectedContext = materialProgramContextForPass(context, mode);
+    try {
+      const selected = selectMaterialPassProgram(
+        projection,
+        pass.name,
+        selectedContext,
+        'scene-index',
+      );
+      entries[pass.name] = {
+        specializationKey: selected.specializationKey,
+        pass: selectedContext.pass,
+      };
+    } catch (error) {
+      if (!isMissingMaterialProgram(error)) throw error;
+    }
+  }
+  return Object.keys(entries).length === 0 ? undefined : entries;
+}
+
+function isMissingMaterialProgram(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { readonly code?: unknown }).code === 'material-specialization-not-cooked'
+  );
+}
+
+function materialProgramKeysForAddress(
+  material: MaterialAsset,
+  assets: AssetRegistry,
+  context: MaterialCookRasterContext | undefined,
+  address: 'direct' | 'scene-index',
+): Readonly<Record<string, string>> | undefined {
+  const selections = materialProgramSelectionsForMaterial(material, assets, context, address);
+  return selections === undefined
+    ? undefined
+    : Object.fromEntries(
+        selections.map(({ pass, specializationKey }) => [pass, specializationKey]),
+      );
+}
+
+export function runtimeMaterialShaderIdForMaterial(
+  passes: readonly MaterialPass[],
+  programs: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+  const pass =
+    passes.find(
+      (pass) =>
+        !/shadow|depth/i.test(
+          String(
+            (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode ?? pass.name,
+          ),
+        ),
+    ) ?? passes[0];
+  if (pass === undefined) return undefined;
+  return programs === undefined
+    ? runtimeMaterialShaderId(pass.program.module, pass.name)
+    : programs[pass.name];
+}
+
+/** The authored Surface/root defines semantics; cooked program hashes do not. */
+export function materialSurfaceModel(
+  passes: readonly MaterialPass[],
+  declared: MaterialSurfaceModel | undefined,
+): MaterialSurfaceModel | undefined {
+  if (declared !== undefined) return declared;
+  const authored = runtimeMaterialShaderIdForMaterial(passes, undefined);
+  return isCanonicalStandardPbrMaterialShader(authored) &&
+    !passes.some(
+      (pass) =>
+        (pass.renderState?.tags as Readonly<Record<string, unknown>> | undefined)?.SurfaceKind ===
+        'full-custom',
+    )
+    ? 'standard'
+    : undefined;
+}
+
+export function pipelineRenderState(
   renderState:
     | (MaterialRenderState & {
         readonly tags?: Readonly<Record<string, string>>;
@@ -1130,23 +1768,33 @@ function pipelineRenderState(
         readonly stencilReference?: number;
       })
     | undefined,
+  outputs?: MaterialPass['outputs'],
 ): MaterialRenderState | undefined {
-  if (renderState === undefined) return undefined;
+  if (renderState === undefined && outputs === undefined) return undefined;
   const {
     cullMode,
     depthCompare,
     depthWriteEnabled,
+    colorWriteMask,
+    depthBias,
+    depthBiasSlopeScale,
+    depthBiasClamp,
     blend,
     alphaToCoverageEnabled,
     stencil,
     stencilReadMask,
     stencilWriteMask,
     frontFace,
-  } = renderState;
+  } = renderState ?? {};
   if (
+    outputs === undefined &&
     cullMode === undefined &&
     depthCompare === undefined &&
     depthWriteEnabled === undefined &&
+    colorWriteMask === undefined &&
+    depthBias === undefined &&
+    depthBiasSlopeScale === undefined &&
+    depthBiasClamp === undefined &&
     blend === undefined &&
     alphaToCoverageEnabled === undefined &&
     stencil === undefined &&
@@ -1157,9 +1805,14 @@ function pipelineRenderState(
     return undefined;
   }
   return {
+    ...(outputs !== undefined && { outputs }),
     ...(cullMode !== undefined && { cullMode }),
     ...(depthCompare !== undefined && { depthCompare }),
     ...(depthWriteEnabled !== undefined && { depthWriteEnabled }),
+    ...(colorWriteMask !== undefined && { colorWriteMask }),
+    ...(depthBias !== undefined && { depthBias }),
+    ...(depthBiasSlopeScale !== undefined && { depthBiasSlopeScale }),
+    ...(depthBiasClamp !== undefined && { depthBiasClamp }),
     ...(blend !== undefined && { blend }),
     ...(alphaToCoverageEnabled !== undefined && { alphaToCoverageEnabled }),
     ...(stencil !== undefined && { stencil }),
@@ -1167,6 +1820,62 @@ function pipelineRenderState(
     ...(stencilWriteMask !== undefined && { stencilWriteMask }),
     ...(frontFace !== undefined && { frontFace }),
   };
+}
+
+export function shadowCasterCpuReason(
+  material: MaterialSnapshot,
+  draw: GpuDrivenDrawSnapshot | undefined,
+  shadowEntries: readonly DispatchEntry[],
+  morph: MorphSnapshot | undefined,
+  skin: SkinPaletteReceipt | undefined,
+): ShadowCasterCpuReason | undefined {
+  if (shadowEntries.length !== 1) return 'multi-pass';
+  if (material.transparent === true || material.renderState?.blend !== undefined) {
+    return 'transparent';
+  }
+  if (morph !== undefined) return 'morph';
+  const shadowEntry = shadowEntries[0];
+  if (!supportsGpuShadowRenderState(shadowEntry?.renderState)) return 'unsupported-render-state';
+  if (draw === undefined) return 'missing-gpu-draw';
+  if (draw.prepared === undefined) return 'unprepared';
+  const preparedMaterial = draw.prepared.identity.material;
+  const preparedDeformation = draw.prepared.identity.deformation;
+  const materialContractMatches = preparedMaterial === material.materialShaderId;
+  const deformationContractMatches =
+    (skin === undefined && preparedDeformation === 'rigid') ||
+    (skin !== undefined && preparedDeformation === 'skin');
+  if (!materialContractMatches || !deformationContractMatches) return 'prepared-contract';
+  if (preparedDeformation === 'skin' && !hasFiniteOrderedSkinBounds(skin?.bounds)) {
+    return 'missing-skin-bounds';
+  }
+  return undefined;
+}
+
+function hasFiniteOrderedSkinBounds(bounds: Float32Array | undefined): bounds is Float32Array {
+  if (bounds === undefined || bounds.length !== 6) return false;
+  const minX = bounds[0];
+  const minY = bounds[1];
+  const minZ = bounds[2];
+  const maxX = bounds[3];
+  const maxY = bounds[4];
+  const maxZ = bounds[5];
+  return (
+    minX !== undefined &&
+    minY !== undefined &&
+    minZ !== undefined &&
+    maxX !== undefined &&
+    maxY !== undefined &&
+    maxZ !== undefined &&
+    Number.isFinite(minX) &&
+    Number.isFinite(minY) &&
+    Number.isFinite(minZ) &&
+    Number.isFinite(maxX) &&
+    Number.isFinite(maxY) &&
+    Number.isFinite(maxZ) &&
+    minX <= maxX &&
+    minY <= maxY &&
+    minZ <= maxZ
+  );
 }
 
 /**
@@ -1211,7 +1920,7 @@ interface GuidHandleInternEntry {
 
 const guidHandleInternByWorld = new WeakMap<World, Map<string, GuidHandleInternEntry>>();
 
-function internSharedRefFromGuid<B extends string>(
+export function internSharedRefFromGuid<B extends string>(
   world: World,
   assetsRef: AssetRegistry,
   guid: string,
@@ -1260,7 +1969,7 @@ function internSharedRefFromGuid<B extends string>(
  * A `number` paramValue (already a minted column handle) is not a GUID string so
  * it cannot be a freshly-catalogued video; it passes through as undefined here.
  */
-function resolveVideoFieldHandle(
+export function resolveVideoFieldHandle(
   value: unknown,
   world: World,
   assetsRef: AssetRegistry,
@@ -1277,7 +1986,7 @@ function resolveVideoFieldHandle(
   return internSharedRefFromGuid(world, assetsRef, textureGuid, 'VideoAsset');
 }
 
-function materialTextureValue(value: unknown): MaterialTextureValue | undefined {
+export function materialTextureValue(value: unknown): MaterialTextureValue | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const textureValue = value as Partial<MaterialTextureValue>;
   return typeof textureValue.texture === 'number' ||
@@ -1287,39 +1996,130 @@ function materialTextureValue(value: unknown): MaterialTextureValue | undefined 
     : undefined;
 }
 
-function assetReferenceText(value: unknown): string | undefined {
+export function assetReferenceText(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
   if (value instanceof Uint8Array && isAssetGuidBytes(value)) return AssetGuid.format(value);
   return undefined;
 }
 
-function isAssetGuidBytes(value: Uint8Array): value is AssetGuidBytes {
+export function isAssetGuidBytes(value: Uint8Array): value is AssetGuidBytes {
   return value.byteLength === 16;
 }
 
-function materialTextureRef(value: unknown): unknown {
+export function materialNormalScale(
+  values: Readonly<Record<string, unknown>>,
+): readonly [number, number] {
+  const scale = values.normalScale;
+  return Array.isArray(scale) &&
+    scale.length === 2 &&
+    Number.isFinite(scale[0]) &&
+    Number.isFinite(scale[1])
+    ? [scale[0], scale[1]]
+    : [1, 1];
+}
+
+export function materialTextureRef(value: unknown): unknown {
   return materialTextureValue(value)?.texture ?? value;
 }
 
-function collectMaterialTextureCoordinates(
+export function collectMaterialTextureCoordinates(
   values: Readonly<Record<string, unknown>>,
 ): Map<string, MaterialTextureCoordinates> {
   const out = new Map<string, MaterialTextureCoordinates>();
-  for (const field of [
-    'baseColorTexture',
-    'metallicRoughnessTexture',
-    'normalTexture',
-    'specularTintTexture',
-    'emissiveTexture',
-    'occlusionTexture',
-  ]) {
-    const coordinates = materialTextureValue(values[field])?.coordinates;
+  // Texture transforms belong to the value itself. Walking every authored
+  // value keeps the route closed when Standard gains another physical map
+  // without adding another renderer-side field inventory.
+  for (const [field, value] of Object.entries(values)) {
+    if (!field.endsWith('Texture')) continue;
+    const coordinates = materialTextureValue(value)?.coordinates;
     if (coordinates !== undefined) out.set(field, coordinates);
   }
   return out;
 }
 
-function collectMaterialTextureSamplers(
+/**
+ * Return the schema-owned fields that may carry a texture source handle.
+ * Numeric material values are otherwise scalar parameters (roughness,
+ * metallic, custom steps, ...), so probing them through SharedRefStore is
+ * both wasted work and an accidental dependency on slot-number collisions.
+ */
+export function materialTextureSourceFields(
+  schema: readonly ParamSchemaEntry[] | undefined,
+): ReadonlySet<string> | undefined {
+  if (schema === undefined) return undefined;
+  const fields = new Set<string>();
+  for (const entry of schema) {
+    if (entry.type.startsWith('texture')) fields.add(entry.name);
+  }
+  return fields;
+}
+
+export interface MaterialTextureSourceStats {
+  sourceFieldsVisited: number;
+  numericSharedRefProbes: number;
+  sourceCacheHits: number;
+  sourceCacheMisses: number;
+  producerRoutes: Record<string, number>;
+}
+
+/**
+ * Extract-local cache for numeric shared references. `null` is a deliberate
+ * negative entry: a handle that is not a runtime texture source must not be
+ * resolved repeatedly for every material field in the same frame.
+ */
+export type MaterialTextureSourceCache = Map<number, MaterialTextureSource | null>;
+
+export function collectMaterialTextureSources(
+  values: Readonly<Record<string, unknown>>,
+  world: World,
+  textureFields?: ReadonlySet<string>,
+  stats?: MaterialTextureSourceStats,
+  cache?: MaterialTextureSourceCache,
+): Map<string, MaterialTextureSource> {
+  const out = new Map<string, MaterialTextureSource>();
+  for (const [field, value] of Object.entries(values)) {
+    const structured = materialTextureValue(value);
+    const schemaKnown = textureFields !== undefined;
+    const schemaAdmitted = textureFields?.has(field) === true;
+    // With a known schema, only producer-admitted texture fields may carry a
+    // source handle. Without a schema, retain the historical numeric parse so
+    // an older producer can still publish a direct shared-ref value; its
+    // structured form is accepted on the same conservative path.
+    if (schemaKnown && !schemaAdmitted) continue;
+    const reference = structured?.texture ?? value;
+    if (stats !== undefined) stats.sourceFieldsVisited += 1;
+    if (typeof reference !== 'number') continue;
+    if (stats !== undefined) stats.numericSharedRefProbes += 1;
+    let source: MaterialTextureSource | undefined;
+    if (cache?.has(reference) === true) {
+      if (stats !== undefined) stats.sourceCacheHits += 1;
+      source = cache.get(reference) ?? undefined;
+    } else {
+      if (stats !== undefined) stats.sourceCacheMisses += 1;
+      const resolved = world.sharedRefs.resolve<'MaterialTextureSource', MaterialTextureSource>(
+        toShared<'MaterialTextureSource'>(reference),
+      );
+      if (!resolved.ok) {
+        cache?.set(reference, null);
+      } else {
+        const binding = isCanvasTextureSource(resolved.value)
+          ? resolved.value
+          : resolveRenderTargetMaterialSource(resolved.value);
+        cache?.set(reference, binding === undefined ? null : resolved.value);
+        source = binding === undefined ? undefined : resolved.value;
+      }
+    }
+    if (source === undefined) continue;
+    if (stats !== undefined) {
+      const route = isCanvasTextureSource(source) ? 'canvas' : 'renderTarget';
+      stats.producerRoutes[route] = (stats.producerRoutes[route] ?? 0) + 1;
+    }
+    out.set(field, source);
+  }
+  return out;
+}
+
+export function collectMaterialTextureSamplers(
   values: Readonly<Record<string, unknown>>,
   resolveSampler: (value: unknown) => Handle<'SamplerAsset', 'shared'> | undefined,
 ): Map<string, Handle<'SamplerAsset', 'shared'>> {
@@ -1342,11 +2142,11 @@ function collectMaterialTextureSamplers(
  * `AssetRegistry.materialShaderTextureFieldNames`). Each declared texture
  * field whose paramValue resolves to a handle lands in the returned map keyed
  * by field name; this is the single path through which an arbitrary number of user-region
- * textures (4 standard or 5+ custom, e.g. parallax `heightTexture`) flow.
+ * textures (8 Standard or 9+ custom, e.g. parallax `heightTexture`) flow.
  *
- * When the shader is not registered the built-in 4-field set is used so
- * standard materials still resolve. `emissiveTexture` / `occlusionTexture`
- * are engine-injection (lightmap) textures and are NOT part of this set.
+ * When the shader is not registered the built-in Standard field set is used
+ * so standard materials still resolve. Emissive and occlusion are ordinary
+ * schema-driven user-region textures in that set.
  *
  * feat-20260623-world-space-video-asset M4 / w14 (D-5): a field whose paramValue
  * catalogues to a VideoAsset is routed into `videoOut` (a VideoAsset-branded
@@ -1356,7 +2156,7 @@ function collectMaterialTextureSamplers(
  * `textureFieldNames` traversal set or it is never inspected (R-7) — that
  * membership is asserted in w13.
  */
-function collectUserRegionTextureHandles(
+export function collectUserRegionTextureHandles(
   pv: Readonly<Record<string, unknown>>,
   shaderId: string | undefined,
   paramSchema: readonly ParamSchemaEntry[] | undefined,
@@ -1376,7 +2176,7 @@ function collectUserRegionTextureHandles(
         : shaderId !== undefined
           ? assetsRef.materialShaderTextureFieldNames(shaderId)
           : undefined,
-    ) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
+    ) ?? BUILTIN_MATERIAL_TEXTURE_FIELDS;
   const out = new Map<string, Handle<'TextureAsset', 'shared'>>();
   for (const field of fields) {
     // D-5: a video-kind paramValue is routed to the transient path (videoOut),
@@ -1395,32 +2195,112 @@ function collectUserRegionTextureHandles(
 
 const ENGINE_INJECTED_TEXTURE_FIELDS = new Set(['emissiveTexture', 'occlusionTexture']);
 
-function isEngineInjectedTextureField(shaderId: string | undefined, fieldName: string): boolean {
+export function isEngineInjectedTextureField(
+  shaderId: string | undefined,
+  fieldName: string,
+): boolean {
   return isStandardPbrMaterialShader(shaderId) && ENGINE_INJECTED_TEXTURE_FIELDS.has(fieldName);
 }
 
-function materialParametersToParamSchema(
-  parameters: readonly MaterialParameter[],
+interface StandardSampleInputs {
+  readonly textureHandles: ReadonlyMap<string, number>;
+  readonly samplerHandles: ReadonlyMap<string, number>;
+  readonly textureCoordinates: ReadonlyMap<string, MaterialTextureCoordinates>;
+}
+
+function sameSampleCoordinates(
+  a: MaterialTextureCoordinates | undefined,
+  b: MaterialTextureCoordinates | undefined,
+): boolean {
+  return (
+    (a?.set ?? 0) === (b?.set ?? 0) &&
+    (a?.transform?.offset?.[0] ?? 0) === (b?.transform?.offset?.[0] ?? 0) &&
+    (a?.transform?.offset?.[1] ?? 0) === (b?.transform?.offset?.[1] ?? 0) &&
+    (a?.transform?.scale?.[0] ?? 1) === (b?.transform?.scale?.[0] ?? 1) &&
+    (a?.transform?.scale?.[1] ?? 1) === (b?.transform?.scale?.[1] ?? 1) &&
+    (a?.transform?.rotation ?? 0) === (b?.transform?.rotation ?? 0) &&
+    (a?.physicalUvScale?.[0] ?? 1) === (b?.physicalUvScale?.[0] ?? 1) &&
+    (a?.physicalUvScale?.[1] ?? 1) === (b?.physicalUvScale?.[1] ?? 1)
+  );
+}
+
+export function materialStandardTextureMask(
+  parameters: readonly MaterialParameter[] | undefined,
   shaderId: string | undefined,
+  values: Readonly<Record<string, unknown>>,
+  sampling?: StandardSampleInputs,
+): number | undefined {
+  if (!isCanonicalStandardPbrMaterialShader(shaderId)) return undefined;
+  const presence = standardTextureMask(
+    // Canonical materials may provide values without redeclaring the root
+    // schema. Pruning must agree with the texture binder in that route too.
+    DEFAULT_STANDARD_PBR_PARAM_SCHEMA.filter(
+      (entry) =>
+        entry.type === 'texture2d' &&
+        (values[entry.name] !== undefined ||
+          parameters?.some(
+            (parameter) => parameter.name === entry.name && parameter.default !== undefined,
+          )),
+    ),
+  );
+  if (sampling === undefined) return presence;
+  return (
+    presence +
+    standardSampleReuseMask(presence, (source, target) => {
+      const texture = sampling.textureHandles.get(source);
+      if (texture === undefined || texture !== sampling.textureHandles.get(target)) return false;
+      if (sampling.samplerHandles.get(source) !== sampling.samplerHandles.get(target)) return false;
+      return sameSampleCoordinates(
+        sampling.textureCoordinates.get(source),
+        sampling.textureCoordinates.get(target),
+      );
+    })
+  );
+}
+
+/**
+ * Project one material's authoring parameters into the runtime ABI.
+ *
+ * Engine-owned Standard roots are compiled against the canonical superset
+ * schema even when the authoring asset omits optional physical fields. A
+ * compact authored schema would move later UBO members (for example `ior`)
+ * into the wrong slots. Custom material roots keep their own published
+ * parameter projection.
+ */
+export function materialParametersToParamSchema(
+  parameters: readonly MaterialParameter[],
+  shaderId?: string,
 ): readonly ParamSchemaEntry[] {
-  const engineInjectedTextureFields = isStandardPbrMaterialShader(shaderId)
-    ? ENGINE_INJECTED_TEXTURE_FIELDS
-    : undefined;
-  return parameters.flatMap((parameter): ParamSchemaEntry[] => {
-    // Boolean material values are runtime-only and have no UBO representation.
-    if (parameter.type === 'bool') return [];
-    if (parameter.type === 'texture') {
-      if (engineInjectedTextureFields?.has(parameter.name) === true) return [];
-      return [{ name: parameter.name, type: 'texture2d' }];
-    }
-    return [
-      {
-        name: parameter.name,
-        type: parameter.type,
-        ...(parameter.colorSpace === undefined ? {} : { colorSpace: parameter.colorSpace }),
-      },
-    ];
-  });
+  if (isCanonicalStandardPbrMaterialShader(shaderId)) return STANDARD_PIPELINE_PARAM_SCHEMA;
+  return projectMaterialParametersToParamSchema(parameters);
+}
+
+/**
+ * Select the parameter ABI for one resolved material. The canonical Standard
+ * schema is valid only for the selected built-in program. A published program
+ * uses the same authored parameter projection as the cooker, even when its
+ * Surface module is Engine-owned.
+ */
+export function materialParamSchemaForMaterial(
+  parameters: readonly MaterialParameter[],
+  selectedShaderId: string | undefined,
+  passes: readonly MaterialPass[],
+): readonly ParamSchemaEntry[] {
+  const firstPass =
+    passes.find(
+      (pass) =>
+        !/shadow|depth/i.test(
+          String(
+            (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode ?? pass.name,
+          ),
+        ),
+    ) ?? passes[0];
+  const surfaceModule = firstPass?.program.moduleSlots?.surface;
+  const schemaShaderId =
+    surfaceModule === undefined || surfaceModule === DEFAULT_STANDARD_SURFACE_MODULE
+      ? selectedShaderId
+      : undefined;
+  return materialParametersToParamSchema(parameters, schemaShaderId);
 }
 
 /**
@@ -1429,7 +2309,7 @@ function materialParametersToParamSchema(
  * materials commonly omit `parameters`, while the shader registry still owns
  * the complete parameter contract.
  */
-function materialColorParameterSchema(
+export function materialColorParameterSchema(
   parameters: readonly MaterialParameter[],
   shaderId: string | undefined,
   assets: AssetRegistry,
@@ -1447,7 +2327,7 @@ function materialColorParameterSchema(
 
 const MATERIAL_PARENT_CHAIN_LIMIT = 128;
 
-function isDeepFrozen(value: unknown, seen = new Set<object>()): boolean {
+export function isDeepFrozen(value: unknown, seen = new Set<object>()): boolean {
   if (typeof value !== 'object' || value === null) return true;
   if (seen.has(value)) return true;
   if (!Object.isFrozen(value)) return false;
@@ -1464,7 +2344,7 @@ function isDeepFrozen(value: unknown, seen = new Set<object>()): boolean {
  * validation must walk the same chain on every cross-frame read. A malformed
  * or cyclic chain is deliberately not cacheable.
  */
-function captureMaterialCacheChain(
+export function captureMaterialCacheChain(
   root: MaterialAsset,
   assets: AssetRegistry,
 ): readonly MaterialCacheChainIdentity[] | undefined {
@@ -1486,7 +2366,7 @@ function captureMaterialCacheChain(
   return undefined;
 }
 
-function readPersistentMaterialSnapshot(
+export function readPersistentMaterialSnapshot(
   cache: MaterialSnapshotCache | undefined,
   handleRaw: number,
   assets: AssetRegistry,
@@ -1513,7 +2393,7 @@ function readPersistentMaterialSnapshot(
  * epoch changed; asking ECS to resolve that root before checking the epoch
  * defeats the cross-frame cache on the ordinary stable frame.
  */
-function readStablePersistentMaterialSnapshot(
+export function readStablePersistentMaterialSnapshot(
   cache: MaterialSnapshotCache | undefined,
   handleRaw: number,
   assets: AssetRegistry,
@@ -1526,7 +2406,7 @@ function readStablePersistentMaterialSnapshot(
     : undefined;
 }
 
-function storeMaterialSnapshot(
+export function storeMaterialSnapshot(
   cache: MaterialSnapshotCache,
   handleRaw: number,
   snapshot: MaterialSnapshot,
@@ -1567,6 +2447,9 @@ export function resolveMaterialSnapshot(
   assetsRef: AssetRegistry,
   materialSnapshotCache?: MaterialSnapshotCache,
   persistentMaterialSnapshotCache?: MaterialSnapshotCache,
+  materialContext?: MaterialCookRasterContext,
+  materialTextureSourceStats?: MaterialTextureSourceStats,
+  materialTextureSourceCache?: MaterialTextureSourceCache,
 ): MaterialSnapshot {
   if (handleRaw === 0) return defaultMaterialSnapshot(handleRaw);
   const cached = materialSnapshotCache?.get(handleRaw);
@@ -1598,10 +2481,21 @@ export function resolveMaterialSnapshot(
   if (!resolvedResult.ok) return defaultMaterialSnapshot(handleRaw);
   const resolved = resolvedResult.value;
   const allPasses = resolved.passes;
-  const firstPassShader =
-    allPasses.length > 0
-      ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
-      : undefined;
+  // Numeric World content changes values, never the immutable program owner.
+  const source = world.sharedRefs.resolve<string, Asset>(tagged);
+  const programOwner = source.ok && source.value.kind === 'material' ? source.value : asset;
+  const materialProgramKeys = materialProgramKeysForMaterial(
+    programOwner,
+    assetsRef,
+    materialContext,
+  );
+  const materialSceneIndexProgramKeys = materialSceneIndexProgramKeysForMaterial(
+    programOwner,
+    assetsRef,
+    materialContext,
+  );
+  const materialRay = materialRayForMaterial(programOwner, assetsRef, materialContext, resolved);
+  const firstPassShader = runtimeMaterialShaderIdForMaterial(allPasses, materialProgramKeys);
   const pv = materialValuesToLinearRuntime(
     resolved.values,
     materialColorParameterSchema(resolved.parameters ?? [], firstPassShader, assetsRef),
@@ -1615,10 +2509,7 @@ export function resolveMaterialSnapshot(
   );
   const metallicPv = typeof pv.metallic === 'number' ? pv.metallic : 0;
   const roughnessPv = typeof pv.roughness === 'number' ? pv.roughness : 0.5;
-  const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
-  const clearcoatRoughnessPv =
-    typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
-  const specularTintPv = pv.specularTint as readonly number[] | undefined;
+  const specularColorPv = pv.specularColor as readonly number[] | undefined;
   const normalScalePv = materialNormalScale(pv);
 
   const paramSnap: Record<string, number | number[] | string> = {};
@@ -1629,9 +2520,10 @@ export function resolveMaterialSnapshot(
       paramSnap[k] = v as number[];
     }
   }
-  const materialParamSchema = materialParametersToParamSchema(
+  const materialParamSchema = materialParamSchemaForMaterial(
     resolved.parameters ?? [],
     firstPassShader,
+    allPasses,
   );
   // feat-20260614 M8 (D-19): texture / sampler values are embedded GUIDs
   // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
@@ -1657,8 +2549,7 @@ export function resolveMaterialSnapshot(
   // feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): iterate the
   // shader's derive(paramSchema).textureFieldNames SSOT instead of a hardcoded
   // user-region field list, so an Nth texture (e.g. parallax heightTexture)
-  // resolves through the same path. emissive/occlusion are engine-injection
-  // (lightmap) textures, NOT in textureFieldNames, so they keep named reads.
+  // resolves through the same path, including emissive/occlusion fields.
   const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
   const textureHandles = collectUserRegionTextureHandles(
     pv,
@@ -1671,6 +2562,13 @@ export function resolveMaterialSnapshot(
   );
   const samplerHandles = collectMaterialTextureSamplers(pv, (value) =>
     resolveTexLike(materialTextureRef(value), 'SamplerAsset'),
+  );
+  const textureSources = collectMaterialTextureSources(
+    pv,
+    world,
+    materialTextureSourceFields(materialParamSchema.length > 0 ? materialParamSchema : undefined),
+    materialTextureSourceStats,
+    materialTextureSourceCache,
   );
   const emissiveTextureHandle = resolveTexLike(
     materialTextureRef(pv.emissiveTexture),
@@ -1686,27 +2584,42 @@ export function resolveMaterialSnapshot(
   const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
   const normalTextureHandle = textureHandles.get('normalTexture');
   const emissivePv = pv.emissive as readonly number[] | undefined;
+  const surfaceModel = materialSurfaceModel(allPasses, resolved.surface?.model);
   const snapshot: MaterialSnapshot = {
     baseColor,
     metallic: metallicPv,
     roughness: roughnessPv,
-    clearcoat: clearcoatPv,
-    clearcoatRoughness: clearcoatRoughnessPv,
-    ...(specularTintPv !== undefined && {
-      specularTint: [
-        specularTintPv[0] ?? 1,
-        specularTintPv[1] ?? 1,
-        specularTintPv[2] ?? 1,
+    ...(surfaceModel === undefined ? {} : { surfaceModel }),
+    deferredPass: allPasses.some(
+      (pass) =>
+        String(
+          (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode ?? pass.name,
+        ) === 'Deferred',
+    ),
+    ...(specularColorPv !== undefined && {
+      specularColor: [
+        specularColorPv[0] ?? 1,
+        specularColorPv[1] ?? 1,
+        specularColorPv[2] ?? 1,
       ] as readonly [number, number, number],
     }),
     normalScale: normalScalePv,
     materialShaderId: firstPassShader,
+    materialProgramKeys,
+    materialSceneIndexProgramKeys,
+    materialRay,
     materialHandle: handleRaw,
-    renderState: pipelineRenderState(allPasses[0]?.renderState),
+    renderState: pipelineRenderState(allPasses[0]?.renderState, allPasses[0]?.outputs),
     paramSnapshot: paramSnap,
     ...(materialParamSchema.length > 0 && { materialParamSchema }),
+    standardTextureMask: materialStandardTextureMask(resolved.parameters, firstPassShader, pv, {
+      textureHandles,
+      samplerHandles,
+      textureCoordinates,
+    }),
     ...(textureCoordinates.size > 0 && { textureCoordinates }),
     ...(textureHandles.size > 0 && { textureHandles }),
+    ...(textureSources.size > 0 && { textureSources }),
     ...(videoTextureFields.size > 0 && { videoTextureFields }),
     ...(samplerHandles.size > 0 && { samplerHandles }),
     ...(baseColorTextureHandle !== undefined && { baseColorTexture: baseColorTextureHandle }),
@@ -1801,80 +2714,6 @@ export interface ExtractPipelineSurface {
  * @internal exported for w6/w7 testing only; production callers route through
  *   extractFrame which validates cascadeCount/splitLambda via component schema.
  */
-/**
- * Compute the 8 world-space corner points of a camera frustum slice.
- *
- * Uses mat4.unproject to map NDC cube corners back to world space.
- * The slice is defined by view-space nearZ and farZ depths.
- *
- * For a WebGPU perspective matrix, ndcZ(viewZ) = camFar * (viewZ - camNear) /
- * (viewZ * (camFar - camNear)). We compute the ndcZ for each slice boundary
- * and unproject directly.
- *
- * @param vp - camera view-projection matrix (column-major 16 floats)
- * @param camNear - camera near plane (used to derive NDC mapping)
- * @param camFar - camera far plane (used to derive NDC mapping)
- * @param nearZ - near depth of the frustum slice (view-space, positive)
- * @param farZ - far depth of the frustum slice (view-space, positive)
- * @returns Array of 8 Vec3 world-space corner positions.
- */
-function computeFrustumCorners(
-  vp: Mat4,
-  camNear: number,
-  camFar: number,
-  nearZ: number,
-  farZ: number,
-  projection: 'perspective' | 'orthographic',
-): Vec3[] {
-  const invVP = mat4.create();
-  mat4.invert(invVP, vp);
-  const corners: Vec3[] = [];
-
-  // NDC z mapping is projection-dependent (WebGPU clip-space z in [0,1]):
-  //   perspective:  ndc(z) = camFar * (z - camNear) / (z * (camFar - camNear))
-  //   orthographic: ndc(z) = (z - camNear) / (camFar - camNear)
-  // feat-20260613-csm M6 / w22: orthographic cameras silently produced
-  // garbage NDC z (perspective formula divides by viewZ, but ortho NDC is
-  // linear), which mapped the cascade slab back to a degenerate world-space
-  // corner set and the AABB-fit collapsed to near zero -- shadow_caster
-  // wrote its triangles outside the [-1,1] clip volume so the depth
-  // attachment stayed at clear=1.0 (root cause for shadow-m2 / shadow-m3 /
-  // shadow-opt-out dawn red surfaced after w20's host-side ortho fix).
-  const span = camFar - camNear;
-  const ndcNear =
-    projection === 'orthographic'
-      ? (nearZ - camNear) / span
-      : (camFar * (nearZ - camNear)) / (nearZ * span);
-  const ndcFar =
-    projection === 'orthographic'
-      ? (farZ - camNear) / span
-      : (camFar * (farZ - camNear)) / (farZ * span);
-
-  const signs = [-1, 1];
-  for (const sx of signs) {
-    for (const sy of signs) {
-      corners.push(unprojectNDC(invVP, sx, sy, ndcNear));
-    }
-  }
-  for (const sx of signs) {
-    for (const sy of signs) {
-      corners.push(unprojectNDC(invVP, sx, sy, ndcFar));
-    }
-  }
-
-  return corners;
-}
-
-/**
- * Unproject a single NDC point to world space.
- */
-function unprojectNDC(invVP: Mat4, ndcX: number, ndcY: number, ndcZ: number): Vec3 {
-  const ndc = vec3.create(ndcX, ndcY, ndcZ);
-  const ws = vec3.create();
-  mat4.unproject(ws, ndc, invVP);
-  return ws;
-}
-
 export function pssmSplit(
   nearPlane: number,
   farPlane: number,
@@ -1906,41 +2745,15 @@ export function pssmSplit(
 // requirements §5.3): 6-face view-proj matrix table for one omnidirectional
 // shadow caster.
 //
-// Face order matches WebGPU cube layer convention (also LearnOpenGL 5.3.2):
-//   0 (+X) | look=(+1, 0, 0) | up=(0, -1, 0)
-//   1 (-X) | look=(-1, 0, 0) | up=(0, -1, 0)
-//   2 (+Y) | look=(0, +1, 0) | up=(0,  0, +1)
-//   3 (-Y) | look=(0, -1, 0) | up=(0,  0, -1)
-//   4 (+Z) | look=(0, 0, +1) | up=(0, -1, 0)
-//   5 (-Z) | look=(0, 0, -1) | up=(0, -1, 0)
-//
-// Projection: WebGPU [0, 1] NDC perspective (mat4.perspective short name).
-// fov=90deg, aspect=1, near/far from PointLightShadow component.
-const POINT_SHADOW_FACE_LOOK: readonly Vec3[] = [
-  vec3.create(1, 0, 0),
-  vec3.create(-1, 0, 0),
-  vec3.create(0, 1, 0),
-  vec3.create(0, -1, 0),
-  vec3.create(0, 0, 1),
-  vec3.create(0, 0, -1),
-];
-const POINT_SHADOW_FACE_UP: readonly Vec3[] = [
-  vec3.create(0, -1, 0),
-  vec3.create(0, -1, 0),
-  vec3.create(0, 0, 1),
-  vec3.create(0, 0, -1),
-  vec3.create(0, -1, 0),
-  vec3.create(0, -1, 0),
-];
-
 /**
  * Build 6 face view-proj matrices for an omnidirectional shadow caster
  * (point-light cube map). Returns 6 mat4 (column-major 16-float each) in face
- * order [+X, -X, +Y, -Y, +Z, -Z] matching WebGPU cube layer convention.
+ * order [+X, -X, +Y, -Y, +Z, -Z] matching the WebGPU cube-camera layer
+ * convention.
  *
- * Each matrix is `proj * view` where:
- *   - `view = lookAt(lightPos, lightPos + faceLook[i], faceUp[i])`
- *   - `proj = perspective(PI/2, 1, near, far)` (WebGPU [0, 1] NDC short name)
+ * Derive face directions from the shared CubeCamera owner, then reflect clip X
+ * to match WebGPU cubemap texel orientation. The point-shadow raster lane
+ * mirrors authored front-face winding when it uses these reflected matrices.
  *
  * The returned `Mat4[]` length is always exactly 6. Caller can flatten into a
  * 96-float (6 mat4) Float32Array for UBO upload (T-M1-7).
@@ -1950,29 +2763,10 @@ const POINT_SHADOW_FACE_UP: readonly Vec3[] = [
  * @param far  far plane distance  (PointLightShadow.farPlane)
  */
 export function buildPointShadowMatrices(lightPos: Vec3, near: number, far: number): Mat4[] {
-  const fovY = Math.PI / 2; // 90 deg
-  const aspect = 1;
-  const proj = mat4.create();
-  mat4.perspective(proj, fovY, aspect, near, far);
-
-  const out: Mat4[] = [];
-  for (let i = 0; i < 6; i++) {
-    // biome-ignore lint/style/noNonNullAssertion: i in [0..6) and arrays are length-6 const
-    const look = POINT_SHADOW_FACE_LOOK[i]!;
-    // biome-ignore lint/style/noNonNullAssertion: i in [0..6) and arrays are length-6 const
-    const up = POINT_SHADOW_FACE_UP[i]!;
-    const target = vec3.create(
-      (lightPos[0] ?? 0) + (look[0] ?? 0),
-      (lightPos[1] ?? 0) + (look[1] ?? 0),
-      (lightPos[2] ?? 0) + (look[2] ?? 0),
-    );
-    const view = mat4.create();
-    mat4.lookAt(view, lightPos, target, up);
-    const vp = mat4.create();
-    mat4.multiply(vp, proj, view);
-    out.push(vp);
-  }
-  return out;
+  return buildCubeCameraFaceViews({ position: lightPos, near, far }).map(({ viewProjection }) => {
+    for (const offset of [0, 4, 8, 12]) viewProjection[offset] = -(viewProjection[offset] ?? 0);
+    return viewProjection;
+  });
 }
 
 /**
@@ -2010,6 +2804,9 @@ export interface DirectionalCsmConfig {
   readonly cascadeBlend: number;
   readonly mapSize: number;
   readonly shadowDistance: number;
+  readonly shadowFilter: number;
+  readonly shadowAngularRadius: number;
+  readonly maxPenumbraTexels: number;
 }
 
 /**
@@ -2024,6 +2821,70 @@ export interface DirectionalCsmResult {
   readonly cascadeCount: number;
   readonly cascadeBlend: number;
   readonly shadowMapSize: number;
+  readonly directionalShadowQuality: DirectionalShadowQuality;
+}
+
+/** Pages per directional cascade edge; a cascade center snaps to whole pages. */
+const DIRECTIONAL_SHADOW_PAGES = 16;
+
+/**
+ * World-space bounding sphere of the camera view slice between view depths
+ * `near` and `far`. The radius derives only from the projection parameters,
+ * so it is identical for every camera orientation and position.
+ */
+function cascadeSliceSphere(
+  camera: CsmCameraData,
+  near: number,
+  far: number,
+): { readonly center: Vec3; readonly radius: number } {
+  // A singular camera transform reads as identity, matching mat4.invert.
+  const world = mat4.invert(mat4.create(), mat4.invert(mat4.create(), camera.world));
+  const forward = vec3.normalize(
+    vec3.create(),
+    vec3.create(-(world[8] ?? 0), -(world[9] ?? 0), -(world[10] ?? 1)),
+  );
+  const origin = vec3.create(world[12] ?? 0, world[13] ?? 0, world[14] ?? 0);
+  let depth: number;
+  let radius: number;
+  let offsetX = 0;
+  let offsetY = 0;
+  if (camera.projection === 'orthographic') {
+    const halfWidth = (camera.orthoRight - camera.orthoLeft) * 0.5;
+    const halfHeight = (camera.orthoTop - camera.orthoBottom) * 0.5;
+    offsetX = (camera.orthoRight + camera.orthoLeft) * 0.5;
+    offsetY = (camera.orthoTop + camera.orthoBottom) * 0.5;
+    depth = (near + far) * 0.5;
+    radius = Math.hypot(halfWidth, halfHeight, (far - near) * 0.5);
+  } else {
+    const tanY = Math.tan(camera.fov * 0.5);
+    const tanX = tanY * camera.aspect;
+    const slope = tanX * tanX + tanY * tanY;
+    depth = Math.min(far, (near + far) * 0.5 * (1 + slope));
+    radius = Math.sqrt((far - depth) ** 2 + far * far * slope);
+  }
+  const right = vec3.normalize(
+    vec3.create(),
+    vec3.create(world[0] ?? 1, world[1] ?? 0, world[2] ?? 0),
+  );
+  const up = vec3.normalize(
+    vec3.create(),
+    vec3.create(world[4] ?? 0, world[5] ?? 1, world[6] ?? 0),
+  );
+  const center = vec3.create(
+    (origin[0] ?? 0) +
+      (forward[0] ?? 0) * depth +
+      (right[0] ?? 0) * offsetX +
+      (up[0] ?? 0) * offsetY,
+    (origin[1] ?? 0) +
+      (forward[1] ?? 0) * depth +
+      (right[1] ?? 0) * offsetX +
+      (up[1] ?? 0) * offsetY,
+    (origin[2] ?? 0) +
+      (forward[2] ?? 0) * depth +
+      (right[2] ?? 0) * offsetX +
+      (up[2] ?? 0) * offsetY,
+  );
+  return { center, radius };
 }
 
 /**
@@ -2038,9 +2899,10 @@ export interface DirectionalCsmResult {
  * the caller leaves lightViewProj undefined rather than emitting zero matrices
  * that the WGSL reader would sample as NaN → "fully lit").
  *
- * Byte-identical to the prior inline computation for the single-world case
- * (same PSSM lambda, same toward-light Z reach RC-2 fix, same clip-space
- * matrix / tile-placement-in-shader split).
+ * Keeps the prior PSSM lambda, toward-light Z reach RC-2 fix, and clip-space
+ * matrix / tile-placement-in-shader split. The XY fit is additionally snapped
+ * to the cascade's shadow-texel grid so camera motion cannot continuously
+ * shimmer a receiver across raster texel boundaries.
  */
 export function computeDirectionalCsm(
   direction: Vec3,
@@ -2056,9 +2918,6 @@ export function computeDirectionalCsm(
 
   // PSSM split planes: [camera near, shadowDistance], not the camera far.
   const splits = pssmSplit(sNear, sFar, cascadeCount, config.splitLambda);
-  const paddedSplits = new Float32Array(4);
-  for (let i = 0; i < splits.length; i++) paddedSplits[i] = splits[i] ?? 0;
-
   // Light view matrix: camera at origin, looking along the light direction.
   const lightDirN = vec3.normalize(vec3.create(), direction);
   const lightTarget = vec3.create(lightDirN[0] ?? 0, lightDirN[1] ?? 0, lightDirN[2] ?? 0);
@@ -2069,99 +2928,81 @@ export function computeDirectionalCsm(
   // frustum cannot be fit — bail so the caller emits no matrices (undefined),
   // NOT zero matrices (which read as NaN in the shadow shader → no shadow).
   if (cameraData === undefined) return null;
-  const camProj = mat4.create();
-  if (cameraData.projection === 'orthographic') {
-    mat4.orthographic(
-      camProj,
-      cameraData.orthoLeft,
-      cameraData.orthoRight,
-      cameraData.orthoBottom,
-      cameraData.orthoTop,
-      cameraData.near,
-      cameraData.far,
-    );
-  } else {
-    mat4.perspective(camProj, cameraData.fov, cameraData.aspect, cameraData.near, cameraData.far);
-  }
-  const camView = mat4.create();
-  mat4.invert(camView, cameraData.world);
-  const cameraVP = mat4.create();
-  mat4.multiply(cameraVP, camProj, camView);
-
   const resultLightViewProjs: Float32Array[] = [];
+  const cascadeFits: DirectionalShadowCascadeFit[] = [];
+  const full = cascadeSliceSphere(cameraData, sNear, sFar);
+  const pageTexels = config.mapSize / DIRECTIONAL_SHADOW_PAGES;
+  const usableTexels = config.mapSize - 2 * pageTexels;
 
-  // bug-20260619 RC-2 (AC-05): toward-light Z reach. Extend the near (toward-
-  // light) bound of EVERY cascade to the toward-light extreme of the WHOLE
-  // shadow frustum (sNear..sFar) so casters between the light and a slice are
-  // admitted; X/Y stays per-cascade tight. Larger light-space z == closer to
-  // the light (lookAt forward = eye-target), so the full-frustum max-z is the
-  // toward-light reach used as -maxZ (the ortho near plane) per cascade.
-  let lightSpaceMaxZFull = -Infinity;
-  const fullCorners = computeFrustumCorners(
-    cameraVP,
-    cameraData.near,
-    cameraData.far,
-    sNear,
-    sFar,
-    cameraData.projection,
-  );
-  for (const ws of fullCorners) {
-    const ls = vec3.create();
-    mat4.transformVec3(ls, lightView, ws);
-    if ((ls[2] ?? 0) > lightSpaceMaxZFull) lightSpaceMaxZFull = ls[2] ?? 0;
-  }
-
-  // Pre-allocate 4-cascade array; fill in the effective cascades.
   for (let cIdx = 0; cIdx < 4; cIdx++) {
     if (cIdx >= cascadeCount) {
       resultLightViewProjs.push(new Float32Array(16));
       continue;
     }
-    const cascadeNear = cIdx === 0 ? sNear : (splits[cIdx - 1] ?? sFar);
+    // The receiver blends into this cascade before the preceding split.
+    // Fit that same overlap instead of sampling outside the next projection.
+    const previousSplit = splits[cIdx - 1] ?? sNear;
+    const cascadeNear =
+      cIdx === 0 ? sNear : Math.max(sNear, previousSplit * (1 - config.cascadeBlend));
     const cascadeFar = splits[cIdx] ?? sFar;
-    const corners = computeFrustumCorners(
-      cameraVP,
-      cameraData.near,
-      cameraData.far,
-      cascadeNear,
-      cascadeFar,
-      cameraData.projection,
-    );
-    const lightMVP = mat4.clone(lightView);
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-    for (const ws of corners) {
-      const ls = vec3.create();
-      mat4.transformVec3(ls, lightMVP, ws);
-      if ((ls[0] ?? 0) < minX) minX = ls[0] ?? 0;
-      if ((ls[0] ?? 0) > maxX) maxX = ls[0] ?? 0;
-      if ((ls[1] ?? 0) < minY) minY = ls[1] ?? 0;
-      if ((ls[1] ?? 0) > maxY) maxY = ls[1] ?? 0;
-      if ((ls[2] ?? 0) < minZ) minZ = ls[2] ?? 0;
-      if ((ls[2] ?? 0) > maxZ) maxZ = ls[2] ?? 0;
-    }
-    // Orthographic projection from light-space AABB. RC-2: whole-frustum
-    // toward-light extreme for the near bound; per-cascade far (minZ) + X/Y.
-    const nearZ = Math.max(maxZ, lightSpaceMaxZFull);
+    // A bounding sphere of the slice keeps the extent independent of camera
+    // rotation, and snapping its light-space center to whole pages keeps the
+    // projection bit-identical until the camera crosses a page. One page of
+    // margin on every side contains the sphere across any snap. The retained
+    // shadow cache compares matrices exactly, so this stability is what lets
+    // a moving camera reuse unchanged cascades.
+    const sphere = cascadeSliceSphere(cameraData, cascadeNear, cascadeFar);
+    const center = vec3.create();
+    mat4.transformVec3(center, lightView, sphere.center);
+    const texel = (2 * sphere.radius) / usableTexels;
+    const page = pageTexels * texel;
+    const snap = (value: number) => Math.round(value / page) * page;
+    const centerX = snap(center[0] ?? 0);
+    const centerY = snap(center[1] ?? 0);
+    const centerZ = snap(center[2] ?? 0);
+    const half = sphere.radius + page;
+    const minX = centerX - half;
+    const maxX = centerX + half;
+    const minY = centerY - half;
+    const maxY = centerY + half;
+    const minZ = centerZ - half;
+    // A receiver's caster can sit behind the display camera, toward the light
+    // beyond the receiver slice. Reaching past the whole shadow range's sphere
+    // admits every such caster without a rotation-dependent bound.
+    const nearZ = centerZ + half + 2 * full.radius;
     const orthoProj = mat4.create();
-    mat4.orthographic(orthoProj, minX, maxX, minY, maxY, -nearZ, -minZ);
+    mat4.orthographicReverseZ(orthoProj, minX, maxX, maxY, minY, -nearZ, -minZ);
     // lightViewProj = orthoProj * lightView — pure clip-space [-1,1]. Atlas
     // tile placement is handled by the per-cascade viewport + fragment-side UV
     // math (evalDirectional), so shadow_caster.gl_Position stays clip-space.
-    void cIdx;
+    cascadeFits.push({
+      split: splits[cIdx] ?? sFar,
+      minX,
+      maxX,
+      minY,
+      maxY,
+      minZ,
+      maxZ: nearZ,
+    });
     resultLightViewProjs.push(new Float32Array(mat4.multiply(mat4.create(), orthoProj, lightView)));
   }
 
+  const projection = projectDirectionalShadow(
+    cascadeFits,
+    config.mapSize,
+    config.shadowFilter ?? 2,
+    config.shadowAngularRadius ?? 0.00465,
+    config.maxPenumbraTexels ?? 32,
+  );
+  if (projection === undefined) return null;
+
   return {
     lightViewProj: resultLightViewProjs,
-    splitPlanes: paddedSplits,
+    splitPlanes: projection.splitPlanes,
     cascadeCount,
     cascadeBlend: config.cascadeBlend,
     shadowMapSize: config.mapSize,
+    directionalShadowQuality: projection.directionalShadowQuality,
   };
 }
 
@@ -2178,38 +3019,157 @@ export function computeDirectionalCsm(
 export interface ExtractFramesOwner {
   readonly cameraOwner: number;
   readonly resourceOwner: number;
+  /** Explicit display-camera entity selected by the frame owner. */
+  readonly cameraEntityKey?: number;
 }
 
 export interface PreparedExtractContext {
+  readonly materialContext?: MaterialCookRasterContext | undefined;
   readonly assets: AssetRegistry | null | undefined;
   readonly pipelineState: ExtractPipelineSurface | null | undefined;
   readonly materialSnapshotCache: MaterialSnapshotCache | undefined;
+  /** `undefined` keeps direct extractFrame's local Fog semantics; `null` means
+   * the frame owner already selected that no Fog is present for this world. */
+  readonly resourceOwnerFog: FogFrame | null | undefined;
   readonly cull: 'self' | 'none' | 'external';
   readonly cullCameras: readonly CameraSnapshot[] | undefined;
-  readonly hierarchy: SceneHierarchySnapshot;
+  /** Explicit display-camera entity for this world's camera-owner extract. */
+  readonly cameraEntityKey?: number;
+  readonly viewExtent?: { readonly width: number; readonly height: number };
+  readonly renderables: 'full' | 'none';
+  readonly renderableEntities: ReadonlySet<number> | undefined;
+  readonly retainHidden: boolean;
+  /** World identity used to form cross-world producer ownership keys. */
+  readonly worldId: number;
   readonly visibility: VisibilitySnapshot;
+  /** Producer-owned artifact lookup; extraction only, never record-time asset reads. */
+  readonly getMaterialShaderArtifact:
+    | ((
+        materialShaderId: string,
+        request?: {
+          readonly vertexColorAvailable?: boolean;
+          readonly deformation?: 'rigid' | 'skin';
+          readonly variantSet?: string;
+          readonly pass?: 'forward' | 'shadow' | 'depth';
+          readonly address?: 'direct' | 'scene-index';
+        },
+      ) => MaterialShaderArtifact | undefined)
+    | undefined;
+  /** Renderer-private projection of World-authored instance matrices. */
+  readonly instanceCollections: InstanceProjectionStore | undefined;
 }
 
-export function extractCameraSnapshots(world: World): CameraSnapshot[] {
+const ALL_VISIBLE: VisibilitySnapshot = {
+  diagnostics: [],
+  hasAnyIntent: false,
+  hasAnyHiddenIntent: false,
+  get: () => undefined,
+  effective: () => 'visible',
+};
+
+function collectCameraSnapshots(world: World): CameraSnapshot[] {
   const worldInternal = createWorldInternalView(world);
   const cameras: CameraSnapshot[] = [];
-  const cameraEntities: number[] = [];
-  const cameraQuery = world.query({ read: [Camera], with: [Transform] }).unwrap();
+  const cameraQuery = world
+    .query({
+      read: [Camera],
+      optional: [
+        CameraView,
+        MotionBlur,
+        DynamicResolution,
+        ScreenSpaceReflection,
+        DepthOfField,
+        BarrelDistortion,
+        LensEffects,
+        ClippingPlanes,
+        Outline,
+        PlanarReflection,
+      ],
+      with: [Transform, GlobalTransform],
+    })
+    .unwrap();
   for (const row of cameraQuery) {
     const cam = row.get(Camera);
+    const cameraView = row.get(CameraView);
+    const clipping = extractClippingPlanes(row.get(ClippingPlanes));
+    const planar = row.get(PlanarReflection);
+    if (planar !== undefined && cam.target !== 0 && cameraView === undefined)
+      throw new PlanarReflectionInvalidError('camera');
+    if (planar !== undefined && (planar.target === 0 || planar.updateIntervalFrames < 1))
+      throw new PlanarReflectionInvalidError(
+        planar.target === 0 ? 'target' : 'updateIntervalFrames',
+      );
+    const motionBlur = row.get(MotionBlur);
+    const barrelDistortion = row.get(BarrelDistortion);
+    const lensEffects = resolveLensEffects(row.get(LensEffects));
+    if (!lensEffects.ok) throw lensEffects.error;
+    const outline = resolveOutline(row.get(Outline));
+    if (!outline.ok) throw outline.error;
+    const motionBlurResult = resolveMotionBlurParams(motionBlur);
+    if (!motionBlurResult.ok) throw motionBlurResult.error;
+    const motionBlurParams = motionBlurResult.value;
+    const depthOfField = row.get(DepthOfField);
+    const dynamicResolution = row.get(DynamicResolution);
+    const screenSpaceReflection = row.get(ScreenSpaceReflection);
+    const projection = cameraProjectionFromF32(cam.projection);
+    const depthOfFieldResult = resolveDepthOfFieldParams(depthOfField, {
+      projection,
+      fov: cam.fov,
+      near: cam.near,
+      far: cam.far,
+    });
+    const depthOfFieldError = depthOfFieldResult.ok
+      ? undefined
+      : depthOfFieldRequestFailure(depthOfFieldResult.error);
     const entity = row.entity;
-    const view = worldInternal._getArrayView(entity, Transform, 'world');
+    const view = worldInternal._getArrayView(entity, GlobalTransform, 'world');
     if (view === undefined) continue;
     const worldMat = new Float32Array(view);
-    cameras.push({
+    const target = resolveCameraTarget(world, cam.target);
+    const hasNonDefaultOutput =
+      cam.exposureMode !== CAMERA_EXPOSURE_MODE_MANUAL ||
+      cam.exposure !== 1 ||
+      cam.temperature !== 6504 ||
+      cam.tint !== 0 ||
+      cam.colorLut !== 0 ||
+      cam.colorLutStrength !== 0;
+    const output = hasNonDefaultOutput
+      ? {
+          exposure: cameraExposureFromColumns(cam),
+          temperature: cam.temperature,
+          tint: cam.tint,
+          colorLut: cam.colorLut,
+          colorLutStrength: cam.colorLutStrength,
+        }
+      : undefined;
+    const antialias = antialiasFromF32(cam.antialias);
+    const dynamicResolutionResult = validateDynamicResolutionCamera(dynamicResolution, antialias);
+    if (!dynamicResolutionResult.ok) throw dynamicResolutionResult.error;
+    const barrelDistortionResult = validateBarrelDistortionParameters(barrelDistortion);
+    if (!barrelDistortionResult.ok) throw barrelDistortionResult.error;
+    const snapshot: CameraSnapshot = {
       entityKey: entity as number,
+      ...(cameraView === undefined
+        ? {}
+        : {
+            view: {
+              viewport: new Float32Array(cameraView.viewport),
+              order: cameraView.order,
+              resolutionScale: cameraView.resolutionScale,
+              updateInterval: cameraView.updateInterval,
+              enabled: cameraView.enabled,
+            },
+          }),
+      ...(target === undefined ? {} : { target }),
+      historyVersion: cam.historyVersion,
       position: mat4.getTranslation(vec3.create(), worldMat),
       world: worldMat,
       fov: cam.fov,
       aspect: cam.aspect,
+      autoAspect: cam.autoAspect,
       near: cam.near,
       far: cam.far,
-      projection: cameraProjectionFromF32(cam.projection),
+      projection,
       orthoLeft: cam.left,
       orthoRight: cam.right,
       orthoBottom: cam.bottom,
@@ -2217,27 +3177,271 @@ export function extractCameraSnapshots(world: World): CameraSnapshot[] {
       tonemap: tonemapFromF32(cam.tonemap),
       exposure: cam.exposure,
       whitePoint: cam.whitePoint,
-      antialias: antialiasFromF32(cam.antialias),
-      bloom: bloomEnabledFromF32(cam.bloom),
+      ...(output === undefined ? {} : { output }),
+      antialias,
+      transparency: transparencyFromF32(cam.transparency),
+      ...(dynamicResolutionResult.value === undefined
+        ? {}
+        : { dynamicResolution: dynamicResolutionResult.value }),
+      bloom: validateCameraBloom(
+        cam.bloom,
+        cam.bloomThreshold,
+        cam.bloomIntensity,
+        cam.bloomSoftKnee,
+        cam.bloomScatter,
+      ),
       bloomThreshold: cam.bloomThreshold,
       bloomIntensity: cam.bloomIntensity,
-      bloomBlurRadius: cam.bloomBlurRadius,
+      bloomSoftKnee: cam.bloomSoftKnee,
+      bloomScatter: cam.bloomScatter,
       clearColor: [
         cam.clearColor[0] ?? 0,
         cam.clearColor[1] ?? 0,
         cam.clearColor[2] ?? 0,
         cam.clearColor[3] ?? 1,
       ],
-    });
-    cameraEntities.push(entity as number);
+      ...(depthOfFieldResult.ok && depthOfFieldResult.value !== undefined
+        ? { depthOfField: depthOfFieldResult.value }
+        : {}),
+      ...(depthOfFieldError === undefined ? {} : { depthOfFieldError }),
+      ...(motionBlurParams === undefined
+        ? {}
+        : {
+            motionBlur: {
+              shutterAngle: motionBlurParams.shutterAngle,
+              maxRadiusPixels: motionBlurParams.maxRadiusPixels,
+              sampleCount: motionBlurParams.sampleCount,
+              targetFps: motionBlurParams.targetFps,
+            },
+          }),
+      ...(clipping === undefined ? {} : { clipping }),
+      ...(outline.value === undefined ? {} : { outline: outline.value }),
+      ...(lensEffects.value === undefined ? {} : { lensEffects: lensEffects.value }),
+      ...(barrelDistortion === undefined ? {} : { barrelDistortion: barrelDistortionResult.value }),
+      ...(screenSpaceReflection === undefined
+        ? {}
+        : {
+            screenSpaceReflection: {
+              maxDistance: screenSpaceReflection.maxDistance,
+              thickness: screenSpaceReflection.thickness,
+              maxRoughness: screenSpaceReflection.maxRoughness,
+            },
+          }),
+    };
+    cameras.push(snapshot);
+    if (planar !== undefined) {
+      const reflectionTarget = resolveCameraTarget(world, planar.target);
+      if (reflectionTarget === undefined) throw new PlanarReflectionInvalidError('target');
+      const { view: _view, ...capture } = snapshot;
+      const { target: _target, ...reflection } = planar;
+      cameras.push({
+        ...capture,
+        target: reflectionTarget,
+        planarReflection: { ...reflection, normal: new Float32Array(planar.normal) },
+      });
+    }
   }
-  const activeCameraIndex = selectActiveCameraIndex(cameraEntities, getActiveCamera(world)?.entity);
-  if (activeCameraIndex < 0) return cameras;
-  const selected = cameras[activeCameraIndex];
-  return selected === undefined ? cameras : [selected];
+  const planarTargets = new Set<RenderTarget>();
+  const otherTargets = new Set(
+    cameras
+      .filter((camera) => camera.planarReflection === undefined)
+      .map((camera) => camera.target),
+  );
+  for (const camera of collectCubeCameraSnapshots(world)) otherTargets.add(camera.target);
+  for (const camera of cameras) {
+    if (camera.planarReflection === undefined || camera.target === undefined) continue;
+    if (planarTargets.has(camera.target) || otherTargets.has(camera.target))
+      throw new PlanarReflectionInvalidError('target-writer');
+    planarTargets.add(camera.target);
+  }
+  return cameras;
 }
 
-function tonemapParams(camera: CameraSnapshot): Uint8Array {
+export function collectCubeCameraSnapshots(world: World): CubeCameraSnapshot[] {
+  const worldInternal = createWorldInternalView(world);
+  const snapshots: CubeCameraSnapshot[] = [];
+  const query = world.query({ read: [CubeCamera], with: [Transform, GlobalTransform] }).unwrap();
+  for (const row of query) {
+    const camera = row.get(CubeCamera);
+    const target = resolveCameraTarget(world, camera.target);
+    if (target === undefined) continue;
+    const view = worldInternal._getArrayView(row.entity, GlobalTransform, 'world');
+    if (view === undefined) continue;
+    snapshots.push({
+      entityKey: row.entity as number,
+      target,
+      position: [view[12] ?? 0, view[13] ?? 0, view[14] ?? 0],
+      near: camera.near,
+      far: camera.far,
+      updateIntent: cubeCameraUpdateIntentFromF32(camera.updateIntent),
+      requestVersion: camera.requestVersion,
+      faceBudget: camera.faceBudget,
+    });
+  }
+  return snapshots;
+}
+
+export function collectReflectionProbeFacts(world: World): ReflectionProbeFact[] {
+  const worldInternal = createWorldInternalView(world);
+  const facts: ReflectionProbeFact[] = [];
+  const query = world
+    .query({ read: [ReflectionProbe], with: [Transform, GlobalTransform] })
+    .unwrap();
+  for (const row of query) {
+    const probe = row.get(ReflectionProbe);
+    const view = worldInternal._getArrayView(row.entity, GlobalTransform, 'world');
+    if (view === undefined) {
+      continue;
+    }
+    facts.push({
+      worldId: 0,
+      entityKey: row.entity as number,
+      center: [view[12] ?? 0, view[13] ?? 0, view[14] ?? 0],
+      halfExtents: [
+        probe.halfExtents[0] ?? 0,
+        probe.halfExtents[1] ?? 0,
+        probe.halfExtents[2] ?? 0,
+      ],
+      priority: probe.priority,
+      intensity: probe.intensity,
+      resolution: probe.resolution,
+      boxProjection: probe.boxProjection,
+      revision: probe.invalidationVersion,
+      updateIntent: reflectionProbeUpdateIntentFromF32(probe.updateIntent),
+      invalidationVersion: probe.invalidationVersion,
+    });
+  }
+  return facts;
+}
+
+interface CameraRoleSelection {
+  readonly display: readonly CameraSnapshot[];
+  readonly auxiliary: readonly CameraSnapshot[];
+}
+
+/** Both World extraction and publication rendering derive one camera's physical aspect here. */
+export function cameraForView(
+  cameras: readonly CameraSnapshot[],
+  entityKey: number | undefined,
+  extent: { readonly width: number; readonly height: number },
+): CameraSnapshot | undefined {
+  const camera = cameras.find(
+    (item) => item.planarReflection === undefined && item.entityKey === entityKey,
+  );
+  return camera === undefined
+    ? undefined
+    : {
+        ...camera,
+        aspect: camera.autoAspect === false ? camera.aspect : extent.width / extent.height,
+      };
+}
+
+/** Rebuild view-dependent planar captures from authoring facts and the selected display camera. */
+export function projectAuxiliaryCamerasForView(
+  display: CameraSnapshot | undefined,
+  auxiliary: readonly CameraSnapshot[],
+): readonly CameraSnapshot[] {
+  return auxiliary.flatMap((camera) => {
+    const planar = camera.planarReflection;
+    if (planar === undefined) return [camera];
+    if (display === undefined || camera.entityKey !== display.entityKey) return [];
+    const reflected = buildPlanarReflectionView({
+      world: display.world,
+      projection: computeProjectionMatrix(display),
+      plane: [...planar.normal, planar.distance],
+      clipBias: planar.clipBias,
+    });
+    if (reflected === undefined) return [];
+    return [
+      {
+        ...display,
+        ...(display.clipping === undefined
+          ? {}
+          : {
+              clipping: {
+                planes: display.clipping.planes.map((plane) => [...plane] as const),
+                intersection: display.clipping.intersection === true,
+                clipShadows: false,
+              },
+            }),
+        ...(camera.entityKey === undefined ? {} : { entityKey: camera.entityKey }),
+        ...(camera.target === undefined ? {} : { target: camera.target }),
+        world: reflected.world,
+        position: reflected.position,
+        captureProjection: reflected.projection,
+        planarReflection: planar,
+        clearColor: [0, 0, 0, 0] as const,
+      },
+    ];
+  });
+}
+
+export function selectCameraRoles(
+  world: World,
+  requestedEntityKey?: number,
+  viewExtent?: { readonly width: number; readonly height: number },
+): CameraRoleSelection {
+  const snapshots = collectCameraSnapshots(world);
+  const cameras = snapshots.filter((camera) => camera.planarReflection === undefined);
+  const planar = snapshots.filter((camera) => camera.planarReflection !== undefined);
+  const views = cameras.filter((camera) => camera.view !== undefined);
+  const viewCamera =
+    viewExtent === undefined ? undefined : cameraForView(cameras, requestedEntityKey, viewExtent);
+  const displayEntities = cameras
+    .filter((camera) => camera.target === undefined && camera.view === undefined)
+    .map((camera) => camera.entityKey ?? 0);
+  const hasExplicitSelection = requestedEntityKey !== undefined;
+  const activeCameraIndex = selectActiveCameraIndex(
+    displayEntities,
+    hasExplicitSelection ? requestedEntityKey : getActiveCamera(world)?.entity,
+  );
+  // An explicit FrameCamera selection is authoritative. If it does not name a
+  // display camera, retain the existing no-camera error path instead of
+  // silently selecting the first camera. ActiveCamera keeps its established
+  // first-hit fallback when no explicit frame selection is supplied.
+  const displayEntityKey = hasExplicitSelection
+    ? displayEntities[activeCameraIndex]
+    : (displayEntities[activeCameraIndex] ?? displayEntities[0]);
+  const display =
+    viewExtent !== undefined
+      ? viewCamera === undefined
+        ? []
+        : [viewCamera]
+      : views.length > 0
+        ? views
+        : displayEntityKey === undefined
+          ? []
+          : cameras.filter((camera) => camera.entityKey === displayEntityKey);
+  const candidates: CameraTargetCandidate[] = cameras
+    .filter((camera) => camera.view === undefined)
+    .map((camera) => ({
+      worldId: 0,
+      entityKey: camera.entityKey ?? 0,
+      ...(camera.target === undefined ? {} : { target: camera.target }),
+      requestVersion: 0,
+      update: 'continuous',
+    }));
+  const selected = selectCameraTargetViews(candidates, {
+    ...(displayEntityKey === undefined ? {} : { displayEntityKey }),
+    budget: 1,
+  });
+  const auxiliary = selected.auxiliary.flatMap((candidate) =>
+    cameras.filter((camera) => camera.entityKey === candidate.entityKey),
+  );
+  // Retain every camera's authored reflection across publication. Each RenderSystem
+  // projects only its own view before recording; source extraction never picks a winner.
+  return { display, auxiliary: [...auxiliary, ...planar] };
+}
+
+export function extractCameraSnapshots(world: World): CameraSnapshot[] {
+  return [...selectCameraRoles(world).display];
+}
+
+export function extractCameraTargetSnapshots(world: World): readonly CameraSnapshot[] {
+  return selectCameraRoles(world).auxiliary;
+}
+
+export function tonemapParams(camera: CameraSnapshot): Uint8Array {
   const bytes = new ArrayBuffer(16);
   const floats = new Float32Array(bytes);
   const integers = new Uint32Array(bytes);
@@ -2250,2328 +3454,279 @@ function tonemapParams(camera: CameraSnapshot): Uint8Array {
 export function prepareExtractContext(
   world: World,
   options: {
+    readonly materialContext?: MaterialCookRasterContext;
     readonly assets?: AssetRegistry | null;
     readonly pipelineState?: ExtractPipelineSurface | null;
     readonly materialSnapshotCache?: MaterialSnapshotCache;
+    readonly resourceOwnerFog?: FogFrame | null;
     readonly cull?: 'self' | 'none' | 'external';
     readonly cullCameras?: readonly CameraSnapshot[];
+    readonly cameraEntityKey?: number;
+    readonly viewExtent?: { readonly width: number; readonly height: number };
+    readonly renderables?: 'full' | 'none';
+    readonly renderableEntities?: ReadonlySet<number>;
+    readonly retainHidden?: boolean;
+    readonly worldId?: number;
+    readonly getMaterialShaderArtifact?: (
+      materialShaderId: string,
+      request?: {
+        readonly vertexColorAvailable?: boolean;
+        readonly deformation?: 'rigid' | 'skin';
+        readonly variantSet?: string;
+        readonly pass?: 'forward' | 'shadow' | 'depth';
+        readonly address?: 'direct' | 'scene-index';
+      },
+    ) => MaterialShaderArtifact | undefined;
+    readonly instanceCollections?: InstanceProjectionStore;
   } = {},
 ): PreparedExtractContext {
-  const hierarchy = projectHierarchy(world);
+  const renderables = options.renderables ?? 'full';
   return {
+    materialContext: options.materialContext,
     assets: options.assets,
     pipelineState: options.pipelineState,
     materialSnapshotCache: options.materialSnapshotCache,
+    resourceOwnerFog: options.resourceOwnerFog,
     cull: options.cull ?? 'self',
     cullCameras: options.cullCameras,
-    hierarchy,
-    visibility: resolveVisibility(world, hierarchy),
-  };
-}
-
-export function extractFrames(
-  worlds: readonly World[],
-  owner: number | ExtractFramesOwner,
-  assets?: AssetRegistry | null,
-  pipelineState?: ExtractPipelineSurface | null,
-  materialSnapshotCachesByWorld?: MaterialSnapshotCachesByWorld,
-  options: { readonly cull?: 'normal' | 'none' } = {},
-): ExtractedFrame {
-  // w4: normalize the owner argument. A bare number is the legacy single-owner
-  // form (cameraOwner === resourceOwner); an object carries the two split
-  // indices. When they coincide the code path is byte-identical to the pre-w4
-  // single-owner behaviour (w1 contract combination 2).
-  const cameraOwner = typeof owner === 'number' ? owner : owner.cameraOwner;
-  const resourceOwner = typeof owner === 'number' ? owner : owner.resourceOwner;
-
-  // ── D-2: frame-level side effects live here ────────────────────────────
-  //
-  // resetForFrame is called exactly once per frame, at the extractFrames
-  // entry. The skinPaletteAllocator cursor is reset before each per-world
-  // extract runs, so sequential per-world allocation yields non-overlapping
-  // palette slices (AC-08).
-  const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
-  if (skinPaletteAllocator !== null) {
-    skinPaletteAllocator.resetForFrame();
-  }
-
-  const failedWorlds = new Set<World>();
-  // ── D-2: per-world extract with error isolation ────────────────────────
-  //
-  // Each world runs extractFrame over the final state published by
-  // world.update(). Failure in one world is caught, routed to that world's
-  // _routeError (systemName carries worldId for source identification),
-  // and the world's contribution is skipped (AC-09 graceful degradation).
-
-  // The camera-owner frame must be extracted first: non-owner worlds do not
-  // carry the surfaced camera, but their renderables still need to be tested
-  // against that camera's frustum. Frames are placed back into worlds[] order
-  // before merge so queue / directional-light / worldId semantics stay stable.
-  const succeededFrames: ExtractedFrame[] = [];
-  const succeededIndices: number[] = [];
-
-  const extractionOrder = Array.from({ length: worlds.length }, (_, wi) => wi).sort((a, b) => {
-    if (a === cameraOwner) return -1;
-    if (b === cameraOwner) return 1;
-    return a - b;
-  });
-  const framesByWorld = new Map<number, ExtractedFrame>();
-
-  for (const wi of extractionOrder) {
-    const world = worlds[wi];
-    if (world === undefined || failedWorlds.has(world)) continue;
-    try {
-      const isCameraOwner = wi === cameraOwner;
-      const cameraOwnerFrame = framesByWorld.get(cameraOwner);
-      const prepared = prepareExtractContext(world, {
-        ...(assets !== undefined ? { assets } : {}),
-        ...(pipelineState !== undefined ? { pipelineState } : {}),
-        ...(materialSnapshotCachesByWorld === undefined
-          ? {}
-          : {
-              materialSnapshotCache:
-                materialSnapshotCachesByWorld.get(world) ??
-                (() => {
-                  const cache: MaterialSnapshotCache = new Map();
-                  materialSnapshotCachesByWorld.set(world, cache);
-                  return cache;
-                })(),
-            }),
-        cull: options.cull === 'none' ? 'none' : isCameraOwner ? 'self' : 'external',
-        ...(cameraOwnerFrame === undefined ? {} : { cullCameras: cameraOwnerFrame.cameras }),
-      });
-      const frame = extractFrame(world, prepared);
-
-      framesByWorld.set(wi, frame);
-    } catch (err) {
-      // Per-world failure: route to world's own error handler, skip contribution.
-      try {
-        createWorldInternalView(world)._routeError(err, {
-          severity: Severity.Error,
-          systemName: `RenderSystem.extractFrames(world[${wi}])`,
-        });
-      } catch {
-        // If _routeError itself throws, the world already failed — skip silently.
-      }
-    }
-  }
-
-  // Restore the caller's world order after the camera-owner-first extraction.
-  for (let wi = 0; wi < worlds.length; wi++) {
-    const frame = framesByWorld.get(wi);
-    if (frame === undefined) continue;
-    succeededFrames.push(frame);
-    succeededIndices.push(wi);
-  }
-
-  // ── D-3: merge semantics ───────────────────────────────────────────────
-
-  // AC-04: renderables — concat by worlds[] order, stamp worldId.
-  const renderables: RenderableSnapshot[] = [];
-  const dispatchEntries: DispatchEntry[] = [];
-  const visibilitySnapshots: VisibilitySnapshot[] = [];
-  const featureVisibilitySnapshots: RenderFeatureWorldVisibilitySnapshot[] = [];
-  const hiddenEntityReports: RenderFeatureHiddenEntityReport[] = [];
-
-  for (let fi = 0; fi < succeededFrames.length; fi++) {
-    const f = succeededFrames[fi];
-    const wId = succeededIndices[fi];
-    if (f === undefined || wId === undefined) continue;
-
-    const base = renderables.length;
-    const visibilitySnapshot = f.visibilitySnapshots[0];
-    const world = worlds[wId];
-    if (visibilitySnapshot !== undefined) {
-      visibilitySnapshots.push(visibilitySnapshot);
-      if (world !== undefined)
-        featureVisibilitySnapshots.push({ world, snapshot: visibilitySnapshot });
-    }
-    hiddenEntityReports.push(...f.hiddenEntityReports);
-    for (const r of f.renderables) {
-      renderables.push({
-        ...r,
-        worldId: wId,
-        ...(r.pointsLines === undefined ? {} : { pointsLines: { ...r.pointsLines, worldId: wId } }),
-      });
-    }
-
-    // D-3: dispatch — per-world renderableIndex rebased by base offset.
-    for (const d of f.dispatch) {
-      dispatchEntries.push({ ...d, renderableIndex: (d.renderableIndex ?? 0) + base });
-    }
-  }
-
-  // Stable sort dispatch by queue value.
-  dispatchEntries.sort((a, b) => (a.queue ?? 0) - (b.queue ?? 0));
-
-  // AC-04: lights — point[]/spot[] concat; directional first-hit in
-  // succeededFrames order (which preserves worlds[] order for successful
-  // frames); directionalCount sum.
-  const point: PointLightSnapshot[] = [];
-  const spot: SpotLightSnapshot[] = [];
-  let directional: DirectionalLightSnapshot | undefined;
-  let directionalCount = 0;
-  let lightViewProj: readonly Float32Array[] | undefined;
-  let splitPlanes: Float32Array | undefined;
-  let cascadeCount: number | undefined;
-  let cascadeBlend: number | undefined;
-  let shadowMapSize: number | undefined;
-  let depthBias: number | undefined;
-  let normalBias: number | undefined;
-  let pcfKernelSize: number | undefined;
-  const pointShadow: PointShadowSnapshot[] = [];
-  // bug-20260710-editor-cross-world-shadow: carry the raw CSM config +
-  // direction of the first-hit directional so the merge layer can recompute
-  // matrices against the SURFACED (cameraOwner) camera — the light and the
-  // camera may live in different worlds (editor super-composite).
-  let directionalCsmConfig: DirectionalCsmConfig | undefined;
-  let directionalCsmDirection: Vec3 | undefined;
-  for (const f of succeededFrames) {
-    for (const p of f.lights.point) point.push(p);
-    for (const s of f.lights.spot) spot.push(s);
-    for (const ps of f.lights.pointShadow) pointShadow.push(ps);
-    if (directional === undefined && f.lights.directional !== undefined) {
-      directional = f.lights.directional;
-      // Carry CSM shadow fields from the first-hit directional's world.
-      lightViewProj = f.lights.lightViewProj;
-      splitPlanes = f.lights.splitPlanes;
-      cascadeCount = f.lights.cascadeCount;
-      cascadeBlend = f.lights.cascadeBlend;
-      shadowMapSize = f.lights.shadowMapSize;
-      depthBias = f.lights.depthBias;
-      normalBias = f.lights.normalBias;
-      pcfKernelSize = f.lights.pcfKernelSize;
-      directionalCsmConfig = f.lights.directionalCsmConfig;
-      directionalCsmDirection = f.lights.directionalCsmDirection;
-    }
-    directionalCount += f.lights.directionalCount;
-  }
-
-  // AC-05/06 + w4 owner split (D-3 / R-6): cameras come from the cameraOwner
-  // world; skylight / skybox / postProcessParams come from the resourceOwner
-  // world (holistic snapshot selection). Scan succeededIndices once to locate
-  // each owner's surviving frame. When cameraOwner === resourceOwner both
-  // resolve to the same frame — byte-identical to the pre-w4 single-owner path.
-  let cameraOwnerFrame: ExtractedFrame | undefined;
-  let resourceOwnerFrame: ExtractedFrame | undefined;
-  for (let fi = 0; fi < succeededFrames.length; fi++) {
-    if (succeededIndices[fi] === cameraOwner) cameraOwnerFrame = succeededFrames[fi];
-    if (succeededIndices[fi] === resourceOwner) resourceOwnerFrame = succeededFrames[fi];
-  }
-  const cameras = cameraOwnerFrame !== undefined ? [...cameraOwnerFrame.cameras] : [];
-
-  // bug-20260710-editor-cross-world-shadow: RECOMPUTE directional CSM matrices
-  // against the surfaced camera. In a single-world app the per-world extract
-  // already produced correct matrices (light+camera share the world), and this
-  // recompute reproduces them byte-identically (same config, same camera). In
-  // the editor super-composite the directional light's world has NO camera, so
-  // its per-world `lightViewProj` is undefined/degenerate; the surfaced camera
-  // lives in the cameraOwner world. Pairing them here is the ONLY place both
-  // are visible. Point/spot shadows are camera-independent (light-space only)
-  // and need no merge-layer fix-up.
-  const mergeCam = cameras[0];
-  if (directionalCsmConfig !== undefined && directionalCsmDirection !== undefined) {
-    const mergeCameraData: CsmCameraData | undefined =
-      mergeCam !== undefined
-        ? {
-            world: mergeCam.world,
-            fov: mergeCam.fov,
-            aspect: mergeCam.aspect,
-            near: mergeCam.near,
-            far: mergeCam.far,
-            projection: mergeCam.projection,
-            orthoLeft: mergeCam.orthoLeft,
-            orthoRight: mergeCam.orthoRight,
-            orthoBottom: mergeCam.orthoBottom,
-            orthoTop: mergeCam.orthoTop,
-          }
-        : undefined;
-    const csm = computeDirectionalCsm(
-      directionalCsmDirection,
-      directionalCsmConfig,
-      mergeCameraData,
-    );
-    if (csm !== null) {
-      lightViewProj = csm.lightViewProj;
-      splitPlanes = csm.splitPlanes;
-      cascadeCount = csm.cascadeCount;
-      cascadeBlend = csm.cascadeBlend;
-      shadowMapSize = csm.shadowMapSize;
-    }
-    // csm === null (no surfaced camera at all): keep the per-world carry —
-    // there is no better data, and a cameraless frame renders nothing anyway.
-  }
-
-  const lights: ExtractedLights = {
-    directional,
-    directionalCount,
-    point,
-    spot,
-    lightViewProj,
-    splitPlanes,
-    cascadeCount,
-    cascadeBlend,
-    shadowMapSize,
-    depthBias,
-    normalBias,
-    pcfKernelSize,
-    pointShadow,
-    directionalCsmConfig,
-    directionalCsmDirection,
-  };
-  const skylight = resourceOwnerFrame?.skylight;
-  const skylightCount = resourceOwnerFrame?.skylightCount ?? 0;
-  const skybox = resourceOwnerFrame?.skybox;
-  const skyboxCount = resourceOwnerFrame?.skyboxCount ?? 0;
-  // User-authored PostProcessParams entities are singleton scene resources, so
-  // they come from the resourceOwner world (holistic snapshot selection).
-  const postProcessParams = new Map(resourceOwnerFrame?.postProcessParams);
-  // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 1): the
-  // engine built-in Standard tonemap param is NOT a scene resource — the
-  // per-world extractFrame bridges it from that world's own `cameras[0]`
-  // (Camera.exposure / whitePoint / tonemap is the SSOT). It therefore lives on
-  // the CAMERA-owner frame, not the resource-owner frame. In the split-owner
-  // editor topology the resourceOwner world has no Camera, so its frame carries
-  // no Standard tonemap entry; taking postProcessParams from resourceOwner
-  // alone drops it, the tonemap pass's params UBO stays zero-filled
-  // (exposure=0 => tonemapped output is uniformly black), and the whole frame
-  // reads black even though geometry drew into the HDR target. Overlay the
-  // camera-owner frame's tonemap param (its SSOT source) so the surfaced
-  // camera's exposure/whitePoint/mode reach the tonemap pass. When
-  // cameraOwner === resourceOwner this is a no-op (identical entry). The 'na'
-  // Standard tonemap identity mirrors the engine provider key set at the
-  // bottom of extractFrame (SSOT: same identity, same 16B layout).
-  const TONEMAP_PARAM_KEY = STANDARD_TONEMAP_FEATURE_ID;
-  const cameraTonemapParam = cameraOwnerFrame?.postProcessParams.get(TONEMAP_PARAM_KEY);
-  if (cameraTonemapParam !== undefined) {
-    postProcessParams.set(TONEMAP_PARAM_KEY, cameraTonemapParam);
-  } else {
-    // The camera-owner world produced no tonemap param (no Camera surfaced
-    // there this frame); do not leave a stale resource-owner entry that would
-    // apply a foreign camera's exposure. Removing it lets the tonemap pass fall
-    // back to its param-less zero path only when genuinely no camera exists.
-    postProcessParams.delete(TONEMAP_PARAM_KEY);
-  }
-
-  // D-3: frustumStats — culled/total summed across worlds.
-  const frustumStats = {
-    culled: succeededFrames.reduce((s, f) => s + f.frustumStats.culled, 0),
-    total: succeededFrames.reduce((s, f) => s + f.frustumStats.total, 0),
-  };
-  const visibilityStats = {
-    explicitlyHidden: succeededFrames.reduce((s, f) => s + f.visibilityStats.explicitlyHidden, 0),
-  };
-
-  return {
-    cameras,
-    lights,
+    ...(options.cameraEntityKey === undefined ? {} : { cameraEntityKey: options.cameraEntityKey }),
+    ...(options.viewExtent === undefined ? {} : { viewExtent: options.viewExtent }),
     renderables,
-    dispatch: dispatchEntries,
-    skylight,
-    skylightCount,
-    skybox,
-    skyboxCount,
-    frustumStats,
-    visibilityStats,
-    postProcessParams,
-    visibilitySnapshots,
-    featureVisibilitySnapshots,
-    hiddenEntityReports,
+    worldId: options.worldId ?? 0,
+    renderableEntities: options.renderableEntities,
+    retainHidden: options.retainHidden ?? false,
+    visibility: renderables === 'none' ? ALL_VISIBLE : resolveVisibility(world),
+    getMaterialShaderArtifact: options.getMaterialShaderArtifact,
+    instanceCollections: options.instanceCollections,
   };
 }
 
-/**
- * A MeshAsset participates in frustum culling only when its producer supplied
- * the complete finite local-space bounds promised by the asset contract.
- * Missing, malformed, and inverted-infinity empty bounds remain conservative
- * (always visible) so a bad asset cannot turn into a false-negative render;
- * they are not cull candidates and therefore do not inflate frustumStats.
- */
-function hasFiniteOrderedLocalAabb(aabb: Float32Array | undefined): aabb is Float32Array {
-  if (aabb === undefined || aabb.length !== 6) return false;
-  const minX = aabb[0];
-  const minY = aabb[1];
-  const minZ = aabb[2];
-  const maxX = aabb[3];
-  const maxY = aabb[4];
-  const maxZ = aabb[5];
-  if (
-    minX === undefined ||
-    minY === undefined ||
-    minZ === undefined ||
-    maxX === undefined ||
-    maxY === undefined ||
-    maxZ === undefined
-  ) {
-    return false;
-  }
-  if (
-    !Number.isFinite(minX) ||
-    !Number.isFinite(minY) ||
-    !Number.isFinite(minZ) ||
-    !Number.isFinite(maxX) ||
-    !Number.isFinite(maxY) ||
-    !Number.isFinite(maxZ)
-  ) {
-    return false;
-  }
-  return minX <= maxX && minY <= maxY && minZ <= maxZ;
+const fogQueries = new WeakMap<World, Query<readonly [typeof Fog]>>();
+const fogLkgStates = new WeakMap<
+  World,
+  { lkg: FogFrame | undefined; failure: FogSelectionFailure | undefined }
+>();
+
+export function fogState(world: World): {
+  lkg: FogFrame | undefined;
+  failure: FogSelectionFailure | undefined;
+} {
+  const existing = fogLkgStates.get(world);
+  if (existing !== undefined) return existing;
+  const created = { lkg: undefined, failure: undefined };
+  fogLkgStates.set(world, created);
+  return created;
 }
 
-function morphSnapshotFor(
-  mesh: MeshAsset,
-  weights: ArrayLike<number> | undefined,
-): MorphSnapshot | undefined {
-  const targets = mesh.morphTargets;
-  if (targets === undefined || targets.length === 0 || weights === undefined) return undefined;
-  if (weights.length !== targets.length) return undefined;
-  const firstPositions = targets[0]?.position;
-  if (
-    firstPositions === undefined ||
-    firstPositions.length === 0 ||
-    firstPositions.length % 3 !== 0
-  ) {
-    return undefined;
+export function selectFogFrame(world: World): FogFrame | undefined {
+  // Query compilation is owned once per World; Query refreshes its matched
+  // tables when the ECS structure changes, while iteration reads current Fog
+  // values. This keeps the frame boundary free of repeated descriptor work.
+  const fogCandidates: FogCandidate[] = [];
+  let fogQuery = fogQueries.get(world);
+  if (fogQuery === undefined) {
+    fogQuery = world.query({ read: [Fog] }).unwrap();
+    fogQueries.set(world, fogQuery);
   }
-  const vertexCount = firstPositions.length / 3;
-  if (mesh.vertices.length % vertexCount !== 0) return undefined;
-  for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
-    const target = targets[targetIndex];
-    if (target?.position?.length !== firstPositions.length) return undefined;
+  for (const row of fogQuery) {
+    const value = row.get(Fog);
+    fogCandidates.push({
+      entityKey: row.entity,
+      color: [value.color[0] ?? 0, value.color[1] ?? 0, value.color[2] ?? 0],
+      density: value.density,
+      heightFalloff: value.heightFalloff,
+      maxOpacity: value.maxOpacity,
+    });
   }
-  const copied = new Float32Array(weights.length);
-  for (let index = 0; index < weights.length; index += 1) {
-    const weight = weights[index] ?? Number.NaN;
-    if (!Number.isFinite(weight)) return undefined;
-    copied[index] = weight;
+  const fogSelection = selectEnvironment({
+    environments: [],
+    fogs: fogCandidates,
+    suns: [],
+    lane: 'direct',
+  });
+  const state = fogState(world);
+  if (fogSelection.ok) {
+    state.lkg = fogSelection.value.fog;
+    state.failure = undefined;
+    return fogSelection.value.fog;
   }
-  return { weights: copied, targetCount: targets.length };
+  state.failure = {
+    code: fogSelection.error.code,
+    expected: fogSelection.error.expected,
+    hint: fogSelection.error.hint,
+    detail: Object.freeze({ ...fogSelection.error.detail }),
+  };
+  routeWorldError(world, fogSelection.error, {
+    systemName: 'RenderSystem.extract (fog-selection)',
+  });
+  if (state.lkg !== undefined) return state.lkg;
+  throw fogSelection.error;
 }
 
-export function extractFrame(world: World, context: PreparedExtractContext): ExtractedFrame {
-  // feat-20260708-composited-multi-world-rendering M2 / D-2: resetForFrame
-  // has been lifted to extractFrames (the frame-level entry point).
-  // extractFrame is now a pure world->snapshot function with no frame-level
-  // side effects. See plan-decisions PD2 for the reviewer ruling.
-  const {
-    assets,
-    pipelineState,
-    materialSnapshotCache: persistentMaterialSnapshotCache,
-    cull: cullMode,
-  } = context;
-  const visibility = context.visibility.hasAnyHiddenIntent ? context.visibility : undefined;
-  const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
+export function textureDigest(texture: TextureAsset): string {
+  // The render inspection needs a stable identity token, not a second byte
+  // store.  FNV-1a is deterministic, synchronous, and deliberately labelled
+  // as a non-cryptographic digest so it cannot be mistaken for Catalog proof.
+  let hash = 2166136261;
+  for (const byte of texture.data) hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+  return `fnv1a:${hash.toString(16).padStart(8, '0')}`;
+}
 
-  const directionalLightQuery = world.query({ read: [DirectionalLight] }).unwrap();
-
-  // feat-20260601 D-3: camera / point / spot light world transforms are read
-  // through the single resolved `Transform.world` mat4 (written by
-  // propagateTransforms), not the retired GlobalTransform-column-switch.
-  //
-  // Each segment routes through a World-owned Query with explicit read and
-  // optional roles. The packed entity handle for `readWorldMat4Copy` /
-  // `_getArrayView` reads comes from `row.entity` -- the
-  // archetype-graph back-door (`graph.archetypes` / `arch.components.some`) is gone.
-  // Plan-decisions K-2 sniffing scheme B (archetype-edge sniff once via
-  // `row.get(X) !== undefined`); K-3 invariant preserved (`_getArrayView`
-  // calls survive untouched, only the entity source changes).
-  const worldInternal = createWorldInternalView(world);
-
-  const cameras = extractCameraSnapshots(world);
-
-  // Three-query union (M2 / w16 / AC-03): directional has no Transform
-  // dependency (sun-like infinite-source semantics); point + spot pull
-  // position from the companion Transform via the joined queries.
-  // Host-side pre-multiplication: color *= intensity (charter P4); cone
-  // deg -> cos (D-S2); range -> 1/range^2 (D-S5).
-  let directional: DirectionalLightSnapshot | undefined;
-  let directionalCount = 0;
-  // feat-20260621 M2: capture shadow fields from the first-hit DirectionalLight.
-  // castShadow defaults to true; the CSM path is gated on firstHitCastShadow !== false.
-  let firstHitCastShadow: boolean | undefined;
-  let firstHitShadowFields:
+export function extractVolumeSnapshot(
+  world: World,
+  assets: AssetRegistry | null | undefined,
+  worldInternal: WorldInternalView,
+): ExtractedVolumetricFog | undefined {
+  const elapsed = world.getResource(Time).elapsed;
+  const worldTimeSeconds = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+  const query = world.query({ read: [VolumetricFog] }).unwrap();
+  const authorings: VolumetricFogAuthoring[] = [];
+  const members: ExtractedVolumetricFog[] = [];
+  let selectedLight:
     | {
-        cascadeCount: number;
-        splitLambda: number;
-        cascadeBlend: number;
-        mapSize: number;
-        depthBias: number;
-        normalBias: number;
-        shadowDistance: number;
-        pcfKernelSize: number;
+        readonly entity: EntityHandle;
+        readonly kind: 'directional' | 'point' | 'spot';
+        readonly pointLightEntity?: EntityHandle;
+        readonly spotLightEntity?: EntityHandle;
       }
     | undefined;
-  for (const row of directionalLightQuery) {
-    const l = row.get(DirectionalLight);
-    directionalCount += 1;
-    const intensity = l.intensity;
-    const snapshot: DirectionalLightSnapshot = {
-      kind: 'directional',
-      direction: vec3.create(l.direction[0] ?? 0, l.direction[1] ?? -1, l.direction[2] ?? 0),
-      color: vec3.create(
-        (l.color[0] ?? 1) * intensity,
-        (l.color[1] ?? 1) * intensity,
-        (l.color[2] ?? 1) * intensity,
-      ),
-      intensity,
-    };
-    if (directional === undefined) {
-      // First hit wins; record-stage N>1 fail-fast (M3 / w19) flags duplicates.
-      directional = snapshot;
-      firstHitCastShadow = l.castShadow;
-      firstHitShadowFields = {
-        cascadeCount: l.cascadeCount,
-        splitLambda: l.splitLambda,
-        cascadeBlend: l.cascadeBlend,
-        mapSize: l.mapSize,
-        depthBias: l.depthBias,
-        normalBias: l.normalBias,
-        shadowDistance: l.shadowDistance,
-        pcfKernelSize: l.pcfKernelSize,
+
+  for (const row of query) {
+    selectedLight = undefined;
+    const source = row.get(VolumetricFog);
+    if (source.light === null) continue;
+    const selected = resolveSelectedVolumetricLight(world, source.light);
+    if (selected.status === 'available') {
+      const pairSpot = source.spotLight === null ? undefined : source.spotLight;
+      selectedLight ??= {
+        entity: selected.entity,
+        kind: selected.kind,
+        ...(selected.kind === 'point' ? { pointLightEntity: selected.entity } : {}),
+        ...(pairSpot === undefined ? {} : { spotLightEntity: pairSpot }),
       };
     }
-  }
-
-  const pointSnapshots: PointLightSnapshot[] = [];
-  // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4: track entity per
-  // pointSnapshots index so the post-extract pointShadow join can stamp
-  // `shadowAtlasLayer + shadowNear + shadowFar` onto the matching PointLight.
-  const pointSnapshotEntities: number[] = [];
-  const pointLightQuery = world
-    .query({
-      read: [PointLight],
-      optional: [Transform],
-    })
-    .unwrap();
-  for (const row of pointLightQuery) {
-    const p = row.get(PointLight);
-    // K-2 scheme B: archetype-edge sniff -- `bundle.Transform` key is absent
-    // when the archetype does not carry the Transform column.
-    const hasTransform = row.get(Transform) !== undefined;
-    const intensity = p.intensity;
-    const range = p.range;
-    const entityId = row.entity;
-    // Position = world-space translation extracted from Transform.world.
-    // A point light archetype without a Transform column sits at the origin.
-    let worldMat: Float32Array | undefined;
-    if (hasTransform) {
-      const view = worldInternal._getArrayView(entityId, Transform, 'world');
-      if (view !== undefined) worldMat = new Float32Array(view);
-    }
-    const position =
-      worldMat !== undefined ? mat4.getTranslation(vec3.create(), worldMat) : vec3.create(0, 0, 0);
-    pointSnapshots.push({
-      kind: 'point',
-      position,
-      color: vec3.create(
-        (p.color[0] ?? 1) * intensity,
-        (p.color[1] ?? 1) * intensity,
-        (p.color[2] ?? 1) * intensity,
-      ),
-      intensity,
-      invRangeSquared: computeInvRangeSquared(range),
-    });
-    pointSnapshotEntities.push(entityId);
-  }
-
-  const spotSnapshots: SpotLightSnapshot[] = [];
-  const spotLightQuery = world
-    .query({
-      read: [SpotLight],
-      optional: [Transform],
-    })
-    .unwrap();
-  // feat-20260625-spot-light-shadow-mapping M1 w5: tile allocation for castShadow spots.
-  // Cap = 4 (OOS-5), sentinel -1 = unassigned (plan-strategy D-4).
-  // Direction degeneration (near-zero) also skips shadow (requirements $112).
-  let spotTileNext = 0;
-  for (const row of spotLightQuery) {
-    const s = row.get(SpotLight);
-    const hasTransform = row.get(Transform) !== undefined;
-    const intensity = s.intensity;
-    const range = s.range;
-    const innerConeDeg = s.innerConeDeg;
-    const outerConeDeg = s.outerConeDeg;
-    let worldMat: Float32Array | undefined;
-    if (hasTransform) {
-      const entity = row.entity;
-      const view = worldInternal._getArrayView(entity, Transform, 'world');
-      if (view !== undefined) worldMat = new Float32Array(view);
-    }
-    const position =
-      worldMat !== undefined ? mat4.getTranslation(vec3.create(), worldMat) : vec3.create(0, 0, 0);
-    const dir = vec3.create(s.direction[0] ?? 0, s.direction[1] ?? -1, s.direction[2] ?? 0);
-
-    // Extract is the single direction-normalization owner for direct-light
-    // snapshots. URP and HDRP preserve this value downstream.
-    const dirLen = Math.sqrt(
-      (dir[0] ?? 0) * (dir[0] ?? 0) + (dir[1] ?? 0) * (dir[1] ?? 0) + (dir[2] ?? 0) * (dir[2] ?? 0),
-    );
-    const EPSILON = 1e-6;
-    const hasValidDirection = dirLen > EPSILON;
-    if (!hasValidDirection) {
+    const densityHandle = toShared<'TextureAsset'>(Math.round(Number(source.density)));
+    const resolved = resolveAssetHandle<TextureAsset>(world, densityHandle);
+    if (!resolved.ok || resolved.value.kind !== 'texture') {
       worldInternal._routeError(
-        new SpawnLightInvalidBoundsError('SpotLight', 'direction', [
-          dir[0] ?? 0,
-          dir[1] ?? 0,
-          dir[2] ?? 0,
-        ]),
-        {
-          severity: Severity.Error,
-          systemName: 'RenderSystem.extract (spot-direction)',
-        },
+        resolved.ok
+          ? new RhiError({
+              code: 'asset-not-registered',
+              expected: 'VolumetricFog.density resolves to a TextureAsset',
+              hint: 'load a TextureAsset before assigning it to VolumetricFog.density',
+              detail: { assetHandle: Number(densityHandle) },
+            })
+          : resolved.error,
+        { severity: Severity.Error, systemName: 'RenderSystem.extract (volumetric-density)' },
       );
+      return { status: 'degraded', worldTimeSeconds };
     }
-    const dirN = vec3.create(
-      hasValidDirection ? (dir[0] ?? 0) / dirLen : (dir[0] ?? 0),
-      hasValidDirection ? (dir[1] ?? 0) / dirLen : (dir[1] ?? 0),
-      hasValidDirection ? (dir[2] ?? 0) / dirLen : (dir[2] ?? 0),
-    );
-
-    // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
-    const castShadow = s.castShadow;
-    const sMapSize = s.mapSize;
-    const sNearPlane = s.nearPlane;
-    const sFarPlane = s.farPlane;
-
-    let lightViewProj: Float32Array | undefined;
-    let shadowAtlasTile = -1;
-
-    if (castShadow && hasValidDirection) {
-      const target = vec3.create(
-        (position[0] ?? 0) + (dirN[0] ?? 0),
-        (position[1] ?? 0) + (dirN[1] ?? 0),
-        (position[2] ?? 0) + (dirN[2] ?? 0),
-      );
-      // D-1: perspective(outerConeDeg*2, aspect=1, near, far) x lookAt(pos, pos+dir).
-      // FOV = outerConeDeg * 2 in degrees; mat4.perspective takes fov in radians.
-      const fov = outerConeDeg * 2 * (Math.PI / 180);
-      const proj = mat4.create();
-      mat4.perspective(proj, fov, 1, sNearPlane, sFarPlane);
-      const view = mat4.create();
-      mat4.lookAt(view, position, target, vec3.create(0, 1, 0));
-      lightViewProj = new Float32Array(16);
-      // Reinterpret the Float32Array surface field as a Mat4 out-param; a
-      // factory would force a needless alloc+copy. brand-cast-ok
-      mat4.multiply(lightViewProj as Mat4, proj, view);
-
-      // D-4: allocate tile 0..3; 5th+ = -1 sentinel.
-      if (spotTileNext < 4) {
-        shadowAtlasTile = spotTileNext;
-        spotTileNext += 1;
-      }
-    }
-
-    spotSnapshots.push({
-      kind: 'spot',
-      // D-6: position reflects world transform; direction stays sourced
-      // from SpotLight.direction (NOT rotated by the parent).
-      position,
-      direction: dirN,
-      color: vec3.create(
-        (s.color[0] ?? 1) * intensity,
-        (s.color[1] ?? 1) * intensity,
-        (s.color[2] ?? 1) * intensity,
-      ),
-      intensity,
-      invRangeSquared: computeInvRangeSquared(range),
-      cosInner: degToCos(innerConeDeg),
-      cosOuter: degToCos(outerConeDeg),
-      // ── shadow fields ──
-      castShadow,
-      lightViewProj,
-      mapSize: sMapSize,
-      nearPlane: sNearPlane,
-      farPlane: sFarPlane,
-      shadowAtlasTile,
+    const densityAsset = resolved.value;
+    const guid = assets?.guidOf(densityAsset) ?? `handle:${Number(densityHandle)}`;
+    const shape = densityAsset.shape;
+    const density: VolumeDensityBinding =
+      shape.viewDimension === '3d'
+        ? {
+            guid,
+            generation: 1,
+            shape: {
+              viewDimension: '3d',
+              extent: {
+                width: shape.extent.width,
+                height: shape.extent.height,
+                depth: shape.extent.depth,
+              },
+            },
+            format: densityAsset.format,
+            colorSpace: densityAsset.colorSpace,
+          }
+        : {
+            guid,
+            generation: 1,
+            shape: {
+              viewDimension: shape.viewDimension,
+              extent:
+                shape.viewDimension === '2d-array'
+                  ? {
+                      width: shape.extent.width,
+                      height: shape.extent.height,
+                      layers: shape.extent.layers,
+                    }
+                  : { width: shape.extent.width, height: shape.extent.height },
+            },
+            format: densityAsset.format,
+            colorSpace: densityAsset.colorSpace,
+          };
+    const authoring: VolumetricFogAuthoring = {
+      light: source.light,
+      density,
+      bounds: {
+        min: [source.boundsMin[0] ?? 0, source.boundsMin[1] ?? 0, source.boundsMin[2] ?? 0],
+        max: [source.boundsMax[0] ?? 0, source.boundsMax[1] ?? 0, source.boundsMax[2] ?? 0],
+      },
+      extinction: [source.extinction[0] ?? 0, source.extinction[1] ?? 0, source.extinction[2] ?? 0],
+      albedo: [source.albedo[0] ?? 0, source.albedo[1] ?? 0, source.albedo[2] ?? 0],
+      emission: [source.emission[0] ?? 0, source.emission[1] ?? 0, source.emission[2] ?? 0],
+      anisotropy: source.anisotropy,
+      maxDistance: source.maxDistance,
+      sampling: source.sampling === 1 ? 'density' : 'noise',
+    };
+    authorings.push(authoring);
+    members.push({
+      status: 'available',
+      worldTimeSeconds,
+      densityHandle,
+      densityAsset,
+      guid,
+      generation: 1,
+      digest: textureDigest(densityAsset),
+      ...(selectedLight === undefined
+        ? {}
+        : {
+            lightEntity: selectedLight.entity,
+            lightKind: selectedLight.kind,
+            ...(selectedLight.pointLightEntity === undefined
+              ? {}
+              : { pointLightEntity: selectedLight.pointLightEntity }),
+            ...(selectedLight.spotLightEntity === undefined
+              ? {}
+              : { spotLightEntity: selectedLight.spotLightEntity }),
+          }),
     });
   }
 
-  // bug-20260710-editor-cross-world-shadow: CSM matrices are computed by the
-  // shared pure {@link computeDirectionalCsm}, called here per-world with THIS
-  // world's own `cameras[0]`. In a single-world app the light and camera share
-  // the world, so this per-world result is final (byte-identical to the prior
-  // inline block). In the editor super-composite the light's world may have no
-  // camera → this yields no matrices; {@link extractFrames} then RECOMPUTES at
-  // the merge layer using the surfaced (cameraOwner) camera + the raw config
-  // carried on ExtractedLights. The raw config + direction are surfaced
-  // unconditionally so the merge layer can re-run the builder.
-  let lightViewProj: Float32Array[] | undefined;
-  let splitPlanes: Float32Array | undefined;
-  let cascadeCount: number | undefined;
-  let cascadeBlend: number | undefined;
-  let shadowMapSize: number | undefined;
-  let directionalCsmConfig: DirectionalCsmConfig | undefined;
-  let directionalCsmDirection: Vec3 | undefined;
-
-  // Camera data needed for frustum corner computation (first camera only;
-  // multi-camera CSM is OOS-1). Undefined in a cameraless world.
-  const cam0 = cameras[0];
-  const cameraData: CsmCameraData | undefined =
-    cam0 !== undefined
-      ? {
-          world: cam0.world,
-          fov: cam0.fov,
-          aspect: cam0.aspect,
-          near: cam0.near,
-          far: cam0.far,
-          projection: cam0.projection,
-          orthoLeft: cam0.orthoLeft,
-          orthoRight: cam0.orthoRight,
-          orthoBottom: cam0.orthoBottom,
-          orthoTop: cam0.orthoTop,
-        }
-      : undefined;
-
-  // feat-20260621 M2: CSM computation gated on castShadow from the
-  // merged DirectionalLight. castShadow defaults to true (first-hit-wins
-  // semantics, D-6 no cardinality cap).
-  if (directional !== undefined && firstHitCastShadow !== false) {
-    const dirSnapshot = directional;
-    const sf = firstHitShadowFields;
-    if (sf !== undefined) {
-      directionalCsmConfig = {
-        cascadeCount: sf.cascadeCount,
-        splitLambda: sf.splitLambda,
-        cascadeBlend: sf.cascadeBlend,
-        mapSize: sf.mapSize,
-        shadowDistance: sf.shadowDistance,
-      };
-      directionalCsmDirection = dirSnapshot.direction;
-      const csm = computeDirectionalCsm(dirSnapshot.direction, directionalCsmConfig, cameraData);
-      // Cascade metadata (splitPlanes / count / blend / mapSize) is available
-      // even without a camera (splitPlanes needs only near/far); the matrices
-      // need the camera. When csm is null (no camera) leave lightViewProj
-      // undefined — the merge layer recomputes. Still surface the split/count
-      // metadata so a single-world path keeps its prior fields.
-      cascadeCount = Math.round(sf.cascadeCount);
-      cascadeBlend = sf.cascadeBlend;
-      shadowMapSize = sf.mapSize;
-      if (csm !== null) {
-        lightViewProj = csm.lightViewProj;
-        splitPlanes = csm.splitPlanes;
-      } else {
-        const sNear = cameraData?.near ?? 0.1;
-        const splits = pssmSplit(sNear, sf.shadowDistance, cascadeCount, sf.splitLambda);
-        const padded = new Float32Array(4);
-        for (let i = 0; i < splits.length; i++) padded[i] = splits[i] ?? 0;
-        splitPlanes = padded;
-      }
-    }
+  if (authorings.length === 0) return undefined;
+  const extracted = extractVolumetricFog(authorings);
+  if (!extracted.ok) {
+    worldInternal._routeError(extracted.error, {
+      severity: Severity.Error,
+      systemName: 'RenderSystem.extract (volumetric-fog)',
+    });
+    return { ...members[0], status: 'degraded' };
   }
-
-  // feat-20260613-csm M3 / w14 (plan-strategy §D-7): pad the up-to-4
-  // splitPlanes into a fixed length-4 Float32Array (unused slots = 0) so
-  // the View UBO tail keeps a stable layout regardless of the runtime
-  // cascadeCount. Host-side correctness invariant: only the first
-  // cascadeCount slots are ever read by the WGSL kernel.
-  const paddedSplitPlanes = new Float32Array(4);
-  if (splitPlanes !== undefined) {
-    for (let i = 0; i < splitPlanes.length; i++) {
-      paddedSplitPlanes[i] = splitPlanes[i] ?? 0;
-    }
-  }
-
-  // feat-20260612-point-light-shadows-urp-hdrp M1 / T-M1-7 (plan-strategy §D-3,
-  // requirements §5.3): query (PointLight + PointLightShadow + Transform)
-  // archetype join. For each shadow caster, build 6 face VP matrices and pack
-  // into Float32Array(96). Atlas layer assigned in spawn order (0..3); the
-  // sentinel -1 is shader-side and applies to non-shadow PointLights only.
-  // Cap of 4 is enforced by ECS cardinality on PointLightShadow.
-  const pointShadowSnapshots: PointShadowSnapshot[] = [];
-  {
-    const pointShadowQuery = world
-      .query({ read: [Transform, PointLightShadow], with: [PointLight] })
-      .unwrap();
-    for (const row of pointShadowQuery) {
-      const t = row.get(Transform);
-      const ps = row.get(PointLightShadow);
-      // Read world-space position from Transform.world (mat4 column-major;
-      // translation lives at indices 12..14, mirroring CameraSnapshot.world
-      // semantics in this file).
-      // feat-20260614 M4 / w13: TypedArrayFor for `array<f32, 16>` now
-      // resolves to a concrete `Float32Array` (was `never` pre-w11), which
-      // surfaces the row-window slicing -- `t.world` is the stride-16 flat
-      // column view; row i lives at `[i*16, (i+1)*16)`. The prior
-      // `t.world?.[i]` form silently returned a single element under the
-      // `never`-typed bundle path and `wRow[12]` widened to `undefined ?? 0`
-      // so light positions clamped to the origin.
-      const wRow = t.world;
-      if (wRow === undefined) continue;
-      const px = wRow[12] ?? 0;
-      const py = wRow[13] ?? 0;
-      const pz = wRow[14] ?? 0;
-      const lightPos = vec3.create(px, py, pz);
-      const mapSize = ps.mapSize;
-      const nearPlane = ps.nearPlane;
-      const farPlane = ps.farPlane;
-      const layer = pointShadowSnapshots.length; // 0, 1, 2, 3 in spawn order
-
-      const matrices = buildPointShadowMatrices(lightPos, nearPlane, farPlane);
-      const packed = new Float32Array(96);
-      for (let f = 0; f < 6; f++) {
-        const m = matrices[f];
-        if (m === undefined) continue;
-        for (let k = 0; k < 16; k++) {
-          packed[f * 16 + k] = m[k] ?? 0;
-        }
-      }
-      pointShadowSnapshots.push({
-        entity: row.entity,
-        position: lightPos,
-        mapSize,
-        nearPlane,
-        farPlane,
-        shadowAtlasLayer: layer,
-        shadowMatrices: packed,
-      });
-    }
-  }
-
-  // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
-  // join pointShadow snapshots into the matching PointLightSnapshot so the
-  // record stage threads `shadowAtlasLayer + shadowNear + shadowFar` through
-  // `packLightSlot` for the HDRP std430 LightSlot pad lanes (byte 52..64).
-  // Mutates the freshly-built PointLightSnapshot in place; the snapshot is
-  // not exposed elsewhere this frame yet (consumed only by lights.point[]).
-  if (pointShadowSnapshots.length > 0) {
-    const shadowByEntity = new Map<number, PointShadowSnapshot>();
-    for (const ps of pointShadowSnapshots) shadowByEntity.set(ps.entity, ps);
-    for (let i = 0; i < pointSnapshots.length; i++) {
-      const entityId = pointSnapshotEntities[i] ?? 0;
-      const ps = shadowByEntity.get(entityId);
-      if (ps !== undefined) {
-        pointSnapshots[i] = {
-          ...(pointSnapshots[i] as PointLightSnapshot),
-          shadowAtlasLayer: ps.shadowAtlasLayer,
-          shadowNear: ps.nearPlane,
-          shadowFar: ps.farPlane,
-        };
-      }
-    }
-  }
-
-  const lights: ExtractedLights = {
-    directional,
-    directionalCount,
-    point: pointSnapshots,
-    spot: spotSnapshots,
-    lightViewProj,
-    splitPlanes: splitPlanes !== undefined ? paddedSplitPlanes : undefined,
-    cascadeCount,
-    cascadeBlend,
-    shadowMapSize,
-    depthBias: firstHitCastShadow !== false ? firstHitShadowFields?.depthBias : undefined,
-    normalBias: firstHitCastShadow !== false ? firstHitShadowFields?.normalBias : undefined,
-    pcfKernelSize: firstHitCastShadow !== false ? firstHitShadowFields?.pcfKernelSize : undefined,
-    pointShadow: pointShadowSnapshots,
-    // bug-20260710-editor-cross-world-shadow: raw CSM config + light direction
-    // so the merge layer can recompute matrices against the surfaced camera.
-    directionalCsmConfig,
-    directionalCsmDirection,
-  };
-
-  // feat-20260520-skylight-ibl-cubemap M4 / t26+t27: query Skylight entities.
-  // First archetype hit wins (mirrors DirectionalLight pattern); multi-Skylight
-  // warn in record stage (t27) uses skylightCount.
-  const skylightQuery = world.query({ read: [Skylight] }).unwrap();
-  let skylight: SkylightSnapshot | undefined;
-  let skylightCount = 0;
-  for (const row of skylightQuery) {
-    const s = row.get(Skylight);
-    // equirect is OPTIONAL: an omitted field zero-inits to handle 0, which
-    // record treats as "no equirect" -> solid-color ambient via the white
-    // fallback cube. A Skylight WITHOUT an equirect is still a valid snapshot
-    // (the prior `equirectRaw !== undefined` gate dropped color-only
-    // skylights, leaving the scene black -- the downstream gap #4).
-    const equirectRaw = s.equirect;
-    const intensity = s.intensity;
-    const colorR = s.color[0] ?? 1.0;
-    const colorG = s.color[1] ?? 1.0;
-    const colorB = s.color[2] ?? 1.0;
-    const rotation: [number, number, number, number] = [
-      s.rotation[0] ?? 0,
-      s.rotation[1] ?? 0,
-      s.rotation[2] ?? 0,
-      s.rotation[3] ?? 1,
-    ];
-    skylightCount += 1;
-    if (skylight === undefined) {
-      skylight = {
-        equirectHandle: equirectRaw !== undefined ? Math.round(equirectRaw) : 0,
-        color: [colorR, colorG, colorB],
-        intensity,
-        rotation,
-        // w19: winning entity handle for the multi-Skylight once-warn (F-8).
-        entityHandle: row.entity,
-      };
-    }
-  }
-
-  // feat-20260531-skybox-env-background M2 / w5: query SkyboxBackground entities.
-  // First archetype hit wins (mirrors Skylight pattern); multi-entity
-  // once-warn in record stage uses skyboxCount.
-  const skyboxQuery = world.query({ read: [SkyboxBackground] }).unwrap();
-  let skybox: SkyboxSnapshot | undefined;
-  let skyboxCount = 0;
-  for (const row of skyboxQuery) {
-    const s = row.get(SkyboxBackground);
-    const equirectRaw = s.equirect;
-    const modeRaw = s.mode;
-    const rotation: [number, number, number, number] = [
-      s.rotation[0] ?? 0,
-      s.rotation[1] ?? 0,
-      s.rotation[2] ?? 0,
-      s.rotation[3] ?? 1,
-    ];
-    skyboxCount += 1;
-    if (skybox === undefined && equirectRaw !== undefined) {
-      skybox = {
-        equirectHandle: Math.round(equirectRaw),
-        mode: modeRaw,
-        rotation,
-        // w19: winning entity handle for the multi-SkyboxBackground warn (F-8).
-        entityHandle: row.entity,
-      };
-    }
-  }
-
-  // feat-20260528-frustum-culling M3 / w10: precompute per-camera frustum
-  // planes so entities can be tested against all cameras in the inner loop.
-  // Cameras with degenerate projection parameters (e.g. zero fov, zero aspect)
-  // are skipped — entities are always-visible for those. Frustum plane cache
-  // stored as Float32Array[] parallel to the cameras[] array.
-  //
-  // feat-20260708-composited-multi-world-rendering M2 / D-4: a composite
-  // non-owner world uses the camera-owner snapshots, not its own cameras.
-  // This keeps culling correct when the surfaced camera and renderables live
-  // in different worlds. The explicit 'none' mode remains the always-visible
-  // escape hatch for callers that genuinely need it.
-  const frustumPlanes: Float32Array[] = [];
-  const cullingCameras = cullMode === 'external' ? (context.cullCameras ?? []) : cameras;
-  if (cullMode !== 'none') {
-    for (const cam of cullingCameras) {
-      // feat-20260613 M6 / w20: orthographic cameras have fov=0 by design;
-      // the previous degeneracy guard (`fov <= 0`) was rejecting valid ortho
-      // cameras and returning the always-visible escape hatch. Only the
-      // perspective path needs the fov check.
-      if (cam.projection === 'perspective' && (cam.fov <= 0 || cam.aspect <= 0)) {
-        frustumPlanes.push(new Float32Array(0)); // degenerate → always-visible
-        continue;
-      }
-      if (cam.near >= cam.far) {
-        frustumPlanes.push(new Float32Array(0));
-        continue;
-      }
-      const proj = mat4.create();
-      if (cam.projection === 'orthographic') {
-        mat4.orthographic(
-          proj,
-          cam.orthoLeft,
-          cam.orthoRight,
-          cam.orthoBottom,
-          cam.orthoTop,
-          cam.near,
-          cam.far,
-        );
-      } else {
-        mat4.perspective(proj, cam.fov, cam.aspect, cam.near, cam.far);
-      }
-      // feat-20260601 D-3: view = invert(camera world mat4). The camera scale is
-      // carried in the world basis columns; the cull frustum uses the same view
-      // the record stage derives, so cull stays same-source with render (AC-05).
-      const view = mat4.create();
-      mat4.invert(view, cam.world);
-      const vp = mat4.create();
-      mat4.multiply(vp, proj, view);
-      const f = frustum.create();
-      frustum.fromViewProjection(f, vp);
-      frustumPlanes.push(f);
-    }
-  }
-
-  const renderables: RenderableSnapshot[] = [];
-  // feat-20260528-frustum-culling M3 / w11: frustum culling counters.
-  let frustumCulled = 0;
-  let frustumTotal = 0;
-  const explicitlyHidden = new Set<EntityHandle>();
-  // feat-20260520-2d-sprite-layer-mvp M-3 / w22 (@new-surface): three-
-  // bucket dispatch arrays. The legacy `materialDispatch` field stays as
-  // a back-compat union (opaque + transparent + overlay back-compat
-  // entries) so the pre-w25 RenderSystem.draw consumer loop keeps
-  // working until M-3 / w25 lands the bucket-aware record. Plan-strategy
-  // §6.1 (back-compat field stays until M-4 acceptance round green).
-  // M3 / w26: single dispatch list replaces old three-bucket model
-  // (plan-strategy D-3). Entries built per-entity per-pass inside the
-  // archetype walk, then sorted by queue at the end.
-  let dispatch: DispatchEntry[] = [];
-  // Keep the derived material snapshot and its resolved passes local to this
-  // extraction. Shared handles are immutable inputs for the frame, while
-  // dispatch entries still need to be rebuilt for each entity.
-  const materialSnapshotCache: MaterialSnapshotCache = new Map();
-  // tweak-20260611 M1: MeshRenderer renderable archetype walk routes
-  // through one World-owned Query. K-2 sniffing scheme B
-  // (`row.get(X) !== undefined` edge sniff) replaces the prior
-  // `arch.components.some` row-internal back-door. K-3 invariant: the
-  // variable-length array reads (`MeshRenderer.materials`,
-  // `Instances.transforms`) still flow through `_getArrayView` /
-  // `world.get(e, Instances)` -- only the `entity` source switches to
-  // `row.entity`.
-  //
-  // archVersion plumbing exception: the `RenderableSnapshot.instances
-  // .archVersion` cache key is keyed off the live archetype's mutation
-  // counter (record stage `instanceBuffers` cache invalidation). The
-  // QueryRow does not surface this number, so a single archetype
-  // graph access is retained for instance-bearing rows -- match by entity
-  // packed handle. AC-01 grep ≤ current - 1 still holds: the stale
-  // archetype-graph traversal commentary at the prior call site is gone.
-  // feat-20260521-sprite-atlas-animation M3 / T-16: SpriteRegionOverride
-  // column id for the sprite-bucket per-entity region override read
-  void SpriteRegionOverride;
-
-  const meshRendererQuery = world
-    .query({
-      read: [MeshRenderer],
-      optional: [
-        Transform,
-        MeshFilter,
-        Instances,
-        Skin,
-        Layer,
-        MorphWeights,
-        SpriteRegionOverride,
-        SpriteInstances,
-        Points,
-        Lines,
-        SortKey,
-      ],
-    })
-    .unwrap();
-  // QueryRow deliberately exposes component data, not an archetype version.
-  // The optimized ECS owner keeps table storage private, so instance-buffer
-  // invalidation uses a content fingerprint of the managed arrays instead.
-  const resolveArchVersion = (entity: EntityHandle): number => {
-    const values = [
-      worldInternal._getArrayView(entity, Instances, 'transforms'),
-      worldInternal._getArrayView(entity, SpriteInstances, 'transforms'),
-      worldInternal._getArrayView(entity, SpriteInstances, 'regions'),
-    ];
-    let hash = 2166136261;
-    for (const value of values) {
-      hash = Math.imul(hash ^ (value?.length ?? 0), 16777619) >>> 0;
-      if (value === undefined) continue;
-      for (let index = 0; index < value.length; index += 1) {
-        hash = Math.imul(hash ^ Math.fround(value[index] ?? 0), 16777619) >>> 0;
-      }
-    }
-    return hash;
-  };
-  // Pending entries are created with the current renderables.length, which is
-  // exactly the slot this entity receives if it survives culling. No other
-  // renderable can be pushed between staging and this entity's push, so publish
-  // the original fresh entries instead of cloning every submesh descriptor.
-  // A culled entity still discards its private pending array unchanged.
-  const flushPendingDispatch = (pending: readonly DispatchEntry[]): void => {
-    for (const entry of pending) dispatch.push(entry);
-  };
-  for (const row of meshRendererQuery) {
-    // K-2 archetype-edge sniff (scheme B): a missing optional component
-    // surfaces as an absent bundle key, not a row-internal optional chain.
-    // Presence-only checks use QueryRow.has so large array-bearing components
-    // are not materialised merely to answer a boolean question.
-    const hasTransform = row.has(Transform);
-    const meshFilter = row.get(MeshFilter);
-    const hasInstances = row.has(Instances);
-    const skin = row.get(Skin);
-    const morphWeightsView = worldInternal._getArrayView(row.entity, MorphWeights, 'weights');
-    const hasMeshFilter = meshFilter !== undefined;
-    const hasSkin = skin !== undefined;
-    // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
-    // SpriteInstances optional component archetype-edge sniff. Three structured
-    // EcsError codes fire at the row-loop entry (D-6 fail-fast at extract):
-    //   - 'sprite-instances-mutually-exclusive-with-instances'
-    //       (hasInstances && hasSpriteInstances) — Instances + SpriteInstances peers.
-    //   - 'sprite-instances-requires-sprite-shading-model'
-    //       (materialSnap.materialShaderId !== 'forgeax::sprite') — non-sprite material.
-    //   - 'sprite-instances-count-mismatch'
-    //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
-    const hasSpriteInstances = row.has(SpriteInstances);
-    const points = row.get(Points);
-    const lines = row.get(Lines);
-    const sortKey = row.get(SortKey)?.value;
-    const pointsLinesComponent =
-      points !== undefined ? 'Points' : lines !== undefined ? 'Lines' : undefined;
-    const isRenderable = hasTransform && hasMeshFilter;
-
-    // feat-20260601 D-3: the resolved world transform is read per-entity from
-    // the single `Transform.world` mat4 (propagateTransforms output) inside the
-    // row loop below. The retired GlobalTransform-column-switch + the
-    // ChildOf-without-GlobalTransform misconfig signal are gone: the world
-    // column always exists on a Transform-bearing entity, so the
-    // "ChildOf but forgot GlobalTransform" misconfiguration cannot occur.
-    const fAssetHandle = meshFilter?.assetHandle;
-    // feat-20260520-2d-sprite-layer-mvp M-3 / w22: Layer column read here;
-    // value folded into each DispatchEntry so the render-system sort can use
-    // it as the primary transparent-sort key without a second ECS round-trip.
-    const fLayerValue = row.get(Layer)?.value;
-    // feat-20260608-tilemap-object-layer-rendering M3 / m3-t5: tilemap-spawned
-    // per-cell render entities (the ones `tilemap-chunk-extract-system`
-    // pushes via `spawnDerivedRenderEntities`) reach this loop via the same
-    // archetype edge that carries a sprite entity -- they all wear
-    // `MeshFilter.assetHandle === HANDLE_QUAD` + a `forgeax::sprite`-shaded
-    // material asset + the sprite-bucket `values.region` rectangle.
-    // For the per-entity Y-sort path (requirements §AC-12 / §AC-13):
-    //
-    //   sortKey = -(Transform.posY - effectivePivotY * |Transform.scaleY|)
-    //
-    // with `effectivePivotY = effectivePivotYForTilemapFlip(pivotY, pivotX,
-    // flipV, flipDiagonal)` from `tilemap-chunk-extract-system` (the SAME
-    // helper drives `spawnDerivedRenderEntities`, so the value the sort
-    // uses matches the value baked into `Transform.posY` -- charter P4
-    // single SSOT for the post-flip pivot). Sprite entities reuse the same
-    // formula but skip the flip composition (their pivot stays raw); both
-    // bucket types therefore feed one `transparentSortEntries` argsort
-    // step + share the `argsortInPlace` radix LSD primitive (plan-strategy
-    // §D-1 / §D-3). The detection lives on the material side -- detect a
-    // tilemap-spawned entity by `MeshFilter.assetHandle === HANDLE_QUAD`
-    // plus the `forgeax::sprite` shader id on `MeshRenderer.material`'s
-    // first pass + non-empty `values.region`; no new public ECS
-    // marker component lands (charter F1 minimum surface).
-    //
-    // Layer.value is now folded into each DispatchEntry.layer (fLayerValue
-    // column, read once per archetype pass above). render-system.ts
-    // `sortTransparentDispatch` applies (layer ASC, sortValue ASC) for all
-    // transparent-sort modes (0/1/2) using posY/pivotY/sizeY from the
-    // parallel renderables[] snapshot -- no second ECS round-trip needed.
-    // feat-20260527-sprite-nineslice M4 / w17 (AC-14): SpriteRegionOverride
-    // per-entity UV sub-rectangle. When the entity carries this component the
-    // 4-float `[uMin, vMin, uW, vH]` override displaces the asset-side
-    // `values.region` for this entity only — downstream 9-slice logic
-    // measures slices against this effective region.zw, so a half-width sub-
-    // sprite reduces the anchor budget to 0.5 rather than the asset's 1.0.
-    //
-    // SpriteRegionOverride.region is a fixed stride-4 value. Per-row reads
-    // route through `_getArrayView` for the zero-copy row window
-    // row-window slice (consistent with the variable-length array column
-    // reads -- K-3 carve-out keeps `_getArrayView` as the row-accessor of
-    // record for each non-scalar column).
-    const hasSpriteRegionOverride = row.has(SpriteRegionOverride);
-    // feat-20260523-skin-skeleton-animation M2 / T-21: Skin component
-    // column views for coexistence check + joint despawn fail-fast.
-    // `skeleton` holds the packed Handle<SkeletonAsset>; `joints` holds
-    // the packed Entity u32 array (N x one u32 each).
-    const skinSkeletonView = skin?.skeleton;
-
-    let archVersion = 0;
-    if (hasInstances || hasSpriteInstances) {
-      // All rows in this callback share one archetype.  Only these two
-      // instance-bearing paths consume the version in their cache key.
-      archVersion = resolveArchVersion(row.entity);
-    }
-
-    {
-      // feat-20260608 M2 / w11: read materials array via _getArrayView
-      const entity = row.entity;
-      if (isRenderable && visibility?.effective(entity) === 'hidden') {
-        explicitlyHidden.add(entity);
-        continue;
-      }
-      const layerVal = fLayerValue ?? 0;
-      // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
-      // (carries PR #598 feat-20260703 D-7): dispatch entries for this entity
-      // are staged locally and flushed into the shared `dispatch[]` array
-      // ONLY when the entity survives the frustum-cull `continue` below —
-      // same cull-passed branch as the paired `renderables.push`. Prior to
-      // this fix the three `dispatch.push` sites ran before the cull check,
-      // so a culled entity left dangling entries whose `renderableIndex`
-      // aliased the slot a LATER visible entity occupied — surfacing as the
-      // pbr-mesh-array-bgl vs hdrp-unified-bgl-group2 BGL/PL mismatch on
-      // the deferred-shading smoke (PR #598 CI). Pure ordering fix; cull
-      // logic and MeshRenderer contract unchanged.
-      const pendingDispatch: DispatchEntry[] = [];
-      const materialsView = worldInternal._getArrayView(entity, MeshRenderer, 'materials') as
-        | Uint32Array
-        | undefined;
-      const materialCount = materialsView?.length ?? 0;
-      let materialHandles = Array.from(materialsView ?? []);
-      let materialBindingSources: MeshMaterialBindingSource[] = materialHandles.map(
-        () => 'renderer-override',
-      );
-      let materialBindingDiagnostics: MeshMaterialBindingDiagnostic[] = [];
-      let gpuDrivenSubmeshes: readonly MeshAsset['submeshes'][number][] = [];
-      let gpuDrivenIndexed = false;
-
-      // Resolve instance overrides against mesh-owned slot defaults once.
-      const fAssetHandleVal = fAssetHandle;
-      if (
-        fAssetHandleVal !== undefined &&
-        fAssetHandleVal !== 0 &&
-        assets !== undefined &&
-        assets !== null
-      ) {
-        const meshHandle = toShared<'MeshAsset'>(fAssetHandleVal);
-        const meshRes = resolveAssetHandle<Asset>(world, meshHandle);
-        if (meshRes.ok && meshRes.value.kind === 'mesh') {
-          const meshAsset = meshRes.value as MeshAsset;
-          gpuDrivenSubmeshes = meshAsset.submeshes;
-          gpuDrivenIndexed = meshAsset.indices !== undefined;
-          // extractFrames is also a public read path and can run before the
-          // Renderer.draw pre-render stage. GlyphText proves the derived mesh
-          // owns exactly one Default slot; arbitrary meshes still fail closed
-          // and never infer slot topology from their submeshes.
-          if (!Array.isArray(meshAsset.materialSlots) && world.get(entity, GlyphText).ok) {
-            ensureGlyphMeshMaterialSlots(world, meshHandle);
-          }
-          const guid = (meshRes.value as { guid?: string }).guid ?? '<no-guid>';
-          const resolvedBindings = resolveMeshMaterialBindings(meshAsset, materialsView ?? [], {
-            isValidOverride(handle) {
-              const resolved = resolveAssetHandle(world, toShared<'MaterialAsset'>(handle));
-              return resolved.ok && resolved.value.kind === 'material';
-            },
-            resolveMeshDefault(defaultGuid) {
-              const guidText = AssetGuid.format(defaultGuid);
-              if (assets.lookup<Asset>(guidText)?.kind !== 'material') return undefined;
-              return internSharedRefFromGuid(world, assets, guidText, 'MaterialAsset') as
-                | number
-                | undefined;
-            },
-          });
-          if (!resolvedBindings.ok) {
-            if (resolvedBindings.code === 'mesh-material-slots-missing') {
-              worldInternal._routeError(
-                new AssetError({
-                  code: 'load-failed',
-                  expected: 'every MeshAsset producer supplies materialSlots[]',
-                  hint: `fix the MeshAsset producer; renderer inheritance never guesses slot topology (mesh=${guid}, entity=${entity}, vertices=${meshAsset.vertices.length}, indices=${meshAsset.indices?.length ?? 0})`,
-                  detail: {
-                    referencedByGuid: guid,
-                    referencedByKind: 'mesh',
-                    subAssetGuid: '<material-slots-missing>',
-                    sourceField: { fieldName: 'materialSlots' },
-                  },
-                }),
-                {
-                  severity: Severity.Error,
-                  systemName: 'RenderSystem.extract (mesh-material-slots-missing)',
-                },
-              );
-              continue;
-            }
-            const materialGuid = AssetGuid.format(resolvedBindings.defaultMaterial);
-            worldInternal._routeError(
-              new AssetError({
-                code: 'load-failed',
-                expected: `MeshAsset materialSlots[${resolvedBindings.slotIndex}] default ${materialGuid} is ready and a MaterialAsset`,
-                hint: `loadByGuid(meshGuid) must recursively load the declared default material; mesh=${guid}, slot=${resolvedBindings.slotIndex}, material=${materialGuid}`,
-                detail: {
-                  referencedByGuid: guid,
-                  referencedByKind: 'mesh',
-                  subAssetGuid: materialGuid,
-                  sourceField: {
-                    fieldName: 'materialSlots',
-                    arrayIndex: resolvedBindings.slotIndex,
-                  },
-                },
-              }),
-              {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (mesh-default-not-ready)',
-              },
-            );
-            continue;
-          }
-          materialHandles = resolvedBindings.bindings.map((binding) => binding.handle);
-          materialBindingSources = resolvedBindings.bindings.map((binding) => binding.source);
-          materialBindingDiagnostics = resolvedBindings.diagnostics.map((diagnostic) => ({
-            ...diagnostic,
-            detail:
-              diagnostic.code === 'mesh-renderer-material-override-overflow'
-                ? {
-                    expectedCount: meshAsset.materialSlots.length,
-                    actualCount: materialCount,
-                    meshAssetGuid: guid,
-                  }
-                : {
-                    meshAssetGuid: guid,
-                    slotIndex: diagnostic.slotIndex,
-                    handle: diagnostic.handle ?? 0,
-                  },
-          }));
-          for (const diagnostic of resolvedBindings.diagnostics) {
-            worldInternal._routeError(
-              new AssetError({
-                code: diagnostic.code,
-                expected:
-                  diagnostic.code === 'mesh-renderer-material-override-overflow'
-                    ? `materials.length <= materialSlots.length (${meshAsset.materialSlots.length})`
-                    : `materials[${diagnostic.slotIndex}] resolves to a live MaterialAsset`,
-                hint: ASSET_ERROR_HINTS[diagnostic.code],
-                detail:
-                  diagnostic.code === 'mesh-renderer-material-override-overflow'
-                    ? {
-                        expectedCount: meshAsset.materialSlots.length,
-                        actualCount: materialCount,
-                        meshAssetGuid: guid,
-                      }
-                    : {
-                        meshAssetGuid: guid,
-                        slotIndex: diagnostic.slotIndex,
-                        handle: diagnostic.handle ?? 0,
-                      },
-              }),
-              {
-                severity: Severity.Warning,
-                systemName: `RenderSystem.extract (${diagnostic.code})`,
-              },
-            );
-          }
-        }
-      }
-
-      if (materialHandles.length === 0) {
-        materialHandles = [0];
-        materialBindingSources = ['engine-default'];
-      }
-
-      // Use the first material handle for the entity-level snapshot
-      // (shading-model dispatch routing + multi-pass DispatchEntry. Per-
-      // submesh materials[i>=1] are resolved by `resolveMaterialSnapshot`
-      // below into the `materials[]` array, used by the record stage to
-      // upload N material UBO slots and bind the i-th slot before the
-      // i-th submesh draw.) -- feat-20260608 M5 amend / w11-a.
-      const handleRaw = materialHandles[0] ?? 0;
-
-      const cachedMaterial =
-        handleRaw !== 0 && !hasSpriteRegionOverride && !hasSkin
-          ? materialSnapshotCache.get(handleRaw)
-          : undefined;
-
-      let materialSnap: MaterialSnapshot;
-
-      if (cachedMaterial !== undefined) {
-        materialSnap = cachedMaterial.snapshot;
-        if (isRenderable) {
-          appendMaterialDispatchEntries(
-            pendingDispatch,
-            cachedMaterial.passes,
-            entity,
-            handleRaw,
-            renderables.length,
-            layerVal,
-            materialSnap.paramSnapshot,
-          );
-        }
-      } else if (handleRaw === 0 || assets === undefined || assets === null) {
-        // case B: missing-spec sentinel -> mid-grey defaultMaterialSnapshot.
-        materialSnap = defaultMaterialSnapshot(handleRaw);
-      } else {
-        const tagged = toShared<'MaterialAsset'>(handleRaw);
-        const stablePersistentCached =
-          !hasSpriteRegionOverride && !hasSkin
-            ? readStablePersistentMaterialSnapshot(
-                persistentMaterialSnapshotCache,
-                handleRaw,
-                assets,
-              )
-            : undefined;
-        if (stablePersistentCached !== undefined) {
-          materialSnapshotCache.set(handleRaw, stablePersistentCached);
-          materialSnap = stablePersistentCached.snapshot;
-          if (isRenderable) {
-            appendMaterialDispatchEntries(
-              pendingDispatch,
-              stablePersistentCached.passes,
-              entity,
-              handleRaw,
-              renderables.length,
-              layerVal,
-              materialSnap.paramSnapshot,
-            );
-          }
-        } else {
-          const res = resolveAssetHandle(world, tagged);
-          if (!res.ok) {
-            if (isRenderable) {
-              const rhiErr = new RhiError({
-                code: 'asset-not-registered',
-                expected: 'MeshRenderer.material in AssetRegistry',
-                hint: 'catalog the material via assetRegistry.catalog(guid, asset) + world.allocSharedRef before spawn, or remove the material field to fall back to default',
-                detail: { assetHandle: handleRaw },
-              });
-              worldInternal._routeError(rhiErr, {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (material asset-not-registered)',
-              });
-            }
-            continue;
-          }
-          const asset = res.value;
-          if (asset.kind !== 'material') {
-            materialSnap = defaultMaterialSnapshot(handleRaw);
-          } else {
-            // feat-20260529 M3 / w11: material parent chain inheritance via
-            // read-through _materialWalk accessor (plan-strategy D-6).
-            // The old direct asset.passes / asset.values read never
-            // walked the parent chain, causing broken-inheritance (root cause).
-            const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assets);
-            if (!resolvedResult.ok) {
-              // AC-09 / S-7 / q8=A: passes-empty or cycle must fire structured
-              // error through _routeError (same routing as asset-not-registered
-              // branch above). Silent continue is forbidden because it produces
-              // a black screen indistinguishable from a content bug.
-              const err = resolvedResult.error;
-              switch (err.code) {
-                case 'material-parent-not-found':
-                case 'material-no-effective-pass':
-                case 'material-value-unknown':
-                case 'material-value-type-mismatch':
-                case 'material-contract-program-mismatch':
-                  worldInternal._routeError(err, {
-                    severity: Severity.Error,
-                    systemName: `RenderSystem.extract (${err.code})`,
-                  });
-                  break;
-                case 'material-circular-inheritance':
-                  worldInternal._routeError(err, {
-                    severity: Severity.Error,
-                    systemName: 'RenderSystem.extract (material-circular-inheritance)',
-                  });
-                  break;
-                default:
-                  // Exhaustive guard: unhandled error codes from _materialWalk
-                  // surface an internal assertion to avoid silent continuation.
-                  worldInternal._routeError(err, {
-                    severity: Severity.Error,
-                    systemName: `RenderSystem.extract (_materialWalk: ${err.code})`,
-                  });
-              }
-              continue;
-            }
-            const resolved = resolvedResult.value;
-            const allPasses = resolved.passes;
-            const firstPassShader =
-              allPasses.length > 0
-                ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
-                : undefined;
-            const pv = materialValuesToLinearRuntime(
-              resolved.values,
-              materialColorParameterSchema(resolved.parameters ?? [], firstPassShader, assets),
-              resolved.colorSpace,
-            ) as Readonly<Record<string, unknown>>;
-
-            const baseColorPv = pv.baseColor as readonly number[] | undefined;
-            const baseColor = vec3.create(
-              baseColorPv?.[0] ?? 1,
-              baseColorPv?.[1] ?? 1,
-              baseColorPv?.[2] ?? 1,
-            );
-            const metallicPv = typeof pv.metallic === 'number' ? pv.metallic : 0;
-            const roughnessPv = typeof pv.roughness === 'number' ? pv.roughness : 0.5;
-            const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
-            const clearcoatRoughnessPv =
-              typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
-            const specularTintPv = pv.specularTint as readonly number[] | undefined;
-            const normalScalePv = materialNormalScale(pv);
-
-            const paramSnap: Record<string, number | number[] | string> = {};
-            for (const [k, v] of Object.entries(pv)) {
-              if (typeof v === 'number') paramSnap[k] = v;
-              else if (typeof v === 'string') paramSnap[k] = v;
-              else if (Array.isArray(v) && v.every((x) => typeof x === 'number')) {
-                paramSnap[k] = v as number[];
-              }
-            }
-
-            const materialParamSchema = materialParametersToParamSchema(
-              resolved.parameters ?? [],
-              firstPassShader,
-            );
-            // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
-            // bidirectional Skin <-> pbr-skin material fail-fast at extract.
-            // Skin component without a forgeax::pbr-skin first-pass material
-            // would draw with a non-skin shader against the 18-float vertex
-            // buffer (joints/weights bytes interpreted as garbage). Conversely
-            // a forgeax::pbr-skin material against a 12-float (unskinned) mesh
-            // would have @location(4)/@location(5) read uninitialized memory.
-            // Both cases route through `_routeError` + `continue` so a single
-            // misconfigured entity does NOT abort the whole frame's draw list
-            // (charter P3 explicit failure + plan-decisions D-5 over `return err`).
-            {
-              const hasSkinSkel =
-                hasSkin &&
-                skinSkeletonView !== undefined &&
-                skinSkeletonView !== undefined &&
-                skinSkeletonView !== 0;
-              const isPbrSkinMaterial = firstPassShader === 'forgeax::pbr-skin';
-              if (hasSkinSkel && !isPbrSkinMaterial) {
-                worldInternal._routeError(new SkinMaterialMismatchError(entity, firstPassShader), {
-                  severity: Severity.Error,
-                  systemName: 'RenderSystem.extract (skin-material-mismatch)',
-                });
-                continue;
-              }
-              if (isPbrSkinMaterial && fAssetHandleVal !== undefined && fAssetHandleVal !== 0) {
-                const meshHandleForSkinCheck = toShared<'MeshAsset'>(fAssetHandleVal);
-                const meshResForSkinCheck = resolveAssetHandle<MeshAsset>(
-                  world,
-                  meshHandleForSkinCheck,
-                );
-                if (meshResForSkinCheck.ok) {
-                  const meshAttrs = meshResForSkinCheck.value.attributes;
-                  const hasSkinIdx = meshAttrs.skinIndex !== undefined;
-                  const hasSkinWt = meshAttrs.skinWeight !== undefined;
-                  if (!hasSkinIdx || !hasSkinWt) {
-                    const missing: 'skinIndex' | 'skinWeight' | 'both' =
-                      !hasSkinIdx && !hasSkinWt ? 'both' : !hasSkinIdx ? 'skinIndex' : 'skinWeight';
-                    worldInternal._routeError(new MaterialSkinAttrMissingError(entity, missing), {
-                      severity: Severity.Error,
-                      systemName: 'RenderSystem.extract (material-skin-attr-missing)',
-                    });
-                    continue;
-                  }
-                }
-              }
-            }
-            // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12 (D-3):
-            // sprite materials now flow through the same generic paramSchema-
-            // driven extract path PBR / unlit use. The narrow `forgeax::sprite`
-            // exception block below covers exactly 2 plan-authorised cases:
-            //   1. SpriteRegionOverride per-entity region displacement (Q4=a)
-            //   2. flipX / flipY -> region fold (plan-strategy D-8)
-            // No legacy values field-name shim; demos and SpriteParamValues
-            // are UBO-aligned (no `texture` / `baseColor` / `pivot` / `slices`
-            // / `sliceMode` keys reaching this code path). AGENTS.md §Change
-            // stance: "no shim layer, no v1/v2 dual-path".
-            //
-            // feat-20260624 M1' / t6: `'forgeax::sprite-lit'` walks the same
-            // sprite-family vertex path (VsOut byte-identical, paramSchema
-            // mirror) so the SAME 2 folds apply — extending `isSprite` to
-            // cover both shader ids keeps the narrowing-point count at 1
-            // (plan-strategy §1.6 + D-1: mirror sprite, no new branch).
-            const isSprite =
-              firstPassShader === 'forgeax::sprite' || firstPassShader === 'forgeax::sprite-lit';
-
-            // feat-20260613-material-paramschema-driven-binding M4 / w23
-            // (D-5 graceful): paramSchema-driven texture-field validation.
-            // For each handle-shaped paramValue (typeof === 'number'),
-            // verify it actually points at a registered texture asset
-            // when the field is declared as a texture in the shader's
-            // paramSchema; mis-typed handles (e.g. a scalar f32 stored as
-            // int 0 the M4 / w22 graceful fallback resolved to a wrong
-            // sub-asset) are dropped here so the record stage falls back
-            // to MISSING_TEXTURE_HANDLE (default white) without raising.
-            const validateTextureHandle = (
-              fieldName: string,
-              raw: unknown,
-            ): Handle<'TextureAsset', 'shared'> | undefined => {
-              // feat-20260614 M8 (D-19): a string value is an embedded texture
-              // GUID; resolve it to a column handle via catalog + allocSharedRef
-              // before validation. A number is an already-minted column handle.
-              let handle: Handle<'TextureAsset', 'shared'>;
-              const textureRef = materialTextureRef(raw);
-              const textureGuid = assetReferenceText(textureRef);
-              if (textureGuid !== undefined) {
-                if (assets === null || assets === undefined) return undefined;
-                // M4: intern so the GUID mints one stable handle per World
-                // instead of a fresh slot every frame (GPU residency relies on
-                // a stable handleSlot). onLastRelease -> gpuStore.evictTexture.
-                const interned = internSharedRefFromGuid(
-                  world,
-                  assets,
-                  textureGuid,
-                  'TextureAsset',
-                );
-                if (interned === undefined) return undefined;
-                handle = interned;
-              } else if (typeof textureRef === 'number') {
-                handle = toShared<'TextureAsset'>(textureRef);
-              } else {
-                return undefined;
-              }
-              if (assets === null || assets === undefined) return handle;
-              const declaredFields = materialTextureFields(
-                firstPassShader,
-                materialParamSchema.length > 0
-                  ? derive(materialParamSchema).textureFieldNames
-                  : firstPassShader !== undefined
-                    ? assets.materialShaderTextureFieldNames(firstPassShader)
-                    : undefined,
-              );
-              // Shader not registered (R-4 cross-worktree path) -> trust the
-              // raw handle and let the record stage / GPU layer surface each
-              // mismatch via MISSING_TEXTURE_HANDLE.
-              if (declaredFields === undefined) return handle;
-              // Field is not declared as a texture by the shader -> the
-              // loader's "try every int" fallback misclassified a scalar;
-              // drop the slot so the record stage uses the default white.
-              if (
-                !declaredFields.has(fieldName) &&
-                !isEngineInjectedTextureField(firstPassShader, fieldName)
-              ) {
-                return undefined;
-              }
-              // Field declared as texture: verify the handle's asset kind.
-              const assetRes = resolveAssetHandle(world, handle);
-              if (!assetRes.ok) return undefined;
-              const kind = (assetRes.value as { kind?: string }).kind;
-              if (kind !== 'texture') return undefined;
-              return handle;
-            };
-            // feat-20260614 M8 (D-19): resolve a sampler / texture paramValue
-            // that may be an embedded GUID string (catalog + allocSharedRef) or
-            // an already-minted column handle (number passthrough).
-            const resolveParamHandle = <B extends string>(
-              raw: unknown,
-              brand: B,
-            ): Handle<B, 'shared'> | undefined => {
-              const value = materialTextureRef(raw);
-              if (typeof value === 'number') return toShared<B>(value);
-              const guid = assetReferenceText(value);
-              if (guid !== undefined) {
-                if (assets === null || assets === undefined) return undefined;
-                // M4: intern the GUID -> column-handle resolution (one stable
-                // handle per (world, guid, brand), reused across frames).
-                return internSharedRefFromGuid(world, assets, guid, brand);
-              }
-              return undefined;
-            };
-            // feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): iterate the
-            // shader's derive(paramSchema).textureFieldNames SSOT so the Nth
-            // user-region texture (e.g. parallax heightTexture) is validated +
-            // carried, replacing the hardcoded 3-field list. validateTextureHandle
-            // already drops fields a shader doesn't declare as a texture.
-            const userRegionFields =
-              materialTextureFields(
-                firstPassShader,
-                materialParamSchema.length > 0
-                  ? derive(materialParamSchema).textureFieldNames
-                  : firstPassShader !== undefined && assets !== null && assets !== undefined
-                    ? assets.materialShaderTextureFieldNames(firstPassShader)
-                    : undefined,
-              ) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
-            const textureHandles = new Map<string, Handle<'TextureAsset', 'shared'>>();
-            const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
-            for (const field of userRegionFields) {
-              // D-5: a video-kind paramValue routes to the transient path
-              // (videoTextureFields), NOT validateTextureHandle (which drops
-              // kind!=='texture', the R-7 silent-fail path). Static fields fall
-              // through to validateTextureHandle unchanged.
-              const videoHandle =
-                assets !== null && assets !== undefined
-                  ? resolveVideoFieldHandle(pv[field], world, assets)
-                  : undefined;
-              if (videoHandle !== undefined) {
-                videoTextureFields.set(field, videoHandle);
-                continue;
-              }
-              const handle = validateTextureHandle(field, pv[field]);
-              if (handle !== undefined) textureHandles.set(field, handle);
-            }
-            const baseColorTextureHandle = textureHandles.get('baseColorTexture');
-            const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
-            const normalTextureHandle = textureHandles.get('normalTexture');
-            const samplerHandles = collectMaterialTextureSamplers(pv, (value) =>
-              resolveParamHandle(materialTextureRef(value), 'SamplerAsset'),
-            );
-            const emissiveTextureHandle = validateTextureHandle(
-              'emissiveTexture',
-              pv.emissiveTexture,
-            );
-            const occlusionTextureHandle = validateTextureHandle(
-              'occlusionTexture',
-              pv.occlusionTexture,
-            );
-            const textureCoordinates = collectMaterialTextureCoordinates(pv);
-            const emissivePv = pv.emissive as readonly number[] | undefined;
-            // feat-20260625 M2 / w6: first-pass transparency flag folds into
-            // MaterialSnapshot.transparent so the record stage can drive the
-            // LDR split + premultiplied-alpha blend decision without
-            // re-reading passes[]. feat-20260626-collapse M2: derive from
-            // `passes[0].renderState.blend !== undefined` (blend presence is
-            // the SSOT after MaterialPass.transparent was dropped).
-            // Result is plain boolean (always defined here) — written as-is
-            // into the snapshot (`boolean | undefined` field, see L759).
-            const firstPassTransparent: boolean = allPasses[0]?.renderState?.blend !== undefined;
-
-            // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12 (D-8):
-            // narrow `forgeax::sprite` extract block --- folds the legacy user
-            // values format (flipX / flipY / slices / sliceMode + free
-            // region / pivot) into the UBO-aligned paramSnapshot vec4 fields
-            // (region / pivotAndSize / slicesAndMode + colorTint). Also folds
-            // per-entity SpriteRegionOverride (Q4=a). After this block the
-            // generic else branch picks up the snapshot via the same writer
-            // path PBR / unlit use; no more shadingModel='sprite' arm, no
-            // spriteFields POD (AC-02 / AC-07: extract has exactly 2 hard
-            // `forgeax::sprite` checks --- this fold + the slices mesh swap on
-            // the record side).
-            if (isSprite) {
-              // SpriteRegionOverride: per-entity per-frame region displacement.
-              let overrideRegion: readonly [number, number, number, number] | undefined;
-              if (hasSpriteRegionOverride) {
-                const overrideView = worldInternal._getArrayView(
-                  entity,
-                  SpriteRegionOverride,
-                  'region',
-                ) as Float32Array | undefined;
-                if (overrideView !== undefined && overrideView.length >= 4) {
-                  overrideRegion = [
-                    overrideView[0] ?? 0,
-                    overrideView[1] ?? 0,
-                    overrideView[2] ?? 1,
-                    overrideView[3] ?? 1,
-                  ];
-                }
-              }
-              // Region resolution priority: SpriteRegionOverride > paramSnapshot.
-              // region (UBO-aligned user input) > [0,0,1,1] identity.
-              const regionPv = paramSnap.region as readonly number[] | undefined;
-              let regionX = overrideRegion?.[0] ?? regionPv?.[0] ?? 0;
-              let regionY = overrideRegion?.[1] ?? regionPv?.[1] ?? 0;
-              let regionZ = overrideRegion?.[2] ?? regionPv?.[2] ?? 1;
-              let regionW = overrideRegion?.[3] ?? regionPv?.[3] ?? 1;
-              // flipX / flipY fold into region (D-8): the shader does
-              // `uv * region.zw + region.xy`, so flipping along U is a sign
-              // negation of region.z plus an origin offset.
-              const flipXPv = typeof pv.flipX === 'number' ? pv.flipX : 0;
-              const flipYPv = typeof pv.flipY === 'number' ? pv.flipY : 0;
-              if (flipXPv !== 0) {
-                regionX += regionZ;
-                regionZ = -regionZ;
-              }
-              if (flipYPv !== 0) {
-                regionY += regionW;
-                regionW = -regionW;
-              }
-              paramSnap.region = [regionX, regionY, regionZ, regionW];
-              // Guard: slicesAndMode must be present and zero for non-9-slice
-              // sprites so the record-stage UBO writer (applyParamSnapshotToUbo)
-              // writes [0,0,0,0] at offset 48 instead of leaving the
-              // buildPbrMaterialUboPayload PBR baseline (e.g. occlusionStrength=1
-              // at that slot). A non-zero slicesAndMode trips `useSlices=true`
-              // in sprite.wgsl, which degenerates HANDLE_QUAD geometry → invisible.
-              if (!('slicesAndMode' in paramSnap)) {
-                (paramSnap as Record<string, unknown>).slicesAndMode = [0, 0, 0, 0];
-              }
-            }
-
-            // Generic materialShaderId snapshot --- sprite included now flows
-            // through this single branch (plan-strategy D-3 / AC-01 / AC-02 /
-            // AC-07). The sprite block above only writes paramSnap.region (D-8
-            // SpriteRegionOverride + flip fold); the rest of the UBO is filled
-            // by the same paramSchema-driven path PBR / unlit use.
-            materialSnap = {
-              baseColor,
-              metallic: metallicPv,
-              roughness: roughnessPv,
-              clearcoat: clearcoatPv,
-              clearcoatRoughness: clearcoatRoughnessPv,
-              ...(specularTintPv !== undefined && {
-                specularTint: [
-                  specularTintPv[0] ?? 1,
-                  specularTintPv[1] ?? 1,
-                  specularTintPv[2] ?? 1,
-                ] as readonly [number, number, number],
-              }),
-              normalScale: normalScalePv,
-              materialShaderId: firstPassShader,
-              materialHandle: handleRaw,
-              renderState: pipelineRenderState(allPasses[0]?.renderState),
-              paramSnapshot: paramSnap,
-              ...(materialParamSchema.length > 0 && { materialParamSchema }),
-              ...(textureCoordinates.size > 0 && { textureCoordinates }),
-              ...(samplerHandles.size > 0 && { samplerHandles }),
-              ...(textureHandles.size > 0 && { textureHandles }),
-              ...(videoTextureFields.size > 0 && { videoTextureFields }),
-              ...(baseColorTextureHandle !== undefined && {
-                baseColorTexture: baseColorTextureHandle,
-              }),
-              ...(metallicRoughnessTextureHandle !== undefined && {
-                metallicRoughnessTexture: metallicRoughnessTextureHandle,
-              }),
-              ...(normalTextureHandle !== undefined && { normalTexture: normalTextureHandle }),
-              ...(emissivePv !== undefined && {
-                emissive: [emissivePv[0] ?? 0, emissivePv[1] ?? 0, emissivePv[2] ?? 0] as readonly [
-                  number,
-                  number,
-                  number,
-                ],
-              }),
-              ...(typeof pv.emissiveIntensity === 'number' && {
-                emissiveIntensity: pv.emissiveIntensity,
-              }),
-              ...(emissiveTextureHandle !== undefined && {
-                emissiveTexture: emissiveTextureHandle,
-              }),
-              ...(occlusionTextureHandle !== undefined && {
-                occlusionTexture: occlusionTextureHandle,
-              }),
-              ...(typeof pv.occlusionStrength === 'number' && {
-                occlusionStrength: pv.occlusionStrength,
-              }),
-              transparent: firstPassTransparent,
-            };
-
-            if (!hasSpriteRegionOverride && !hasSkin) {
-              const stored = storeMaterialSnapshot(
-                materialSnapshotCache,
-                handleRaw,
-                materialSnap,
-                allPasses,
-                asset,
-                assets,
-              );
-              if (stored.crossFrameSafe) persistentMaterialSnapshotCache?.set(handleRaw, stored);
-            }
-
-            // Build dispatch entries from resolved passes.
-            if (isRenderable) {
-              appendMaterialDispatchEntries(
-                pendingDispatch,
-                allPasses,
-                entity,
-                handleRaw,
-                renderables.length,
-                layerVal,
-                paramSnap,
-              );
-            }
-          }
-        }
-      }
-
-      // feat-20260609 M2/M5 corrective fixup: default-material entities
-      // (handleRaw===0 / case-B MeshRenderer{data:{}}) must produce
-      // ShadowCaster dispatch entries so the shadow pass includes them.
-      // The pre-existing logic only builds dispatch entries from
-      // resolved material assets; defaultMaterialSnapshot() (mid-grey unlit)
-      // left dispatch empty, causing shadow-m2/m3 test failures.
-      // Requirements §10.5: shadow-casting is default behaviour, opt-out
-      // via castShadow:false.  The default material has no opt-out, so
-      // it casts shadows.
-      //
-      // CHARTER NOTE (feat-20260609 T-005-a): the URP literals
-      // `LightMode: 'ShadowCaster'` / `LightMode: 'Forward'` below are a
-      // local URP-bridge — they mirror what `Materials.unlit({ castShadow:
-      // true })` produces at the asset layer.  The default-material
-      // handle=0 path bypasses asset registration, so we synthesize the
-      // same dispatch shape inline.  Follow-up cleanup (F-1 from
-      // implement-review R1): thread default materials through the
-      // Materials factory so this block can call into the shared
-      // passes[] producer.
-      // tweak-20260701 M1: `materialSnap.shadingModel === 'unlit'` removed —
-      // for handleRaw===0, defaultMaterialSnapshot() was always unlit
-      // (the shadingModel check was a tautology); the isRenderable &&
-      // handleRaw===0 guard alone preserves the exact same dispatch shape.
-      if (isRenderable && handleRaw === 0) {
-        const shadowCasterTags: Record<string, string> = { LightMode: 'ShadowCaster' };
-        const nextRenderableIndex = renderables.length;
-        // M2.5: stage into pendingDispatch; flushed at the renderable push
-        // site below only when the entity survives cull.
-        pendingDispatch.push({
-          entityIndex: entity,
-          materialHandle: 0,
-          renderableIndex: nextRenderableIndex,
-          passIndex: 0,
-          queue: 2000,
-          layer: layerVal,
-          tags: shadowCasterTags,
-          renderState: undefined,
-          defines: undefined,
-          vertexEntry: 'vs_main',
-          fragmentEntry: undefined,
-          materialShaderId: 'forgeax::default-shadow-caster',
-          paramSnapshot: {},
-        });
-        // Also add a Forward pass entry so the entity renders in the
-        // main scene pass (mirrors Materials.unlit default).
-        appendMaterialDispatchEntries(
-          pendingDispatch,
-          [DEFAULT_FORWARD_PASS],
-          entity,
-          0,
-          nextRenderableIndex,
-          layerVal,
-          {},
-          1,
-        );
-      }
-
-      if (isRenderable) {
-        // feat-20260612 M2 / m2-6: Skin + Instances coexistence + per-joint
-        // dangling fail-fast + real palette slice allocation. Replaces the
-        // T-21 placeholder ({0,0} discriminator-only sentinel) with full
-        // resolve / validate / write chain (D-9 reset already fired at
-        // extractFrame entry; per-entity allocate + writeJointPalette here).
-        let skinSlice: SkinPaletteSlice | undefined;
-        if (hasSkin) {
-          const skeletonHandleRaw = skinSkeletonView;
-          if (
-            skeletonHandleRaw !== undefined &&
-            skeletonHandleRaw !== 0 &&
-            assets !== undefined &&
-            assets !== null
-          ) {
-            // Skin + Instances coexistence is forbidden (D-10).
-            if (hasInstances) {
-              worldInternal._routeError(new SkinInstancesCoexistForbiddenError(entity), {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (skin-instances-coexist)',
-              });
-
-              continue;
-            }
-            // (a) Resolve skeleton asset; on failure -> skeleton-resolve-failed.
-            const skeletonHandle = toShared<'SkeletonAsset'>(skeletonHandleRaw);
-            const skeletonRes = resolveAssetHandle<SkeletonAsset>(world, skeletonHandle);
-            if (!skeletonRes.ok || skeletonRes.value.kind !== 'skeleton') {
-              worldInternal._routeError(new SkeletonResolveFailedError(entity, skeletonHandleRaw), {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (skeleton-resolve-failed)',
-              });
-              continue;
-            }
-            const skeleton = skeletonRes.value;
-            // (b) Reuse the Skin row already read for its skeleton handle;
-            // the old path repeated a second whole-row world.get here.
-            const skinJoints = skin?.joints;
-            if (skinJoints === undefined) continue;
-            const jointsLength = skinJoints.length;
-            if (jointsLength !== skeleton.jointCount) {
-              worldInternal._routeError(
-                new JointCountMismatchError(entity, skeleton.jointCount, jointsLength),
-                {
-                  severity: Severity.Error,
-                  systemName: 'RenderSystem.extract (joint-count-mismatch)',
-                },
-              );
-              continue;
-            }
-            // (c) Resolve only each joint's Transform.world column. The
-            // transient view is consumed before a structural mutation and
-            // therefore preserves the same dangling-joint behavior without
-            // constructing every other Transform field.
-            // Build mat4 list eagerly so write happens once per entity (no
-            // half-written slice on dangling).
-            const jointWorlds = new Array<Mat4>(skeleton.jointCount);
-            let jointDangling = -1;
-            for (let jIdx = 0; jIdx < skeleton.jointCount; jIdx++) {
-              const jointEntityRaw = skinJoints[jIdx] ?? 0;
-              const jointEntity = jointEntityRaw as EntityHandle;
-              const jointWorld = worldInternal._getArrayView(jointEntity, Transform, 'world');
-              if (jointWorld === undefined) {
-                jointDangling = jIdx;
-                break;
-              }
-              // The allocator consumes the canonical Mat4 brand. Copy the
-              // column view into that owner-created value so the ECS storage
-              // view never crosses the math brand boundary by assertion.
-              const jointWorldMat = mat4.create();
-              jointWorldMat.set(jointWorld);
-              jointWorlds[jIdx] = jointWorldMat;
-            }
-            if (jointDangling >= 0) {
-              worldInternal._routeError(new JointEntityDanglingError(entity, jointDangling), {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (joint-entity-dangling)',
-              });
-              continue;
-            }
-            // (d) Slice the IBM flat Float32Array into per-joint Float32Arrays.
-            //     skeleton.inverseBindMatrices length === jointCount * 16.
-            const ibmFlat = skeleton.inverseBindMatrices;
-            const ibms: Float32Array[] = new Array<Float32Array>(skeleton.jointCount);
-            for (let jIdx = 0; jIdx < skeleton.jointCount; jIdx++) {
-              ibms[jIdx] = ibmFlat.subarray(jIdx * 16, jIdx * 16 + 16);
-            }
-            // (e) Allocate slice + write palette via the allocator (D-9 reset
-            // already fired at extractFrame entry). When the pipelineState
-            // surface is absent (test fixtures that pass undefined) the
-            // hasSkin segment is skipped silently — bind-pose equivalent.
-            if (skinPaletteAllocator !== null) {
-              const slice = skinPaletteAllocator.allocateSlice(skeleton.jointCount);
-              skinPaletteAllocator.writeJointPalette(slice, ibms, jointWorlds);
-              skinSlice = {
-                jointCount: slice.jointCount,
-                byteOffset: slice.byteOffset,
-                buffer: slice.buffer,
-              };
-            }
-          }
-        }
-
-        // feat-20260601 D-3: read the resolved world mat4 (propagateTransforms
-        // output) straight from the Transform.world column array view. The
-        // record stage copies these 16 floats into the mesh SSBO with zero
-        // per-snapshot `mat4.compose` (AC-07). A stale slot (generation gone)
-        // skips the renderable, mirroring the Instances dangling-row sweep.
-        // tweak-20260611 M1 / K-3: `_getArrayView` call survives untouched;
-        // only the `entity` source switched to `bundle.Entity.self[i]`.
-        const worldView = worldInternal._getArrayView(entity, Transform, 'world');
-        if (worldView === undefined) continue;
-        const worldMat = new Float32Array(worldView);
-        const transformSnap: TransformSnapshot = { world: worldMat };
-        // feat-20260608 M5 amend / w11-a: per-submesh `materials[]` array
-        // aligned 1-1 with `MeshAsset.submeshes[]`. materials[0] === the
-        // representative entity-level snapshot already built; materials[i>=1]
-        // are resolved via `resolveMaterialSnapshot` (a non-sprite, single-
-        // pass-equivalent resolver — sprite per-submesh is OOS-1). When the
-        // entity has no materialsView (case-B sentinel) the array is a single
-        // mid-grey default mirroring the legacy single-material path so the
-        // record stage's per-submesh UBO upload loop trivially writes one
-        // slot, no special branch.
-        const materialsArr: MaterialSnapshot[] = [materialSnap];
-        if (assets !== undefined && assets !== null) {
-          for (let mi = 1; mi < materialHandles.length; mi++) {
-            const subHandle = materialHandles[mi] ?? 0;
-            const cachedSubmaterial = materialSnapshotCache.get(subHandle);
-            materialsArr.push(
-              cachedSubmaterial?.snapshot ??
-                resolveMaterialSnapshot(
-                  subHandle,
-                  world,
-                  assets,
-                  materialSnapshotCache,
-                  persistentMaterialSnapshotCache,
-                ),
-            );
-          }
-        }
-        if (isRenderable && assets !== undefined && assets !== null) {
-          for (let mi = 1; mi < materialHandles.length; mi++) {
-            const subHandle = materialHandles[mi] ?? 0;
-            if (subHandle === handleRaw) continue;
-            const subEntry =
-              materialSnapshotCache.get(subHandle) ??
-              readPersistentMaterialSnapshot(persistentMaterialSnapshotCache, subHandle, assets);
-            appendMaterialDispatchEntries(
-              pendingDispatch,
-              subEntry?.passes ?? (subHandle === 0 ? [DEFAULT_FORWARD_PASS] : []),
-              entity,
-              subHandle,
-              renderables.length,
-              layerVal,
-              materialsArr[mi]?.paramSnapshot,
-            );
-          }
-        }
-
-        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 /
-        // w10: SpriteInstances validation + snapshot materialisation.
-        // Three structured EcsError fires at this single point (plan-strategy
-        // D-6 "fail-fast at the render domain entry, not at ECS spawn-time"):
-        let spriteInstancesSnap: SpriteInstancesSnapshot | undefined;
-        if (hasSpriteInstances) {
-          // (1) mutually exclusive with Instances (peers — pick one).
-          if (hasInstances) {
-            worldInternal._routeError(
-              new SpriteInstancesMutuallyExclusiveWithInstancesError(entity),
-              {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (sprite-instances-mutually-exclusive)',
-              },
-            );
-            continue;
-          }
-          // (2) requires sprite shader — the per-instance UV region is
-          // consumed by the sprite vertex shader path only (plan-strategy D-4
-          // axis on sprite.wgsl). Post-collapse (PR #520): sprite is no longer
-          // a `shadingModel` enum member; identification is via the first-pass
-          // `materialShaderId === 'forgeax::sprite'` (OOS-1 path retained).
-          //
-          // feat-20260624 M1' / t6: `'forgeax::sprite-lit'` also walks the same
-          // per-instance UV region vertex path (VsOut byte-identical, paramSchema
-          // mirror); accept either shader id.
-          if (
-            materialSnap.materialShaderId !== 'forgeax::sprite' &&
-            materialSnap.materialShaderId !== 'forgeax::sprite-lit'
-          ) {
-            worldInternal._routeError(
-              new SpriteInstancesRequiresSpriteShaderError(
-                entity,
-                materialSnap.materialShaderId ?? 'undefined',
-              ),
-              {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (sprite-instances-requires-sprite-shader)',
-              },
-            );
-            continue;
-          }
-          // (3) count mismatch — transforms.length / 16 === regions.length / 4
-          // (transforms.length=0 + regions.length=0 is the zero-instance lawful
-          // boundary; both derivations are 0 and equality holds, so no fire).
-          const transforms = worldInternal._getArrayView(entity, SpriteInstances, 'transforms');
-          const regions = worldInternal._getArrayView(entity, SpriteInstances, 'regions');
-          if (transforms !== undefined && regions !== undefined) {
-            const transformsLength = transforms.length;
-            const regionsLength = regions.length;
-            // Stride sanity: transforms must be mod 16, regions must be mod 4.
-            // A stride violation expresses as a count mismatch under the
-            // canonical derivation transforms/16 vs regions/4 — fire the
-            // count-mismatch code (the same code carries detail.expectedStride).
-            const tCount = transformsLength / 16;
-            const rCount = regionsLength / 4;
-            if (transformsLength % 16 !== 0 || regionsLength % 4 !== 0 || tCount !== rCount) {
-              worldInternal._routeError(
-                new SpriteInstancesCountMismatchError(transformsLength, regionsLength),
-                {
-                  severity: Severity.Error,
-                  systemName: 'RenderSystem.extract (sprite-instances-count-mismatch)',
-                },
-              );
-              continue;
-            }
-            // Validation passes — build the snapshot. transforms.length === 0
-            // is lawful (zero-instance) and produces instanceCount=0; the
-            // record stage skips drawIndexed when instanceCount===0.
-            const transformsCopy = new Float32Array(transforms);
-            const regionsCopy = new Float32Array(regions);
-            spriteInstancesSnap = {
-              transforms: transformsCopy,
-              regions: regionsCopy,
-              instanceCount: tCount,
-              cacheKey: entity,
-              archVersion,
-            };
-          }
-        }
-
-        let localAabb: Float32Array | undefined;
-        let morph: MorphSnapshot | undefined;
-        const assetHandleRaw = Math.round(fAssetHandle ?? 0);
-        if (assetHandleRaw !== 0) {
-          const meshRes = resolveAssetHandle(world, toShared<'MeshAsset'>(assetHandleRaw));
-          if (meshRes.ok && meshRes.value.kind === 'mesh') {
-            const meshAsset = meshRes.value as MeshAsset;
-            morph = morphSnapshotFor(meshAsset, morphWeightsView);
-            const meshAabb = meshAsset.aabb;
-            // Morph targets can expand the authored bounds. Keep the
-            // specialized lane conservative until a target-aware bounds
-            // projection is available; a false-positive draw is preferable
-            // to culling a valid deformed vertex.
-            if (morph === undefined && hasFiniteOrderedLocalAabb(meshAabb)) {
-              localAabb = new Float32Array(meshAabb);
-            }
-          }
-        }
-
-        const pointsLinesStyle: PointsLinesStyle | undefined =
-          points !== undefined
-            ? (() => {
-                const shape = pointShapeFromU32(points.shape);
-                return shape === undefined
-                  ? undefined
-                  : { kind: 'points' as const, sizePx: points.sizePx, shape };
-              })()
-            : lines === undefined
-              ? undefined
-              : { kind: 'lines' as const, widthPx: lines.widthPx };
-        const cullingLocalAabb = expandPointsLinesBounds(localAabb ?? [], pointsLinesStyle);
-        const pointsLines =
-          pointsLinesComponent === undefined
-            ? undefined
-            : ({
-                worldId: 0,
-                entityKey: entity,
-                component: pointsLinesComponent,
-                meshHandle: assetHandleRaw,
-                meshGeneration: assets?.catalogEpoch ?? 0,
-                materialHandle: handleRaw,
-                materialGeneration: assets?.catalogEpoch ?? 0,
-                style: pointsLinesStyle,
-                layer: layerVal,
-                sortKey,
-                visible: true,
-                sourceBounds: cullingLocalAabb,
-                viewport: { width: 0, height: 0, dpr: 1 },
-                projection: identityProjection(),
-              } satisfies PointsLinesRetainedSnapshot);
-
-        let nonIndexedFirst = 0;
-        const gpuDrivenDraws = gpuDrivenSubmeshes.flatMap((submesh) => {
-          const drawMaterial = materialsArr[submesh.materialSlot] ?? materialSnap;
-          const first = gpuDrivenIndexed ? submesh.indexOffset : nonIndexedFirst;
-          nonIndexedFirst += submesh.vertexCount;
-          if (drawMaterial.transparent === true) return [];
-          return [
-            {
-              kind: gpuDrivenIndexed ? ('indexed' as const) : ('non-indexed' as const),
-              first,
-              count: gpuDrivenIndexed ? submesh.indexCount : submesh.vertexCount,
-              baseVertex: 0,
-              materialSlot: submesh.materialSlot,
-              topology: submesh.topology,
-              pipelineClass: `${drawMaterial.materialShaderId ?? 'forgeax::default-unlit'}|${submesh.topology}|${JSON.stringify(drawMaterial.renderState ?? null)}`,
-              materialResourceClass: gpuDrivenMaterialResourceClass(drawMaterial),
-            },
-          ];
-        });
-        const baseRenderable: RenderableSnapshot = {
-          assetHandle: Math.round(fAssetHandle ?? 0),
-          transform: transformSnap,
-          ...(localAabb !== undefined ? { localAabb: cullingLocalAabb } : {}),
-          material: materialSnap,
-          materials: materialsArr,
-          materialBindingSources,
-          materialBindingDiagnostics,
-          ...(morph === undefined && gpuDrivenDraws.length > 0 ? { gpuDrivenDraws } : {}),
-          worldId: 0,
-          entityKey: entity,
-          ...(skinSlice !== undefined ? { skin: skinSlice } : {}),
-          ...(morph !== undefined ? { morph } : {}),
-          ...(spriteInstancesSnap !== undefined ? { spriteInstances: spriteInstancesSnap } : {}),
-          ...(pointsLines !== undefined ? { pointsLines } : {}),
-        };
-
-        // feat-20260528-frustum-culling M3 / w10: frustum culling check.
-        // Skip the entity if a valid AABB exists AND ALL cameras' frusta
-        // reject the world-space AABB. Missing or malformed AABBs are
-        // conservative always-visible fallbacks; valid culling bounds are
-        // producer-owned finite local-space AABBs. Culling is unconditional
-        // engine behavior; there is no per-entity opt-out.
-        if (localAabb !== undefined) {
-          // feat-20260601 D-3: cull AABB uses the resolved world mat4
-          // directly (no compose) -- same source the record stage feeds
-          // the mesh SSBO, so cull stays same-source with render (AC-05).
-          const worldAabb = box3.create();
-          box3.transformBox3(worldAabb, cullingLocalAabb, transformSnap.world);
-
-          // Test against all cameras. Entity is visible if one camera
-          // frustum intersects the world-space AABB (or planes are empty
-          // from degenerate projection).
-          frustumTotal += 1;
-          let visible = frustumPlanes.length === 0;
-          for (let ci = 0; ci < frustumPlanes.length; ci++) {
-            const planes = frustumPlanes[ci] as Float32Array;
-            if (planes.length === 0) {
-              visible = true;
-              break;
-            }
-            if (frustum.intersectsBox(planes as frustum.Frustum, worldAabb as box3.Box3Like)) {
-              visible = true;
-              break;
-            }
-          }
-          if (!visible) {
-            frustumCulled += 1;
-            continue;
-          }
-        }
-
-        if (hasInstances) {
-          const transforms = worldInternal._getArrayView(entity, Instances, 'transforms');
-          if (transforms === undefined) {
-            flushPendingDispatch(pendingDispatch);
-            renderables.push(baseRenderable);
-          } else {
-            const actualLength = transforms.length;
-            if (actualLength % 16 !== 0) {
-              worldInternal._routeError(new InstanceTransformsStrideMismatchError(actualLength), {
-                severity: Severity.Error,
-                systemName: 'RenderSystem.extract (Instances stride)',
-              });
-
-              continue;
-            }
-            const snapshotCopy = new Float32Array(transforms);
-            const instanceCount = Math.max(1, Math.floor(actualLength / 16));
-            flushPendingDispatch(pendingDispatch);
-            renderables.push({
-              ...baseRenderable,
-              instances: {
-                transforms: snapshotCopy,
-                instanceCount,
-                cacheKey: entity,
-                archVersion,
-              },
-            });
-          }
-        } else {
-          flushPendingDispatch(pendingDispatch);
-          renderables.push(baseRenderable);
-        }
-      }
-
-      // feat-20260520-2d-sprite-layer-mvp M-3 / w22 + w25: finalise the
-      // pending TransparentEntry with the renderableIndex pointing at the
-      // RenderableSnapshot we just pushed (when isRenderable === true).
-      // The check below also covers a sprite entity that survives the
-      // dangling-Instances branch (silent skip with `dispatchEntry !==
-      // null` early-continue) — in that case renderableIndex is still set
-      // to the just-pushed slot which is correct because materialDispatch
-      // already captures the dispatch position.
-    }
-  }
-
-  // M3 / w26: sort dispatch entries by queue (ascending, stable sort)
-  // per plan-strategy D-3.
-  dispatch = sortDispatchByQueue(dispatch);
-
-  // D-1: collect PostProcessParams entities into Map<shaderId, Uint8Array>.
-  // Last-one-wins when multiple entities bear the same shader id (mirrors
-  // Camera.exposure -> CameraSnapshot pattern; extract stage only reads).
-  const postProcessParams: Map<string, Uint8Array> = new Map();
-  const postProcessParamsQuery = world.query({ with: [PostProcessParams] }).unwrap();
-  for (const row of postProcessParamsQuery) {
-    const entity = row.entity;
-    const read = world.get(entity, PostProcessParams);
-    if (!read.ok) continue;
-    postProcessParams.set(read.value.shader, read.value.data);
-  }
-
-  // feat-20260621 M-A3 / w13 (D-5): engine built-in tonemap data-driven
-  // provider. The engine bridges the active camera's `Camera.exposure /
-  // whitePoint / tonemap` onto the SAME unified params channel custom
-  // post-processes use — `Camera.exposure` stays the AI-user-facing SSOT (D-5),
-  // the engine itself acts as the provider for the Standard tonemap shader
-  // id. The 16B layout is byte-identical to the prior recordTonemapPass packing
-  // (render-system-record.ts pre-w14): Float32 [exposure, whitePoint, _, pad]
-  // with the mode u32 occupying the third 4-byte slot via tonemapToU32 (SSOT in
-  // camera.ts). Run AFTER the user-entity collection above so the engine's
-  // built-in provider is authoritative for its own reserved key (a user entity
-  // can never shadow the Standard tonemap identity. The single active camera mirrors
-  // recordFrame's `activeCameras[0]` selection.
-  const tonemapCamera = cameras[0];
-  if (tonemapCamera !== undefined) {
-    postProcessParams.set(STANDARD_TONEMAP_FEATURE_ID, tonemapParams(tonemapCamera));
-  }
-
+  if (extracted.value.status === 'off') return { status: 'off' };
+  const validatedMembers = extracted.value.fogs.map((fog, index) => ({
+    ...members[index],
+    status: 'available' as const,
+    fog,
+  }));
   return {
-    cameras,
-    lights,
-    renderables,
-    dispatch,
-    skylight,
-    skylightCount,
-    skybox,
-    skyboxCount,
-    frustumStats: { culled: frustumCulled, total: frustumTotal },
-    visibilityStats: { explicitlyHidden: explicitlyHidden.size },
-    postProcessParams,
-    visibilitySnapshots: [context.visibility],
-    featureVisibilitySnapshots: [{ world, snapshot: context.visibility }],
-    hiddenEntityReports: [...explicitlyHidden].map((entity) => ({ world, entity })),
+    ...validatedMembers[0],
+    status: 'available',
+    additional: validatedMembers.slice(1),
   };
 }
+
+/** Immutable author-independent default; extraction retains its producer identity. */
+const DEFAULT_MATERIAL_SNAPSHOT: MaterialSnapshot = Object.freeze({
+  baseColor: vec3.create(0.5, 0.5, 0.5),
+  metallic: 0,
+  roughness: 1,
+  materialHandle: 0,
+});
 
 export function defaultMaterialSnapshot(materialHandle = 0): MaterialSnapshot {
-  // Mid-grey unlit fallback (D-Q7 case B + extract-stage missing-spec),
-  // matching the pre-w6 visual outcome where the record stage's force-cast
-  // read of `firstMaterial.baseColorTexture` returned undefined and the
-  // unlit fallback shader was selected.
-  return {
-    baseColor: vec3.create(0.5, 0.5, 0.5),
-    metallic: 0,
-    roughness: 1,
-    materialHandle,
-  };
-}
-
-function identityProjection(): Float32Array {
-  const projection = new Float32Array(16);
-  projection[0] = 1;
-  projection[5] = 1;
-  projection[10] = 1;
-  projection[15] = 1;
-  return projection;
+  return materialHandle === 0
+    ? DEFAULT_MATERIAL_SNAPSHOT
+    : { ...DEFAULT_MATERIAL_SNAPSHOT, materialHandle };
 }

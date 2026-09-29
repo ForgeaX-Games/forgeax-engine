@@ -1,4 +1,11 @@
 import type { CodecError, TranscodeModel } from '@forgeax/engine-codec';
+import {
+  ktx2ColorSpace,
+  parseKtx2,
+  selectTranscodeTarget,
+  transcodeBasis,
+  transcodeKtx2,
+} from '@forgeax/engine-codec';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   AssetCodec,
@@ -12,11 +19,33 @@ import type {
   TextureAsset,
   TilesetAsset,
 } from '@forgeax/engine-types';
-import { AssetError } from '@forgeax/engine-types';
+import { AssetError, deriveTextureLayout } from '@forgeax/engine-types';
+import {
+  type TexturePackVerificationDetail,
+  TexturePackVerificationError,
+} from '../errors/asset.js';
 import type { PackLoaderInput } from '../loader-registry';
-import { numMipLevels } from '../mipmap-generator';
+import { traceAssetLoadPhase } from '../registry/load-trace';
 
 type PackArtifact = PackLoaderInput['artifacts'][string];
+
+export interface TexturePackLoadInput {
+  readonly pack: PackLoaderInput;
+  readonly sourceKey: string;
+  readonly generation: number;
+  readonly expectedDigest: string;
+}
+
+export type VerifiedTexturePack = {
+  readonly asset: TextureAsset;
+  readonly sourceKey: string;
+  readonly generation: number;
+  readonly digest: string;
+};
+
+export type VerifiedTexturePackResult =
+  | { readonly ok: true; readonly value: VerifiedTexturePack }
+  | { readonly ok: false; readonly error: TexturePackVerificationError | AssetError };
 
 type CodecFailureProjection = {
   readonly code: string;
@@ -36,6 +65,36 @@ function payloadNumber(payload: Record<string, unknown>, key: string, fallback: 
 
 function payloadColorSpace(payload: Record<string, unknown>): 'srgb' | 'linear' {
   return payload.colorSpace === 'linear' ? 'linear' : 'srgb';
+}
+
+function payloadTextureShape(payload: Record<string, unknown>): TextureAsset['shape'] | undefined {
+  const shape = payload.shape;
+  if (!record(shape) || typeof shape.viewDimension !== 'string' || !record(shape.extent)) {
+    return undefined;
+  }
+  const { width, height, layers, depth } = shape.extent;
+  if (!positiveInteger(width) || !positiveInteger(height)) return undefined;
+  if (shape.viewDimension === '2d' && layers === undefined && depth === undefined) {
+    return { viewDimension: '2d', extent: { width, height } };
+  }
+  if (shape.viewDimension === '2d-array' && positiveInteger(layers) && depth === undefined) {
+    return { viewDimension: '2d-array', extent: { width, height, layers } };
+  }
+  if (shape.viewDimension === '3d' && positiveInteger(depth) && layers === undefined) {
+    return { viewDimension: '3d', extent: { width, height, depth } };
+  }
+  return undefined;
+}
+
+function payloadTextureMips(payload: Record<string, unknown>): TextureAsset['mips'] | undefined {
+  const mips = payload.mips;
+  if (!record(mips) || typeof mips.kind !== 'string') return undefined;
+  if (mips.kind === 'none') return { kind: 'none' };
+  if (mips.kind === 'generate') return { kind: 'generate' };
+  if (mips.kind === 'packed' && positiveInteger(mips.levelCount)) {
+    return { kind: 'packed', levelCount: mips.levelCount };
+  }
+  return undefined;
 }
 
 function invalidPackAsset<T>(input: PackLoaderInput, expected: string): LoaderAsyncResult<T> {
@@ -62,6 +121,32 @@ function positiveInteger(value: unknown): value is number {
   return finiteNumber(value) && Number.isInteger(value) && value > 0;
 }
 
+async function textureDigest(bytes: Uint8Array): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) throw new Error('Web Crypto API is required for texture verification');
+  const digest = await subtle.digest('SHA-256', bytes.slice().buffer as ArrayBuffer);
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function textureVerificationError(
+  input: TexturePackLoadInput,
+  cause: TexturePackVerificationDetail['cause'],
+  expected: string,
+  fields: Partial<TexturePackVerificationDetail> = {},
+): TexturePackVerificationError {
+  return new TexturePackVerificationError(
+    {
+      guid: input.pack.guid,
+      sourceKey: input.sourceKey,
+      generation: input.generation,
+      stage: 'loader',
+      cause,
+      ...fields,
+    },
+    expected,
+  );
+}
+
 function validRenderPipelineConfig(value: unknown): value is Record<string, unknown> {
   if (!record(value)) return false;
   const passCount = value.passCount;
@@ -80,6 +165,10 @@ function validRenderPipelineConfig(value: unknown): value is Record<string, unkn
   }
   const ssao = value.ssao;
   if (ssao !== undefined && (!record(ssao) || typeof ssao.enabled !== 'boolean')) return false;
+  const outputDither = value.outputDither;
+  if (outputDither !== undefined && typeof outputDither !== 'boolean') return false;
+  const gpuOcclusion = value.gpuOcclusion;
+  if (gpuOcclusion !== undefined && typeof gpuOcclusion !== 'boolean') return false;
   const postEffects = value.postEffects;
   return (
     postEffects === undefined ||
@@ -136,12 +225,17 @@ function readJsonArtifact(
 function renderPipelineDescriptor(value: Record<string, unknown>): RenderPipelineAsset | undefined {
   if (value.kind !== 'render-pipeline') return undefined;
   const pipelineId = value.pipelineId;
-  if (typeof pipelineId !== 'string' || pipelineId.trim().length === 0) return undefined;
+  if (pipelineId !== 'forgeax::standard') return undefined;
+  const renderPath = value.renderPath;
+  if (renderPath !== undefined && renderPath !== 'forward' && renderPath !== 'deferred') {
+    return undefined;
+  }
   const config = value.config;
   if (config !== undefined && !validRenderPipelineConfig(config)) return undefined;
   return {
     kind: 'render-pipeline',
     pipelineId,
+    ...(renderPath === undefined ? {} : { renderPath }),
     ...(config === undefined
       ? {}
       : { config: config as NonNullable<RenderPipelineAsset['config']> }),
@@ -291,12 +385,14 @@ async function loadTexturePack(
   input: PackLoaderInput,
   ctx: LoadContext,
 ): Promise<LoaderAsyncResult<TextureAsset>> {
+  traceAssetLoadPhase('texture.loader.start', {
+    guid: input.guid,
+    detail: { codec: input.artifacts.body?.descriptor.assetCodec?.name },
+  });
   const artifact = firstArtifact(input);
   if (artifact === undefined)
     return invalidPackAsset<TextureAsset>(input, 'texture asset-local image artifact');
   const payload = input.payload;
-  const width = payloadNumber(payload, 'width', 0);
-  const height = payloadNumber(payload, 'height', 0);
   const colorSpace = payloadColorSpace(payload);
   const codec = artifact.descriptor.assetCodec;
   const profile = codecProfile(codec);
@@ -322,12 +418,19 @@ async function loadTexturePack(
       };
     }
     try {
-      const { selectTranscodeTarget, transcodeBasis } = await import('@forgeax/engine-codec');
       const target = selectTranscodeTarget(
         { model, srgb: colorSpace === 'srgb', channels: 'rgba' },
         ctx.transcodeCaps,
       );
+      traceAssetLoadPhase('codec.basis.transcode.start', {
+        guid: input.guid,
+        detail: { target },
+      });
       const transcoded = await transcodeBasis(artifact.bytes, target);
+      traceAssetLoadPhase('codec.basis.transcode.complete', {
+        guid: input.guid,
+        detail: { ok: transcoded.ok, target },
+      });
       if (!transcoded.ok) {
         return {
           ok: false,
@@ -346,13 +449,14 @@ async function loadTexturePack(
         ok: true,
         value: {
           kind: 'texture',
-          width: transcoded.value.width,
-          height: transcoded.value.height,
+          shape: {
+            viewDimension: '2d',
+            extent: { width: transcoded.value.width, height: transcoded.value.height },
+          },
           format: target,
           data,
           colorSpace,
-          mipmap: transcoded.value.mips.length > 1,
-          mipLevelCount: Math.max(1, transcoded.value.mips.length),
+          mips: { kind: 'packed', levelCount: Math.max(1, transcoded.value.mips.length) },
         },
       };
     } catch (error) {
@@ -380,10 +484,12 @@ async function loadTexturePack(
   if (model !== undefined && codec !== undefined) {
     const ktx2Codec = codec;
     try {
-      const { ktx2ColorSpace, parseKtx2, selectTranscodeTarget, transcodeKtx2 } = await import(
-        '@forgeax/engine-codec'
-      );
+      traceAssetLoadPhase('codec.ktx2.parse.start', { guid: input.guid });
       const parsed = await parseKtx2(artifact.bytes);
+      traceAssetLoadPhase('codec.ktx2.parse.complete', {
+        guid: input.guid,
+        detail: { ok: parsed.ok },
+      });
       if (!parsed.ok) {
         return {
           ok: false,
@@ -414,7 +520,15 @@ async function loadTexturePack(
         { model, srgb: colorSpace === 'srgb', channels: 'rgba' },
         ctx.transcodeCaps,
       );
+      traceAssetLoadPhase('codec.ktx2.transcode.start', {
+        guid: input.guid,
+        detail: { target },
+      });
       const transcoded = await transcodeKtx2(parsed.value, target);
+      traceAssetLoadPhase('codec.ktx2.transcode.complete', {
+        guid: input.guid,
+        detail: { ok: transcoded.ok, target },
+      });
       if (!transcoded.ok) {
         return {
           ok: false,
@@ -433,13 +547,14 @@ async function loadTexturePack(
         ok: true,
         value: {
           kind: 'texture',
-          width: transcoded.value.width,
-          height: transcoded.value.height,
+          shape: {
+            viewDimension: '2d',
+            extent: { width: transcoded.value.width, height: transcoded.value.height },
+          },
           format: target,
           data,
           colorSpace,
-          mipmap: transcoded.value.mips.length > 1,
-          mipLevelCount: Math.max(1, transcoded.value.mips.length),
+          mips: { kind: 'packed', levelCount: Math.max(1, transcoded.value.mips.length) },
         },
       };
     } catch (error) {
@@ -465,19 +580,143 @@ async function loadTexturePack(
     }
   }
 
-  const mipmap = payload.mipmap === true;
+  const shape = payloadTextureShape(payload);
+  const mips = payloadTextureMips(payload);
+  if (shape === undefined || mips === undefined) {
+    return invalidPackAsset<TextureAsset>(
+      input,
+      'texture payload with a valid shape and mip policy',
+    );
+  }
   return {
     ok: true,
     value: {
       kind: 'texture',
-      width,
-      height,
+      shape,
       format: (payload.format ??
         (colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm')) as GPUTextureFormat,
       data: artifact.bytes,
       colorSpace,
-      mipmap,
-      mipLevelCount: mipmap ? numMipLevels({ width, height }) : 1,
+      mips,
+    },
+  };
+}
+
+/** Verify producer facts and then expose one accepted texture projection. */
+export async function loadVerifiedTexturePack(
+  input: TexturePackLoadInput,
+  ctx: LoadContext,
+): Promise<VerifiedTexturePackResult> {
+  const artifact = firstArtifact(input.pack);
+  if (artifact === undefined) {
+    return {
+      ok: false,
+      error: textureVerificationError(input, 'byte-length', 'one asset-local body artifact', {
+        expectedBytes: 0,
+        actualBytes: 0,
+      }),
+    };
+  }
+  const actualBytes = artifact.bytes.byteLength;
+  const declaredBytes = artifact.descriptor.byteLength;
+  if (declaredBytes !== undefined && declaredBytes !== actualBytes) {
+    return {
+      ok: false,
+      error: textureVerificationError(
+        input,
+        'byte-length',
+        `artifact byte length ${declaredBytes}`,
+        { expectedBytes: declaredBytes, actualBytes },
+      ),
+    };
+  }
+  const payloadOrder = input.pack.payload.packingOrder;
+  if (payloadOrder !== undefined && payloadOrder !== 'mip-major,image-major,row-major') {
+    return {
+      ok: false,
+      error: textureVerificationError(
+        input,
+        'packing-order-mismatch',
+        'mip-major,image-major,row-major packing order',
+      ),
+    };
+  }
+  const shape = payloadTextureShape(input.pack.payload);
+  const mips = payloadTextureMips(input.pack.payload);
+  const format = (input.pack.payload.format ??
+    (payloadColorSpace(input.pack.payload) === 'srgb'
+      ? 'rgba8unorm-srgb'
+      : 'rgba8unorm')) as GPUTextureFormat;
+  if (shape === undefined || mips === undefined) {
+    return {
+      ok: false,
+      error: textureVerificationError(input, 'shape-mismatch', 'valid TextureAsset shape and mips'),
+    };
+  }
+  const layout = deriveTextureLayout({
+    shape,
+    format,
+    mips,
+    actualByteLength: actualBytes,
+    order: 'mip-major,image-major,row-major',
+  });
+  if (!layout.ok) {
+    const expectedBytes =
+      layout.error.code === 'texture-packing-invalid'
+        ? layout.error.detail.expectedBytes
+        : actualBytes;
+    const actualLayoutBytes =
+      layout.error.code === 'texture-packing-invalid'
+        ? layout.error.detail.actualBytes
+        : actualBytes;
+    return {
+      ok: false,
+      error: textureVerificationError(
+        input,
+        'byte-length',
+        `canonical texture byte length ${expectedBytes}`,
+        {
+          expectedBytes,
+          actualBytes: actualLayoutBytes,
+        },
+      ),
+    };
+  }
+  const actualDigest = await textureDigest(artifact.bytes);
+  const descriptorDigest = artifact.descriptor.integrity?.digest;
+  if (descriptorDigest !== input.expectedDigest || actualDigest !== input.expectedDigest) {
+    return {
+      ok: false,
+      error: textureVerificationError(
+        input,
+        'digest-mismatch',
+        `artifact digest ${input.expectedDigest}`,
+        {
+          expectedDigest: input.expectedDigest,
+          actualDigest,
+        },
+      ),
+    };
+  }
+  const loaded = await loadTexturePack(input.pack, ctx);
+  if (!loaded.ok) {
+    if (loaded.error instanceof AssetError) return { ok: false, error: loaded.error };
+    return {
+      ok: false,
+      error: textureVerificationError(
+        input,
+        'shape-mismatch',
+        'runtime texture loader to return a verified TextureAsset',
+      ),
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      asset: loaded.value,
+      sourceKey: input.sourceKey,
+      generation: input.generation,
+      digest: actualDigest,
     },
   };
 }

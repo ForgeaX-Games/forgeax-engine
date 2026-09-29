@@ -98,6 +98,45 @@ function tmpExtraction(files, mutateContract = () => {}) {
 // Tests
 // ============================================================================
 
+test('multithread source recovery needs no unrelated app Pack before its own executable build', () => {
+  const repository = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts/ci/build-artifact-contract.json'), 'utf8'),
+  );
+  const consumer = 'multithread-browser-benchmark';
+  const root = tmpExtraction(
+    {
+      'packages/runtime/dist/index.mjs': 'export {}',
+      'packages/preview/assets/canonical-kit/present': 'source kit',
+      'packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm': 'binary',
+      'shared-app-inputs/shaders/manifest.json': '{}',
+      'apps/hello/multithreaded-execution/dist/shaders/manifest.json': '{}',
+    },
+    (contract) => {
+      contract.artifactClasses = repository.artifactClasses;
+      contract.consumers = { [consumer]: repository.consumers[consumer] };
+    },
+  );
+  try {
+    const args = [
+      '--consumer',
+      consumer,
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ];
+    const present = runVerifier(args);
+    assert.equal(present.exitCode, 0, present.stdout || present.stderr);
+    rmSync(join(root, 'shared-app-inputs/shaders/manifest.json'));
+    const missing = runVerifier(args);
+    assert.notEqual(missing.exitCode, 0);
+    assert.equal(JSON.parse(missing.stdout).code, 'ci-artifact-required-path-missing');
+    assert.match(JSON.parse(missing.stdout).expected, /shared-engine-shaders/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('t3: consumer with all declared paths present exits 0', async () => {
   const root = tmpExtraction({
     'packages/runtime/dist/index.mjs': 'export {}',
@@ -144,7 +183,14 @@ test('M1-T2: return evidence metadata stays outside consumer payload classes', (
     const contract = JSON.parse(readFileSync(join(root, 'build-artifact-contract.json'), 'utf8'));
     assert.deepEqual(contract.provenance.payloadClasses, Object.keys(contract.artifactClasses));
 
-    const present = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    const present = runVerifier([
+      '--consumer',
+      'vitest-dawn',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.equal(present.exitCode, 0, present.stderr || present.stdout);
 
     rmSync(join(root, 'packages', 'wgpu-wasm'), { recursive: true, force: true });
@@ -162,7 +208,14 @@ test('t3: consumer missing a required path exits non-zero with structured error'
     // 'packages/wgpu-wasm/pkg/...' is MISSING
   });
   try {
-    const r = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'vitest-dawn',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.notStrictEqual(r.exitCode, 0, 'should fail on missing required path');
     const parsed = JSON.parse(r.stdout);
     assert.strictEqual(
@@ -224,6 +277,7 @@ test('t3: consumer with no files produces error if required classes exist', asyn
 test('t3: consumer with only engine-dist but needs wasm-runtime fails', async () => {
   const root = tmpExtraction({
     'packages/runtime/dist/index.mjs': 'export {}',
+    'packages/preview/assets/canonical-kit/example.json': '{}',
     // missing packages/wgpu-wasm/pkg
   });
   try {
@@ -263,13 +317,58 @@ test('t8: primary-pnpm with all declared classes present exits 0', async () => {
   }
 });
 
+test('t8: app artifact globs match nested body and Pack sidecars', async () => {
+  const guid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+  const appDistRoot = 'apps/learn-render/6.pbr/2.ibl-irradiance/dist';
+  const appAssetRoot = 'apps/learn-render/6.pbr/2.ibl-irradiance/dist/assets';
+  const root = tmpExtraction(
+    {
+      'packages/runtime/dist/index.mjs': 'export {}',
+      'packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm': 'binary',
+      'apps/learn-render/6.pbr/2.ibl-irradiance/dist/shaders/manifest.json': '{}',
+      [`${appDistRoot}/pack-index.json`]: '[]',
+      [`${appAssetRoot}/${guid}-body.bin`]: 'body',
+      [`${appAssetRoot}/${guid}.pack.json`]: '{}',
+      [`${appAssetRoot}/${guid}.pack-material.json`]: '{}',
+    },
+    (contract) => {
+      contract.artifactClasses['app-dist'].fileClasses = [
+        'apps/**/dist/shaders/manifest.json',
+        'apps/**/dist/pack-index.json',
+        'apps/**/dist/assets/*-body.bin',
+        'apps/**/dist/assets/*.pack*.json',
+      ];
+    },
+  );
+  try {
+    const r = runVerifier([
+      '--consumer',
+      'primary-pnpm',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
+    assert.strictEqual(r.exitCode, 0, `app Pack closure should pass: ${r.stderr || r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('t8: vitest-dawn with engine-dist + wasm-runtime only exits 0', async () => {
   const root = tmpExtraction({
     'packages/runtime/dist/index.mjs': 'export {}',
     'packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm': 'binary',
   });
   try {
-    const r = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'vitest-dawn',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.strictEqual(r.exitCode, 0, `vitest-dawn should pass: ${r.stderr}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -321,8 +420,14 @@ test('t8: consumer with extra undeclared class still passes (contract only enfor
     'apps/hello-triangle/dist/shaders/manifest.json': 'extra',
   });
   try {
-    // vitest-dawn only needs engine-dist + wasm-runtime
-    const r = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'vitest-dawn',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.strictEqual(r.exitCode, 0, `extra files should not cause failure: ${r.stderr}`);
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent } from '../component';
+import { componentId, defineComponent } from '../component';
 import { createRenderReadLease, type RenderProjectionRequest } from '../projection/index';
 import { World } from '../world';
 
@@ -27,36 +27,30 @@ describe('RenderReadLease contract', () => {
     expect(projection.spans[0]?.fields.y).toEqual(new Float32Array([2]));
   });
 
-  it('publishes world and shared-ref changes through one cursor contract', () => {
+  it('publishes component changes from an explicit consumer version', () => {
     const world = new World();
-    const lease = createRenderReadLease(world);
-    const cursor = lease.inspectCursor();
     const entity = world.spawn({ component: Position, data: { x: 0, y: 0 } }).unwrap();
+    const lease = createRenderReadLease(world);
+    const version = lease.captureVersion();
     world.set(entity, Position, { x: 3 }).unwrap();
-    const batch = lease.readChanges(cursor);
+    const batch = lease.readChanges(version);
 
-    expect(batch.status).toBe('ok');
-    if (batch.status !== 'ok') return;
-    expect(batch.cursor).toBeGreaterThan(cursor);
-    expect(batch.world.records.some((record) => record.kind === 'component-changed')).toBe(true);
-    expect(batch.sharedRefs.status).toBe('ok');
+    expect(batch.version.mutationEpoch).toBeGreaterThan(version.mutationEpoch);
+    expect(batch.world.changedComponentIds).toContain(componentId(Position));
   });
 
-  it('reports overflow and requires an explicit resync', () => {
+  it('publishes current structure versions independently of intervening operation count', () => {
     const world = new World();
     const lease = createRenderReadLease(world);
-    const staleCursor = 0;
+    const version = lease.captureVersion();
 
     for (let index = 0; index < 65537; index += 1) {
       const entity = world.spawn({ component: Position, data: { x: index, y: 0 } }).unwrap();
       world.despawn(entity).unwrap();
     }
 
-    const batch = lease.readChanges(staleCursor);
-    expect(batch.status).toBe('overflow');
-    if (batch.status !== 'overflow') return;
-    expect(batch.resync).toBe(true);
-    expect(batch.oldestAvailable).toBeGreaterThan(staleCursor);
+    const batch = lease.readChanges(version);
+    expect(batch.version.structureEpoch).toBeGreaterThan(version.structureEpoch);
   });
 
   it('detaches idempotently and rejects reads after dispose', () => {
@@ -64,7 +58,7 @@ describe('RenderReadLease contract', () => {
     lease.dispose();
     lease.dispose();
 
-    expect(() => lease.inspectCursor()).toThrow(/disposed/i);
+    expect(() => lease.captureVersion()).toThrow(/disposed/i);
     expect(() => lease.querySpans(request)).toThrow(/disposed/i);
   });
 
@@ -74,6 +68,6 @@ describe('RenderReadLease contract', () => {
     const projection = lease.querySpans(request);
 
     expect(projection).not.toBe(lease);
-    expect(Object.keys(projection)).toEqual(['generation', 'sharedRefEpoch', 'spans']);
+    expect(Object.keys(projection)).toEqual(['generation', 'spans']);
   });
 });

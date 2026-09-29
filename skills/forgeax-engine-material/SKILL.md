@@ -7,6 +7,16 @@ description: ForgeaX MaterialAsset authoring and visibility route. Use when crea
 
 ## Contract index
 
+## Lighting asset entry points
+
+Use these entry points:
+
+1. Declare a one-sided rectangular light with `RectAreaLight`; `width` and `height` own its dimensions, and the optional `sourceTexture` (a 2D `TextureAsset` of any size: rgba8/bgra8 sRGB or linear, r8 grayscale, rgba16float/rgba32float clipped to [0, 1] take the CPU projection; KTX2 BC/ETC2/ASTC block formats are resampled from level 0 on the GPU, which needs compute and the device compression feature, otherwise one `feature-not-enabled` error and a white slice) tints diffuse and specular like Unreal's SourceTexture. u follows the light's local +X; an absent handle is uniform emission. Show the same image on an emitter quad yourself; the light does not draw its surface.
+2. Declare `iesProfile`, `cookie`, and `rollDeg` on the existing `SpotLight`; `TextureAsset` always owns the cookie.
+3. Declare 27 `irradiance` values and `radius` through `LightProbe`; GPU slots, LTC, and the probe registry are not public API.
+
+author -> publish -> admit -> accept -> verify are evidence stages. The IES producer creates cooked `IesProfileAsset` at build time; runtime loads it by GUID. Follow `.code`/`.detail`/`.hint` back to the producer for rebuild; fallback is not verification.
+
 Keep one MaterialAsset subject and one Pack publication. Runtime bool/value
 data, composed module slots, and a closed compiler context are inputs; macros,
 feature defines, runtime cooking, and app-local fallbacks are not. Trace
@@ -55,6 +65,69 @@ browser WebGPU and Dawn captures. Preserve the case `provenance`, named
 replace a missing engine path with a custom mesh, fallback shader, or app-local
 light profile.
 
+## Transmission/refraction
+
+Use the existing `Materials.standard` entry with transmission, IOR, thickness, attenuation, and named
+texture values. Smooth/rough refraction, edge fallback, and transparent ordering are renderer-owned;
+inspect `renderer.inspect().transmission` for detached capability/resource/lifecycle facts. GLTF
+transmission is producer-owned and must be repaired through source -> Pack -> GUID load, including the
+structured BLEND rejection path.
+
+## Diffuse transmission (foliage, paper, thin cloth)
+
+Back-lit thin surfaces use `diffuseTransmission` (0..1) and `diffuseTransmissionColor`, with optional
+`diffuseTransmissionTexture` (alpha, linear) and `diffuseTransmissionColorTexture` (RGB, sRGB), the
+`KHR_materials_diffuse_transmission` model. It is opaque light passing through, not refraction: no
+`transmission`, no depth-write change, no backdrop copy.
+
+The factor is a split, not an extra term: reflected `(1 - factor) · baseColor`, transmitted
+`factor · tint`, so a white leaf in a white sky stays at 1 on both sides. `factor = 1` is a lossless
+frosted diffuser, never glass; use `transmission` for see-through. Leaves sit near 0.3-0.6. Unreal
+two-sided foliage adds `SubsurfaceColor` on top of full diffuse (about 2x in a white furnace); convert
+with `S = max(1, |Base| + |Sub|)`, `factor = |Sub| / (|Base| + |Sub|)`,
+`baseColor = Base / (S · (1 - factor))`, `tint = Sub / (S · factor)` (`|c|` = largest channel), which
+matches Unreal's path-traced balance, and do not port its GGX back-scatter peak (render README
+§Factor semantics).
+
+1. Author values with `Materials.standard({ diffuseTransmission, diffuseTransmissionColor, ... })` and
+   `renderState.cullMode: 'none'` so the back face rasterizes.
+2. Bind it to a cooked Standard alias root: module id containing `::standard-`, the five canonical
+   user-region textures, and the diffuse-transmission parameter names. The built-in
+   `forgeax::default-standard-pbr` root is layer-free, so values alone stay inert.
+3. The layer is Forward-only; do not expect it in a Deferred GBuffer. Authored alias roots currently
+   draw on the per-entity CPU lane and compile out clustered and rect-area lights (render README
+   §Diffuse transmission); budget dense foliage accordingly.
+4. Verify with the back-lit falsifier pattern in `apps/hello/foliage-transmission` (opaque control
+   stays dark, factor 0 must fail), its white furnace (factors 0, 0.5, 1 match the opaque white
+   control; `FALSIFY=additive` must fail), and its RHI Debug browser smoke, which checks the bound pipeline's
+   module and 68/69 bindings.
+
+A glTF source carrying the extension imports through the same fields; out-of-range values fail as
+`gltf-material-physical-invalid`.
+
+## Order-independent transparency
+
+Transparent draws composite in back-to-front sorted order by default. For
+interpenetrating or cyclic transparent layers, set the view's
+`Camera.transparency` to `TRANSPARENCY_WEIGHTED_BLENDED`. Do not reorder
+entities or split meshes in the app. There is no per-material opt-in.
+
+A draw accumulates only when all of these hold:
+- its blend is straight over (`src-alpha / one-minus-src-alpha`) or
+  premultiplied over (`one / one-minus-src-alpha`);
+- depth writes are off;
+- it is an unskinned built-in Standard or Unlit `fs_main` draw without `outputs`.
+
+Every other transparent draw stays in the sorted pass after the composite.
+Read `renderer.inspect().transparency.ineligible` for its reason:
+`blend-not-eligible`, `depth-write-enabled` or `program-without-oit-output`.
+Repair the material's render state, or accept sorted, rather than parsing
+messages.
+
+The result has exact coverage and a depth-weighted average color. It is not
+the exact over-operator for overlapping layers. See the
+[OIT section](../../packages/render/README.md#order-independent-transparency).
+
 ## Mental model
 
 The recovery route is structured error inspection followed by source or cook
@@ -78,6 +151,25 @@ only its changed values. A texture value is structured:
 The coordinate set and transform remain attached to the named texture slot.
 The glTF bridge, pack cook, runtime extract, and built-in PBR shader consume
 that same data.
+
+For a render target or reflection probe, the material consumes the public
+`RenderTargetTextureSource` projection produced by the Renderer. The source is
+bound to the named texture slot with its exact dimension and mip view; it is not
+an asset handle or an app-local texture registry. Probe sampling uses the
+renderer-owned selected probe, roughness mip, local box projection, and
+Skylight irradiance fallback. Read pixels only after the matching
+`FrameReceipt.completed` promise resolves.
+
+Standard PBR always applies geometric specular anti-aliasing: roughness widens
+by the screen-space normal spread in Forward, Deferred, IBL, and clearcoat.
+Do not raise authored roughness or add a custom shader to hide sparkling
+highlights on curved low-roughness surfaces. The contract lives in
+`packages/shader/README.md` under Standard lit shader contract.
+
+Specular IBL also compensates multiple scattering, so rough metal keeps its
+energy: in a uniform environment a white metal matches the sky at every
+roughness. Do not brighten rough metals with a higher `baseColor`, `intensity`,
+or an emissive term to offset split-sum darkening; that loss no longer exists.
 
 ## Author, cook, load
 
@@ -180,3 +272,26 @@ const snapshot = resolveVisibility(world);
 Do not replace a missing material, mesh, camera, or visibility path with a
 demo-side stand-in. Visibility does not own camera, picking, lifecycle, assets,
 or VFX shadow behavior. Those are out of scope for this material skill.
+## Custom multiple outputs
+
+`passes[].outputs` declares ordered named color outputs with format, optional
+blend and writeMask. WGSL `@location(n)` selects index n. Cook validates the
+selected fragment interface; load through the ordinary GUID route. Bind matching
+RenderGraph targets through [public MRT](../../packages/render/README.md#public-material-mrt),
+then inspect all attachments through RHI Debug rather than accepting color alone.
+
+## Color writes and coplanar overlays
+
+Use `renderState.colorWriteMask` (RGBA bits 1/2/4/8, default 15) for per-channel
+writes. Mask 0 with depth writes enabled makes an invisible occluder; place it
+before affected opaque geometry with the existing queue. Use `depthBias` (signed
+32-bit constant units), `depthBiasSlopeScale`, and optional `depthBiasClamp` for
+polygon offset. Zero defaults need no enable flag. Negative bias pulls forward
+under conventional less-depth; an overlay usually disables depth writes.
+With multiple outputs, this mask intersects each output's `writeMask`.
+
+Generated shadow passes retain polygon offset and culling but own depth writes;
+color suppression does not disable shadows. Derived temporal attachments write
+all scene-data channels. See the [pass table and RHI Debug regression commands](../../packages/render/README.md#material-color-writes-and-polygon-depth-offset)
+before interpreting masks on deferred/MRT attachments. Inspect both pipeline
+state and live/fresh-replay pixels, including the zero-bias and write-off controls.

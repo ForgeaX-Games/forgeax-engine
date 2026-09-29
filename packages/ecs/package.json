@@ -17,7 +17,7 @@
       "import": "./dist/externalization/index.mjs"
     },
     "./internal": {
-      "types": "./dist/component.d.ts",
+      "types": "./dist/internal.d.ts",
       "import": "./dist/internal.mjs"
     },
     "./projection": {
@@ -27,6 +27,10 @@
     "./shared": {
       "types": "./dist/shared.d.ts",
       "import": "./dist/shared.mjs"
+    },
+    "./world-read": {
+      "types": "./dist/world-read.d.ts",
+      "import": "./dist/world-read.mjs"
     }
   },
   "main": "./dist/index.mjs",

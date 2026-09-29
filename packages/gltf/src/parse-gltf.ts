@@ -1,9 +1,5 @@
-// parse-gltf.ts - JSON-side glTF importer entry (w17).
-//
-// w17 lands the full parseGltf main function plus parseGlb / toAssetPack
-// siblings. The helpers exported here include both the surface API
-// (parseGltf / parseGlb / toAssetPack) and a few mesh / scene utilities
-// the main path uses internally.
+// parse-gltf.ts - JSON-side glTF importer entry.
+// The public parse, GLB, asset-pack, mesh, and scene helpers live here.
 
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import {
@@ -23,6 +19,16 @@ import { decodeColorAccessor } from './accessor/decode-color.js';
 import { checkExtensions, type GltfExtensionsJson } from './check-extensions.js';
 import { Base64DecodeError, dataUriBase64Payload, decodeBase64 } from './data-uri.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
+import { type GltfLodRelation, parseGltfLodExtension } from './lod/parse-lod.js';
+import { projectGltfLodMeta } from './lod/project-meta.js';
+import {
+  type GltfImageIr,
+  type GltfMaterialIr,
+  type GltfMaterialJson,
+  type GltfSamplerIr,
+  type GltfTextureIr,
+  parseMaterial,
+} from './material/parse-material.js';
 import {
   type GltfBufferViewDecodeCapability,
   type MeshoptBufferViewJson,
@@ -41,6 +47,21 @@ import {
 import type { GltfSourceKeyError } from './source-key.js';
 import { type DecomposedTransform, decomposeNodeTransform } from './transform.js';
 
+export type {
+  GltfImageIr,
+  GltfMaterialIr,
+  GltfMaterialJson,
+  GltfNormalTextureInfoIr,
+  GltfOcclusionTextureInfoIr,
+  GltfSamplerIr,
+  GltfTextureInfoIr,
+  GltfTextureIr,
+  GltfTextureTransformIr,
+  NormalTextureInfoJson,
+  OcclusionTextureInfoJson,
+  TextureInfoJson,
+} from './material/parse-material.js';
+
 export interface MeshPrimitiveJson {
   readonly attributes?: Record<string, number>;
   readonly indices?: number;
@@ -55,12 +76,7 @@ export interface MeshJson {
   readonly primitives: readonly MeshPrimitiveJson[];
 }
 
-// === Tier-B v1 IR (GltfDoc) ===
-//
-// Shape: a denormalised view of the parsed glTF JSON, post-validation,
-// suitable for downstream `toAssetPack` and runtime AssetRegistry
-// hand-off. Math types are POD (number tuples), no Vec3/Quat brand at
-// the boundary (charter proposition 5).
+// Tier-B IR: validated glTF JSON projected into downstream POD records.
 
 interface InstancingAttributes {
   readonly TRANSLATION?: number;
@@ -217,26 +233,26 @@ export interface GltfMeshIr {
   readonly positions: Float32Array;
   readonly normals?: Float32Array;
   readonly texcoord0?: Float32Array;
-  /** TEXCOORD_1 per-vertex UV set 1 (Float32Array, 2 per vertex). feat-20260629-multi-uv-set-support m1-w2. */
+  /** TEXCOORD_1 per-vertex UV set 1. */
   readonly texcoord1?: Float32Array;
-  /** TEXCOORD_2 per-vertex UV set 2 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_2 per-vertex UV set 2. */
   readonly texcoord2?: Float32Array;
-  /** TEXCOORD_3 per-vertex UV set 3 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_3 per-vertex UV set 3. */
   readonly texcoord3?: Float32Array;
-  /** TEXCOORD_4 per-vertex UV set 4 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_4 per-vertex UV set 4. */
   readonly texcoord4?: Float32Array;
-  /** TEXCOORD_5 per-vertex UV set 5 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_5 per-vertex UV set 5. */
   readonly texcoord5?: Float32Array;
-  /** TEXCOORD_6 per-vertex UV set 6 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_6 per-vertex UV set 6. */
   readonly texcoord6?: Float32Array;
-  /** TEXCOORD_7 per-vertex UV set 7 (Float32Array, 2 per vertex). */
+  /** TEXCOORD_7 per-vertex UV set 7. */
   readonly texcoord7?: Float32Array;
   readonly tangents?: Float32Array;
-  /** COLOR_0 importer carrier; bridge projects it to the canonical color attribute. */
+  /** COLOR_0 importer carrier. */
   readonly colors0?: Float32Array;
-  /** JOINTS_0 per-vertex joint indices (Uint16Array, 4 per vertex). UBYTE source is width-converted to U16 at parse time (D-3). */
+  /** JOINTS_0 per-vertex joint indices. */
   readonly joints0?: Uint16Array;
-  /** WEIGHTS_0 per-vertex skin weights (Float32Array, 4 per vertex). */
+  /** WEIGHTS_0 per-vertex skin weights. */
   readonly weights0?: Float32Array;
   readonly morphTargets?: readonly {
     readonly position?: Float32Array;
@@ -244,109 +260,17 @@ export interface GltfMeshIr {
     readonly tangent?: Float32Array;
   }[];
   readonly morphWeights?: Float32Array;
-  /**
-   * Optional per-glTF-spec: when omitted, primitive declares non-indexed
-   * geometry (vertex buffer is consumed in vertex order, every 3 verts =
-   * 1 triangle for triangle-list). bridge.ts handles undefined by routing
-   * MeshAsset.indices to undefined and submesh.indexCount=0 (vertexCount
-   * carries the draw count for `pass.draw(vertexCount)`).
-   * bug-20260612 hello-skin visual layered gate: prior shape coerced
-   * undefined into Uint16Array(0) and tripped MeshAsset.indices !==
-   * undefined branches downstream into drawIndexed(0).
-   * U16 (incl. widened U8) or U32 — width preserved from the source accessor;
-   * bridge.ts narrows U32 to U16 when the merged maxIndex fits.
-   */
+  /** Undefined means non-indexed; otherwise source width is preserved. */
   readonly indices?: Uint16Array | Uint32Array;
   readonly materialIndex: number | null;
-  /**
-   * Owning glTF mesh index in the original document (`gltf.meshes[meshIndex]`).
-   * After OOS-7 flattening, multiple GltfMeshIr entries may share the same
-   * meshIndex (one per primitive). Bridge layer uses this to filter material
-   * collection per node, fixing the verify-r1 charter-defect where multi
-   * glTF-mesh documents would silently misalign materials across nodes.
-   */
+  /** Owning glTF mesh index; multiple IR rows may share it after flattening. */
   readonly meshIndex: number;
 }
 
-export interface GltfTextureIr {
-  readonly sampler?: number;
-  readonly source: number;
-  readonly name?: string;
-}
-
-export interface GltfTextureTransformIr {
-  readonly offset?: readonly [number, number];
-  readonly rotation?: number;
-  readonly scale?: readonly [number, number];
-}
-
-export interface GltfTextureInfoIr {
-  readonly texture: number;
-  readonly sampler?: number;
-  readonly texCoord?: number;
-  readonly transform?: GltfTextureTransformIr;
-}
-
-export interface GltfNormalTextureInfoIr extends GltfTextureInfoIr {
-  readonly scale?: number;
-}
-
-export interface GltfOcclusionTextureInfoIr extends GltfTextureInfoIr {
-  readonly strength?: number;
-}
-
-export interface GltfImageIr {
-  readonly uri?: string;
-  readonly mimeType?: string;
-  readonly bufferView?: number;
-  readonly name?: string;
-}
-
-export interface GltfSamplerIr {
-  readonly magFilter?: number;
-  readonly minFilter?: number;
-  readonly wrapS: number;
-  readonly wrapT: number;
-  readonly name?: string;
-}
-
-export interface GltfMaterialIr {
-  readonly name?: string;
-  readonly baseColorFactor: readonly [number, number, number, number];
-  /** glTF emissiveFactor; omitted means the glTF default [0, 0, 0]. */
-  readonly emissiveFactor?: readonly [number, number, number];
-  readonly baseColorTexture?: GltfTextureInfoIr | number;
-  /** Texture binding for the emissive map. */
-  readonly emissiveTexture?: GltfTextureInfoIr | number;
-  readonly metallicFactor: number;
-  readonly roughnessFactor: number;
-  readonly metallicRoughnessTexture?: GltfTextureInfoIr | number;
-  readonly normalTexture?: GltfNormalTextureInfoIr | number;
-  readonly occlusionTexture?: GltfOcclusionTextureInfoIr | number;
-  /**
-   * glTF `alphaMode` (`'OPAQUE'` | `'MASK'` | `'BLEND'`). Absent -> `'OPAQUE'`
-   * (glTF spec default). Drives the bridge's transparent / alpha-test routing.
-   */
-  readonly alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
-  /** glTF `alphaCutoff` (MASK-mode threshold; glTF spec default 0.5). */
-  readonly alphaCutoff?: number;
-  /**
-   * glTF `doubleSided`. Absent -> false (the glTF spec default). The bridge
-   * maps this to a no-cull material pass so reverse-facing glass and cards
-   * remain visible without changing their authored winding.
-   */
-  readonly doubleSided?: boolean;
-  /**
-   * baseColorTexture UV-set index (glTF `baseColorTexture.texCoord`). Absent
-   * -> 0. Selects which interleaved UV set the base-color sampler reads.
-   */
-  readonly baseColorTexCoord?: number;
-}
-
 export interface NodeInstancingIr {
-  /** Number of instances. All TRS attribute accessors share this count. */
+  /** Number of instances. */
   readonly count: number;
-  /** N column-major mat4 transforms packed into one Float32Array (length = N*16). */
+  /** Column-major transforms packed into one Float32Array. */
   readonly transforms: Float32Array;
 }
 
@@ -367,16 +291,12 @@ export interface GltfNodeIr {
   readonly name?: string;
   readonly transform: DecomposedTransform;
   readonly meshIndex: number | null;
-  /** Node-authored morph weights override mesh defaults at instantiation. */
+  /** Node-authored morph weights override mesh defaults. */
   readonly morphWeights?: Float32Array;
-  /** Valid when node carries `skin` reference. Null when no skin. */
   readonly skinIndex: number | null;
   readonly children: readonly number[];
-  /** Present when node carries EXT_mesh_gpu_instancing (feat-20260518). */
   readonly instancing?: NodeInstancingIr;
-  /** glTF camera index. Null when the node does not reference a camera. */
   readonly camera: number | null;
-  /** KHR_lights_punctual light index. Null when the node has no light. */
   readonly lightIndex?: number | null;
 }
 
@@ -423,34 +343,12 @@ export interface GltfDoc {
    * fixtures; producers from parseGltf / parseGlb always populate it.
    */
   readonly meshPrimitiveCount?: ReadonlyMap<number, number>;
+  readonly lod?: GltfLodRelation;
 }
 
 interface BuffersJson {
   readonly byteLength: number;
   readonly uri?: string;
-}
-
-interface TextureTransformJson {
-  readonly offset?: readonly number[];
-  readonly rotation?: number;
-  readonly scale?: readonly number[];
-  readonly texCoord?: number;
-}
-
-interface TextureInfoJson {
-  readonly index: number;
-  readonly texCoord?: number;
-  readonly extensions?: {
-    readonly KHR_texture_transform?: TextureTransformJson;
-  };
-}
-
-interface NormalTextureInfoJson extends TextureInfoJson {
-  readonly scale?: number;
-}
-
-interface OcclusionTextureInfoJson extends TextureInfoJson {
-  readonly strength?: number;
 }
 
 interface RootGltfJson extends GltfExtensionsJson {
@@ -468,6 +366,7 @@ interface RootGltfJson extends GltfExtensionsJson {
     readonly rotation?: readonly number[];
     readonly scale?: readonly number[];
     readonly weights?: readonly number[];
+    readonly extras?: { readonly MSFT_screencoverage?: readonly number[] };
     readonly extensions?: {
       readonly KHR_lights_punctual?: {
         readonly light?: number;
@@ -479,6 +378,7 @@ interface RootGltfJson extends GltfExtensionsJson {
           readonly SCALE?: number;
         };
       };
+      readonly MSFT_lod?: { readonly ids?: readonly number[] };
     };
   }>;
   readonly extensions?: {
@@ -494,30 +394,20 @@ interface RootGltfJson extends GltfExtensionsJson {
         };
       }>;
     };
+    readonly MSFT_screencoverage?: { readonly scales?: readonly number[] };
   };
   readonly skins?: ReadonlyArray<{
     readonly name?: string;
     readonly joints: readonly number[];
     readonly inverseBindMatrices?: number;
+    readonly extras?: {
+      readonly forgeax?: {
+        readonly conservativeAnimatedBounds?: unknown;
+      };
+    };
   }>;
   readonly meshes?: readonly MeshJson[];
-  readonly materials?: ReadonlyArray<{
-    readonly name?: string;
-    readonly pbrMetallicRoughness?: {
-      readonly baseColorFactor?: readonly number[];
-      readonly baseColorTexture?: TextureInfoJson;
-      readonly metallicFactor?: number;
-      readonly roughnessFactor?: number;
-      readonly metallicRoughnessTexture?: TextureInfoJson;
-    };
-    readonly normalTexture?: NormalTextureInfoJson;
-    readonly emissiveFactor?: readonly number[];
-    readonly emissiveTexture?: TextureInfoJson;
-    readonly occlusionTexture?: OcclusionTextureInfoJson;
-    readonly alphaMode?: string;
-    readonly alphaCutoff?: number;
-    readonly doubleSided?: boolean;
-  }>;
+  readonly materials?: ReadonlyArray<GltfMaterialJson>;
   readonly textures?: ReadonlyArray<{
     readonly sampler?: number;
     readonly source?: number;
@@ -554,37 +444,6 @@ interface RootGltfJson extends GltfExtensionsJson {
       readonly interpolation?: string;
     }>;
   }>;
-}
-
-function tuple2(values: readonly number[] | undefined): readonly [number, number] | undefined {
-  if (values === undefined || values.length < 2) return undefined;
-  return [values[0] ?? 0, values[1] ?? 0];
-}
-
-function parseTextureInfo(
-  info: TextureInfoJson,
-  textures: readonly GltfTextureIr[],
-): GltfTextureInfoIr {
-  const transformJson = info.extensions?.KHR_texture_transform;
-  const offset = tuple2(transformJson?.offset);
-  const scale = tuple2(transformJson?.scale);
-  const transform =
-    offset === undefined && transformJson?.rotation === undefined && scale === undefined
-      ? undefined
-      : {
-          ...(offset === undefined ? {} : { offset }),
-          ...(transformJson?.rotation === undefined ? {} : { rotation: transformJson.rotation }),
-          ...(scale === undefined ? {} : { scale }),
-        };
-  const sampler = textures[info.index]?.sampler;
-  return {
-    texture: info.index,
-    ...(sampler === undefined ? {} : { sampler }),
-    ...(info.texCoord === undefined && transformJson?.texCoord === undefined
-      ? {}
-      : { texCoord: transformJson?.texCoord ?? info.texCoord }),
-    ...(transform === undefined ? {} : { transform }),
-  };
 }
 
 export type ExternalLoader = (uri: string) => Promise<ArrayBuffer>;
@@ -717,6 +576,8 @@ async function parseGltfWithBin(
   const extResult = checkExtensions(json);
   if (!extResult.ok) return err(extResult.error);
   const unsupportedExtensions = extResult.value.unsupportedUsed;
+  const lodResult = parseGltfLodExtension(json);
+  if (!lodResult.ok) return err(lodResult.error);
   const lightsResult = parsePunctualLights(json, ctx.filePath);
   if (!lightsResult.ok) return err(lightsResult.error);
 
@@ -757,14 +618,7 @@ async function parseGltfWithBin(
   buffers.splice(0, buffers.length, ...projected.value.buffers);
 
   const meshes: GltfMeshIr[] = [];
-  // feat-20260608 round-2: surface the original-glTF-mesh primitive counts so
-  // build-time consumers (gltfImporter scene arm) can hand them to
-  // gltfDocToSceneAsset's `meshPrimitiveCount` parameter without re-parsing
-  // the JSON. Without this, importGltf at gltf-importer.ts ~272 walks the
-  // already-flattened doc.meshes (one entry per primitive) and cannot
-  // reconstruct the gltfMesh -> primitiveCount map; the bridge then uses
-  // identity (gltfMeshIdx == flatIdx) and any multi-primitive .gltf imports
-  // misindex meshes after the first primitive.
+  // Preserve original mesh -> primitive counts for the flattened IR.
   const meshPrimitiveCount = new Map<number, number>();
   for (let meshIndex = 0; meshIndex < meshesJson.length; meshIndex++) {
     const meshJson = meshesJson[meshIndex];
@@ -826,9 +680,7 @@ async function parseGltfWithBin(
       const positions = new Float32Array(positionsDecoded.length);
       positions.set(positionsDecoded);
 
-      // Decode optional vertex attributes: NORMAL (VEC3), TEXCOORD_0 (VEC2),
-      // TANGENT (VEC4). Each uses the existing decodeAttributeAccessor helper.
-      // Missing attributes leave the GltfMeshIr field undefined.
+      // Decode optional NORMAL, TEXCOORD_0, and TANGENT attributes.
       const attrs = prim.attributes ?? {};
 
       let colors0: Float32Array | undefined;
@@ -1165,12 +1017,6 @@ async function parseGltfWithBin(
           owned.set(src);
           indices = owned;
         } else if (indexDecoded.value.kind === 'u32') {
-          // U32 indices ride through end-to-end: MeshAsset.indices is
-          // `Uint16Array | Uint32Array`, mesh-bin serializes iwidth=4, and
-          // the GPU runtime auto-selects 'uint32' via `instanceof Uint32Array`
-          // (createRenderer.ts). bridge.ts merges by value, so small meshes
-          // whose maxIndex < 65536 are losslessly narrowed to Uint16 there.
-          // Re-allocate over a fresh ArrayBuffer for the same reason as u16.
           const src = indexDecoded.value.data;
           const owned = new Uint32Array(src.length);
           owned.set(src);
@@ -1263,70 +1109,12 @@ async function parseGltfWithBin(
     });
   }
 
-  // Materials (Tier-C subset: metallic-roughness PBR + normal/emissive maps).
-  const materialsJson = json.materials ?? [];
+  // Materials are normalized by the material parser owner before entering the IR.
   const materials: GltfMaterialIr[] = [];
-  for (const matJson of materialsJson) {
-    const pbr = matJson.pbrMetallicRoughness;
-    const baseColor = pbr?.baseColorFactor ?? [1, 1, 1, 1];
-    const baseColor4: readonly [number, number, number, number] = [
-      baseColor[0] ?? 1,
-      baseColor[1] ?? 1,
-      baseColor[2] ?? 1,
-      baseColor[3] ?? 1,
-    ];
-
-    const alphaMode =
-      matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
-    const alphaCutoff = alphaMode === 'MASK' ? (matJson.alphaCutoff ?? 0.5) : undefined;
-    const emissiveFactor = matJson.emissiveFactor;
-    const emissiveFactor3: readonly [number, number, number] = [
-      emissiveFactor?.[0] ?? 0,
-      emissiveFactor?.[1] ?? 0,
-      emissiveFactor?.[2] ?? 0,
-    ];
-    materials.push({
-      ...(matJson.name === undefined ? {} : { name: matJson.name }),
-      baseColorFactor: baseColor4,
-      ...(emissiveFactor === undefined ? {} : { emissiveFactor: emissiveFactor3 }),
-      metallicFactor: pbr?.metallicFactor ?? 1.0,
-      roughnessFactor: pbr?.roughnessFactor ?? 1.0,
-      ...(pbr?.baseColorTexture === undefined
-        ? {}
-        : { baseColorTexture: parseTextureInfo(pbr.baseColorTexture, textures) }),
-      ...(pbr?.metallicRoughnessTexture === undefined
-        ? {}
-        : { metallicRoughnessTexture: parseTextureInfo(pbr.metallicRoughnessTexture, textures) }),
-      ...(matJson.normalTexture === undefined
-        ? {}
-        : {
-            normalTexture: {
-              ...parseTextureInfo(matJson.normalTexture, textures),
-              ...(matJson.normalTexture.scale === undefined
-                ? {}
-                : { scale: matJson.normalTexture.scale }),
-            },
-          }),
-      ...(matJson.occlusionTexture === undefined
-        ? {}
-        : {
-            occlusionTexture: {
-              ...parseTextureInfo(matJson.occlusionTexture, textures),
-              ...(matJson.occlusionTexture.strength === undefined
-                ? {}
-                : { strength: matJson.occlusionTexture.strength }),
-            },
-          }),
-      ...(matJson.emissiveTexture === undefined
-        ? {}
-        : { emissiveTexture: parseTextureInfo(matJson.emissiveTexture, textures) }),
-      ...(alphaMode === undefined ? {} : { alphaMode }),
-      ...(alphaCutoff === undefined ? {} : { alphaCutoff }),
-      ...(matJson.doubleSided === true ? { doubleSided: true } : {}),
-      ...(pbr?.baseColorTexture?.texCoord === undefined || pbr.baseColorTexture.texCoord === 0
-        ? {}
-        : { baseColorTexCoord: pbr.baseColorTexture.texCoord }),
-    });
+  for (const material of json.materials ?? []) {
+    const parsedMaterial = parseMaterial(material, textures);
+    if (!parsedMaterial.ok) return err(parsedMaterial.error);
+    materials.push(parsedMaterial.value);
   }
 
   // Nodes + diagnostics.
@@ -1408,6 +1196,7 @@ async function parseGltfWithBin(
     },
     meshPrimitiveCount,
     lights: lightsResult.value,
+    ...(lodResult.value.lodNodeIds.length === 0 ? {} : { lod: lodResult.value }),
   });
 }
 
@@ -1518,7 +1307,7 @@ export interface GltfAssetPack {
   readonly subAssets: readonly GltfSubAssetEntry[];
 }
 
-export type GltfAssetPackResult = Result<GltfAssetPack, GltfSourceKeyError>;
+export type GltfAssetPackResult = Result<GltfAssetPack, GltfSourceKeyError | GltfError>;
 
 /**
  * Project a parsed `GltfDoc` into the disk-shape `<source>.meta.json` plus
@@ -1632,6 +1421,93 @@ export function toAssetPack(
   const sourceOverrides: Record<string, Readonly<Record<string, unknown>>> = {
     ...(existingMeta?.sourceOverrides ?? {}),
   };
+  const lodGroups =
+    doc.lod === undefined ? [] : doc.lod.groups.length > 0 ? doc.lod.groups : [doc.lod];
+  for (const lodGroup of lodGroups) {
+    if (lodGroup.lodNodeIds.length === 0) continue;
+    const rootMeshIndex = doc.nodes[lodGroup.rootNode]?.meshIndex;
+    const referencedMeshIndices = [
+      rootMeshIndex,
+      ...lodGroup.lodNodeIds.map((nodeIndex) => doc.nodes[nodeIndex]?.meshIndex),
+    ];
+    if (
+      referencedMeshIndices.some(
+        (meshIndex) =>
+          !Number.isInteger(meshIndex) ||
+          meshIndex === null ||
+          meshIndex === undefined ||
+          !seenMeshIndices.has(meshIndex as number),
+      )
+    ) {
+      return err(
+        gltfErr('gltf-lod-invalid', {
+          rootNode: lodGroup.rootNode,
+          ids: lodGroup.lodNodeIds,
+          reason: 'missing-node',
+        }),
+      );
+    }
+    const rootOutput =
+      rootMeshIndex === undefined || rootMeshIndex === null
+        ? undefined
+        : subAssetByKindIndex.get(`mesh:${rootMeshIndex}`);
+    const levels = lodGroup.lodNodeIds.map((nodeIndex, index) => {
+      const meshIndex = doc.nodes[nodeIndex]?.meshIndex;
+      const output =
+        meshIndex === undefined || meshIndex === null
+          ? undefined
+          : subAssetByKindIndex.get(`mesh:${meshIndex}`);
+      return {
+        sourceKey: output?.sourceKey ?? `mesh:${meshIndex ?? nodeIndex}`,
+        meshGuid: output?.guid ?? '',
+        ...(lodGroup.screenCoverages[index] === undefined
+          ? {}
+          : { screenCoverage: lodGroup.screenCoverages[index] }),
+      };
+    });
+    if (rootOutput?.sourceKey !== undefined && levels.every((level) => level.meshGuid !== '')) {
+      const previousLodMeta = (() => {
+        const raw = existingMeta?.sourceOverrides?.[rootOutput.sourceKey]?.lods;
+        if (!Array.isArray(raw)) return undefined;
+        return raw.flatMap((entry) => {
+          if (entry === null || typeof entry !== 'object') return [];
+          const value = entry as Record<string, unknown>;
+          return typeof value.sourceKey === 'string' && typeof value.meshGuid === 'string'
+            ? [
+                {
+                  sourceKey: value.sourceKey,
+                  guid: value.meshGuid,
+                  ...(typeof value.screenCoverage === 'number'
+                    ? { screenCoverage: value.screenCoverage }
+                    : {}),
+                },
+              ]
+            : [];
+        });
+      })();
+      const projected = projectGltfLodMeta({
+        rootSourceKey: rootOutput.sourceKey,
+        levels: levels.map((level) => ({
+          sourceKey: level.sourceKey,
+          guid: level.meshGuid,
+          ...(level.screenCoverage === undefined ? {} : { screenCoverage: level.screenCoverage }),
+        })),
+        ...(previousLodMeta === undefined ? {} : { previous: previousLodMeta }),
+      });
+      if (!projected.ok)
+        return err(
+          gltfErr('gltf-lod-invalid', {
+            rootNode: lodGroup.rootNode,
+            ids: lodGroup.lodNodeIds,
+            reason: 'coverage',
+          }),
+        );
+      sourceOverrides[rootOutput.sourceKey] = {
+        ...(sourceOverrides[rootOutput.sourceKey] ?? {}),
+        lods: projected.value.lods,
+      };
+    }
+  }
   for (const meshIndex of seenMeshIndices) {
     const meshOutput = subAssetByKindIndex.get(`mesh:${meshIndex}`);
     if (meshOutput?.sourceKey === undefined) continue;
@@ -1725,7 +1601,5 @@ export function toAssetPack(
   return ok({ meta, subAssets: reuse.value.subAssets });
 }
 
-// Suppress unused-import warning; COMPONENT_TYPE is re-exported so
-// downstream consumers can grep the constants table from a single
-// import. (TS strict mode would otherwise drop the binding.)
+// Keep the component-type table available from this importer module.
 export { COMPONENT_TYPE };

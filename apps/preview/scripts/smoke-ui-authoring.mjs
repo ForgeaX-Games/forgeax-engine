@@ -6,15 +6,61 @@ import { chromium } from 'playwright';
 
 const falsifyCompanion = process.argv.includes('--falsify-companion');
 const reloadBeforeCapture = process.argv.includes('--reload-before-capture');
+const maxServerOutputChars = 8_000;
+const MAX_SERVER_TIMEOUT_MS = 180_000;
+const SERVER_TIMEOUT_MS = Math.min(
+  Math.max(Number.parseInt(process.env.FORGEAX_PREVIEW_SERVER_TIMEOUT_MS ?? '180000', 10) || 180_000, 1),
+  MAX_SERVER_TIMEOUT_MS,
+);
 const appDir = fileURLToPath(new URL('..', import.meta.url));
 const viteBin = fileURLToPath(new URL('../../../node_modules/vite/bin/vite.js', import.meta.url));
+const viteConfig = fileURLToPath(new URL('../vite.ui-authoring.config.ts', import.meta.url));
 const port = await availablePort();
-const server = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+const server = spawn(process.execPath, [
+  viteBin,
+  '--config',
+  viteConfig,
+  '--host',
+  '127.0.0.1',
+  '--port',
+  String(port),
+  '--strictPort',
+], {
   cwd: appDir,
-  stdio: 'ignore',
+  stdio: ['ignore', 'pipe', 'pipe'],
 });
-const stop = () => server.kill('SIGTERM');
-process.on('exit', stop);
+let serverOutput = '';
+let serverError;
+const appendServerOutput = (chunk) => {
+  serverOutput = (serverOutput + String(chunk)).slice(-maxServerOutputChars);
+};
+server.stdout?.on('data', appendServerOutput);
+server.stderr?.on('data', appendServerOutput);
+server.once('error', (error) => {
+  serverError = error;
+});
+
+async function stopServer(timeoutMs = 5_000) {
+  if (server.exitCode !== null || server.signalCode !== null) return;
+  server.kill('SIGTERM');
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    server.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  if (server.exitCode === null && server.signalCode === null) {
+    server.kill('SIGKILL');
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1_000);
+      server.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+}
 
 async function availablePort() {
   const probe = createServer();
@@ -29,29 +75,49 @@ async function availablePort() {
 }
 
 async function waitForServer(origin) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  const deadline = Date.now() + SERVER_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (serverError !== undefined) {
+      throw new Error(
+        `preview Vite server failed to start: ${serverError.message}; output: ${serverOutput.trim() || 'none'}`,
+      );
+    }
     if (server.exitCode !== null || server.signalCode !== null) {
       throw new Error(
-        `preview Vite server exited before becoming ready (exit ${server.exitCode}, signal ${server.signalCode})`,
+        `preview Vite server exited before becoming ready (exit ${server.exitCode}, signal ${server.signalCode}; output: ${serverOutput.trim() || 'none'})`,
       );
     }
     try {
       await fetch(origin);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))));
     }
   }
-  throw new Error('preview Vite server did not become ready');
+  throw new Error(
+    `preview Vite server did not become ready within ${SERVER_TIMEOUT_MS}ms (output: ${serverOutput.trim() || 'none'})`,
+  );
 }
 
+let browser;
 try {
   const origin = `http://127.0.0.1:${port}`;
   await waitForServer(`${origin}/`);
   const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL;
-  const browser = await chromium.launch({
-    headless: true,
+  const headless = process.env.FORGEAX_BROWSER_HEADLESS !== '0';
+  browser = await chromium.launch({
+    headless,
     ...(chromeChannel ? { channel: chromeChannel } : {}),
+    args: [
+      '--enable-unsafe-webgpu',
+      '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+      '--use-vulkan=swiftshader',
+      '--use-angle=swiftshader',
+      '--ignore-gpu-blocklist',
+      '--disable-gpu-driver-bug-workarounds',
+      '--disable-dawn-features=disallow_unsafe_apis',
+      '--autoplay-policy=no-user-gesture-required',
+    ],
   });
   const page = await browser.newPage({ viewport: { width: 320, height: 180 }, deviceScaleFactor: 1 });
   const pageFailures = [];
@@ -59,7 +125,7 @@ try {
     if (message.type() === 'error') pageFailures.push(message.text());
   });
   page.on('pageerror', (error) => pageFailures.push(error.message));
-  await page.goto(`${origin}/?game=game-default`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${origin}/?game=empty`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(globalThis.__forgeaxUiAuthoring), null, { timeout: 30_000 });
   await page.waitForFunction(
     () => {
@@ -82,9 +148,19 @@ try {
     );
     await page.evaluate(() => document.fonts.ready);
   };
+  const screenshotHash = (bytes) => {
+    let hash = 0x811c9dc5;
+    for (const byte of bytes) {
+      hash ^= byte;
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
   const screenshotRenderable = async (scenario) => {
     const attempts = [];
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    let previousSignature = null;
+    let stableCaptures = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       const captureToken = `ui-capture-${captureSequence++}`;
       await waitForPaint();
       await page.waitForFunction(
@@ -130,8 +206,13 @@ try {
           };
         }, captureToken);
         if (state.connected && state.rect.width === 320 && state.rect.height === 180 && state.captureTarget && state.captureRoot) {
-          if (bytes.length >= 100) return bytes;
-          attempts.push({ ...state, bytes: bytes.length });
+          const signature = `${bytes.length}:${screenshotHash(bytes)}`;
+          attempts.push({ ...state, bytes: bytes.length, hash: signature });
+          if (bytes.length >= 100) {
+            stableCaptures = signature === previousSignature ? stableCaptures + 1 : 1;
+            previousSignature = signature;
+            if (stableCaptures >= 2) return bytes;
+          }
         } else {
           attempts.push(state);
         }
@@ -155,7 +236,9 @@ try {
         }, captureToken);
       }
     }
-    throw new Error(`preview screenshot did not become renderable: ${JSON.stringify({ attempts, pageFailures })}`);
+    throw new Error(
+      `preview screenshot did not converge: ${JSON.stringify({ attempts, pageFailures })}`,
+    );
   };
   const captureWithBytes = async (bytes, scenario) =>
     page.evaluate(async ({ pngBytes, scenario }) => {
@@ -307,12 +390,30 @@ try {
     if (report.defaultBytes.some((bytes) => JSON.stringify(bytes) !== JSON.stringify(report.defaultBytes[0]))) {
       throw new Error('capture PNG bytes were not deterministic');
     }
-    if (!report.initiallyValid || report.invalidCode !== 'preview-load-failed' || !report.repaired || !report.retried || report.action !== 'preview-action' || !report.discovered.some((entry) => entry.guid === report.selected.guid)) {
-      throw new Error('authoring smoke report failed');
+    const selectedGuid = report.selected.guid.toLowerCase();
+    if (
+      !report.initiallyValid ||
+      report.invalidCode !== 'preview-load-failed' ||
+      !report.repaired ||
+      !report.retried ||
+      report.action !== 'preview-action' ||
+      !report.discovered.some((entry) => entry.guid.toLowerCase() === selectedGuid)
+    ) {
+      throw new Error(
+        `authoring smoke report failed: ${JSON.stringify({
+          initiallyValid: report.initiallyValid,
+          invalidCode: report.invalidCode,
+          repaired: report.repaired,
+          retried: report.retried,
+          action: report.action,
+          selected: report.selected,
+          discovered: report.discovered,
+        })}`,
+      );
     }
     console.log(JSON.stringify(report));
-    await browser.close();
   }
 } finally {
-  stop();
+  await browser?.close().catch(() => {});
+  await stopServer();
 }

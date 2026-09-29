@@ -99,4 +99,31 @@ describe('MaterialAsset authoring vocabulary', () => {
     };
     void legacyPass;
   });
+
+  it('does not let a parent-bearing child redeclare root-owned fields', () => {
+    const parentGuid = new Uint8Array(16) as AssetGuid;
+    const colorSpace: MaterialAsset = {
+      kind: 'material',
+      parent: parentGuid,
+      // @ts-expect-error - a child inherits colorSpace from its root.
+      colorSpace: 'linear',
+    };
+    void colorSpace;
+
+    const passes: MaterialAsset = {
+      kind: 'material',
+      parent: parentGuid,
+      // @ts-expect-error - a child inherits passes from its root.
+      passes: [{ name: 'forward', program: { module: 'project::root' } }],
+    };
+    void passes;
+
+    const parameters: MaterialAsset = {
+      kind: 'material',
+      parent: parentGuid,
+      // @ts-expect-error - a child inherits parameters from its root.
+      parameters: [{ name: 'roughness', type: 'f32' }],
+    };
+    void parameters;
+  });
 });

@@ -190,10 +190,17 @@ export {
   fbxErr,
 } from './errors.js';
 export {
+  applyFbxImportSettingsBounds,
   deriveFbxSourceKeys,
   fbxImporter,
   sourceKeyForFbxOutput,
 } from './fbx-importer.js';
+export {
+  type FbxLodGroupInput,
+  type FbxLodGroupPod,
+  parseFbxLodGroup,
+} from './lod/parse-lod-group.js';
+export { type FbxLodMetaLevel, projectFbxLodMeta } from './lod/project-meta.js';
 export {
   type FbxRawAnimDoc,
   type FbxRawClip,
@@ -201,7 +208,12 @@ export {
 } from './parse-animation-clip.js';
 export { type FbxRawMaterial, parseMaterial } from './parse-material.js';
 export { type FbxRawDocument, type FbxRawMesh, parseMesh } from './parse-mesh.js';
-export { type FbxRawNode, type FbxRawNodes, parseScene } from './parse-scene.js';
+export {
+  type FbxRawLodGroup,
+  type FbxRawNode,
+  type FbxRawNodes,
+  parseScene,
+} from './parse-scene.js';
 export { type FbxRawSkeletonDoc, parseSkeleton } from './parse-skeleton.js';
 export { type FbxRawSkinDoc, parseSkin } from './parse-skin.js';
 export { type FbxRawTexture, type FbxRawTextures, parseTextures } from './parse-texture.js';

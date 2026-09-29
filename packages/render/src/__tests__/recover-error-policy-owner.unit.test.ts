@@ -14,14 +14,14 @@ const evidence = [
   {
     code: 'recover-not-needed',
     expected:
-      'renderer is healthy; call health() first to confirm degraded state before calling recover()',
-    hint: 'call health() first to confirm degraded state before calling recover()',
+      'renderer is healthy; use state() or inspect() to confirm degraded state before calling recover()',
+    hint: 'use state() or inspect().state to confirm degraded state before calling recover()',
     message: 'recover-not-needed: renderer is not in a degraded state',
   },
   {
     code: 'recover-not-implemented',
     expected: 'recovery is not yet implemented; self-heal lands in S5',
-    hint: 'self-heal recovery lands in S5; health().reason still reflects the degraded state',
+    hint: 'self-heal recovery lands in S5; inspect().state still reflects the lifecycle state',
     message: 'recover-not-implemented: self-heal recovery is not yet implemented',
   },
   {
@@ -47,6 +47,9 @@ describe('RecoverError policy ownership', () => {
 
     expect(source).toContain('export type RecoverErrorCode = keyof typeof RECOVER_ERROR_POLICY;');
     expect(source).not.toMatch(/export type RecoverErrorCode = 'recover-/);
+    expect(source).not.toContain('health()');
+    expect(source).toContain('state()');
+    expect(source).toContain('inspect()');
   });
 
   it('preserves the exact four-code vocabulary and order', () => {

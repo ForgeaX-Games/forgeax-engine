@@ -60,7 +60,11 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 > `timestamp-query-unsupported`; do not turn the structural ledger into fake
 > GPU evidence.
 
-`device.features` returns an empty `ReadonlySet`; `device.limits` returns an empty `Record`. Capability planning reads `caps` booleans, not the feature set.
+The adapter advertises `depth32float-stencil8` for structural descriptor replay.
+`requestDevice` enables only requested advertised features and rejects unavailable
+ones. Default devices retain an empty feature set; `device.limits` remains an
+empty record. This enables descriptor/command bookkeeping, never depth pixels,
+shader execution or GPU timing. Capability planning also reads `caps`.
 
 ## Handle bookkeeping
 
@@ -127,3 +131,10 @@ Use vitest mocks for isolated unit tests (single function / class). Use RhiNull 
 - `@forgeax/engine-rhi` (workspace) -- interface contract SSOT.
 - `@forgeax/engine-types` (workspace) -- POD types / `Result` SSOT.
 - `@webgpu/types` (workspace) -- descriptor type alignment; no real GPU binding.
+
+## Render bundles
+
+Bundle recording counts commands without incrementing submitted device counters. Each
+execution contributes its draws and bindings, rejects foreign bundles and destroyed
+directly referenced buffers, and permits repeated execution. These are structural facts only;
+Browser/Dawn pixel and native validation gates remain required.

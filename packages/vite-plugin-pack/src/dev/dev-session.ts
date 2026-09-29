@@ -69,6 +69,8 @@ export interface DevSession {
   ): Promise<DevSessionState>;
   materializeProduction(guid: string): Promise<ProductionRunResult>;
   rebuildProduction(changes: readonly ProductionSourceChange[]): Promise<ProductionRunResult>;
+  /** Wait until the latest watcher-owned rebuild has settled. */
+  waitForRebuild(): Promise<void>;
   track<T>(task: Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
@@ -189,6 +191,7 @@ export function createDevSession<TState = undefined>(
   let started: Promise<DevSessionState> | undefined;
   let operationToken = 0;
   let runtimeScope: RuntimeAssetBinding | undefined;
+  let activeRebuild: Promise<unknown> | undefined;
 
   const bindRuntime = (binding: RuntimeAssetBinding): void => {
     if (!Number.isSafeInteger(binding.generation) || binding.generation < 1) {
@@ -223,12 +226,11 @@ export function createDevSession<TState = undefined>(
     if (next.status === 'failed') {
       publishRuntime('degraded', 'degraded', [diagnosticForFailure(next.error)]);
     }
-    const accepted = currentSnapshot(next);
-    if (accepted !== undefined) {
+    if (next.status === 'serving' || next.status === 'degraded') {
       publishRuntime(
-        next.status === 'degraded' || accepted.authority === 'degraded' ? 'degraded' : 'ready',
-        accepted.authority,
-        next.status === 'degraded' ? next.diagnostics : accepted.diagnostics,
+        next.status === 'degraded' ? 'degraded' : 'ready',
+        next.status === 'degraded' ? 'degraded' : next.snapshot.authority,
+        next.status === 'degraded' ? next.diagnostics : next.snapshot.diagnostics,
       );
     }
     state = next;
@@ -303,14 +305,12 @@ export function createDevSession<TState = undefined>(
     operation: (context: DevSessionContext) => Promise<DevSessionSnapshot>,
   ): Promise<DevSessionState> => {
     const previous = currentSnapshot(state);
-    if (!intakeOpen || (previous === undefined && state.status !== 'failed')) {
+    if (!intakeOpen || (previous === undefined && state.status !== 'failed'))
       return Promise.resolve(state);
-    }
     const candidateGeneration = (previous?.generation ?? options.generation) + 1;
     const token = ++operationToken;
-    if (previous !== undefined) {
+    if (previous !== undefined)
       publish({ status: 'rebuilding', snapshot: previous, candidateGeneration });
-    }
     const task = (async (): Promise<DevSessionState> => {
       try {
         const snapshot = await settleGenerationOrAbort(
@@ -341,11 +341,33 @@ export function createDevSession<TState = undefined>(
           return state;
         }
         const diagnostics = [...previous.diagnostics, diagnosticForFailure(failure)];
-        publish({ status: 'degraded', snapshot: previous, diagnostics });
+        publish({
+          status: 'degraded',
+          snapshot: previous,
+          diagnostics,
+        });
       }
       return state;
     })();
-    return track(task);
+    const tracked = track(task);
+    activeRebuild = tracked;
+    void tracked.then(
+      () => {
+        if (activeRebuild === tracked) activeRebuild = undefined;
+      },
+      () => {
+        if (activeRebuild === tracked) activeRebuild = undefined;
+      },
+    );
+    return tracked;
+  };
+
+  const waitForRebuild = async (): Promise<void> => {
+    while (activeRebuild !== undefined) {
+      const observed = activeRebuild;
+      await observed;
+      if (activeRebuild === observed) return;
+    }
   };
 
   return {
@@ -356,12 +378,14 @@ export function createDevSession<TState = undefined>(
     publishRuntime,
     start,
     rebuild,
-    materializeProduction(guid): Promise<ProductionRunResult> {
+    async materializeProduction(guid): Promise<ProductionRunResult> {
+      await waitForRebuild();
       return track(options.productionSession.materialize(guid));
     },
     rebuildProduction(changes): Promise<ProductionRunResult> {
       return track(options.productionSession.rebuild(changes));
     },
+    waitForRebuild,
     track,
     async close(): Promise<void> {
       if (state.status === 'closed') return;

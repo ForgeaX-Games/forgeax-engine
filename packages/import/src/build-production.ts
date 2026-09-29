@@ -1,18 +1,27 @@
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   type CatalogBuildResult,
   createRuntimePackPublication,
   finalizePackageTransportSource,
-  loadAssetConfig,
   metaPathForGuid,
-  projectCookedPackageEntry,
+  projectPackageCatalog,
 } from '@forgeax/engine-pack/build';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
+import type { LegacyPackInventoryDocument } from '@forgeax/engine-pack/scanner';
+import {
+  PackageId,
+  parsePackSourceJson,
+  projectDirectPackJson,
+  resolvePackParameterInheritance,
+} from '@forgeax/engine-pack/source';
+import { loadScriptablePack } from '@forgeax/engine-pack/source-node';
 import type {
   AssetPublicationEnvelope,
+  AssetPublicationOutput,
+  CookReceipt,
   Importer,
   PackIndexEntry,
-  ResourceRevision,
   RuntimeAssetBinding,
 } from '@forgeax/engine-types';
 import type { ImportRunnerFs } from './import-runner.js';
@@ -21,16 +30,18 @@ import { projectImportProductForBuild } from './pack-projection.js';
 import {
   canonicalScriptableSourcePath,
   declaredPackExternalOutputs,
-  materializePreparedScriptablePack,
-  prepareAuthoredPackTransport,
+  type PreparedScriptablePack,
+  prepareDirectPackTransport,
+  prepareLegacyPackTransport,
   produceScriptablePackProducts,
-  scriptablePackInputs,
+  type ScriptablePackInput,
 } from './scriptable-pack-host.js';
 import {
   finalizeSourcePackage,
   produceSourcePackage,
   sourcePackageAssetsByGuid,
 } from './source-package.js';
+import { sourceDeclarationForCatalogPath } from './source-path.js';
 
 export interface BuildProductionFailure {
   readonly code: string;
@@ -70,14 +81,6 @@ export interface BuildProductionOptions {
   readonly fail: (failure: BuildProductionFailure) => Error;
 }
 
-export interface ScriptableBuildPackage {
-  readonly packageUrl: string;
-  readonly receiptUrls: ReadonlyMap<string, string>;
-  readonly refs: ReadonlyMap<string, readonly string[]>;
-  readonly revision: ResourceRevision;
-  readonly publication: AssetPublicationEnvelope;
-}
-
 function scriptableArtifactPath(guid: string, key: string): string {
   return `${guid.toLowerCase()}/${key.includes('.') ? key : `${key}.bin`}`;
 }
@@ -90,117 +93,317 @@ function runtimePublicationFor(
     readonly sourceRevision: string;
     readonly packageUrl: string;
     readonly digest?: string;
+    readonly inputFingerprint?: string;
+    /** Preserve producer-declared semantic keys on generic publication output rows. */
+    readonly sourceKeys?: ReadonlyMap<string, string>;
+    readonly outputs?: readonly AssetPublicationOutput[];
+    readonly externalEvidence?: readonly import('@forgeax/engine-types').AssetPublicationExternalEvidence[];
   },
 ) {
-  return createRuntimePackPublication({
+  const publicationInput = {
     pack: input.pack,
     scopeId: context.runtimeBinding?.scopeId ?? 'asset-runtime',
     sourcePath: input.sourcePath,
     sourceRevision: input.sourceRevision,
     packageUrl: input.packageUrl,
     ...(input.digest === undefined ? {} : { digest: input.digest }),
+    ...(input.inputFingerprint === undefined ? {} : { inputFingerprint: input.inputFingerprint }),
+    ...(input.outputs === undefined ? {} : { outputs: input.outputs }),
+    ...(input.sourceKeys === undefined ? {} : { sourceKeys: input.sourceKeys }),
+    ...(input.externalEvidence === undefined ? {} : { externalEvidence: input.externalEvidence }),
     generation: context.runtimeBinding?.generation ?? context.generation,
+  };
+  return createRuntimePackPublication(publicationInput);
+}
+
+function sourceKeysFor(
+  declarations: readonly { readonly guid: string; readonly sourceKey?: string }[],
+): ReadonlyMap<string, string> {
+  return new Map(
+    declarations.flatMap((declaration) =>
+      declaration.sourceKey === undefined
+        ? []
+        : [[declaration.guid.toLowerCase(), declaration.sourceKey] as const],
+    ),
+  );
+}
+
+interface PackBuildBundle {
+  readonly input: ScriptablePackInput;
+  readonly prepared: PreparedScriptablePack;
+  readonly entries: readonly PackIndexEntry[];
+}
+
+type PackSourceSubject = {
+  readonly kind: 'source';
+  readonly packageId: PackageId;
+  readonly sourcePath: string;
+  readonly definition: import('@forgeax/engine-pack/source').AnyScriptablePackDefinition;
+  readonly sourceClosure: readonly import('@forgeax/engine-pack/source').ScriptablePackSourceClosureEntry[];
+};
+
+type PackInstanceSubject = {
+  readonly kind: 'instance';
+  readonly packageId: PackageId;
+  readonly parent: PackageId;
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly sourcePath: string;
+};
+
+type PackDirectSubject = {
+  readonly kind: 'direct';
+  readonly packageId: PackageId;
+  readonly sourcePath: string;
+};
+
+type PackSourceIndexSubject = PackSourceSubject | PackInstanceSubject | PackDirectSubject;
+
+function dynamicFailure(context: BuildProductionOptions, value: unknown): never {
+  const candidate = value !== null && typeof value === 'object' ? value : {};
+  const error = candidate as {
+    readonly code?: unknown;
+    readonly expected?: unknown;
+    readonly hint?: unknown;
+    readonly detail?: unknown;
+  };
+  throw context.fail({
+    code: typeof error.code === 'string' ? error.code : 'pack-build-failed',
+    expected:
+      typeof error.expected === 'string'
+        ? error.expected
+        : 'the Pack source generation to produce a valid terminal result',
+    hint:
+      typeof error.hint === 'string'
+        ? error.hint
+        : 'inspect the Pack source subject and rebuild the current generation',
+    ...(error.detail === undefined ? {} : { detail: error.detail }),
   });
 }
 
-async function buildAuthoredPackages(
-  context: BuildProductionOptions,
-): Promise<ReadonlyMap<string, ScriptableBuildPackage>> {
-  const scriptableSources = [
-    ...new Set(
-      context.inventory.entries
-        .filter((entry) => entry.sourcePath.endsWith('.pack.ts'))
-        .map((entry) => entry.sourcePath),
-    ),
-  ];
-  if (scriptableSources.length === 0) return new Map();
-  const inputs = scriptablePackInputs(
-    scriptableSources,
-    context.inventory.sourceDeclarations,
-    context.cwd,
-    () => context.generation,
-    () => (product) => ({
-      base: context.basePrefix === '' ? '/' : context.basePrefix,
-      packagePath: `assets/${product.anchorGuid}.pack.json`,
-      artifactPath: scriptableArtifactPath,
-    }),
-  );
-  const preparedResult = await produceScriptablePackProducts(
-    inputs,
-    await declaredPackExternalOutputs(
-      context.inventory.sourceDeclarations,
-      context.cookers,
-      inputs.flatMap((input) => Object.values(input.definition.externalAssets)),
-      {
-        importerRegistry: context.importerRegistry,
-        fsForImport: context.fsForImport,
-        assetPaths: loadAssetConfig(context.cwd).paths,
-      },
-    ),
-  );
-  if (!preparedResult.ok) throw context.fail(preparedResult.error);
+function packCatalogSourcePath(context: BuildProductionOptions, sourcePath: string): string {
+  const projected = context.fsForImport.sourceIdentityFor?.(sourcePath);
+  const logical =
+    projected === undefined || isAbsolute(projected)
+      ? relative(context.cwd, sourcePath)
+      : projected;
+  return canonicalScriptableSourcePath(logical).replaceAll('\\', '/');
+}
 
-  const result = new Map<string, ScriptableBuildPackage>();
-  for (const entry of context.inventory.entries) {
-    if (!entry.sourcePath.endsWith('.pack.ts') || result.has(entry.sourcePath)) continue;
-    const prepared = preparedResult.value.get(canonicalScriptableSourcePath(entry.sourcePath));
-    if (prepared === undefined) {
-      throw context.fail({
-        code: 'catalog-declaration-missing',
-        expected: 'the ScriptablePack inventory to retain every authored Pack source',
-        hint: 'rerun the source inventory and rebuild from the accepted declaration set',
-        detail: { stage: 'scan', sourcePath: entry.sourcePath },
+/** Build ScriptablePack roots and Pack JSON instances before normal emission. */
+async function buildPackSources(
+  context: BuildProductionOptions,
+): Promise<readonly PackBuildBundle[]> {
+  const subjects = new Map<string, PackSourceIndexSubject>();
+  for (const [sourcePath, declaration] of context.inventory.sourceDeclarations) {
+    if (declaration.format === 'pack.ts') {
+      const key = PackageId.format(declaration.definition.packageId).toLowerCase();
+      subjects.set(key, {
+        kind: 'source',
+        packageId: declaration.definition.packageId,
+        sourcePath,
+        definition: declaration.definition,
+        sourceClosure: declaration.sourceClosure,
+      });
+      continue;
+    }
+    if (declaration.format !== 'pack.json' || declaration.value.schemaVersion !== '3.0.0') {
+      continue;
+    }
+    const parsed = parsePackSourceJson(declaration.value);
+    if (!parsed.ok) dynamicFailure(context, parsed.error);
+    if (parsed.value.format === 'direct') {
+      subjects.set(PackageId.format(parsed.value.packageId).toLowerCase(), {
+        kind: 'direct',
+        packageId: parsed.value.packageId,
+        sourcePath,
+      });
+    } else {
+      subjects.set(PackageId.format(parsed.value.packageId).toLowerCase(), {
+        kind: 'instance',
+        packageId: parsed.value.packageId,
+        parent: parsed.value.parent,
+        values: parsed.value.values,
+        sourcePath,
       });
     }
-    const { product, finalized, facts, revision, publication } = prepared;
-    const packagePath = `assets/${product.anchorGuid}.pack.json`;
-    const runtimePublication = createRuntimePackPublication({
-      pack: { assets: finalized.pack.assets },
-      scopeId: context.runtimeBinding?.scopeId ?? 'asset-runtime',
-      sourcePath: publication.sourcePath,
-      sourceRevision: publication.sourceRevision,
-      packageUrl: finalized.packageUrl,
-      inputFingerprint: publication.receipt.inputFingerprint,
-      digest: finalized.digest,
-      generation: context.runtimeBinding?.generation ?? publication.generation,
-      outputs: facts.outputs,
-      externalEvidence: publication.externalEvidence,
-    });
-    const receiptPaths = await materializePreparedScriptablePack(
-      prepared,
+  }
+  const sourceSubject = (packageId: PackageId): PackSourceSubject | undefined => {
+    const subject = subjects.get(PackageId.format(packageId).toLowerCase());
+    return subject?.kind === 'source' ? subject : undefined;
+  };
+  const readSubject = async (packageId: PackageId) => {
+    const subject = subjects.get(PackageId.format(packageId).toLowerCase());
+    if (subject === undefined) return undefined;
+    if (subject.kind === 'source') {
+      return {
+        format: 'source' as const,
+        packageId: subject.packageId,
+        parameters: 'parameters' in subject.definition ? subject.definition.parameters : [],
+      } satisfies import('@forgeax/engine-pack/source').PackParameterRootSubject;
+    }
+    if (subject.kind === 'instance') {
+      return {
+        format: 'instance' as const,
+        packageId: subject.packageId,
+        parent: subject.parent,
+        values: subject.values,
+      } satisfies import('@forgeax/engine-pack/source').PackParameterInstanceSubject;
+    }
+    return {
+      format: 'direct' as const,
+      packageId: subject.packageId,
+    } satisfies import('@forgeax/engine-pack/source').PackDirectSubject;
+  };
+
+  const orderedSubjects = [...subjects.values()].sort((left, right) =>
+    left.sourcePath.localeCompare(right.sourcePath),
+  );
+  const inputs: ScriptablePackInput[] = [];
+  for (const subject of orderedSubjects) {
+    if (subject.kind === 'source') {
+      const packageId = PackageId.format(subject.packageId);
+      const loaded = await loadScriptablePack(subject.sourcePath);
+      if (!loaded.ok) dynamicFailure(context, loaded.error);
+      if (PackageId.format(loaded.value.packageId) !== packageId) {
+        dynamicFailure(context, {
+          code: 'pack-source-revision-conflict',
+          expected: 'the ScriptablePack source packageId to remain fixed during production',
+          hint: 'retry after source writes settle and rebuild the current generation',
+          detail: {
+            sourcePath: subject.sourcePath,
+            scannedPackageId: packageId,
+            loadedPackageId: PackageId.format(loaded.value.packageId),
+          },
+        });
+      }
+      inputs.push({
+        sourcePath: subject.sourcePath,
+        displaySourcePath: packCatalogSourcePath(context, subject.sourcePath),
+        definition: loaded.value,
+        sourceClosure: subject.sourceClosure,
+        publicationGeneration: context.generation,
+        policy: {
+          base: context.basePrefix === '' ? '/' : context.basePrefix,
+          packagePath: `assets/${packageId}.pack.json`,
+          artifactPath: scriptableArtifactPath,
+        },
+      });
+    }
+  }
+  for (const subject of orderedSubjects) {
+    if (subject.kind !== 'instance') continue;
+    const resolved = await resolvePackParameterInheritance(
       {
-        packagePath,
-        artifactPath: (path) => `assets/${path}`,
-        receiptPath: (guid) => `assets/${guid}.receipt.json`,
+        format: 'instance',
+        packageId: subject.packageId,
+        parent: subject.parent,
+        values: subject.values,
       },
-      {
-        writePackage: (path) => {
-          context.sink.emitFile({
-            type: 'asset',
-            fileName: path,
-            originalFileName: `${context.cwd}/${entry.sourcePath}`,
-            source: JSON.stringify(runtimePublication.pack),
-          });
-        },
-        writeArtifact: (path, bytes) => {
-          context.sink.emitFile({ type: 'asset', fileName: path, source: bytes });
-        },
-        writeReceipt: (path, source) => {
-          context.sink.emitFile({ type: 'asset', fileName: path, source });
-        },
-      },
+      readSubject,
     );
-    result.set(entry.sourcePath, {
-      packageUrl: finalized.packageUrl,
-      receiptUrls: new Map(
-        [...receiptPaths].map(([guid, path]) => [guid, context.sink.fileUrl(path)]),
-      ),
-      revision,
-      publication: runtimePublication.publication,
-      refs: facts.refs,
+    if (!resolved.ok) dynamicFailure(context, resolved.error);
+    const root = sourceSubject(resolved.value.rootPackageId);
+    if (root === undefined) {
+      dynamicFailure(context, {
+        code: 'pack-parent-has-no-parameters',
+        expected: 'the instance parent chain to terminate at a ScriptablePack source',
+        hint: 'point the instance at a ScriptablePack *.pack.ts source with parameters',
+        detail: { packageId: PackageId.format(subject.packageId) },
+      });
+    }
+    const loaded = await loadScriptablePack(root.sourcePath);
+    if (!loaded.ok) dynamicFailure(context, loaded.error);
+    if (PackageId.format(loaded.value.packageId) !== PackageId.format(root.packageId)) {
+      dynamicFailure(context, {
+        code: 'pack-source-revision-conflict',
+        expected: 'the ScriptablePack parent packageId to remain fixed during production',
+        hint: 'retry after source writes settle and rebuild the current generation',
+        detail: {
+          sourcePath: root.sourcePath,
+          scannedPackageId: PackageId.format(root.packageId),
+          loadedPackageId: PackageId.format(loaded.value.packageId),
+        },
+      });
+    }
+    const packageId = PackageId.format(subject.packageId);
+    inputs.push({
+      sourcePath: subject.sourcePath,
+      displaySourcePath: packCatalogSourcePath(context, subject.sourcePath),
+      definition: loaded.value,
+      sourceClosure: root.sourceClosure,
+      subjectPackageId: subject.packageId,
+      values: resolved.value.values,
+      publicationGeneration: context.generation,
+      policy: {
+        base: context.basePrefix === '' ? '/' : context.basePrefix,
+        packagePath: `assets/${packageId}.pack.json`,
+        artifactPath: scriptableArtifactPath,
+      },
     });
   }
-  return result;
+  if (inputs.length === 0) return [];
+
+  const requiredGuids = context.inventory.entries.flatMap((entry) => {
+    const parsed = AssetGuid.parse(entry.guid);
+    if (!parsed.ok) dynamicFailure(context, parsed.error);
+    return [parsed.value];
+  });
+  const externalOutputs = await declaredPackExternalOutputs(
+    context.inventory.sourceDeclarations,
+    context.cookers,
+    requiredGuids,
+    {
+      importerRegistry: context.importerRegistry,
+      fsForImport: context.fsForImport,
+    },
+  );
+  const availableGuids = new Set(requiredGuids.map((guid) => AssetGuid.format(guid).toLowerCase()));
+  const built = await produceScriptablePackProducts({
+    sources: inputs,
+    declaredExternalOutputs: externalOutputs,
+    cookers: context.cookers,
+    availableGuids,
+  });
+  if (!built.ok) dynamicFailure(context, built.error);
+
+  const bundles: PackBuildBundle[] = [];
+  for (const input of inputs) {
+    const prepared = built.value.get(input.displaySourcePath);
+    if (prepared === undefined) {
+      dynamicFailure(context, {
+        code: 'pack-build-failed',
+        expected: 'the worklist to return one prepared result per source subject',
+        hint: 'rerun Pack source generation from a clean inventory',
+        detail: { sourcePath: input.sourcePath },
+      });
+    }
+    const packageId = PackageId.format(input.subjectPackageId ?? input.definition.packageId);
+    const stagedByGuid = new Map(
+      prepared.product.stagedOutputs.map((output) => [
+        AssetGuid.format(output.guid).toLowerCase(),
+        output,
+      ]),
+    );
+    const entries = projectPackageCatalog(
+      prepared.product.product.assets.map((asset, sourceIndex) => {
+        const staged = stagedByGuid.get(asset.guid.toLowerCase());
+        return {
+          guid: asset.guid,
+          kind: asset.kind,
+          sourcePath: input.displaySourcePath,
+          sourceIndex,
+          ...(staged?.sourceKey === undefined ? {} : { sourceKey: staged.sourceKey }),
+          refs: asset.refs.map((reference) => reference.guid),
+          execution: 'cooked' as const,
+          packageId,
+          provenance: { provider: 'pack-ts', version: '2.0.0' },
+        };
+      }),
+      `${context.basePrefix === '/' ? '' : context.basePrefix}/${input.displaySourcePath}`,
+    );
+    bundles.push({ input, prepared, entries });
+  }
+  return bundles;
 }
 
 function updateImportedEntries(
@@ -210,18 +413,25 @@ function updateImportedEntries(
   projection: Record<string, unknown> = {},
   refsByGuid?: ReadonlyMap<string, readonly string[]>,
   publication?: AssetPublicationEnvelope,
+  sourcePath?: string,
+  receiptUrls?: ReadonlyMap<string, string>,
+  revision?: PackIndexEntry['revision'],
 ): void {
   const selected = new Set(guids.map((guid) => guid.toLowerCase()));
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (entry === undefined || !selected.has(entry.guid.toLowerCase())) continue;
     const refs = refsByGuid?.get(entry.guid.toLowerCase());
+    const cookReceiptUrl = receiptUrls?.get(entry.guid.toLowerCase());
     entries[index] = {
       ...entry,
       packageUrl,
       ...projection,
+      ...(sourcePath === undefined ? {} : { sourcePath }),
       ...(publication === undefined ? {} : { publication }),
       ...(refs === undefined ? {} : { refs }),
+      ...(cookReceiptUrl === undefined ? {} : { cookReceiptUrl }),
+      ...(revision === undefined ? {} : { revision }),
     };
   }
 }
@@ -239,7 +449,11 @@ interface PackEmissionOptions {
   readonly guids: readonly string[];
   readonly projection?: Record<string, unknown>;
   readonly refsByGuid?: ReadonlyMap<string, readonly string[]>;
+  readonly receipts?: readonly CookReceipt[];
+  readonly receiptOutputDigest?: string;
   readonly publication?: AssetPublicationEnvelope;
+  readonly sourcePath?: string;
+  readonly revision?: PackIndexEntry['revision'];
 }
 
 async function emitPackDocument(
@@ -255,11 +469,34 @@ async function emitPackDocument(
   }
   const referenceId = work.context.sink.emitFile({
     type: 'asset',
+    fileName: options.packageName.startsWith('assets/')
+      ? options.packageName
+      : `assets/${options.packageName}`,
     name: options.packageName,
     originalFileName: options.originalFileName,
     source: JSON.stringify(options.pack),
   });
   const packageUrl = work.context.sink.fileUrl(work.context.sink.getFileName(referenceId));
+  const receiptUrls = new Map<string, string>();
+  for (const receipt of options.receipts ?? []) {
+    const guid = receipt.guid.toLowerCase();
+    const receiptReferenceId = work.context.sink.emitFile({
+      type: 'asset',
+      fileName: `assets/${guid}.receipt.json`,
+      name: `${guid}.receipt.json`,
+      originalFileName: options.originalFileName,
+      source: JSON.stringify({
+        ...receipt,
+        ...(receipt.outputDigest === undefined && options.receiptOutputDigest === undefined
+          ? {}
+          : { outputDigest: receipt.outputDigest ?? options.receiptOutputDigest }),
+      }),
+    });
+    receiptUrls.set(
+      guid,
+      work.context.sink.fileUrl(work.context.sink.getFileName(receiptReferenceId)),
+    );
+  }
   updateImportedEntries(
     work.importedEntries,
     options.guids,
@@ -267,6 +504,9 @@ async function emitPackDocument(
     options.projection,
     options.refsByGuid,
     options.publication,
+    options.sourcePath,
+    receiptUrls,
+    options.revision,
   );
   return packageUrl;
 }
@@ -275,9 +515,16 @@ async function emitAuthoredPack(
   work: BuildEmissionWork,
   guidSeen: Set<string>,
   entry: PackIndexEntry,
+  availableGuids: ReadonlySet<string>,
 ): Promise<void> {
-  const packPath = resolve(work.context.cwd, entry.sourcePath);
-  const declaration = work.context.inventory.sourceDeclarations.get(packPath);
+  const sourceDeclaration = sourceDeclarationForCatalogPath(
+    entry.sourcePath,
+    work.context.inventory.sourceDeclarations,
+    work.context.fsForImport.sourceIdentityFor,
+    work.context.cwd,
+  );
+  const packPath = sourceDeclaration?.sourcePath ?? resolve(work.context.cwd, entry.sourcePath);
+  const declaration = sourceDeclaration?.declaration;
   if (declaration?.format !== 'pack.json') {
     throw work.context.fail({
       code: 'catalog-declaration-missing',
@@ -286,53 +533,163 @@ async function emitAuthoredPack(
       detail: { stage: 'scan', sourcePath: packPath },
     });
   }
-  const prepared = await prepareAuthoredPackTransport(
-    declaration.value,
+  if (declaration.value.schemaVersion === '3.0.0') {
+    const parsed = parsePackSourceJson(declaration.value);
+    if (!parsed.ok) dynamicFailure(work.context, parsed.error);
+    if (parsed.value.format !== 'direct') {
+      dynamicFailure(work.context, {
+        code: 'catalog-declaration-missing',
+        expected: 'a direct v3 Pack declaration for an indexed authored output',
+        hint: 'instances are built from their ScriptablePack parent and do not have direct Catalog rows',
+        detail: { stage: 'scan', sourcePath: packPath },
+      });
+    }
+    const projected = projectDirectPackJson(parsed.value);
+    if (!projected.ok) dynamicFailure(work.context, projected.error);
+    const prepared = await prepareDirectPackTransport({
+      projected: projected.value,
+      sourcePath: packPath,
+      sourceRevision: declaration.sourceRevision,
+      availableGuids,
+      cookers: work.context.cookers,
+      policy: {
+        base: work.context.basePrefix === '' ? '/' : work.context.basePrefix,
+        packagePath: `assets/${projected.value.packageId}.pack.json`,
+        artifactPath: (assetGuid, key) => `${assetGuid}/${key}.bin`,
+        sink: () => {},
+      },
+    });
+    if (!prepared.ok) dynamicFailure(work.context, prepared.error);
+    const { product, finalized, facts, revision } = prepared.value;
+    const publication = runtimePublicationFor(work.context, {
+      pack: finalized.pack,
+      sourcePath: entry.sourcePath,
+      sourceRevision: product.inputFingerprint,
+      packageUrl: finalized.packageUrl,
+      digest: finalized.digest,
+      inputFingerprint: product.inputFingerprint,
+      outputs: facts.outputs,
+      externalEvidence: product.externalEvidence,
+    });
+    await emitPackDocument(work, {
+      pack: publication.pack,
+      artifacts: finalized.artifacts,
+      packageName: `${prepared.value.projected.packageId}.pack.json`,
+      originalFileName: packPath,
+      guids: product.product.assets.map((asset) => asset.guid),
+      projection: work.context.authoredCookedCurrentProjection,
+      refsByGuid: facts.refs,
+      receipts: product.product.receipts,
+      receiptOutputDigest: finalized.digest,
+      publication: publication.publication,
+      sourcePath: entry.sourcePath,
+      revision,
+    });
+    for (const asset of product.product.assets) guidSeen.add(asset.guid.toLowerCase());
+    return;
+  }
+  // Legacy array-shaped documents are runtime Pack transport, not an
+  // authoring input anymore. Preserve the explicit v2 native-cooker seam for
+  // cooked transport while keeping source evaluation out of this path.
+  const legacy = declaration.value as LegacyPackInventoryDocument;
+  const prepared = await prepareLegacyPackTransport(
+    legacy,
     work.context.cookers,
     (guid) => ({
       base: work.context.basePrefix === '' ? '/' : work.context.basePrefix,
       packagePath: `assets/${guid}.pack.json`,
-      artifactPath: (artifactGuid, key) => `${artifactGuid}/${key}.bin`,
+      artifactPath: (assetGuid, key) => `${assetGuid}/${key}.bin`,
     }),
     packPath,
   );
   const outputGuid = prepared.firstGuid ?? entry.guid;
-  const authoredPack = prepared.finalized?.pack ?? prepared.pack;
-  const runtimePublication =
-    authoredPack.assets === undefined || authoredPack.assets.length === 0
-      ? undefined
-      : runtimePublicationFor(work.context, {
-          pack: { assets: authoredPack.assets },
-          sourcePath: packPath,
-          sourceRevision: prepared.finalized?.sourceRevision ?? entry.sourcePath,
-          packageUrl:
-            prepared.finalized?.packageUrl ??
-            `${work.context.basePrefix === '/' ? '' : work.context.basePrefix}/assets/${outputGuid}.pack.json`,
-          ...(prepared.finalized?.digest === undefined
-            ? {}
-            : { digest: prepared.finalized.digest }),
-        });
+  const authoredPack = prepared.finalized?.pack ?? {
+    schemaVersion: '2.0.0' as const,
+    kind: 'internal-text-package' as const,
+    assets: legacy.assets.map((asset) => ({
+      guid: asset.guid,
+      kind: asset.kind,
+      ...(asset.name === undefined ? {} : { name: asset.name }),
+      payload: asset.payload,
+      refs: asset.refs,
+      artifacts: asset.artifacts ?? {},
+    })),
+  };
+  const runtimePublication = runtimePublicationFor(work.context, {
+    pack: authoredPack,
+    sourceKeys: sourceKeysFor(legacy.assets),
+    sourcePath: entry.sourcePath,
+    sourceRevision: declaration.sourceRevision,
+    packageUrl:
+      prepared.finalized?.packageUrl ??
+      `${work.context.basePrefix === '/' ? '' : work.context.basePrefix}/assets/${outputGuid}.pack.json`,
+    ...(prepared.finalized?.digest === undefined ? {} : { digest: prepared.finalized.digest }),
+  });
   await emitPackDocument(work, {
-    pack: runtimePublication?.pack ?? authoredPack,
+    pack: runtimePublication.pack,
     artifacts: prepared.finalized?.artifacts ?? [],
     packageName: `${outputGuid}.pack.json`,
     originalFileName: packPath,
-    guids: prepared.pack.assets?.map((asset) => asset.guid) ?? [outputGuid],
+    guids: authoredPack.assets.map((asset) => asset.guid),
     projection:
       prepared.finalized === undefined
         ? work.context.directCurrentProjection
         : work.context.authoredCookedCurrentProjection,
-    ...(prepared.cooked === undefined ? {} : { refsByGuid: prepared.cooked.refsByGuid }),
-    ...(runtimePublication === undefined ? {} : { publication: runtimePublication.publication }),
+    refsByGuid: new Map(authoredPack.assets.map((asset) => [asset.guid.toLowerCase(), asset.refs])),
+    ...(prepared.finalized?.receipts === undefined
+      ? {}
+      : {
+          receipts: prepared.finalized.receipts,
+          receiptOutputDigest: prepared.finalized.digest,
+        }),
+    publication: runtimePublication.publication,
+    sourcePath: entry.sourcePath,
   });
-  for (const guid of prepared.pack.assets?.map((asset) => asset.guid) ?? [outputGuid]) {
+  for (const guid of authoredPack.assets.map((asset) => asset.guid)) {
     guidSeen.add(guid.toLowerCase());
   }
+}
+
+async function emitScriptablePack(
+  work: BuildEmissionWork,
+  guidSeen: Set<string>,
+  bundle: PackBuildBundle,
+): Promise<void> {
+  const { input, prepared } = bundle;
+  const packageId = PackageId.format(input.subjectPackageId ?? input.definition.packageId);
+  const runtimePublication = createRuntimePackPublication({
+    pack: { assets: prepared.finalized.pack.assets },
+    scopeId: work.context.runtimeBinding?.scopeId ?? 'asset-runtime',
+    sourcePath: input.displaySourcePath,
+    sourceRevision: prepared.product.inputFingerprint,
+    packageUrl: prepared.finalized.packageUrl,
+    inputFingerprint: prepared.product.inputFingerprint,
+    digest: prepared.finalized.digest,
+    generation: work.context.runtimeBinding?.generation ?? prepared.publication.generation,
+    outputs: prepared.facts.outputs,
+    externalEvidence: prepared.product.externalEvidence,
+  });
+  await emitPackDocument(work, {
+    pack: runtimePublication.pack,
+    artifacts: prepared.finalized.artifacts,
+    packageName: `${packageId}.pack.json`,
+    originalFileName: input.sourcePath,
+    guids: prepared.product.product.assets.map((asset) => asset.guid),
+    projection: work.context.authoredCookedCurrentProjection,
+    refsByGuid: prepared.facts.refs,
+    receipts: prepared.product.product.receipts,
+    receiptOutputDigest: prepared.finalized.digest,
+    publication: runtimePublication.publication,
+    sourcePath: input.displaySourcePath,
+    revision: prepared.revision,
+  });
+  for (const asset of prepared.product.product.assets) guidSeen.add(asset.guid.toLowerCase());
 }
 
 async function emitFinalizedOwner(
   work: BuildEmissionWork,
   metaPath: string,
+  sourcePath: string,
   subAssets: readonly { readonly guid: string }[],
   sourcePackage: Extract<
     Awaited<ReturnType<typeof produceSourcePackage>>,
@@ -353,8 +710,10 @@ async function emitFinalizedOwner(
     });
     artifactPaths.set(path, work.context.sink.getFileName(ref));
   }
-  const ownerProduct = finalizeSourcePackage(sourcePackage.product, ownerFinalizer, (artifact) =>
-    work.context.sink.fileUrl(artifactPaths.get(artifact.path) ?? artifact.path),
+  const ownerProduct = await finalizeSourcePackage(
+    sourcePackage.product,
+    ownerFinalizer,
+    (artifact) => work.context.sink.fileUrl(artifactPaths.get(artifact.path) ?? artifact.path),
   );
   if (!ownerProduct.ok) throw work.context.fail(ownerProduct.error);
   const ownerPackage = await finalizePackageTransportSource(
@@ -379,7 +738,10 @@ async function emitFinalizedOwner(
   );
   const runtimePublication = runtimePublicationFor(work.context, {
     pack: { assets: ownerPackage.pack.assets },
-    sourcePath: metaPath,
+    // The Catalog entry identifies the imported source, while metaPath is the
+    // sidecar declaration that drove the import. Keep publication fences on
+    // the Catalog identity in production just as the dev importer does.
+    sourcePath,
     sourceRevision: ownerPackage.sourceRevision,
     packageUrl: ownerPackage.packageUrl,
     digest: ownerPackage.digest,
@@ -398,6 +760,7 @@ async function emitFinalizedOwner(
       ]),
     ),
     publication: runtimePublication.publication,
+    sourcePath,
   });
 }
 
@@ -405,11 +768,13 @@ async function emitBuildEntry(
   work: BuildEmissionWork,
   guidSeen: Set<string>,
   entry: PackIndexEntry,
+  availableGuids: ReadonlySet<string>,
 ): Promise<void> {
   const guid = entry.guid.toLowerCase();
   const metaPath = metaPathForGuid(work.context.inventory.declarations, guid);
   if (metaPath === undefined) {
-    if (entry.sourcePath.endsWith('.pack.json')) await emitAuthoredPack(work, guidSeen, entry);
+    if (entry.sourcePath.endsWith('.pack.json'))
+      await emitAuthoredPack(work, guidSeen, entry, availableGuids);
     else guidSeen.add(guid);
     return;
   }
@@ -423,17 +788,25 @@ async function emitBuildEntry(
     });
   }
   const runMeta = { ...declaration, buildPack: false };
-  const subAssets: readonly { readonly guid: string }[] = runMeta.subAssets;
+  const subAssets = runMeta.subAssets;
   for (const sub of subAssets) guidSeen.add(sub.guid.toLowerCase());
   const sourcePackage = await produceSourcePackage({
     meta: runMeta,
     registry: work.context.importerRegistry,
     fs: work.context.fsForImport,
+    cookers: work.context.cookers,
   });
   if (!sourcePackage.ok) throw work.context.fail(sourcePackage.error);
   const ownerFinalizer = work.context.importerRegistry.get(runMeta.importer)?.finalize;
   if (ownerFinalizer !== undefined) {
-    await emitFinalizedOwner(work, metaPath, subAssets, sourcePackage.value, ownerFinalizer);
+    await emitFinalizedOwner(
+      work,
+      metaPath,
+      canonicalScriptableSourcePath(entry.sourcePath),
+      subAssets,
+      sourcePackage.value,
+      ownerFinalizer,
+    );
     return;
   }
   const finalized = await finalizePackageTransportSource(
@@ -446,12 +819,16 @@ async function emitBuildEntry(
     },
   );
   const productByGuid = sourcePackageAssetsByGuid(sourcePackage.value);
+  const canonicalSourcePath = canonicalScriptableSourcePath(entry.sourcePath);
   const runtimePublication = runtimePublicationFor(work.context, {
     pack: { assets: finalized.pack.assets },
-    sourcePath: metaPath,
+    // See emitFinalizedOwner: the sidecar path is an import driver, not the
+    // stable source identity carried by the Catalog row.
+    sourcePath: canonicalSourcePath,
     sourceRevision: finalized.sourceRevision,
     packageUrl: finalized.packageUrl,
     digest: finalized.digest,
+    sourceKeys: sourceKeysFor(subAssets),
   });
   await emitPackDocument(work, {
     pack: runtimePublication.pack,
@@ -464,30 +841,28 @@ async function emitBuildEntry(
       [...productByGuid].map(([guid, asset]) => [guid, asset.refs.map((ref) => ref.guid)]),
     ),
     publication: runtimePublication.publication,
+    sourcePath: canonicalSourcePath,
   });
 }
 
 export async function produceBuildAssets(
   context: BuildProductionOptions,
 ): Promise<PackIndexEntry[]> {
-  const entries = [...context.inventory.entries];
-  const authored = await buildAuthoredPackages(context);
-  const importedEntries = entries.map((entry) => {
-    const scriptable = authored.get(entry.sourcePath);
-    if (scriptable === undefined) return entry;
-    const cookReceiptUrl = scriptable.receiptUrls.get(entry.guid.toLowerCase());
-    return projectCookedPackageEntry(entry, {
-      packageUrl: scriptable.packageUrl,
-      revision: scriptable.revision,
-      refs: scriptable.refs.get(entry.guid.toLowerCase()) ?? [],
-      ...(cookReceiptUrl === undefined ? {} : { cookReceiptUrl }),
-      publication: scriptable.publication,
-    });
-  });
+  const dynamicBundles = await buildPackSources(context);
+  const entries = [
+    ...context.inventory.entries,
+    ...dynamicBundles.flatMap((bundle) => bundle.entries),
+  ];
+  const availableGuids = new Set(entries.map((entry) => entry.guid.toLowerCase()));
+  const importedEntries = [...entries];
   const guidSeen = new Set<string>();
   const work: BuildEmissionWork = { importedEntries, context };
+  for (const bundle of dynamicBundles) {
+    await emitScriptablePack(work, guidSeen, bundle);
+  }
   for (const entry of importedEntries) {
-    if (!guidSeen.has(entry.guid.toLowerCase())) await emitBuildEntry(work, guidSeen, entry);
+    if (!guidSeen.has(entry.guid.toLowerCase()))
+      await emitBuildEntry(work, guidSeen, entry, availableGuids);
   }
   return importedEntries;
 }

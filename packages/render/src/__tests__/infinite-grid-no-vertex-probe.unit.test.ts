@@ -1,8 +1,9 @@
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
-import type { RenderFeaturePlan } from '../features/plan';
+import { createRenderFeatureHost } from '../features/host';
+import type { RenderFeatureWorkPlan } from '../features/plan';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = {
   backendKind: 'null',
@@ -31,7 +32,7 @@ function noVertexFeature(): RenderFeature<{ readonly drawCount: number }> {
     identity: 'editor.infinite-grid.probe',
     extract: () => ok({ drawCount: 1 }),
     plan: () => {
-      const value: RenderFeaturePlan = {
+      const value: RenderFeatureWorkPlan = {
         resources: [
           {
             kind: 'graphics-program',
@@ -61,7 +62,7 @@ function noVertexFeature(): RenderFeature<{ readonly drawCount: number }> {
           },
         ],
       };
-      return ok(value);
+      return ok({ work: [{ scope: { view: 'main' }, ...value }] });
     },
   };
 }
@@ -69,7 +70,7 @@ function noVertexFeature(): RenderFeature<{ readonly drawCount: number }> {
 describe('public no-vertex RenderFeature seam probe', () => {
   it('accepts the explicit public no-vertex producer contract', () => {
     const host = createRenderFeatureHost([noVertexFeature()]).unwrap();
-    const result = runRenderFeatureFrame(host, {
+    const result = runSingleViewFeatureFrame(host, {
       worlds: [],
       owner: 0,
       frameNumber: 1,

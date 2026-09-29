@@ -38,6 +38,7 @@
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { ok } from '@forgeax/engine-rhi';
+import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
 import { Name } from '@forgeax/engine-scene';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -60,7 +61,7 @@ let adapterRequestCount = 0;
 let deviceRequestCount = 0;
 let deviceRefusalCount = 0;
 let deviceRefusalRemaining = 0;
-const browserRhi = deviceLossProbe ? await import('@forgeax/engine-rhi-webgpu') : undefined;
+const browserRhi = deviceLossProbe ? rhiWebgpu : undefined;
 if (browserRhi !== undefined) {
   const requestAdapter = browserRhi.rhi.requestAdapter;
   browserRhi.rhi.requestAdapter = async (
@@ -87,7 +88,11 @@ if (browserRhi !== undefined) {
   };
 }
 
-const app = await createApp(canvas, {}, forgeaxBundlerAdapter());
+const app = await createApp(
+  canvas,
+  deviceLossProbe ? { silenceUnhandledErrors: true } : {},
+  forgeaxBundlerAdapter(),
+);
 if (!app.ok) {
   reportError(app.error);
 } else {
@@ -118,10 +123,28 @@ if (!app.ok) {
     };
   };
   const healthTransitions: unknown[] = [];
+  const deviceLossErrors: Array<{ readonly code: string; readonly hint: string }> = [];
   if (deviceLossProbe) {
     renderer.subscribe((event) => {
-      if (event.kind === 'state-changed' && event.current === 'device-lost') {
+      if (event.kind === 'state-changed') {
         healthTransitions.push({ state: event.current, previous: event.previous });
+      }
+      if (event.kind === 'error') {
+        const detail = (event.error as unknown as { readonly detail?: unknown }).detail;
+        const cause =
+          detail !== null && typeof detail === 'object' && 'cause' in detail
+            ? (detail as { readonly cause?: unknown }).cause
+            : undefined;
+        if (
+          cause !== null &&
+          typeof cause === 'object' &&
+          (cause as { readonly code?: unknown }).code === 'device-lost'
+        ) {
+          deviceLossErrors.push({
+            code: 'device-lost',
+            hint: String((cause as { readonly hint?: unknown }).hint ?? ''),
+          });
+        }
       }
     });
   }
@@ -152,15 +175,19 @@ if (!app.ok) {
           const result = await renderer.recover();
           return result.ok
             ? result
-            : {
-                ok: false,
-                error: {
-                  name: result.error.name,
-                  code: result.error.code,
-                  expected: result.error.expected,
-                  hint: result.error.hint,
-                },
-              };
+            : (() => {
+                const detail = 'detail' in result.error ? result.error.detail : undefined;
+                return {
+                  ok: false,
+                  error: {
+                    name: result.error.name,
+                    code: result.error.code,
+                    expected: result.error.expected,
+                    hint: result.error.hint,
+                    detail,
+                  },
+                };
+              })();
         },
         state: () => ({
           health: renderer.inspect().state,
@@ -172,6 +199,7 @@ if (!app.ok) {
           deviceRequestCount,
           deviceRefusalCount,
           deviceRefusalRemaining,
+          deviceLossError: deviceLossErrors.at(-1),
         }),
         armDeviceRefusal: () => {
           deviceRefusalRemaining = 1;
@@ -179,6 +207,8 @@ if (!app.ok) {
         clearDeviceRefusal: () => {
           deviceRefusalRemaining = 0;
         },
+        pause: () => app.value.pause(),
+        stepFrame: () => app.value.stepFrame(1 / 60),
         disposeTwice: () => {
           app.value.stop();
           renderer.dispose();
@@ -196,15 +226,19 @@ if (!app.ok) {
           });
           return result.ok
             ? result
-            : {
-                ok: false,
-                error: {
-                  name: result.error.name,
-                  code: result.error.code,
-                  expected: result.error.expected,
-                  hint: result.error.hint,
-                },
-              };
+            : (() => {
+                const detail = 'detail' in result.error ? result.error.detail : undefined;
+                return {
+                  ok: false,
+                  error: {
+                    name: result.error.name,
+                    code: result.error.code,
+                    expected: result.error.expected,
+                    hint: result.error.hint,
+                    detail,
+                  },
+                };
+              })();
         },
       },
     });

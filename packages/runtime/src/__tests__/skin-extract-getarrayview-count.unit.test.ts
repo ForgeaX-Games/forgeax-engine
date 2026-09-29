@@ -7,15 +7,16 @@ import { describe, expect, it } from 'vitest';
 // Regression guard for the hot extract path: joint/instance array fields must
 // stay on the zero-copy column route instead of whole-row world.get calls.
 
-const extractPath = (() => {
+const extractPaths = (() => {
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, '..', '..', '..', 'render', 'src', 'render-system-extract.ts');
+  const root = join(here, '..', '..', '..', 'render', 'src');
+  return [join(root, 'render-system-extract.ts'), join(root, 'render-system-extract-tail.ts')];
 })();
 
 describe('_getArrayView count (AC-03 gate)', () => {
   it('keeps skin and instance hot fields on column views', () => {
-    const src = readFileSync(extractPath, 'utf8');
-    expect(src).toContain("_getArrayView(jointEntity, Transform, 'world')");
+    const src = extractPaths.map((path) => readFileSync(path, 'utf8')).join('\n');
+    expect(src).toMatch(/_getArrayView\(jointEntity,\s*GlobalTransform,\s*'world'\)/);
     expect(src).toContain("_getArrayView(entity, Instances, 'transforms')");
     expect(src).toContain("_getArrayView(entity, SpriteInstances, 'transforms')");
     expect(src).toContain("_getArrayView(entity, SpriteInstances, 'regions')");

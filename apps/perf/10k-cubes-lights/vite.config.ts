@@ -13,6 +13,11 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
-    rollupOptions: { input: { main: resolve(here, 'index.html') } },
+    rollupOptions: {
+      input: {
+        main: resolve(here, 'index.html'),
+        three: resolve(here, 'three.html'),
+      },
+    },
   },
 });

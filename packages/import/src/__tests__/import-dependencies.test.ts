@@ -62,4 +62,38 @@ describe('import runner dependency observation', () => {
       'ui/icons/missing.svg',
     ]);
   });
+
+  it('uses host-provided logical identities for dependency fingerprints', async () => {
+    const importer: Importer = {
+      key: 'fixture',
+      async import(ctx: ImportContext): Promise<ImportResult> {
+        await ctx.readSibling('./main.css');
+        return {
+          ok: true,
+          value: {
+            assets: [{ guid: GUID, kind: 'mesh', payload: MESH, refs: [], artifacts: {} }],
+            sourceDependencies: [],
+          },
+        };
+      },
+    };
+    const registry = new ImporterRegistry();
+    registry.register(importer);
+    const result = await runImport(meta(), registry, {
+      sourceIdentityFor: (sourcePath) =>
+        sourcePath.replace('ui/', '@shared/ui/').replace('\\\\', '/'),
+      readSource: async () => ({ ok: true, value: new Uint8Array([1]) }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok && 'product' in result.value) {
+      expect(result.value.product.sourceDependencies).toEqual([
+        '@shared/ui/main.html',
+        '@shared/ui/main.css',
+      ]);
+      expect(result.value.product.sourceRevision).toBe(
+        'source:@shared/ui/main.css|@shared/ui/main.html',
+      );
+    }
+  });
 });

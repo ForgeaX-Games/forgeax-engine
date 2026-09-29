@@ -60,6 +60,9 @@ export type ImportErrorCode =
   | 'import-produced-no-assets'
   | 'guid-mismatch'
   | 'mesh-material-slot-topology-change'
+  | 'mesh-lod-contract-invalid'
+  | 'mesh-lod-topology-change'
+  | 'mesh-lod-authority-conflict'
   | 'import-internal-error'
   | 'source-validation-failed';
 
@@ -148,6 +151,10 @@ export type ImportErrorDetail =
       readonly meshSourceKey?: string;
       readonly previousIndices: readonly number[];
       readonly nextIndices: readonly number[];
+    }
+  | {
+      readonly meshLodSourceKey?: string;
+      readonly reason: string;
     };
 
 /**
@@ -201,6 +208,12 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
     'the importer produced a GUID that meta.subAssets[] never declared (violates the GUID import-stable iron law: GUIDs come from the external meta, never minted by the importer); err.detail.unexpectedGuids lists the offending GUIDs',
   'mesh-material-slot-topology-change':
     'the importer could not match previous and current Mesh material slots without ambiguity; name source materials uniquely or repair their stable sourceKey values before reimport',
+  'mesh-lod-contract-invalid':
+    'the normalized MeshAsset LOD contract is invalid; inspect err.detail.reason and repair coverage, hysteresis, references, bounds, or material slots',
+  'mesh-lod-topology-change':
+    'the source LOD topology changed in the middle of an ordered chain; preserve sourceKey identity and append or remove only at the end before reimporting',
+  'mesh-lod-authority-conflict':
+    'the format-owned LOD relation disagrees with the authored sidecar; repair the source or sidecar explicitly before publishing',
   'import-internal-error':
     'the importer failed at runtime; branch on err.detail: a conversion THROW carries err.detail.reason (the loaded importer threw while converting the source — an importer bug, not a meta / source problem), while a build-time module-LOAD failure carries err.detail.loadError (the host importer module / native addon could not be imported)',
   'source-validation-failed':
@@ -247,6 +260,59 @@ export interface ImportSubAsset {
   /** Producer-owned semantic identity used to look up sourceOverrides. */
   readonly sourceKey?: string;
   readonly kind: string;
+}
+
+/**
+ * Six finite values describing producer-authored animated local bounds:
+ * `[minX, minY, minZ, maxX, maxY, maxZ]`.
+ *
+ * The source producer (or its external-asset sidecar) owns these facts. A
+ * missing or malformed row is deliberately rejected by the reader so a
+ * renderer can keep the skin on its CPU deformation lane; it must never
+ * synthesize bounds from a bind-pose mesh AABB.
+ */
+export type ConservativeAnimatedBounds = readonly [number, number, number, number, number, number];
+
+/** Accepted `*.meta.json#importSettings` producer contract for animated skin bounds. */
+export interface AnimatedSkinImportSettings {
+  readonly conservativeAnimatedBounds?: readonly (readonly number[])[];
+}
+
+/**
+ * Validate one producer-authored bounds row and copy it into the runtime POD.
+ * The copy prevents an importer from retaining a mutable JSON array and keeps
+ * malformed author facts out of the GPU culling contract.
+ */
+export function parseConservativeAnimatedBounds(value: unknown): Float32Array | undefined {
+  if (!Array.isArray(value) || value.length !== 6) return undefined;
+  const bounds = value.map((entry) => (typeof entry === 'number' ? entry : Number.NaN));
+  const [minX, minY, minZ, maxX, maxY, maxZ] = bounds;
+  if (
+    minX === undefined ||
+    minY === undefined ||
+    minZ === undefined ||
+    maxX === undefined ||
+    maxY === undefined ||
+    maxZ === undefined ||
+    ![minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite) ||
+    minX > maxX ||
+    minY > maxY ||
+    minZ > maxZ
+  ) {
+    return undefined;
+  }
+  return new Float32Array(bounds);
+}
+
+/** Read the source-indexed bounds row from the shared importSettings schema. */
+export function readConservativeAnimatedBounds(
+  importSettings: Readonly<Record<string, unknown>>,
+  sourceIndex: number,
+): Float32Array | undefined {
+  if (!Number.isInteger(sourceIndex) || sourceIndex < 0) return undefined;
+  const rows = importSettings.conservativeAnimatedBounds;
+  if (!Array.isArray(rows)) return undefined;
+  return parseConservativeAnimatedBounds(rows[sourceIndex]);
 }
 
 /**
@@ -367,7 +433,7 @@ export interface ImporterCapabilities {
     readonly publish?: (input: {
       readonly importSettings: Readonly<Record<string, unknown>>;
       readonly subAssets: readonly ImportSubAsset[];
-    }) => boolean;
+    }) => boolean | Promise<boolean>;
   };
 }
 
@@ -380,7 +446,7 @@ export interface Importer {
   finalize?: (
     product: ImportProduct<unknown>,
     options: ImportProductFinalizeOptions,
-  ) => ImportProductFinalizeResult;
+  ) => ImportProductFinalizeResult | Promise<ImportProductFinalizeResult>;
 }
 /**
  * Interface slot for the M4 lazy-import transport (OOS-2). A runtime

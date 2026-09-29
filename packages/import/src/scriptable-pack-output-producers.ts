@@ -8,6 +8,7 @@ import type {
   AudioClipAsset,
   EquirectAsset,
   FontAsset,
+  IesProfileAsset,
   ImportedArtifactBody,
   MaterialAsset,
   MaterialTextureReference,
@@ -23,10 +24,16 @@ import type {
   TilesetAsset,
   VideoAsset,
 } from '@forgeax/engine-types';
-import { err, ImportError, MATERIAL_TEXTURE_SLOTS, ok } from '@forgeax/engine-types';
+import {
+  deriveTextureLayout,
+  err,
+  ImportError,
+  MATERIAL_TEXTURE_SLOTS,
+  ok,
+} from '@forgeax/engine-types';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { packMeshBinV4 } from './mesh-bin.js';
+import { packMeshBin } from './mesh-bin.js';
 import {
   type AssetOutputInput,
   type AssetOutputProducer,
@@ -105,7 +112,9 @@ function materialProduct(input: AssetOutputInput): AssetOutputProduct {
       ? new Set<string>(MATERIAL_TEXTURE_SLOTS)
       : new Set(
           material.parameters
-            .filter((parameter) => parameter.type === 'texture')
+            .filter(
+              (parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube',
+            )
             .map((parameter) => parameter.name),
         );
 
@@ -115,7 +124,9 @@ function materialProduct(input: AssetOutputInput): AssetOutputProduct {
   for (const fieldName of Object.keys(material.values ?? {}).sort()) {
     const value = material.values?.[fieldName];
     if (typeof value === 'string' && textureFields.has(fieldName)) {
-      values[fieldName] = addMaterialRef(value, { componentName: '<material>', fieldName });
+      values[fieldName] = {
+        texture: addMaterialRef(value, { componentName: '<material>', fieldName }),
+      };
     } else if (
       value !== null &&
       typeof value === 'object' &&
@@ -152,7 +163,7 @@ function materialProduct(input: AssetOutputInput): AssetOutputProduct {
   };
 }
 
-function meshProduct(input: AssetOutputInput): AssetOutputProduct {
+function meshDataProduct(input: AssetOutputInput): AssetOutputProduct {
   if (input.asset.kind !== 'mesh') throw new TypeError('expected MeshAsset');
   const mesh = input.asset as MeshAsset;
   const refs: AssetRef[] = [];
@@ -164,15 +175,28 @@ function meshProduct(input: AssetOutputInput): AssetOutputProduct {
       sourceField: { fieldName: 'materialSlots', arrayIndex: slotIndex },
     });
   }
+  const seenRefs = new Set(refs.map((reference) => reference.guid.toLowerCase()));
+  for (const [lodIndex, lod] of (mesh.lods ?? []).entries()) {
+    const guid = formatGuid(lod.mesh);
+    if (seenRefs.has(guid.toLowerCase())) continue;
+    seenRefs.add(guid.toLowerCase());
+    refs.push({ guid, sourceField: { fieldName: 'lods', arrayIndex: lodIndex } });
+  }
+  return { payload: mesh, refs, artifacts: {} };
+}
+
+function meshProduct(input: AssetOutputInput): AssetOutputProduct {
+  const prepared = meshDataProduct(input);
+  const mesh = prepared.payload as MeshAsset;
+  const refs = prepared.refs;
   return {
-    payload: mesh,
-    refs,
+    ...prepared,
     artifacts: {
       body: {
         mediaType: 'application/x-forgeax-mesh',
-        assetCodec: { name: 'mesh-binary', version: '4' },
+        assetCodec: { name: 'mesh-binary', version: '5' },
         bytes: (() => {
-          const packed = packMeshBinV4(
+          const packed = packMeshBin(
             mesh,
             input.sourceKey,
             refs.map((reference) => reference.guid),
@@ -205,6 +229,34 @@ function sceneProduct(
   return {
     payload: { kind: 'scene', ...externalized.value.payload },
     refs: externalized.value.refs,
+    artifacts: {},
+  };
+}
+
+function containsAssetGuid(value: unknown): boolean {
+  if (typeof value === 'string') return AssetGuid.parse(value).ok;
+  if (Array.isArray(value)) return value.some(containsAssetGuid);
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(containsAssetGuid);
+  }
+  return false;
+}
+
+/**
+ * Direct v3 scenes migrated from Pack v2 already carry runtime ref indices in
+ * their component payload. There is no component-schema authority in a JSON
+ * direct entry, so preserve that transport shape and let the entry's explicit
+ * refs provide the closure. A GUID-bearing scene is still sent through the
+ * schema-backed producer and therefore fails closed when no schema is present.
+ */
+function preExternalizedSceneProduct(input: AssetOutputInput): AssetOutputProduct {
+  if (input.asset.kind !== 'scene') throw new TypeError('expected SceneAsset');
+  if (containsAssetGuid(input.asset)) {
+    throw new TypeError('direct scene payload must use explicit refs with runtime indices');
+  }
+  return {
+    payload: { ...(input.asset as SceneAsset), kind: 'scene' },
+    refs: [],
     artifacts: {},
   };
 }
@@ -246,23 +298,52 @@ function bytes(value: Uint8Array | Uint8ClampedArray): Uint8Array {
   return Uint8Array.from(value);
 }
 
+function textureProduct(input: AssetOutputInput): AssetOutputProduct {
+  if (input.asset.kind !== 'texture') throw new TypeError('expected TextureAsset');
+  const texture = input.asset as TextureAsset;
+  const layout = deriveTextureLayout({
+    shape: texture.shape,
+    format: texture.format,
+    mips: texture.mips,
+    actualByteLength: texture.data.byteLength,
+    order: 'mip-major,image-major,row-major',
+  });
+  if (!layout.ok) {
+    const expectedBytes =
+      layout.error.code === 'texture-packing-invalid'
+        ? layout.error.detail.expectedBytes
+        : texture.data.byteLength;
+    const actualBytes =
+      layout.error.code === 'texture-packing-invalid'
+        ? layout.error.detail.actualBytes
+        : texture.data.byteLength;
+    throw new TypeError(
+      `texture data is not canonical: expected ${expectedBytes} bytes, got ${actualBytes}`,
+    );
+  }
+  return {
+    payload: texture,
+    refs: [],
+    artifacts: {
+      body: {
+        mediaType:
+          texture.format === 'r8unorm'
+            ? 'application/x-forgeax-r8'
+            : `application/x-forgeax-${texture.format}`,
+        assetCodec: { name: texture.format, version: '1' },
+        bytes: bytes(texture.data),
+      },
+    },
+  };
+}
+
 function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
   const asset = input.asset;
   switch (asset.kind) {
-    case 'texture': {
-      const texture = asset as TextureAsset;
-      return {
-        payload: texture,
-        refs: [],
-        artifacts: {
-          body: {
-            mediaType: 'image/raw',
-            assetCodec: { name: 'raw-image', version: '1' },
-            bytes: bytes(texture.data),
-          },
-        },
-      };
-    }
+    case 'plugin':
+      throw new TypeError('plugin definitions require the plugin output producer');
+    case 'texture':
+      return textureProduct(input);
     case 'equirect': {
       const equirect = asset as EquirectAsset;
       return {
@@ -393,14 +474,43 @@ function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
     case 'particle-effect': {
       const effect = asset as ParticleEffectAsset;
       const cooked = particleProgramArtifact(effect);
+      const refs = new Set<string>();
+      for (const emitter of cooked.program.emitters) {
+        for (const renderer of emitter.renderers) {
+          if (!('material' in renderer) || typeof renderer.material !== 'string') {
+            throw new Error(`Particle emitter '${emitter.id}' requires a renderer Material GUID`);
+          }
+          refs.add(formatGuid(renderer.material));
+          if ('kind' in renderer && renderer.kind === 'mesh') {
+            if (!('mesh' in renderer) || typeof renderer.mesh !== 'string') {
+              throw new Error(`Particle emitter '${emitter.id}' requires a renderer Mesh GUID`);
+            }
+            refs.add(formatGuid(renderer.mesh));
+          }
+        }
+      }
       return {
         payload: { ...effect, programFingerprint: cooked.fingerprint, program: cooked.program },
-        refs: [],
+        refs: [...refs].sort().map((guid) => ({ guid })),
         artifacts: {
           'particle-effect/program.json': {
             mediaType: 'application/json',
             assetCodec: { name: 'forgeax-vfx-program', version: effect.program.format },
             bytes: cooked.bytes,
+          },
+        },
+      };
+    }
+    case 'ies-profile': {
+      const profile = asset as IesProfileAsset;
+      return {
+        payload: profile,
+        refs: [],
+        artifacts: {
+          body: {
+            mediaType: 'application/octet-stream',
+            assetCodec: { name: 'forgeax-ies-profile', version: '1' },
+            bytes: bytes(profile.data),
           },
         },
       };
@@ -414,10 +524,18 @@ function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
 
 export const materialAssetOutputProducer = createSafeProducer(
   'material',
-  'material-pack/1',
+  'material-pack/2',
   materialProduct,
 );
-export const meshAssetOutputProducer = createSafeProducer('mesh', 'mesh-binary/4', meshProduct);
+
+export const meshAssetDataProducer = createSafeProducer('mesh', 'mesh-data/1', meshDataProduct);
+
+export const meshAssetOutputProducer = createSafeProducer('mesh', 'mesh-binary/5', meshProduct);
+export const textureAssetOutputProducer = createSafeProducer(
+  'texture',
+  'texture-pack/1',
+  textureProduct,
+);
 
 export function createSceneAssetOutputProducer(
   sceneComponents: readonly ScriptablePackSceneComponent[] = [],
@@ -428,15 +546,19 @@ export function createSceneAssetOutputProducer(
   return createSafeProducer('scene', 'scene-pack/3', (input) => sceneProduct(input, schemas));
 }
 
-export function createStandardAssetOutputProducerRegistry(
+export function createPreExternalizedSceneAssetOutputProducer(): AssetOutputProducer {
+  return createSafeProducer('scene', 'scene-pack/3', preExternalizedSceneProduct);
+}
+
+export function createAssetOutputProducerRegistry(
   sceneComponents: readonly ScriptablePackSceneComponent[] = [],
 ): AssetOutputProducerRegistry {
   const registry = new AssetOutputProducerRegistry();
   registry.register(materialAssetOutputProducer);
   registry.register(meshAssetOutputProducer);
+  registry.register(textureAssetOutputProducer);
   registry.register(createSceneAssetOutputProducer(sceneComponents));
   for (const kind of [
-    'texture',
     'equirect',
     'sampler',
     'font',
@@ -449,8 +571,15 @@ export function createStandardAssetOutputProducerRegistry(
     'animation-graph',
     'audio',
     'particle-effect',
+    'ies-profile',
   ] as const) {
-    registry.register(createSafeProducer(kind, 'ordinary-pod/1', ordinaryPodProduct));
+    registry.register(
+      createSafeProducer(
+        kind,
+        kind === 'particle-effect' ? 'particle-effect/2' : 'ordinary-pod/1',
+        ordinaryPodProduct,
+      ),
+    );
   }
   return registry;
 }

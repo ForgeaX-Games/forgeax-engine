@@ -19,7 +19,7 @@ import { World } from '@forgeax/engine-ecs';
 import { RhiError } from '@forgeax/engine-rhi/errors';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { Plugin } from '@forgeax/engine-plugin';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import type { RenderFrameInput, Renderer } from '@forgeax/engine-render';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,7 +57,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         expect(typeof registerPropagateTransforms).toBe('function');
       });
 
-      it('one world.update(1 / 60).unwrap() derives a root entity Transform.world from its local Transform', () => {
+      it('one world.update(1 / 60).unwrap() derives GlobalTransform.world from local Transform', () => {
         const world = new World();
         registerPropagateTransforms(world);
 
@@ -70,7 +70,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
         world.update(1 / 60).unwrap();
 
-        const t = world.get(root, Transform);
+        const t = world.get(root, GlobalTransform);
         expect(t.ok).toBe(true);
         if (!t.ok) return;
         const w = t.value.world;
@@ -91,6 +91,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   function makeRendererStubEF(drawImpl?: () => unknown): Renderer {
     return {
+      state: () => 'alive' as const,
       attach: (attachedWorld: World) => ({ ok: true, value: createRenderReadLease(attachedWorld) }),
       draw(_request: RenderFrameInput): unknown {
         if (drawImpl !== undefined) {
@@ -364,7 +365,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     'app-system-update-failed',
     'app-pointer-lock-failed',
     'app-plugin-activation-failed',
-    'app-execution-tier-unavailable',
+    'app-execution-worker-unavailable',
     'app-execution-bootstrap-failed',
     'app-execution-deadline-exceeded',
     'app-execution-kernel-failed',
@@ -438,11 +439,12 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
                 ? { cause: new Error('boom') }
                 : code === 'app-pointer-lock-failed'
                   ? { path: 'w3c' as const, cause: new Error('lock failed') }
-                  : code === 'app-execution-tier-unavailable'
+                  : code === 'app-execution-worker-unavailable'
                     ? {
-                        requestedTier: 'shared' as const,
+                        worker: 'kernels' as const,
+                        reason: 'capability-unavailable' as const,
                         missingCapabilities: ['cross-origin-isolated'] as const,
-                        sharedEvidencePassed: false,
+
                       }
                     : code === 'app-execution-bootstrap-failed'
                       ? {
@@ -589,7 +591,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
               return 'f';
             case 'app-plugin-activation-failed':
               return 'plugin';
-            case 'app-execution-tier-unavailable':
+            case 'app-execution-worker-unavailable':
               return 'g';
             case 'app-execution-bootstrap-failed':
               return 'h';
@@ -633,11 +635,12 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
                   ? { path: 'w3c' as const, cause: 0 }
                   : code === 'app-plugin-activation-failed'
                     ? { cause: 0 }
-                  : code === 'app-execution-tier-unavailable'
+                  : code === 'app-execution-worker-unavailable'
                     ? {
-                        requestedTier: 'shared' as const,
+                        worker: 'kernels' as const,
+                        reason: 'capability-unavailable' as const,
                         missingCapabilities: ['cross-origin-isolated'] as const,
-                        sharedEvidencePassed: false,
+
                       }
                     : code === 'app-execution-bootstrap-failed'
                       ? { phase: 'bootstrap' as const, moduleUrl: '/bootstrap.js', cause: 0 }
@@ -680,6 +683,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
   function makeRendererStubFL(): { renderer: Renderer; drawCalls: RenderFrameInput[] } {
     const drawCalls: RenderFrameInput[] = [];
     const renderer = {
+      state: () => 'alive' as const,
       attach: (attachedWorld: World) => ({
         ok: true,
         value: createRenderReadLease(attachedWorld),
@@ -1000,6 +1004,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   function makeRendererStubRB(): Renderer {
     return {
+      state: () => 'alive' as const,
       attach: (attachedWorld: World) => ({ ok: true, value: createRenderReadLease(attachedWorld) }),
       draw(): { ok: true; value: undefined } {
         // no-op

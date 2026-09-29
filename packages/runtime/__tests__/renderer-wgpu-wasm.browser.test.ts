@@ -97,8 +97,9 @@ describe.skip('renderer-wgpu-wasm.browser - chromium real path with rhi-wgpu esc
     const world = new World();
     // draw(world) must not throw under the wgpu-wasm escape hatch path
     // (charter proposition 6 enforced at the chromium V8 + lavapipe + wgpu
-    // wasm boundary). RenderSystem fires onError for 0 Camera world via the
-    // 'render-system-no-camera' code, but draw itself returns void.
+    // wasm boundary). RenderSystem fires an error event for the 0 Camera world
+    // via the 'render-system-no-camera' code, while draw returns a receipt for
+    // the clear-only submit.
     const attached = renderer.attach(world);
     expect(attached.ok).toBe(true);
     if (!attached.ok) return;

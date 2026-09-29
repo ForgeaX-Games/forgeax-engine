@@ -1,5 +1,5 @@
 // @forgeax/engine-remote/src/__tests__/execute-browser-safe — the ./execute
-// subpath is the eval core reused by the browser remote-live bridge (createApp
+// subpath is the eval core reused by the browser DevKit live bridge (createApp
 // dials a loopback relay; the page realm runs executeScript directly because a
 // browser cannot bind a Node WS server). It MUST stay ws-free / node-built-in-
 // free at the SOURCE level, else importing it in a browser bundle throws on the
@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 const EXECUTE_SRC = fileURLToPath(new URL('../execute.ts', import.meta.url));
 
-describe('execute.ts browser safety (remote-live bridge)', () => {
+describe('execute.ts browser safety (DevKit live bridge)', () => {
   const source = readFileSync(EXECUTE_SRC, 'utf8');
   // Match only real import statements, not prose in comments.
   const importLines = source

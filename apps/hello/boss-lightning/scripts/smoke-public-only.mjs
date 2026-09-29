@@ -5,18 +5,18 @@ import {
   createParticleEffectInstance,
   createVfxEffectContract,
   createVfxInspectSnapshot,
-  defineParticleEffectSourceV2,
-  parseParticleEffectSourceV2,
+  defineParticleEffectSourceV3,
+  parseParticleEffectSourceV3,
 } from '@forgeax/engine-vfx';
-import { reflectVfxLayout, reflectVfxRenderer } from '@forgeax/engine-vfx-compiler';
+import { reflectVfxLayoutV3, reflectVfxRendererV3 } from '@forgeax/engine-vfx-compiler';
 import {
   createTopologyResourcePlan,
   createVfxRenderInspectSnapshot,
   topologyCapacitySnapshot,
 } from '@forgeax/engine-vfx-render';
 
-const source = defineParticleEffectSourceV2({
-  schemaVersion: 2,
+const source = defineParticleEffectSourceV3({
+  schemaVersion: 3,
   emitters: [{
     id: 'public-showcase',
     capacity: 128,
@@ -26,7 +26,7 @@ const source = defineParticleEffectSourceV2({
     schedule: { rate: 8 },
     program: { module: 'public-showcase.vfx.wgsl' },
     renderers: [
-      { kind: 'billboard', material: 'material-public', capacity: 64, sorting: 'back-to-front' },
+      { kind: 'billboard', material: 'material-public', capacity: 64, sorting: 'view-depth' },
       { kind: 'ribbon', material: 'material-public', stripKey: 'alive-index', capacity: 32 },
       { kind: 'trail', material: 'material-public', historyLength: 8, capacity: 32 },
       { kind: 'beam', material: 'material-public', endpointField: 'velocity', capacity: 16 },
@@ -39,8 +39,8 @@ function requireOk(result, label) {
   return result.value;
 }
 
-const parsed = requireOk(parseParticleEffectSourceV2(source), 'source parse');
-const renderers = requireOk(reflectVfxRenderer(parsed.emitters[0].renderers), 'renderer reflection');
+const parsed = requireOk(parseParticleEffectSourceV3(source), 'source parse');
+const renderers = requireOk(reflectVfxRendererV3(parsed.emitters[0].renderers), 'renderer reflection');
 const topologyPlans = renderers
   .filter(renderer => renderer.topology !== 'billboard' && renderer.topology !== 'mesh')
   .map(renderer => requireOk(createTopologyResourcePlan({
@@ -52,7 +52,7 @@ const topologyPlans = renderers
     ...(renderer.topology === 'beam' ? { endpointField: renderer.endpointField } : {}),
   }), `${renderer.topology} resources`));
 
-const layout = requireOk(reflectVfxLayout({
+const layout = requireOk(reflectVfxLayoutV3({
   root: `
     struct VfxParameters {
       intensity: f32,

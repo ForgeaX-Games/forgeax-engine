@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { BindGroupCounts } from '../../../render/src/record/frame-snapshot';
 import {
   cleanPerEntityCache,
+  findFromChain,
   getOrCreateFromChain,
   getOrCreatePerEntity,
 } from '../../../render/src/record/mesh-ssbo';
@@ -243,8 +244,11 @@ describe('w20 — HDRP shadow-instances cross-function read finds helper write (
     entityKey: number,
     instBuffer: object,
   ): BindGroup | undefined {
-    const leaf = outer.get(entityKey)?.get(instBuffer) as Map<string, BindGroup> | undefined;
-    return leaf?.get(SHADOW_INSTANCES_VARIANT);
+    return findFromChain(
+      outer.get(entityKey) ?? new WeakMap<object, unknown>(),
+      [instBuffer],
+      SHADOW_INSTANCES_VARIANT,
+    );
   }
 
   it('read end finds the leaf the write end stored under the same (entityKey, instBuffer)', () => {

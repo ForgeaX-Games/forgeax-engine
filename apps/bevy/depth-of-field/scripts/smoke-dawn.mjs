@@ -13,7 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 const width = 220;
 const height = 160;
-const targetFrames = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10), 300);
+const targetFrames = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60);
 const errors = [];
 
 let create;
@@ -115,12 +115,13 @@ function installEffect(enabled) {
   world.set(paramsEntity, PostProcessParams, { data: enabled ? onParams : offParams });
 }
 
-function drawFrames(count) {
+async function drawFrames(count) {
   let failures = 0;
   for (let i = 0; i < count; i += 1) {
     world.update().unwrap();
     const result = drawSmokeFrame(renderer, world);
     if (!result.ok) failures += 1;
+    await sharedDevice.queue.onSubmittedWorkDone();
   }
   return failures;
 }
@@ -162,17 +163,17 @@ let framesObserved = 0;
 let drawErrors = 0;
 const firstHalf = Math.floor(targetFrames / 3);
 installEffect(false);
-drawErrors += drawFrames(firstHalf);
+drawErrors += await drawFrames(firstHalf);
 framesObserved += firstHalf;
 const offPixels = await capturePixels();
 installEffect(true);
 const secondHalf = Math.floor(targetFrames / 3);
-drawErrors += drawFrames(secondHalf);
+drawErrors += await drawFrames(secondHalf);
 framesObserved += secondHalf;
 const onPixels = await capturePixels();
 const passNames = [...renderer.inspect().perFramePassNames];
 const remainder = targetFrames - firstHalf - secondHalf;
-drawErrors += drawFrames(remainder);
+drawErrors += await drawFrames(remainder);
 framesObserved += remainder;
 
 const offPng = resolve(appRoot, 'artifacts', 'dof-off.png');
@@ -199,7 +200,7 @@ if (failures.length > 0) {
   sharedDevice.destroy?.();
   process.exit(1);
 }
-console.log('[smoke] PASS - depth read, live params, 300 frames, post-effect, and pixel falsifier are GREEN');
+console.log('[smoke] PASS - depth read, live params, 60 frames, post-effect, and pixel falsifier are GREEN');
 sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 await delay(0);

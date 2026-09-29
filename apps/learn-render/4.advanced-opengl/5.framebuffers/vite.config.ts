@@ -22,7 +22,9 @@ export default {
   ...withRhiDebug({
     here,
     rootDepth: 4,
-    port: 5181,
+    // Keep this app off the hello-triangle port on persistent CI runners.
+    // strictPort makes a stale sibling Vite process a visible failure.
+    port: 5202,
     extraPlugins: [
       ...optionalAssetPack(assetRoots, () =>
         pluginPack({

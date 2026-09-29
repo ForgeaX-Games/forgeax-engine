@@ -2,8 +2,9 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const caps = (compute: boolean): Readonly<RhiCaps> =>
   ({ backendKind: 'null', compute }) as unknown as RhiCaps;
@@ -23,14 +24,28 @@ function feature(mode: 'healthy' | 'failed'): RenderFeature<{ readonly ready: tr
               'next-frame',
             ),
           )
-        : ok({ resources: [], passes: [] }),
+        : ok({
+            work: [
+              {
+                scope: { view: 'main' },
+                resources: [
+                  {
+                    kind: 'fullscreen-program' as const,
+                    name: 'synthetic.diagnostics.program',
+                    source: 'synthetic',
+                  },
+                ],
+                passes: [],
+              },
+            ],
+          }),
   };
 }
 
 describe('render feature prepared diagnostics', () => {
   it('projects disabled and failed states with code-directed recovery data', () => {
     const disabledHost = createRenderFeatureHost([feature('healthy')]).unwrap();
-    runRenderFeatureFrame(disabledHost, {
+    runSingleViewFeatureFrame(disabledHost, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
@@ -48,7 +63,7 @@ describe('render feature prepared diagnostics', () => {
     expect(disabled?.latestError?.hint).toContain('disable');
 
     const failedHost = createRenderFeatureHost([feature('failed')]).unwrap();
-    runRenderFeatureFrame(failedHost, {
+    runSingleViewFeatureFrame(failedHost, {
       worlds: [],
       owner: 0,
       frameNumber: 1,

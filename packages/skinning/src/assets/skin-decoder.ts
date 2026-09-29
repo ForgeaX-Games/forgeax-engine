@@ -3,6 +3,7 @@ import {
   type AssetKind,
   err,
   ok,
+  parseShadowCapsuleSet,
   type SkeletonAsset,
   type SkinAsset,
 } from '@forgeax/engine-types';
@@ -47,15 +48,28 @@ export const skeletonContribution: AssetDecoderContribution<SkeletonAsset, 'skel
       if (payload !== null && typeof payload === 'object') {
         const source = payload as Record<string, unknown>;
         const inverseBindMatrices = floatArray(source.inverseBindMatrices);
+        const bounds = floatArray(source.bounds);
         const jointCount = source.jointCount;
+        const shadowCapsules =
+          source.shadowCapsules === undefined || !Number.isSafeInteger(jointCount)
+            ? undefined
+            : parseShadowCapsuleSet(source.shadowCapsules, jointCount as number);
         if (
           source.kind === 'skeleton' &&
           inverseBindMatrices !== undefined &&
           Number.isSafeInteger(jointCount) &&
           (jointCount as number) >= 0 &&
-          inverseBindMatrices.length === (jointCount as number) * 16
+          inverseBindMatrices.length === (jointCount as number) * 16 &&
+          (bounds === undefined || bounds.length === 6) &&
+          (source.shadowCapsules === undefined || shadowCapsules !== undefined)
         ) {
-          return ok({ kind: 'skeleton', inverseBindMatrices, jointCount: jointCount as number });
+          return ok({
+            kind: 'skeleton',
+            inverseBindMatrices,
+            jointCount: jointCount as number,
+            ...(bounds === undefined ? {} : { bounds }),
+            ...(shadowCapsules === undefined ? {} : { shadowCapsules }),
+          });
         }
       }
       return err({

@@ -11,4 +11,24 @@ export {
   SHADER_RESERVED_IMPORTER_KEY,
 } from './import-runner.js';
 export { ImporterRegistry } from './importer-registry.js';
-export { packMeshBinV4 } from './mesh-bin.js';
+export { packMeshBin } from './mesh-bin.js';
+export {
+  deriveDefaultLodScreenCoverages,
+  reconcileMeshLodMeta,
+  validateMeshLodContract,
+} from './mesh-lod.js';
+export * from './runtime-pack.js';
+export type { RuntimePackPinnedAsset, RuntimePackRecipe } from './runtime-pack-snapshot.js';
+export {
+  type AssetOutputInput,
+  type AssetOutputProducer,
+  AssetOutputProducerRegistry,
+  type AssetOutputProduct,
+} from './scriptable-pack.js';
+export {
+  createAssetOutputProducerRegistry,
+  createSceneAssetOutputProducer,
+  materialAssetOutputProducer,
+  meshAssetOutputProducer,
+  textureAssetOutputProducer,
+} from './scriptable-pack-output-producers.js';

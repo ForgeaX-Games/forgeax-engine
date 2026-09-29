@@ -91,6 +91,9 @@ export interface DebugDrawOptions {
  * `flush()` returns `Result.err({ code: 'flushed-after-destroy' })`.
  */
 export interface DebugDraw {
+  /** Whether this frame has staged line vertices waiting to be encoded. */
+  hasWork(): boolean;
+
   /** Push a line segment from `a` to `b` with the given color. */
   line(a: Vec3, b: Vec3, color: ColorLike): void;
 

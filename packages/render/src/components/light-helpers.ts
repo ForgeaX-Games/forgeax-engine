@@ -14,15 +14,20 @@
 // transparent to AI users) + D-S5 (Layer 1 host-side range = 0 ->
 // invRangeSquared = 1e8 protects the 0 * Infinity = NaN intermediate).
 
-import { err, ok, type Result } from '@forgeax/engine-types';
+import { err, ok, R_MIN, type Result } from '@forgeax/engine-types';
 import { SpawnLightInvalidBoundsError } from '../errors/ecs-validation';
 import { ShadowInvalidConfigError } from '../errors/render';
+import { DirectionalShadowFilterValue } from './directional-shadow-filter';
 
 export type LightValidationError = SpawnLightInvalidBoundsError | ShadowInvalidConfigError;
 export type LightValidationResult = Result<void, LightValidationError>;
 
 const RANGE_ZERO_FALLBACK_INV_R2 = 1e8;
 const DEG_TO_RAD = Math.PI / 180;
+const PCSS_RADIUS_MIN = 0.0001;
+const PCSS_RADIUS_MAX = 0.05;
+const PCSS_PENUMBRA_MIN = 1;
+const PCSS_PENUMBRA_MAX = 64;
 
 /**
  * Convert SpotLight cone half-angle (degrees) to its cosine.
@@ -94,10 +99,24 @@ export function validateDirectionalLightData(
     data.direction as ArrayLike<number> | undefined,
   );
   if (directionError !== null) return err(directionError);
+  const contactShadowLength = (data.contactShadowLength as number | undefined) ?? 0;
+  if (!Number.isFinite(contactShadowLength) || contactShadowLength < 0) {
+    return err(
+      new ShadowInvalidConfigError(
+        'contactShadowLength',
+        contactShadowLength,
+        0,
+        '>=',
+        'a finite value >= 0 (0 disables contact shadows)',
+      ),
+    );
+  }
   if (data.castShadow === false) return ok(undefined);
 
   const mapSize = (data.mapSize as number | undefined) ?? 2048;
-  if (mapSize < 1) return err(new ShadowInvalidConfigError('mapSize', mapSize, 1));
+  if (mapSize < 1) {
+    return err(new ShadowInvalidConfigError('mapSize', mapSize, 1));
+  }
   const cascadeCount = (data.cascadeCount as number | undefined) ?? 4;
   if (cascadeCount < 1 || cascadeCount > 4 || !Number.isInteger(cascadeCount)) {
     return err(new ShadowInvalidConfigError('cascadeCount', cascadeCount, 1, 4));
@@ -110,13 +129,69 @@ export function validateDirectionalLightData(
   if (cascadeBlend < 0 || cascadeBlend > 0.5) {
     return err(new ShadowInvalidConfigError('cascadeBlend', cascadeBlend, 0, 0.5));
   }
-  const pcfKernelSize = (data.pcfKernelSize as number | undefined) ?? 3;
-  if (pcfKernelSize < 1 || pcfKernelSize % 2 === 0) {
-    return err(new ShadowInvalidConfigError('pcfKernelSize', pcfKernelSize, 1));
-  }
   const shadowDistance = (data.shadowDistance as number | undefined) ?? 200;
   if (shadowDistance <= 0) {
     return err(new ShadowInvalidConfigError('shadowDistance', shadowDistance, 0, '>'));
+  }
+  const shadowFilter =
+    (data.shadowFilter as number | undefined) ?? DirectionalShadowFilterValue.pcf3;
+  const allowedFilters = Object.values(DirectionalShadowFilterValue);
+  if (!Number.isFinite(shadowFilter) || !allowedFilters.includes(shadowFilter as never)) {
+    return err(
+      new ShadowInvalidConfigError(
+        'shadowFilter',
+        shadowFilter,
+        { kind: 'allowed-values', values: allowedFilters },
+        undefined,
+        'one of [pcf1, pcf3, pcf5, pcssMedium, pcssHigh]',
+      ),
+    );
+  }
+  if (
+    shadowFilter === DirectionalShadowFilterValue.pcssMedium ||
+    shadowFilter === DirectionalShadowFilterValue.pcssHigh
+  ) {
+    const shadowAngularRadius = (data.shadowAngularRadius as number | undefined) ?? 0.00465;
+    if (!Number.isFinite(shadowAngularRadius)) {
+      return err(
+        new ShadowInvalidConfigError('shadowAngularRadius', shadowAngularRadius, {
+          kind: 'range',
+          min: PCSS_RADIUS_MIN,
+          max: PCSS_RADIUS_MAX,
+        }),
+      );
+    }
+    // ECS stores this field as f32; both authored endpoints round outward.
+    // Accept their stored representations, but not the adjacent out-of-range f32.
+    if (
+      shadowAngularRadius < Math.fround(PCSS_RADIUS_MIN) ||
+      shadowAngularRadius > Math.fround(PCSS_RADIUS_MAX)
+    ) {
+      return err(
+        new ShadowInvalidConfigError('shadowAngularRadius', shadowAngularRadius, {
+          kind: 'range',
+          min: PCSS_RADIUS_MIN,
+          max: PCSS_RADIUS_MAX,
+        }),
+      );
+    }
+    const maxPenumbraTexels = (data.maxPenumbraTexels as number | undefined) ?? 32;
+    if (
+      !Number.isFinite(maxPenumbraTexels) ||
+      !Number.isInteger(maxPenumbraTexels) ||
+      maxPenumbraTexels < PCSS_PENUMBRA_MIN ||
+      maxPenumbraTexels > PCSS_PENUMBRA_MAX
+    ) {
+      return err(
+        new ShadowInvalidConfigError(
+          'maxPenumbraTexels',
+          maxPenumbraTexels,
+          { kind: 'range', min: PCSS_PENUMBRA_MIN, max: PCSS_PENUMBRA_MAX },
+          undefined,
+          'a finite integer in [1, 64]',
+        ),
+      );
+    }
   }
   return ok(undefined);
 }
@@ -130,6 +205,18 @@ export function validateSpotLightData(
     data.direction as ArrayLike<number> | undefined,
   );
   if (directionError !== null) return err(directionError);
+  const contactShadowLength = (data.contactShadowLength as number | undefined) ?? 0;
+  if (!Number.isFinite(contactShadowLength) || contactShadowLength < 0) {
+    return err(
+      new ShadowInvalidConfigError(
+        'contactShadowLength',
+        contactShadowLength,
+        0,
+        '>=',
+        'a finite value >= 0 (0 disables contact shadows)',
+      ),
+    );
+  }
   if (data.castShadow === false) return ok(undefined);
 
   const range = (data.range as number | undefined) ?? 10;
@@ -153,7 +240,19 @@ export function validateSpotLightData(
   }
   const pcfKernelSize = (data.pcfKernelSize as number | undefined) ?? 3;
   if (pcfKernelSize < 1 || pcfKernelSize % 2 === 0) {
-    return err(new ShadowInvalidConfigError('pcfKernelSize', pcfKernelSize, 1));
+    return err(
+      new ShadowInvalidConfigError(
+        'pcfKernelSize',
+        pcfKernelSize,
+        { kind: 'lower-bound', operator: '>=', value: 1 },
+        undefined,
+        'an odd integer >= 1',
+      ),
+    );
+  }
+  const shadowIntensity = (data.shadowIntensity as number | undefined) ?? 1;
+  if (!Number.isFinite(shadowIntensity) || shadowIntensity < 0 || shadowIntensity > 1) {
+    return err(new ShadowInvalidConfigError('shadowIntensity', shadowIntensity, 0, 1));
   }
   return ok(undefined);
 }
@@ -182,7 +281,66 @@ export function validatePointLightShadowData(
   }
   const pcfKernelSize = (data.pcfKernelSize as number | undefined) ?? 3;
   if (pcfKernelSize < 1 || pcfKernelSize % 2 === 0) {
-    return err(new ShadowInvalidConfigError('pcfKernelSize', pcfKernelSize, 1));
+    return err(
+      new ShadowInvalidConfigError(
+        'pcfKernelSize',
+        pcfKernelSize,
+        { kind: 'lower-bound', operator: '>=', value: 1 },
+        undefined,
+        'an odd integer >= 1',
+      ),
+    );
+  }
+  return ok(undefined);
+}
+
+/** Validate rectangular area-light authoring facts before renderer admission. */
+export function validateRectAreaLightData(
+  data: Readonly<Record<string, unknown>>,
+): LightValidationResult {
+  const intensity = (data.intensity as number | undefined) ?? 1;
+  if (typeof intensity !== 'number' || !Number.isFinite(intensity) || intensity < 0) {
+    return err(new SpawnLightInvalidBoundsError('RectAreaLight', 'intensity', intensity));
+  }
+  const color = (data.color as ArrayLike<number> | undefined) ?? [1, 1, 1];
+  if (
+    color.length !== 3 ||
+    Array.from(color).some(
+      (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0,
+    )
+  ) {
+    return err(new SpawnLightInvalidBoundsError('RectAreaLight', 'color', Array.from(color)));
+  }
+  for (const field of ['width', 'height', 'range'] as const) {
+    const value = (data[field] as number | undefined) ?? (field === 'range' ? 10 : 1);
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return err(new SpawnLightInvalidBoundsError('RectAreaLight', field, value));
+    }
+  }
+  return ok(undefined);
+}
+
+/** Validate the fixed 27-value SH payload and minimum finite radius. */
+export function validateLightProbeData(
+  data: Readonly<Record<string, unknown>>,
+): LightValidationResult {
+  const irradiance = data.irradiance as ArrayLike<number> | undefined;
+  if (
+    irradiance === undefined ||
+    irradiance.length !== 27 ||
+    Array.from(irradiance).some((value) => typeof value !== 'number' || !Number.isFinite(value))
+  ) {
+    return err(
+      new SpawnLightInvalidBoundsError(
+        'LightProbe',
+        'irradiance',
+        irradiance === undefined ? [] : Array.from(irradiance),
+      ),
+    );
+  }
+  const radius = (data.radius as number | undefined) ?? R_MIN;
+  if (typeof radius !== 'number' || !Number.isFinite(radius) || radius < R_MIN) {
+    return err(new SpawnLightInvalidBoundsError('LightProbe', 'radius', radius));
   }
   return ok(undefined);
 }

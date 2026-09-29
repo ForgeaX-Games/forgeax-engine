@@ -15,7 +15,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -144,15 +144,22 @@ for (let y = 0; y < CHECKER_SIZE; y++) {
     checkerPixels[off + 3] = 255;
   }
 }
-const texPod = { kind: 'texture', width: CHECKER_SIZE, height: CHECKER_SIZE, format: 'rgba8unorm-srgb', data: checkerPixels, colorSpace: 'srgb', mipmap: false };
+const texPod = {
+  kind: 'texture',
+  shape: { viewDimension: '2d', extent: { width: CHECKER_SIZE, height: CHECKER_SIZE } },
+  format: 'rgba8unorm-srgb',
+  data: checkerPixels,
+  colorSpace: 'srgb',
+  mips: { kind: 'none' },
+};
 const texHandle = world.allocSharedRef('TextureAsset', texPod);
 const texId = unwrapHandle(texHandle);
 
 // Upload texture to GPU
 
-const normalMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1], { baseColorTexture: texId, castShadow: false }));
-const redMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 0, 0, 0.5], { baseColorTexture: texId, castShadow: false }));
-const blueMat = world.allocSharedRef('MaterialAsset', Materials.unlit([0, 0, 1, 0.5], { baseColorTexture: texId, castShadow: false }));
+const normalMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1], { baseColorTexture: texId }));
+const redMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 0, 0, 0.5], { baseColorTexture: texId }));
+const blueMat = world.allocSharedRef('MaterialAsset', Materials.unlit([0, 0, 1, 0.5], { baseColorTexture: texId }));
 
 // Normal quad at z=1.5
 world.spawn(

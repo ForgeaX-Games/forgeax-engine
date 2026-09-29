@@ -1,10 +1,13 @@
+import { copyPreparedAsset, validateAssetReferences } from '../prepare-payload.js';
 // @forgeax/engine-assets-runtime -- load-by-guid + pack-fetch collaboration module
 // (feat-20260705-runtime-tier2-decomposition M1 / w7, D-4). Free functions
 // taking the AssetRegistry instance as first param; logic byte-preserved from the
 // class body (this. -> registry.). This is the largest method cluster (loadByGuid
 // + the DDC / pack-index / pack-file fetch + parse pipeline).
 
+import { decompressZstd } from '@forgeax/engine-codec';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
 import { err, ok, type Result, type RhiError } from '@forgeax/engine-rhi';
 import { isEngineMaterial } from '@forgeax/engine-shader';
 import {
@@ -22,10 +25,13 @@ import {
   type LoadContext,
   type LoaderAsyncResult,
   type MaterialAsset,
-  type MeshAsset,
+  materialChildForbiddenFields,
   type ParseErrorDetail,
 } from '@forgeax/engine-types';
 import type { AssetRegistry, ParsedPackFile } from '../asset-registry';
+import { packEnvelopeIssue } from '../internal/pack-envelope.js';
+import { bytesOf, jsonOf, type PackageReadFailure, readPackage } from '../internal/package-read.js';
+import { validatePublicationReferences } from '../internal/publication-references.js';
 import {
   createMaterialLoader,
   type MaterialLoadError,
@@ -34,8 +40,9 @@ import {
   type MaterialReady,
 } from '../material/loader';
 import { readArtifact } from './artifact-io';
-import { fetchPackIndex, resolveCatalogAssetUrl } from './catalog';
+import { type CatalogRecord, resolveCatalogAssetUrl } from './catalog';
 import { buildBreadcrumbHint, buildSceneChildContext } from './instantiate';
+import { traceAssetLoadPhase } from './load-trace';
 import { resolveRuntimeProjection } from './runtime-projection';
 
 /**
@@ -96,82 +103,88 @@ export async function loadByGuid<T = Asset>(
   registry: AssetRegistry,
   guid: AssetGuid,
   parentContext?: {
-    sceneEntityId?: number;
+    sceneEntityKey?: string;
     componentField?: string;
   },
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
-  return loadByGuidInternal(registry, guid, parentContext, new Set());
+  const key = AssetGuid.format(guid).toLowerCase();
+  const isCurrent = currentLoad(registry, key);
+  const before = validateRegistryReferences(registry, key);
+  if (!before.ok) {
+    registry.invalidate(key);
+    return before;
+  }
+  const result = await loadByGuidInternal<T>(registry, guid, parentContext, new Set());
+  if (!isCurrent()) return invalidated(key);
+  if (!result.ok) return result;
+  const after = validateRegistryReferences(registry, key);
+  if (!after.ok) registry.invalidate(key);
+  return after.ok ? result : after;
+}
+
+/** Reuse the accepted Catalog projection; no second dependency graph for the legacy reader. */
+export function validateRegistryReferences(
+  registry: AssetRegistry,
+  guid: string,
+): Result<void, AssetError> {
+  const lookup = (key: string) => registry.packIndexCache?.get(key.toLowerCase());
+  const checked = validatePublicationReferences(guid, lookup(guid), lookup);
+  return checked.ok
+    ? checked
+    : err(
+        new AssetError({
+          code: 'asset-invalidated',
+          expected: checked.error.expected,
+          hint: checked.error.hint,
+        }),
+      );
+}
+
+function currentLoad(registry: AssetRegistry, guidKey: string): () => boolean {
+  const generation = registry.generations.get(guidKey) ?? 0;
+  const globalGeneration = registry.globalGeneration;
+  return () =>
+    generation === (registry.generations.get(guidKey) ?? 0) &&
+    globalGeneration === registry.globalGeneration;
+}
+
+function invalidated(guidKey: string): Result<never, AssetError> {
+  return err(
+    new AssetError({
+      code: 'asset-invalidated',
+      expected: `GUID ${guidKey} to remain current until publication`,
+      hint: ASSET_ERROR_HINTS['asset-invalidated'],
+    }),
+  );
 }
 
 function cookedRecordFromPayload(payload: Record<string, unknown>): unknown {
-  if (payload.schemaVersion === 'material-cook/3') return payload;
+  if (payload.schemaVersion === 'material-cook/4') return payload;
   if (payload.cooked !== null && typeof payload.cooked === 'object') return payload.cooked;
   if (payload.record !== null && typeof payload.record === 'object') return payload.record;
   return undefined;
 }
 
-function materialArtifactKey(
-  record: Record<string, unknown> | undefined,
-  descriptors: Readonly<Record<string, ArtifactDescriptor>>,
-): string | undefined {
-  const artifact = record?.artifact;
-  const path =
-    artifact !== null && typeof artifact === 'object' && 'path' in artifact
-      ? (artifact as { readonly path?: unknown }).path
-      : undefined;
-  if (typeof path === 'string') {
-    const match = Object.entries(descriptors).find(([, descriptor]) => descriptor.path === path);
-    if (match !== undefined) return match[0];
-  }
-  const shaderArtifacts = Object.entries(descriptors).filter(
-    ([, descriptor]) => descriptor.mediaType === 'text/wgsl',
-  );
-  return shaderArtifacts.length === 1 ? shaderArtifacts[0]?.[0] : undefined;
-}
-
-function materialRecordPath(descriptor: ArtifactDescriptor): string {
-  return `${descriptor.path}.record.json`;
-}
-
-function inlineMaterialArtifact(
-  record: Record<string, unknown> | undefined,
-): MaterialPublication['artifact'] | undefined {
-  const artifact = record?.artifact;
-  if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    return undefined;
-  }
-  const bytes = (artifact as { readonly bytes?: unknown }).bytes;
-  const normalizedBytes =
-    bytes instanceof Uint8Array
-      ? new Uint8Array(bytes)
-      : Array.isArray(bytes) &&
-          bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
-        ? Uint8Array.from(bytes)
-        : undefined;
-  if (normalizedBytes === undefined) return undefined;
-  const digest = (artifact as { readonly digest?: unknown }).digest;
-  return {
-    bytes: normalizedBytes,
-    ...(typeof digest === 'string' ? { digest } : {}),
-  };
-}
-
 async function loadMaterialPublicationByGuid(
   registry: AssetRegistry,
   request: MaterialLoadRequest,
+  isCurrent = currentLoad(registry, request.guid.toLowerCase()),
+  boundFetcher?: typeof globalThis.fetch,
 ): Promise<MaterialPublication | undefined> {
   const parsedGuid = AssetGuid.parse(request.guid);
   if (!parsedGuid.ok) return undefined;
   const entry = await resolveCatalogEntry(registry, request.guid.toLowerCase());
-  if (entry === undefined) return undefined;
+  if (!isCurrent() || entry === undefined) return undefined;
+  const fetcher = boundFetcher ?? registry.openPackage(entry.packageUrl);
   let pack = registry.packFileCache.get(entry.packageUrl);
   if (pack === undefined) {
     const fetched = await fetchAndCachePackFile(
       registry,
       entry.packageUrl,
       request.guid.toLowerCase(),
+      fetcher,
     );
-    if (!fetched.ok) return undefined;
+    if (!isCurrent() || !fetched.ok) return undefined;
     pack = registry.packFileCache.get(entry.packageUrl);
   }
   const asset = pack?.assets.find(
@@ -179,115 +192,65 @@ async function loadMaterialPublicationByGuid(
   );
   if (asset === undefined || asset.kind !== 'material') return undefined;
   const record = cookedRecordFromPayload(asset.payload);
-  const recordObject =
-    record !== undefined && typeof record === 'object' && record !== null
-      ? (record as Record<string, unknown>)
-      : undefined;
-  const artifactKey = materialArtifactKey(recordObject, asset.artifacts ?? {});
-  if (artifactKey === undefined) {
-    const inlineArtifact = inlineMaterialArtifact(recordObject);
-    if (inlineArtifact !== undefined) {
+  if (record === undefined) return undefined;
+  const parsed = validateCookedMaterialRecord(record);
+  if (!parsed.ok) return { guid: request.guid, record };
+  const artifacts: Record<string, { bytes: Uint8Array; digest?: string }> = {};
+  const descriptors = Object.entries(asset.artifacts ?? {});
+  for (const { artifact } of parsed.value.programs) {
+    if (artifacts[artifact.path] !== undefined) continue;
+    // Inline transport has no descriptors. Once a descriptor set is present,
+    // every program must be present there; embedded bytes cannot hide a missing file.
+    if (descriptors.length === 0) {
+      artifacts[artifact.path] = { bytes: artifact.bytes, digest: artifact.digest };
+      continue;
+    }
+    // Program paths are asset-local keys. The Pack descriptor owns the
+    // transport path, which may be relocated by the package finalizer.
+    const artifactKey = artifact.path;
+    const descriptor = asset.artifacts?.[artifactKey];
+    if (descriptor === undefined)
       return {
         guid: request.guid,
         record,
-        artifact: inlineArtifact,
-      };
-    }
-    return {
-      guid: request.guid,
-      record,
-      artifactError: {
-        code: 'asset-artifact-missing',
-        expected: 'a published material artifact descriptor',
-      },
-    };
-  }
-  const descriptor = asset.artifacts?.[artifactKey];
-  if (descriptor === undefined) {
-    return {
-      guid: request.guid,
-      record,
-      artifactError: {
-        code: 'asset-artifact-missing',
-        expected: `artifact descriptor '${artifactKey}'`,
-      },
-    };
-  }
-  let publicationRecord = record;
-  if (publicationRecord === undefined) {
-    const recordArtifact = await readArtifact({
-      packageUrl: entry.packageUrl,
-      guid: request.guid,
-      artifactKey: `${artifactKey}.record`,
-      descriptor: {
-        path: materialRecordPath(descriptor),
-        mediaType: 'application/json',
-      },
-    });
-    if (!recordArtifact.ok) return undefined;
-    try {
-      publicationRecord = JSON.parse(new TextDecoder().decode(recordArtifact.value));
-    } catch {
-      publicationRecord = null;
-    }
-  }
-  const artifactCacheKey = `${entry.packageUrl}\0${request.guid.toLowerCase()}\0${artifactKey}`;
-  const artifact = await registry.artifactCache.read(artifactCacheKey, () =>
-    readArtifact({
-      packageUrl: entry.packageUrl,
-      guid: request.guid,
-      artifactKey,
-      descriptor,
-    }),
-  );
-  if (!artifact.ok) {
-    if (artifact.error.code === 'asset-artifact-missing') {
-      return {
-        guid: request.guid,
-        record: publicationRecord,
         artifactError: {
-          code: artifact.error.code,
-          expected: artifact.error.expected,
-          actual: artifact.error.detail.observed,
+          code: 'asset-artifact-missing',
+          expected: `one artifact descriptor for '${artifact.path}'`,
         },
       };
-    }
-    if (artifact.error.code === 'asset-artifact-integrity-mismatch') {
+    const artifactCacheKey = `${request.guid.toLowerCase()}\0${entry.packageUrl}\0${artifact.path}\0${artifact.digest}`;
+    const loaded = await registry.artifactCache.read(artifactCacheKey, () =>
+      readArtifact(
+        { packageUrl: entry.packageUrl, guid: request.guid, artifactKey, descriptor },
+        fetcher,
+      ),
+    );
+    if (!isCurrent()) return undefined;
+    if (!loaded.ok)
       return {
         guid: request.guid,
-        record: publicationRecord,
+        record,
         artifactError: {
-          code: artifact.error.code,
-          expected: artifact.error.expected,
-          actual: artifact.error.detail.observed,
+          code:
+            loaded.error.code === 'asset-artifact-integrity-mismatch'
+              ? loaded.error.code
+              : 'asset-artifact-missing',
+          expected: loaded.error.expected,
+          actual: loaded.error.detail.observed,
         },
       };
-    }
-    return {
-      guid: request.guid,
-      record: publicationRecord,
-      artifactError: {
-        code: 'asset-artifact-missing',
-        expected: artifact.error.expected,
-        actual: artifact.error.detail.observed,
-      },
-    };
+    artifacts[artifact.path] = { bytes: loaded.value };
   }
-  return {
-    guid: request.guid,
-    record: publicationRecord,
-    artifact: {
-      bytes: artifact.value,
-    },
-  };
+  return { guid: request.guid, record, artifacts };
 }
 
 export async function loadMaterialReadyByGuid(
   registry: AssetRegistry,
   request: MaterialLoadRequest,
 ): Promise<MaterialReady | MaterialLoadError> {
-  const publication = await loadMaterialPublicationByGuid(registry, request);
-  return loadMaterialReadyPublication(registry, request, publication);
+  const isCurrent = currentLoad(registry, request.guid.toLowerCase());
+  const publication = await loadMaterialPublicationByGuid(registry, request, isCurrent);
+  return loadMaterialReadyPublication(registry, request, publication, isCurrent);
 }
 
 function publicationSpecializationKey(publication: MaterialPublication | undefined): string {
@@ -301,7 +264,30 @@ async function loadMaterialReadyPublication(
   registry: AssetRegistry,
   request: MaterialLoadRequest,
   publication: MaterialPublication | undefined,
+  isCurrent = currentLoad(registry, request.guid.toLowerCase()),
 ): Promise<MaterialReady | MaterialLoadError> {
+  const fence = (): MaterialLoadError | undefined => {
+    const checked = validateRegistryReferences(registry, request.guid);
+    if (isCurrent() && checked.ok) return undefined;
+    return {
+      status: 'Error',
+      error: {
+        code: 'material-reference-not-ready',
+        expected: checked.ok
+          ? 'the same material publication until readiness completes'
+          : checked.error.expected,
+        hint: 'restore the recorded material and reference versions before switching consumers',
+        retryable: true,
+        recoveryActions: ['retry-material-load'],
+        detail: { ...request },
+      },
+    };
+  };
+  const before = fence();
+  if (before) {
+    if (isCurrent()) registry.recordMaterialReadiness(request.guid, before);
+    return before;
+  }
   const loader = createMaterialLoader({
     loadPublication: async () => publication,
     loadReference: async (guid) => {
@@ -311,8 +297,9 @@ async function loadMaterialReadyPublication(
       return result.ok;
     },
   });
-  const readiness = await loader.load(request);
-  registry.recordMaterialReadiness(request.guid, readiness);
+  const loaded = await loader.load(request);
+  const readiness = fence() ?? loaded;
+  if (isCurrent()) registry.recordMaterialReadiness(request.guid, readiness);
   return readiness;
 }
 
@@ -321,7 +308,7 @@ async function loadByGuidInternal<T = Asset>(
   guid: AssetGuid,
   parentContext:
     | {
-        sceneEntityId?: number;
+        sceneEntityKey?: string;
         componentField?: string;
       }
     | undefined,
@@ -373,32 +360,23 @@ async function loadByGuidInternal<T = Asset>(
   }
 
   // Prod fetch path: only enabled when packIndexUrl is configured.
-  if (registry.packIndexUrl !== undefined && typeof globalThis.fetch === 'function') {
-    // F22: capture generation snapshot at Promise creation time so the
-    // resolve path can detect whether invalidate/invalidateAll was called
-    // while the fetch was in flight.
-    const genAtStart = registry.generations.get(guidKey) ?? 0;
-    const globalGenAtStart = registry.globalGeneration;
-
+  if (registry.packIndexUrl !== undefined || registry.hasCatalogSource) {
+    const isCurrent = currentLoad(registry, guidKey);
     const promise = (async () => {
-      const result = await loadByGuidProd<T>(registry, guid, guidKey, parentContext, ancestry);
-      // F22: if the generation counters changed since the Promise was
-      // created, discard the result -- the asset was invalidated.
-      if (
-        genAtStart !== (registry.generations.get(guidKey) ?? 0) ||
-        globalGenAtStart !== registry.globalGeneration
-      ) {
-        registry.assetCatalog.delete(guidKey);
-        registry.loadState.remove(guidKey);
-        return err(
-          new AssetError({
-            code: 'asset-invalidated',
-            expected: `GUID ${guidKey} was invalidated during load`,
-            hint: ASSET_ERROR_HINTS['asset-invalidated'],
-          }),
-        ) as Result<T, AssetError | ImageError | RhiError>;
+      try {
+        const result = await loadByGuidProd<T>(
+          registry,
+          guid,
+          guidKey,
+          parentContext,
+          ancestry,
+          isCurrent,
+        );
+        return isCurrent() ? result : invalidated(guidKey);
+      } catch (cause) {
+        if (!isCurrent()) return invalidated(guidKey);
+        throw cause;
       }
-      return result;
     })();
     registry.inFlight.set(guidKey, promise);
     try {
@@ -449,9 +427,15 @@ export async function loadFromUpstreamEntry<T = Asset>(
       }),
     );
   }
-  const out = loader.load({ ...entry, guidKey }, undefined, makeLoadContext(registry));
+  const isCurrent = currentLoad(registry, guidKey);
+  const out = loader.load(
+    { ...entry, guidKey },
+    undefined,
+    makeLoadContext(registry, registry.openPackage(entry.packageUrl)),
+  );
   // Upstream-branch loaders are async (Promise<LoaderAsyncResult>).
   const result = (await out) as LoaderAsyncResult;
+  if (!isCurrent()) return invalidated(guidKey);
   if (!result.ok) {
     return err(result.error as AssetError | ImageError | RhiError);
   }
@@ -481,10 +465,11 @@ export async function loadByGuidProd<T = Asset>(
   guid: AssetGuid,
   guidKey: string,
   parentContext?: {
-    sceneEntityId?: number;
+    sceneEntityKey?: string;
     componentField?: string;
   },
   ancestry: ReadonlySet<string> = new Set(),
+  isCurrent = currentLoad(registry, guidKey),
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   // feat-20260603-asset-import-loader-injection M4 / w31 (AC-19 lazy iron law):
   // wrap the DDC fetch + load path so a DDC miss can be routed through the
@@ -499,15 +484,30 @@ export async function loadByGuidProd<T = Asset>(
   // built before the asset was imported); in case (b) the transport is the
   // only fallback (the pack file is genuinely missing).
 
+  traceAssetLoadPhase('catalog.resolve.start', { guid: guidKey });
   const entry = await resolveCatalogEntry(registry, guidKey);
+  if (!isCurrent()) return invalidated(guidKey);
+  traceAssetLoadPhase('catalog.resolve.complete', {
+    guid: guidKey,
+    ...(entry === undefined ? {} : { packageUrl: entry.packageUrl }),
+    detail: { found: entry !== undefined },
+  });
   if (entry !== undefined) {
     const projection = resolveRuntimeProjection(guidKey, entry);
     if (!projection.ok) return projection;
     if (projection.value?.lifecycle !== undefined && projection.value.lifecycle !== 'current') {
-      return transportOrFail<T>(registry, guid, guidKey, 'asset-not-imported');
+      return transportOrFail<T>(registry, guid, guidKey, undefined, isCurrent);
     }
     // Catalog hit: try the DDC load path.
-    const result = await ddcLoad<T>(registry, guid, guidKey, entry, parentContext, ancestry);
+    const result = await ddcLoad<T>(
+      registry,
+      guid,
+      guidKey,
+      entry,
+      parentContext,
+      ancestry,
+      isCurrent,
+    );
     if (result.ok) return result;
     // DDC miss: only route through transport when the error indicates a
     // missing pack file (not a parse / validation failure inside the pack) or
@@ -531,14 +531,14 @@ export async function loadByGuidProd<T = Asset>(
         // NON-eligible so the parent-missing breadcrumb is never masked.
         ddcError.code === 'source-not-imported');
     if (transportEligible) {
-      return transportOrFail<T>(registry, guid, guidKey, ddcError.code);
+      return transportOrFail<T>(registry, guid, guidKey, ddcError, isCurrent);
     }
     return result;
   }
 
   // Catalog miss: the GUID is not in the pack-index. In the studio form the
   // import transport can lazily create the missing DDC.
-  return transportOrFail<T>(registry, guid, guidKey, 'asset-not-found');
+  return transportOrFail<T>(registry, guid, guidKey, undefined, isCurrent);
 }
 
 /**
@@ -548,16 +548,7 @@ export async function loadByGuidProd<T = Asset>(
 export async function resolveCatalogEntry(
   registry: AssetRegistry,
   guidKey: string,
-): Promise<
-  | {
-      packageUrl: string;
-      kind: string;
-      name?: string;
-      metadata?: ImageMetadata | undefined;
-      compression?: AssetCompression;
-    }
-  | undefined
-> {
+): Promise<CatalogRecord | undefined> {
   const key = guidKey.toLowerCase();
   // Re-fetch the pack-index when it has never been fetched (=== undefined) OR
   // when the cached Map lacks this GUID. The miss case covers invalidate(guid)
@@ -567,14 +558,17 @@ export async function resolveCatalogEntry(
   // body cache re-fetches. A genuinely absent GUID re-fetches once then still
   // misses, falling through to the transport / asset-not-found path as before.
   if (registry.packIndexCache === undefined || !registry.packIndexCache.has(key)) {
-    const catalogResult = await fetchPackIndex(registry);
+    // AssetRegistry joins the accepted URL-backed CatalogSource baseline with
+    // this GUID lookup when both explicitly name the same authority. This
+    // keeps enumerateCatalog() -> loadByGuid() and concurrent callers on one
+    // per-instance fetch while preserving the legacy path for distinct sources.
+    const catalogResult = await registry.ensurePackIndexCache(
+      registry.packIndexCache !== undefined,
+    );
     if (!catalogResult.ok) {
       // Keep packIndexCache === undefined so next resolveCatalogEntry re-enters
       // the fetch path instead of short-circuiting on an empty (polluted) cache.
       if (registry.packIndexCache === undefined) return undefined;
-    } else {
-      registry.packIndexCache = catalogResult.value;
-      registerPackagesFromIndex(registry, registry.packIndexCache);
     }
   }
   return registry.packIndexCache?.get(key);
@@ -650,10 +644,11 @@ export async function ddcLoad<T = Asset>(
     compression?: AssetCompression;
   },
   parentContext?: {
-    sceneEntityId?: number;
+    sceneEntityKey?: string;
     componentField?: string;
   },
   ancestry: ReadonlySet<string> = new Set(),
+  isCurrent = currentLoad(registry, guidKey),
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   if (typeof entry.packageUrl !== 'string' || entry.packageUrl.length === 0) {
     return err(
@@ -664,7 +659,18 @@ export async function ddcLoad<T = Asset>(
       }),
     );
   }
-  const packResult = await loadPackV2Asset(registry, guidKey, entry.packageUrl);
+  traceAssetLoadPhase('pack.load.start', {
+    guid: guidKey,
+    packageUrl: entry.packageUrl,
+  });
+  const fetcher = registry.openPackage(entry.packageUrl);
+  const packResult = await loadPackV2Asset(registry, guidKey, entry.packageUrl, isCurrent, fetcher);
+  if (!isCurrent()) return invalidated(guidKey);
+  traceAssetLoadPhase('pack.load.complete', {
+    guid: guidKey,
+    packageUrl: entry.packageUrl,
+    detail: { ok: packResult?.ok === true },
+  });
   if (packResult === undefined) {
     return err(
       new AssetError({
@@ -681,7 +687,7 @@ export async function ddcLoad<T = Asset>(
   const asset = packResult.value.asset;
   // feat-20260622 M4 / w12: project the pack-entry refs[] (GUID strings) into
   // AssetRef[] for the envelope. The on-disk pack.json refs[] carries only
-  // GUID strings (sourceField / sceneEntityId are stripped at the
+  // GUID strings (sourceField / sceneEntityKey are stripped at the
   // serialization boundary, w7 D-10), so prod-loaded edges have no per-entity
   // metadata — the scene breadcrumb fallback (buildSceneChildContext) still
   // walks the payload for entity/field detail. Dev-server register paths that
@@ -704,7 +710,10 @@ export async function ddcLoad<T = Asset>(
   // return: the material registers (register-before-recurse) and its parent
   // edge loads through the same unified path as texture / scene edges.
   let assetToRegister: Asset = asset;
-  let parentGuidKey: string | undefined;
+  let parentGuidKey =
+    asset.kind === 'material' && asset.parent !== undefined
+      ? AssetGuid.format(asset.parent).toLowerCase()
+      : undefined;
   if (
     asset.kind === 'material' &&
     'parentGuid' in (asset as unknown as Record<string, unknown>) &&
@@ -722,20 +731,35 @@ export async function ddcLoad<T = Asset>(
       );
     }
     parentGuidKey = parentGuidStr.toLowerCase();
-    const matAsset = asset as unknown as MaterialAsset & { parentGuid?: string };
-    const passes = matAsset.passes;
-    const values = matAsset.values;
+    const rawMaterial = asset as unknown as Record<string, unknown>;
+    const childForValidation = {
+      ...rawMaterial,
+      parent: parentGuid.value,
+    } as unknown as MaterialAsset;
+    const forbidden = materialChildForbiddenFields(childForValidation);
+    if (forbidden.length > 0) {
+      return err(
+        new AssetError({
+          code: 'asset-parse-failed',
+          expected: `parent-bearing material ${guidKey} to contain only parent and values`,
+          hint: 'remove root-owned colorSpace, passes, and parameters from the child payload',
+          detail: { field: 'material-child-contract', got: forbidden },
+        }),
+      );
+    }
+    const values = rawMaterial.values;
     assetToRegister = {
       kind: 'material',
-      ...(passes !== undefined ? { passes } : {}),
       ...(values !== undefined ? { values } : {}),
       parent: parentGuid.value,
-    };
+    } as unknown as MaterialAsset;
   }
 
   registry.loadState.begin(
     guidKey,
-    packRefs.map((ref) => ref.guid),
+    registry.loaders.referencePolicy(asset.kind) === 'deferred'
+      ? []
+      : packRefs.map((ref) => ref.guid),
   );
 
   // The provisional record lets cycle back-edges terminate internally while
@@ -758,12 +782,13 @@ export async function ddcLoad<T = Asset>(
   // envelope's refs[]. The for-loop is kind-agnostic
   // — every AssetRef carries the GUID to recurse on; scene/material/skin all
   // flow through this one loop. Each edge optionally carries sourceField /
-  // sceneEntityId; when present the childContext is built straight from the
+  // sceneEntityKey; when present the childContext is built straight from the
   // edge, otherwise the scene branch falls back to walking the payload
   // (buildSceneChildContext) so the prod-path breadcrumb keeps its entity /
   // field detail (on-disk refs[] are GUID-string-only, w7 D-10).
   const envelope = registry.assetCatalog.get(guidKey);
-  const refs: readonly AssetRef[] = envelope?.refs ?? [];
+  const refs: readonly AssetRef[] =
+    registry.loaders.referencePolicy(asset.kind) === 'deferred' ? [] : (envelope?.refs ?? []);
   if (refs.length > 0) {
     const subResults = await Promise.all(
       refs.map((ref) => {
@@ -781,7 +806,7 @@ export async function ddcLoad<T = Asset>(
             ) as Result<Asset, AssetError | ImageError | RhiError>,
             childContext: undefined as
               | {
-                  sceneEntityId?: number;
+                  sceneEntityKey?: string;
                   componentField?: string;
                   sourceField?: {
                     componentName?: string;
@@ -796,7 +821,7 @@ export async function ddcLoad<T = Asset>(
         }
         let childContext:
           | {
-              sceneEntityId?: number;
+              sceneEntityKey?: string;
               componentField?: string;
               sourceField?: {
                 componentName?: string;
@@ -805,9 +830,9 @@ export async function ddcLoad<T = Asset>(
               };
             }
           | undefined;
-        if (ref.sceneEntityId !== undefined || ref.sourceField !== undefined) {
+        if (ref.sceneEntityKey !== undefined || ref.sourceField !== undefined) {
           childContext = {};
-          if (ref.sceneEntityId !== undefined) childContext.sceneEntityId = ref.sceneEntityId;
+          if (ref.sceneEntityKey !== undefined) childContext.sceneEntityKey = ref.sceneEntityKey;
           if (ref.sourceField?.fieldName !== undefined) {
             childContext.componentField =
               (ref.sourceField.componentName !== undefined
@@ -847,6 +872,8 @@ export async function ddcLoad<T = Asset>(
         }));
       }),
     );
+
+    if (!isCurrent()) return invalidated(guidKey);
 
     // If any sub-asset load failed, propagate the first error enriched with
     // parent breadcrumb.
@@ -909,13 +936,13 @@ export async function ddcLoad<T = Asset>(
         // on-disk edge is GUID-only (sourceField stripped, w7 D-10), so fall
         // back to the entity-walk-recovered provenance carried on the
         // childContext (verify r1).
-        const provEntityId = subEdge?.sceneEntityId ?? subChildContext?.sceneEntityId;
+        const provEntityKey = subEdge?.sceneEntityKey ?? subChildContext?.sceneEntityKey;
         const provSourceField = subEdge?.sourceField ?? subChildContext?.sourceField;
         const breadcrumbDetail: Readonly<AssetErrorDetail> = {
           referencedByGuid: guidKey,
           referencedByKind: asset.kind,
           subAssetGuid: subGuidKey,
-          ...(provEntityId !== undefined ? { sceneEntityId: provEntityId } : {}),
+          ...(provEntityKey !== undefined ? { sceneEntityKey: provEntityKey } : {}),
           ...(provSourceField !== undefined ? { sourceField: provSourceField } : {}),
         };
         const detail: Readonly<AssetErrorDetail> =
@@ -940,38 +967,22 @@ export async function ddcLoad<T = Asset>(
   // that puts a default GUID in the payload but omits the matching refs[] edge
   // must fail closed instead of publishing a Mesh whose dependency closure is
   // incomplete.
-  if (asset.kind === 'mesh') {
-    const directRefGuids = new Set(refs.map((ref) => ref.guid.toLowerCase()));
-    const slots = (asset as MeshAsset).materialSlots;
-    for (let slotIndex = 0; slotIndex < slots.length; slotIndex++) {
-      const slot = slots[slotIndex];
-      if (slot?.defaultMaterial === undefined) continue;
-      const defaultMaterialGuid = AssetGuid.format(slot.defaultMaterial).toLowerCase();
-      const loaded = directRefGuids.has(defaultMaterialGuid)
-        ? registry.assetCatalog.get(defaultMaterialGuid)?.payload
-        : undefined;
-      if (loaded?.kind === 'material') continue;
-      const actualKind = directRefGuids.has(defaultMaterialGuid)
-        ? (loaded?.kind ?? 'missing')
-        : 'missing-ref-edge';
-      const error = new AssetError({
-        code: 'asset-parse-failed',
-        expected: `mesh ${guidKey} materialSlots[${slotIndex}] (${slot.slotName}) default ${defaultMaterialGuid} to reference a MaterialAsset`,
-        hint: `recook mesh ${guidKey}; slot ${slotIndex} '${slot.slotName}' resolves to ${actualKind}, not 'material'`,
-        detail: {
-          meshAssetGuid: guidKey,
-          slotIndex,
-          slotName: slot.slotName,
-          defaultMaterialGuid,
-          actualKind,
-        },
-      });
-      purgeFailedLoad(registry, guidKey, entry.packageUrl, error);
-      return err(error);
-    }
+  const typedReferenceError = validateAssetReferences(
+    asset,
+    guidKey,
+    refs,
+    (key) => registry.assetCatalog.get(key)?.payload.kind,
+  );
+  if (typedReferenceError) {
+    purgeFailedLoad(registry, guidKey, entry.packageUrl, typedReferenceError);
+    return err(typedReferenceError);
   }
 
   registry.loadState.promoteReady(guidKey);
+  traceAssetLoadPhase('catalog.promote-ready.complete', {
+    guid: guidKey,
+    packageUrl: entry.packageUrl,
+  });
   if (registry.loadState.getReady(guidKey) === undefined) {
     const error = new AssetError({
       code: 'asset-parse-failed',
@@ -982,19 +993,32 @@ export async function ddcLoad<T = Asset>(
     return err(error);
   }
   const registeredAsset = registeredPayload as Asset;
-  if (registeredAsset.kind === 'material' && !isEngineMaterial(registeredAsset)) {
-    const publication = await loadMaterialPublicationByGuid(registry, {
-      guid: guidKey,
-      specializationKey: '',
-    });
-    await loadMaterialReadyPublication(
+  if (registeredAsset.kind === 'material') {
+    const publication = await loadMaterialPublicationByGuid(
       registry,
       {
         guid: guidKey,
-        specializationKey: publicationSpecializationKey(publication),
+        specializationKey: '',
       },
-      publication,
+      isCurrent,
+      fetcher,
     );
+    if (!isCurrent()) return invalidated(guidKey);
+    const hasCookedPublication =
+      publication !== undefined &&
+      (publication.record !== undefined || publication.artifacts !== undefined);
+    if (!isEngineMaterial(registeredAsset) || hasCookedPublication) {
+      await loadMaterialReadyPublication(
+        registry,
+        {
+          guid: guidKey,
+          specializationKey: publicationSpecializationKey(publication),
+        },
+        publication,
+        isCurrent,
+      );
+      if (!isCurrent()) return invalidated(guidKey);
+    }
   }
   return ok(registeredPayload as T);
 }
@@ -1003,6 +1027,8 @@ async function loadPackV2Asset(
   registry: AssetRegistry,
   guidKey: string,
   packageUrl: string,
+  isCurrent: () => boolean,
+  fetcher: typeof globalThis.fetch = registry.openPackage(packageUrl),
 ): Promise<
   | Result<
       {
@@ -1013,14 +1039,29 @@ async function loadPackV2Asset(
     >
   | undefined
 > {
+  const prepared = registry.loadState.getPrepared<Asset>(guidKey);
+  if (prepared !== undefined)
+    return ok({
+      asset: copyPreparedAsset(prepared),
+      refs: registry.loadState.get(guidKey)?.refs ?? [],
+    });
+  traceAssetLoadPhase('pack.v2.start', { guid: guidKey, packageUrl });
   const cached = registry.packFileCache.get(packageUrl);
   if (cached === undefined) {
     const inFlight = registry.packFileInFlight.get(packageUrl);
     if (inFlight !== undefined) await inFlight.catch(() => undefined);
+    if (!isCurrent()) return invalidated(guidKey);
+    traceAssetLoadPhase('pack.fetch.start', { guid: guidKey, packageUrl });
     const fetched =
       registry.packFileCache.get(packageUrl) === undefined
-        ? await fetchAndCachePackFile(registry, packageUrl, guidKey)
+        ? await fetchAndCachePackFile(registry, packageUrl, guidKey, fetcher)
         : undefined;
+    if (!isCurrent()) return invalidated(guidKey);
+    traceAssetLoadPhase('pack.fetch.complete', {
+      guid: guidKey,
+      packageUrl,
+      detail: { cached: registry.packFileCache.has(packageUrl), ok: fetched?.ok ?? true },
+    });
     if (registry.packFileCache.get(packageUrl) === undefined) {
       if (fetched === undefined) {
         return err(
@@ -1037,6 +1078,11 @@ async function loadPackV2Asset(
   const pack = registry.packFileCache.get(packageUrl);
   if (pack?.schemaVersion !== '2.0.0') return undefined;
   const asset = pack.assets.find((candidate) => candidate.guid.toLowerCase() === guidKey);
+  traceAssetLoadPhase('pack.parse.complete', {
+    guid: guidKey,
+    packageUrl,
+    detail: { found: asset !== undefined, kind: asset?.kind },
+  });
   if (asset === undefined) {
     return err(
       new AssetError({
@@ -1048,24 +1094,31 @@ async function loadPackV2Asset(
   }
   const artifacts: Record<string, { descriptor: ArtifactDescriptor; bytes: Uint8Array }> = {};
   for (const [artifactKey, descriptor] of Object.entries(asset.artifacts ?? {})) {
-    const cacheKey = `${packageUrl}\0${guidKey}\0${artifactKey}`;
+    const cacheKey = `${guidKey}\0${packageUrl}\0${artifactKey}`;
     const artifact = await registry.artifactCache.read(cacheKey, () =>
-      readArtifact({ packageUrl, guid: guidKey, artifactKey, descriptor }),
+      readArtifact({ packageUrl, guid: guidKey, artifactKey, descriptor }, fetcher),
     );
+    if (!isCurrent()) return invalidated(guidKey);
     if (!artifact.ok)
       return artifact as unknown as Result<{ asset: Asset; refs: readonly string[] }, AssetError>;
     artifacts[artifactKey] = { descriptor, bytes: artifact.value };
   }
+  traceAssetLoadPhase('loader.load.start', { guid: guidKey, packageUrl });
   const loaded = await registry.loaders.loadPack(
     {
       guid: guidKey,
       kind: asset.kind,
-      payload: asset.payload,
+      payload: structuredClone(asset.payload),
       refs: asset.refs ?? [],
       artifacts,
     },
-    makeLoadContext(registry),
+    makeLoadContext(registry, fetcher),
   );
+  traceAssetLoadPhase('loader.load.complete', {
+    guid: guidKey,
+    packageUrl,
+    detail: { ok: loaded.ok },
+  });
   if (!loaded.ok) return err(loaded.error as AssetError);
   if (loaded.value === undefined || typeof loaded.value !== 'object') {
     return err(
@@ -1086,7 +1139,9 @@ function purgeFailedLoad(
   error: unknown,
 ): void {
   const doomed = registry.loadState.fail(guidKey, error);
-  for (const key of doomed) registry.assetCatalog.delete(key);
+  for (const key of doomed) {
+    if (registry.assetCatalog.delete(key)) registry.catalogEpoch++;
+  }
   registry.packFileCache.delete(packageUrl);
 }
 
@@ -1099,7 +1154,8 @@ export async function transportOrFail<T = Asset>(
   registry: AssetRegistry,
   guid: AssetGuid,
   guidKey: string,
-  _missReason: AssetErrorCode,
+  miss: AssetError | undefined,
+  isCurrent = currentLoad(registry, guidKey),
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   if (registry.importTransport === undefined) {
     // shipped form: no transport wired -> fail fast, never degrade to
@@ -1108,7 +1164,12 @@ export async function transportOrFail<T = Asset>(
       new AssetError({
         code: 'asset-not-imported',
         expected: `GUID ${guidKey} to have been pre-imported at build time or to have an ImportTransport wired`,
-        hint: ASSET_ERROR_HINTS['asset-not-imported'],
+        // Keep the DDC read evidence (URL, HTTP/network reason, attempts).
+        hint:
+          miss === undefined
+            ? ASSET_ERROR_HINTS['asset-not-imported']
+            : `${ASSET_ERROR_HINTS['asset-not-imported']}; DDC ${miss.code}: ${miss.hint}`,
+        ...(miss?.detail === undefined ? {} : { detail: miss.detail }),
       }),
     );
   }
@@ -1121,6 +1182,7 @@ export async function transportOrFail<T = Asset>(
     guidKey,
     registry.runtimeBinding,
   );
+  if (!isCurrent()) return invalidated(guidKey);
   if (!transportResult.ok) {
     return err(
       new AssetError({
@@ -1144,6 +1206,7 @@ export async function transportOrFail<T = Asset>(
     // transportOrFail calls; chaining through the queue ensures each patch
     // completes before the next starts, preventing new-Map overwrite races.
     registry.packIndexCachePatchQueue = registry.packIndexCachePatchQueue.then(() => {
+      if (!isCurrent()) return;
       if (registry.packIndexCache === undefined) registry.packIndexCache = new Map();
       for (const e of importedEntries) {
         if (typeof e.packageUrl !== 'string' || e.packageUrl.length === 0) continue;
@@ -1182,12 +1245,14 @@ export async function transportOrFail<T = Asset>(
       }
     });
     await registry.packIndexCachePatchQueue;
+    if (!isCurrent()) return invalidated(guidKey);
   } else {
     // No inline rows -- fall back to a full pack-index re-read so the freshly
     // imported DDC entry is visible (legacy / non-row-returning transports).
     registry.packIndexCache = undefined;
   }
   const entry = await resolveCatalogEntry(registry, guidKey);
+  if (!isCurrent()) return invalidated(guidKey);
   if (entry === undefined) {
     return err(
       new AssetError({
@@ -1199,7 +1264,7 @@ export async function transportOrFail<T = Asset>(
   }
 
   // Re-enter the DDC load path (identical to the catalog-hit path).
-  return ddcLoad<T>(registry, guid, guidKey, entry);
+  return ddcLoad<T>(registry, guid, guidKey, entry, undefined, new Set(), isCurrent);
 }
 
 /**
@@ -1244,42 +1309,15 @@ export function registerParsedAsset<T = Asset>(
  * GUID strings (feat-20260614 M8 / D-19: GUID verbatim, no handle minting).
  */
 export async function fetchPackEntry(
-  _registry: AssetRegistry,
+  registry: AssetRegistry,
   packageUrl: string,
   guidKey: string,
 ): Promise<
   Result<{ kind: string; payload: Record<string, unknown>; refs?: string[] }, AssetError>
 > {
-  let raw: unknown;
-  try {
-    const res = await globalThis.fetch(packageUrl);
-    if (!res.ok) {
-      return err(
-        new AssetError({
-          code: 'asset-fetch-failed',
-          expected: `fetch(${packageUrl}) to return ok`,
-          hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-        }),
-      );
-    }
-    raw = (await res.json()) as unknown;
-  } catch {
-    return err(
-      new AssetError({
-        code: 'asset-fetch-failed',
-        expected: `fetch(${packageUrl}) to succeed`,
-        hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-      }),
-    );
-  }
-  const packFile = raw as {
-    assets?: Array<{
-      guid: string;
-      kind: string;
-      payload: Record<string, unknown>;
-      refs?: string[];
-    }>;
-  };
+  const parsed = await readPackFile(registry, packageUrl);
+  if (!parsed.ok) return parsed;
+  const packFile = parsed.value;
   const assetEntry = (packFile.assets ?? []).find(
     (a) => a.guid.toLowerCase() === guidKey.toLowerCase(),
   );
@@ -1381,30 +1419,50 @@ export function parseAndReturnAsset(
   // parseAssetPayload's return value -- no shared instance slot.
   if (parsed !== undefined && typeof parsed === 'object' && 'ok' in parsed) {
     const e = (parsed as { readonly ok: false; readonly error: ParseErrorDetail }).error;
+    const detail = {
+      entityKey: e.entityKey,
+      component: e.component,
+      field: e.field,
+      index: e.index,
+      refsLength: e.refsLength,
+    };
     return err(
       new AssetError({
         code: 'asset-parse-failed',
         expected: `refs index ${e.index} within [0, ${e.refsLength})`,
-        detail: {
-          localId: e.localId,
-          component: e.component,
-          field: e.field,
-          index: e.index,
-          refsLength: e.refsLength,
-        },
+        detail,
         hint:
-          `at node localId=${e.localId}, component=${e.component}, ` +
+          `at node key=${e.entityKey}, component=${e.component}, ` +
           `field=${e.field}: index ${e.index} is out of bounds ` +
           `(refs has ${e.refsLength} entries)`,
       }),
     );
   }
   if (parsed === undefined) {
+    const parent =
+      typeof assetEntry.payload.parent === 'string'
+        ? assetEntry.payload.parent
+        : typeof assetEntry.payload.parent === 'number' &&
+            Number.isInteger(assetEntry.payload.parent)
+          ? assetEntry.refs?.[assetEntry.payload.parent]
+          : undefined;
+    const childForValidation =
+      assetEntry.kind === 'material' && typeof parent === 'string'
+        ? ({ ...assetEntry.payload, parent } as unknown as MaterialAsset)
+        : undefined;
+    const forbidden =
+      childForValidation === undefined ? [] : materialChildForbiddenFields(childForValidation);
     return err(
       new AssetError({
         code: 'asset-parse-failed',
         expected: `parseable asset payload for kind ${assetEntry.kind}`,
-        hint: ASSET_ERROR_HINTS['asset-parse-failed'],
+        hint:
+          forbidden.length > 0
+            ? 'remove root-owned colorSpace, passes, and parameters from the child payload'
+            : ASSET_ERROR_HINTS['asset-parse-failed'],
+        ...(forbidden.length > 0
+          ? { detail: { field: 'material-child-contract', got: forbidden } }
+          : {}),
       }),
     );
   }
@@ -1414,6 +1472,60 @@ export function parseAndReturnAsset(
   // as the single recursion source (D-5), never re-deriving them from
   // the payload.
   return ok({ asset: parsed as Asset, refs: assetEntry.refs ?? [] });
+}
+
+function packageReadFailed(url: string, failure: PackageReadFailure): AssetError {
+  return new AssetError({
+    code: 'asset-fetch-failed',
+    expected: `readable package resource at ${url}`,
+    hint: `${failure.observed} after ${failure.attempts} request(s); ${ASSET_ERROR_HINTS['asset-fetch-failed']}`,
+    detail: { field: 'request', value: url, reason: failure.observed },
+  });
+}
+
+async function readPackFile(
+  registry: AssetRegistry,
+  packageUrl: string,
+  fetcher: typeof globalThis.fetch = registry.openPackage(packageUrl),
+): Promise<Result<ParsedPackFile, AssetError>> {
+  const invalid = (field: string) =>
+    err(
+      new AssetError({
+        code: 'asset-parse-failed',
+        expected: `valid Pack field ${field} at ${packageUrl}`,
+        hint: 'repair the Pack envelope at the reported field and republish, then retry the same GUID',
+        detail: { field, value: packageUrl, reason: 'invalid Pack envelope' },
+      }),
+    );
+  const read = await readPackage(fetcher, packageUrl, jsonOf);
+  if (!read.ok) {
+    return read.error.malformed ? invalid('JSON') : err(packageReadFailed(packageUrl, read.error));
+  }
+  const raw = read.value;
+  if (
+    raw === null ||
+    typeof raw !== 'object' ||
+    !Array.isArray((raw as { assets?: unknown }).assets)
+  ) {
+    return invalid('assets');
+  }
+  const pack = raw as ParsedPackFile;
+  const guids = new Set<string>();
+  for (const [index, asset] of pack.assets.entries()) {
+    const issue = packEnvelopeIssue(asset);
+    if (issue !== undefined) return invalid(`assets[${index}].${issue}`);
+    if (
+      asset.payload === null ||
+      typeof asset.payload !== 'object' ||
+      Array.isArray(asset.payload)
+    ) {
+      return invalid(`assets[${index}].payload`);
+    }
+    const guid = asset.guid.toLowerCase();
+    if (guids.has(guid)) return invalid(`assets[${index}].guid`);
+    guids.add(guid);
+  }
+  return ok(pack);
 }
 
 /**
@@ -1429,54 +1541,27 @@ export async function fetchAndCachePackFile(
   registry: AssetRegistry,
   packageUrl: string,
   guidKey: string,
+  fetcher: typeof globalThis.fetch = registry.openPackage(packageUrl),
+  isCurrent: () => boolean = () => true,
 ): Promise<Result<{ asset: Asset; refs: readonly string[] }, AssetError>> {
-  const fetchPromise = (async (): Promise<ParsedPackFile> => {
-    let raw: unknown;
-    try {
-      const res = await globalThis.fetch(packageUrl);
-      if (!res.ok) {
-        throw new AssetError({
-          code: 'asset-fetch-failed',
-          expected: `fetch(${packageUrl}) to return ok`,
-          hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-        });
-      }
-      raw = (await res.json()) as unknown;
-    } catch (e) {
-      if (e instanceof AssetError) throw e;
-      throw new AssetError({
-        code: 'asset-fetch-failed',
-        expected: `fetch(${packageUrl}) to succeed`,
-        hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-      });
-    }
-    // Shape guard: the dev-server / preview / 404 fallback can return
-    // index.html or an unrelated JSON body that satisfies res.ok but lacks
-    // the ParsedPackFile contract. Without this guard the downstream
-    // `packFile.assets.find` raises TypeError outside any AssetError
-    // branch, escapes as a process-level Unhandled Rejection, and drives
-    // vitest browser-project exit=1 even when every onerror-gate test
-    // assertion passes (feat-20260611 step-implement F-4).
-    if (
-      raw === null ||
-      typeof raw !== 'object' ||
-      !Array.isArray((raw as { assets?: unknown }).assets)
-    ) {
-      throw new AssetError({
-        code: 'asset-fetch-failed',
-        expected: `pack-file body at ${packageUrl} to be { assets: [...] }`,
-        hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-      });
-    }
-    return raw as ParsedPackFile;
-  })();
+  const fetchPromise = readPackFile(registry, packageUrl, fetcher).then((result) => {
+    if (!result.ok) throw result.error;
+    return result.value;
+  });
 
   registry.packFileInFlight.set(packageUrl, fetchPromise);
 
   try {
     const packFile = await fetchPromise;
-    registry.packFileCache.set(packageUrl, packFile);
-    registry.packFileInFlight.delete(packageUrl);
+    if (!isCurrent()) {
+      if (registry.packFileInFlight.get(packageUrl) === fetchPromise)
+        registry.packFileInFlight.delete(packageUrl);
+      return invalidated(guidKey);
+    }
+    if (registry.packFileInFlight.get(packageUrl) === fetchPromise) {
+      registry.packFileCache.set(packageUrl, packFile);
+      registry.packFileInFlight.delete(packageUrl);
+    }
 
     const assetEntry = packFile.assets.find((a) => a.guid.toLowerCase() === guidKey.toLowerCase());
     if (assetEntry === undefined) {
@@ -1490,7 +1575,9 @@ export async function fetchAndCachePackFile(
     }
     return parseAndReturnAsset(registry, assetEntry);
   } catch (e) {
-    registry.packFileInFlight.delete(packageUrl);
+    if (registry.packFileInFlight.get(packageUrl) === fetchPromise) {
+      registry.packFileInFlight.delete(packageUrl);
+    }
     if (e instanceof AssetError) {
       return err(e);
     }
@@ -1553,7 +1640,10 @@ export function parseAssetPayload(
  * `fetchBinary` / `resolveRef` / `device` are wired for the async texture /
  * font loaders (w6).
  */
-export function makeLoadContext(registry: AssetRegistry): LoadContext {
+export function makeLoadContext(
+  registry: AssetRegistry,
+  fetcher: typeof globalThis.fetch = registry.fetchAsset,
+): LoadContext {
   return {
     /**
      * feat-20260706 M3 / w19: fetchBinary signature extended per D-2.
@@ -1564,23 +1654,12 @@ export function makeLoadContext(registry: AssetRegistry): LoadContext {
      */
     fetchBinary: async (url: string, opts?: { readonly compression?: AssetCompression }) => {
       try {
-        const res = await globalThis.fetch(url);
-        if (!res.ok) {
-          return {
-            ok: false as const,
-            error: new AssetError({
-              code: 'asset-fetch-failed',
-              expected: `fetch(${url}) to return ok`,
-              hint: ASSET_ERROR_HINTS['asset-fetch-failed'],
-            }),
-          };
-        }
-        const buf = await res.arrayBuffer();
-        let bytes: Uint8Array = new Uint8Array(buf);
+        const read = await readPackage(fetcher, url, bytesOf);
+        if (!read.ok) return { ok: false as const, error: packageReadFailed(url, read.error) };
+        let bytes: Uint8Array = read.value;
 
         // --- Decompression gate (AC-02: single gate inside fetchBinary) ---
         if (opts?.compression === 'zstd') {
-          const { decompressZstd } = await import('@forgeax/engine-codec');
           const decRes = await decompressZstd(bytes);
           if (!decRes.ok) {
             return {

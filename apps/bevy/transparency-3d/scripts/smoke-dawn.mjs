@@ -12,7 +12,7 @@ import { writeReferencePng } from '../../../shared/png-codec.mjs';
 const WIDTH = 320;
 const HEIGHT = 180;
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const FRAME_COUNT = Math.max(MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const FIXED_DT = 1 / 60;
 const EARLY_FRAME = 0;

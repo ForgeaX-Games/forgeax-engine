@@ -9,8 +9,15 @@ interface LearnRenderTestLifecycle {
   owner?: object | undefined;
   app?: LearnRenderTestApp | undefined;
   bootstraps: Map<object, Promise<unknown>>;
+  bootstrapStages: Map<object, BootstrapStage>;
+  closedOwners: WeakSet<object>;
   pendingDisposal?: Promise<void> | undefined;
   disposalErrors: unknown[];
+}
+
+interface BootstrapStage {
+  readonly name: string;
+  readonly startedAt: number;
 }
 
 const LIFECYCLE_KEY = '__forgeaxLearnRenderTestLifecycle';
@@ -23,6 +30,8 @@ function lifecycle(): LearnRenderTestLifecycle {
   if (existing !== undefined) return existing;
   const created: LearnRenderTestLifecycle = {
     bootstraps: new Map(),
+    bootstrapStages: new Map(),
+    closedOwners: new WeakSet(),
     disposalErrors: [],
   };
   scope[LIFECYCLE_KEY] = created;
@@ -99,19 +108,49 @@ async function drainBootstraps(state: LearnRenderTestLifecycle): Promise<void> {
   if (failed) throw failure;
 }
 
-async function waitForBootstrap(state: LearnRenderTestLifecycle, owner: object): Promise<void> {
+async function waitForBootstrap(
+  state: LearnRenderTestLifecycle,
+  owner: object,
+  timeoutMs = 0,
+): Promise<void> {
   const bootstrap = state.bootstraps.get(owner);
   if (bootstrap === undefined) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout =
+    timeoutMs > 0
+      ? new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            const stage = state.bootstrapStages.get(owner);
+            const elapsedMs = stage === undefined ? 0 : Date.now() - stage.startedAt;
+            reject(
+              new Error(
+                `[learn-render bootstrap] timed out after ${timeoutMs}ms; stage=${stage?.name ?? 'unknown'}; stageElapsedMs=${elapsedMs}`,
+              ),
+            );
+          }, timeoutMs);
+        })
+      : undefined;
   try {
-    await bootstrap;
+    await (timeout === undefined ? bootstrap : Promise.race([bootstrap, timeout]));
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
     if (state.bootstraps.get(owner) === bootstrap) state.bootstraps.delete(owner);
   }
+}
+
+/** Record the current async bootstrap stage for bounded browser failures. */
+export function markLearnRenderTestBootstrapStage(owner: object, name: string): void {
+  const state = lifecycle();
+  state.bootstrapStages.set(owner, { name, startedAt: Date.now() });
 }
 
 /** Track the asynchronous SUT bootstrap so teardown cannot race its App creation. */
 export function trackLearnRenderTestBootstrap(bootstrap: Promise<unknown>, owner: object): void {
   const state = lifecycle();
+  // A real browser smoke starts the app from the page entry, so there is no
+  // Vitest owner to call beginLearnRenderTestLifecycle first. Claim that owner
+  // before exposing the App; test callers already set the same owner explicitly.
+  if (state.owner === undefined) state.owner = owner;
   const tracked = Promise.resolve(bootstrap);
   state.bootstraps.set(owner, tracked);
   // Keep rejection observed until the browser gate drains it, while preserving
@@ -120,8 +159,8 @@ export function trackLearnRenderTestBootstrap(bootstrap: Promise<unknown>, owner
 }
 
 /** Wait for the current SUT bootstrap without changing ownership or disposal state. */
-export async function waitForLearnRenderTestBootstrap(owner: object): Promise<void> {
-  await waitForBootstrap(lifecycle(), owner);
+export async function waitForLearnRenderTestBootstrap(owner: object, timeoutMs = 0): Promise<void> {
+  await waitForBootstrap(lifecycle(), owner, timeoutMs);
 }
 
 /** Mark the canvas/test scope that is allowed to own the next App. */
@@ -153,7 +192,12 @@ export async function beginLearnRenderTestLifecycle(owner: object): Promise<void
 /** Register the current demo App so a browser error-gate can close its GPU owner. */
 export function exposeLearnRenderTestApp(app: LearnRenderTestApp, owner: object): void {
   const state = lifecycle();
-  if (state.owner !== owner) {
+  // Standalone browser smoke harnesses do not run the Vitest onerror-gate
+  // setup, so there is no pre-admitted owner. Let the first SUT register its
+  // own canvas; an explicitly admitted owner still retains the stale-App
+  // protection below.
+  if (state.owner === undefined) state.owner = owner;
+  if (state.closedOwners.has(owner) || state.owner !== owner) {
     enqueueDisposal(state, app);
     return;
   }
@@ -161,17 +205,22 @@ export function exposeLearnRenderTestApp(app: LearnRenderTestApp, owner: object)
 }
 
 /** Dispose and clear the current demo App; safe to call when bootstrap failed. */
-export async function disposeLearnRenderTestApp(owner: object): Promise<void> {
+export async function disposeLearnRenderTestApp(owner: object, timeoutMs = 0): Promise<void> {
   const state = lifecycle();
+  // Close the owner before awaiting a pending bootstrap so a late App cannot
+  // be retained in the test scope while teardown is already in flight.
+  state.closedOwners.add(owner);
   let failure: unknown;
   let failed = false;
   try {
-    await waitForBootstrap(state, owner);
+    await waitForBootstrap(state, owner, timeoutMs);
   } catch (error) {
     failed = true;
     failure = error;
+    if (state.bootstraps.has(owner)) state.bootstraps.delete(owner);
   }
   if (state.owner === owner) {
+    state.bootstrapStages.delete(owner);
     const app = state.app;
     state.owner = undefined;
     state.app = undefined;

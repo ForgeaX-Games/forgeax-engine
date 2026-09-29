@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { LoadContext, TextureAsset } from '@forgeax/engine-types';
@@ -7,7 +8,11 @@ import type {
   BasisModuleFactory,
 } from '../../../codec/src/wasm/basis-types.js';
 import type { CodecContextFailure } from '../loaders/pack-artifact.js';
-import { PACK_ARTIFACT_LOADERS, textureLoader } from '../loaders/pack-artifact.js';
+import {
+  loadVerifiedTexturePack,
+  PACK_ARTIFACT_LOADERS,
+  textureLoader,
+} from '../loaders/pack-artifact.js';
 
 const TRANSCODER_GLUE = new URL('../../../codec/pkg/basis_transcoder.mjs', import.meta.url);
 const ENCODER_GLUE = new URL('../../../codec/pkg/encode/basis_encoder.mjs', import.meta.url);
@@ -52,6 +57,10 @@ const context: LoadContext = {
   device: undefined,
 };
 
+function digest(bytes: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+}
+
 describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
   it('keeps context failure code and detail correlated as a closed union', () => {
     type ExpectedContextFailure =
@@ -79,7 +88,11 @@ describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
       {
         guid: '019f0000-0000-7000-8000-000000000304',
         kind: 'texture',
-        payload: { width: 4, height: 4, colorSpace: 'linear' },
+        payload: {
+          shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+          colorSpace: 'linear',
+          mips: { kind: 'none' },
+        },
         refs: [],
         artifacts: {
           body: {
@@ -101,12 +114,10 @@ describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
     if (!result.ok) return;
     expect(result.value).toMatchObject({
       kind: 'texture',
-      width: 4,
-      height: 4,
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
       format: 'rgba8unorm',
       colorSpace: 'linear',
-      mipmap: false,
-      mipLevelCount: 1,
+      mips: { kind: 'packed', levelCount: 1 },
     });
     expect(result.value.data.byteLength).toBeGreaterThan(0);
   });
@@ -119,7 +130,11 @@ describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
       {
         guid: '019f0000-0000-7000-8000-000000000305',
         kind: 'texture',
-        payload: { width: 4, height: 4, colorSpace: 'srgb' },
+        payload: {
+          shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+          colorSpace: 'srgb',
+          mips: { kind: 'none' },
+        },
         refs: [],
         artifacts: {
           body: {
@@ -164,5 +179,49 @@ describe('Pack artifact loader matrix', () => {
     expect(PACK_ARTIFACT_LOADERS.map((loader) => loader.kind).sort()).toEqual(
       ['equirect', 'font', 'render-pipeline', 'texture', 'tileset'].sort(),
     );
+  });
+
+  it('preserves array shape and generation provenance through verified loading', async () => {
+    const bytes = new Uint8Array(8 * 4 * 3).fill(91);
+    const artifactDigest = digest(bytes);
+    const result = await loadVerifiedTexturePack(
+      {
+        sourceKey: 'array/layers',
+        generation: 4,
+        expectedDigest: artifactDigest,
+        pack: {
+          guid: '019f0000-0000-7000-8000-000000000306',
+          kind: 'texture',
+          payload: {
+            shape: { viewDimension: '2d-array', extent: { width: 8, height: 4, layers: 3 } },
+            format: 'r8unorm',
+            colorSpace: 'linear',
+            mips: { kind: 'none' },
+          },
+          refs: [],
+          artifacts: {
+            body: {
+              bytes,
+              descriptor: {
+                path: 'array.raw',
+                mediaType: 'application/x-forgeax-r8',
+                byteLength: bytes.byteLength,
+                integrity: { algorithm: 'sha256', digest: artifactDigest },
+              },
+            },
+          },
+        },
+      },
+      context,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.asset.shape).toEqual({
+      viewDimension: '2d-array',
+      extent: { width: 8, height: 4, layers: 3 },
+    });
+    expect(result.value.generation).toBe(4);
+    expect(result.value.sourceKey).toBe('array/layers');
   });
 });

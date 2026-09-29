@@ -2,7 +2,24 @@
 
 import type { Result, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import type { HandleId } from '../types';
-import type { CreateShaderModuleFn, DebugRhiInstance } from './core';
+import type { CreateShaderModuleFn, CreateShaderModuleImmediateFn, DebugRhiInstance } from './core';
+
+function recordShaderModule(
+  debugInst: DebugRhiInstance,
+  result: Result<ShaderModule, import('@forgeax/engine-rhi').RhiError>,
+  desc: { code: string; label?: string | undefined },
+): Result<ShaderModule, import('@forgeax/engine-rhi').RhiError> {
+  if (!result.ok) return result;
+  const hId = debugInst.pushExternalCreateEvent(result.value, 'shaderModule', {
+    kind: 'createShaderModule',
+    handleId: '' as HandleId,
+    wgslCode: desc.code,
+  });
+  // Register the shader module handle in the recorder's handleMap so
+  // downstream pipeline events can resolve the handleId during replay.
+  debugInst.registerShaderModule(result.value, hId);
+  return result;
+}
 
 export function wrapCreateShaderModule(
   originalFn: CreateShaderModuleFn,
@@ -21,27 +38,17 @@ export function wrapCreateShaderModule(
     // proxyDevice exposes for exactly this purpose.
     const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
     const result = await originalFn(realDevice, desc);
-    if (!result.ok) return result;
+    return recordShaderModule(debugInst, result, desc);
+  };
+}
 
-    // I-12 (round 1 implement-review) fix: route the createShaderModule
-    // event through the same `pushExternalEvent` helper that wraps the
-    // internal `pushEvent` (and therefore the `_skipRecord` + state-machine
-    // guard). The previous `(events as RhiCallEvent[]).push(...)` cast
-    // bypassed those guards — recorder-internal RHI calls during shader
-    // construction would have self-polluted the tape.
-    const hId = debugInst.pushExternalCreateEvent(result.value, 'shaderModule', {
-      kind: 'createShaderModule',
-      handleId: '' as HandleId,
-      wgslCode: desc.code,
-    });
-    // Register the shader module handle in the recorder's handleMap so
-    // downstream pipeline events (createRenderPipeline / createComputePipeline)
-    // can resolve the handleId via getHandleId. Required for cross-device
-    // replay: the tape's pipeline desc carries live GPU module objects which
-    // are device-bound, so the replayer must swap them with re-created shader
-    // modules from the handleMap using the handleId.
-    debugInst.registerShaderModule(result.value, hId);
-
-    return result;
+/** Wrap the synchronous render-path factory while preserving tape ownership. */
+export function wrapCreateShaderModuleImmediate(
+  originalFn: CreateShaderModuleImmediateFn,
+  debugInst: DebugRhiInstance,
+): CreateShaderModuleImmediateFn {
+  return (device, desc) => {
+    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    return recordShaderModule(debugInst, originalFn(realDevice, desc), desc);
   };
 }

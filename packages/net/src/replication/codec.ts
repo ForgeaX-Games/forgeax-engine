@@ -6,17 +6,6 @@ import type { ReplicationDataPacket, ReplicationEntityRecord, ReplicationPacket 
 
 export type { ReplicationComponentRecord, ReplicationEntityRecord } from './protocol';
 
-type PortableTypedArray =
-  | Float32Array
-  | Float64Array
-  | Int8Array
-  | Int16Array
-  | Int32Array
-  | Uint8Array
-  | Uint8ClampedArray
-  | Uint16Array
-  | Uint32Array;
-
 const TYPED_ARRAYS = {
   Float32Array,
   Float64Array,
@@ -30,6 +19,7 @@ const TYPED_ARRAYS = {
 } as const;
 
 type TypedArrayName = keyof typeof TYPED_ARRAYS;
+type PortableTypedArray = (typeof TYPED_ARRAYS)[TypedArrayName]['prototype'];
 
 const PACKET_KINDS = [
   'session-open',
@@ -106,7 +96,10 @@ function reviveTypedArrays(
       !Array.isArray(record.values)
     )
       return { reason: 'typed-array tag must contain only an allowlisted name and values array' };
-    const typedArrayConstructor = TYPED_ARRAYS[record.$typedArray as TypedArrayName];
+    const typedArrayLabel = record.$typedArray;
+    const typedArrayConstructor = Object.hasOwn(TYPED_ARRAYS, typedArrayLabel)
+      ? TYPED_ARRAYS[typedArrayLabel as TypedArrayName]
+      : undefined;
     if (
       typedArrayConstructor === undefined ||
       record.values.some((item) => typeof item !== 'number')

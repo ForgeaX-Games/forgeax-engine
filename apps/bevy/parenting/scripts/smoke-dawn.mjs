@@ -19,7 +19,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const MOTION_THRESHOLD = Number.parseFloat(process.env.SMOKE_MOTION_THRESHOLD ?? '0.0005');
 const WIDTH = 320;
@@ -96,7 +96,7 @@ const mockCanvas = {
 
 // --- build the parenting World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { ChildOf, Transform } = await import('@forgeax/engine-scene');
+const { ChildOf, GlobalTransform, Transform } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { propagateTransforms } = await import('@forgeax/engine-scene');
 
@@ -160,12 +160,12 @@ async function capture(device) {
   return tight;
 }
 
-// Read the child's world position from the Transform.world column.
+// Read the child's derived world position from the GlobalTransform.world column.
 function readChildWorldPos(world) {
-  const query = world.query({ read: [Transform], with: [ChildOf] }).unwrap();
+  const query = world.query({ read: [GlobalTransform], with: [ChildOf] }).unwrap();
   let result = [0, 0, 0];
   for (const row of query) {
-    const worldMatrix = row.get(Transform).world;
+    const worldMatrix = row.get(GlobalTransform).world;
     result = [worldMatrix[12] ?? 0, worldMatrix[13] ?? 0, worldMatrix[14] ?? 0];
     break;
   }

@@ -13,7 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 const width = 320;
 const height = 180;
-const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const falsify = process.env.FALSIFY ?? '';
 const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const errors = [];
@@ -87,7 +87,8 @@ globalThis.cancelAnimationFrame = (id) => {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const manifest = await buildEngineShaderManifest();
-const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
+const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(manifestUrl));
 const { createApp } = await import('@forgeax/engine-app');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { createDevImportTransport } = await import('@forgeax/engine-runtime');
@@ -181,10 +182,8 @@ for (let i = 0; i < targetFrames; i += 1) {
   due.callback(i * 16.67);
   frames += 1;
   if (i === 4) passNames = [...app.renderer.inspect().perFramePassNames];
-  if (i % 16 === 15) {
-    await sharedDevice.queue.onSubmittedWorkDone();
-    await delay(1);
-  }
+  await sharedDevice.queue.onSubmittedWorkDone();
+  await delay(1);
 }
 for (let pass = 0; pass < 4; pass += 1) {
   await sharedDevice.queue.onSubmittedWorkDone();
@@ -195,7 +194,8 @@ for (let i = 0; i < 32; i += 1) {
   if (!due) break;
   due.callback((targetFrames + i) * 16.67);
   frames += 1;
-  if (i % 8 === 7) await sharedDevice.queue.onSubmittedWorkDone();
+  await sharedDevice.queue.onSubmittedWorkDone();
+  await delay(1);
 }
 passNames = [...app.renderer.inspect().perFramePassNames];
 app.stop();

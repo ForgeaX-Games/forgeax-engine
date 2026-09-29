@@ -20,7 +20,7 @@ import type { Mat4Like, Vec3 } from '@forgeax/engine-math';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { CharacterController } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 
 import { readDt } from './frame-time';
 
@@ -304,7 +304,7 @@ function cameraPlanarBasis(
   fwd: Vec3,
   right: Vec3,
 ): { fwdX: number; fwdZ: number } {
-  const camTf = world.get(camera, Transform);
+  const camTf = world.get(camera, GlobalTransform);
   if (!camTf.ok) {
     right[0] = 1;
     right[2] = 0;

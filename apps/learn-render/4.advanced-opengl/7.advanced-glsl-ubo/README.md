@@ -42,8 +42,8 @@ The `View` struct layout (784 B std140, `packages/shader/src/common.wgsl:17-52,1
 | 176..240 | `inverseViewProj` | 64 B | `mat4x4<f32>` — inverse of viewProjection (skybox reconstruction) |
 | 240..432 | `lightViewProj_B..D` | 192 B | Three additional directional-light shadow cascades |
 | 432..496 | `splitPlanes` | 64 B | Four cascade split-depth values in `vec4<f32>` slots |
-| 496..516 | `cascadeCount`, `cascadeBlend`, `depthBias`, `normalBias`, `pcfKernelSize` | 20 B | Directional shadow controls |
-| 516..528 | alignment padding | 12 B | 16-byte alignment before the matrix array |
+| 496..512 | `cascadeCount`, `cascadeBlend`, `depthBias`, `normalBias` | 16 B | Directional CSM controls |
+| 512..528 | `directionalShadowFilter` | 16 B | Filter profile, PCSS angular radius, max penumbra, and reserved lane |
 | 528..784 | `spotLightViewProj` | 256 B | Four fragment-read spot-light shadow matrices |
 
 **Host-side lifecycle** (all engine-internal, zero user code):
@@ -152,7 +152,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo" 
 | File | Lines | Role |
 |:--|--:|:--|
 | `src/index.ts` | ~160 | Minimal proof — three cubes + camera + DirectionalLight, heavy comments referencing View UBO anchor (`common.wgsl:17-128`, `@group(0)@binding(0)`, 784 B std140) |
-| `scripts/smoke-dawn.mjs` | ~220 | Dawn-node structural-only smoke: createApp boot + 300 frames + 0 RhiError assertion, no pixel readback |
+| `scripts/smoke-dawn.mjs` | ~220 | Dawn-node structural-only smoke: createApp boot + 60 frames + 0 RhiError assertion, no pixel readback |
 | `package.json` | ~55 | Workspace metadata + dependencies |
 
 > [!NOTE]
@@ -162,7 +162,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo" 
 
 The smoke script uses a **structural-only** approach (AC-06):
 
-- **Single-pass**: `createApp` boot + spawn minimal proof scene + run N>=300 frames.
+- **Single-pass**: `createApp` boot + spawn minimal proof scene + run N>=60 frames.
 - **Assert**: createApp boot succeeds + 0 `RhiError` events collected + no render-loop crash.
 - **No pixel assertion**: The View UBO is engine-internal with no visible state toggle. Forcing a pixel diff would introduce a non-discriminative assertion (plan D-4).
 

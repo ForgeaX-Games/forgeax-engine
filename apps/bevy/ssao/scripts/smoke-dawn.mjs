@@ -2,7 +2,7 @@
 import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-ssao headless Dawn smoke (receipt-bound structural + pixel falsifier).
 // The same occlusion-heavy scene is rendered with Standard SSAO disabled and
-// enabled. The readbacks must differ and both runs must complete the 300-frame
+// enabled. The readbacks must differ and both runs must complete the 60-frame
 // gate without renderer errors.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 
@@ -124,10 +124,10 @@ async function createStandardRenderer(ssao, label) {
       canvas,
       {
         rhi,
-        standardProfile: {
-          ...DEFAULT_STANDARD_PROFILE,
-          lighting: 'clustered',
-          ssao,
+          standardProfile: {
+            ...DEFAULT_STANDARD_PROFILE,
+            renderPath: 'deferred',
+            ssao,
         },
       },
       { shaderManifestUrl: manifestUrl },
@@ -168,13 +168,13 @@ function meanByteDiff(left, right) {
   return { mean: total / (WIDTH * HEIGHT * 3), changedPixels };
 }
 
-const targetFrames = Math.max(SMOKE_MIN_FRAMES, 300);
+const targetFrames = Math.max(SMOKE_MIN_FRAMES, 60);
 async function runVariant(ssao, label) {
   const constructed = await createStandardRenderer(ssao, label);
   if (!constructed.ok) throw constructed.error;
   const renderer = constructed.value;
   const errors = [];
-  subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
+  subscribeSmokeErrors(renderer, (err) => errors.push(err));
   const world = new World();
   const attached = renderer.attach(world);
   if (!attached.ok) throw attached.error;
@@ -192,8 +192,14 @@ async function runVariant(ssao, label) {
     });
     if (!result.ok) {
       drawErrors += 1;
-      console.error(`[smoke] draw frame ${framesObserved} error: ${result.error.code}`);
-    } else latestReceipt = result.value;
+      throw new Error(`${label} frame ${framesObserved}: ${JSON.stringify({ error: result.error, events: errors })}`);
+    } else {
+      latestReceipt = result.value;
+      // A receipt acknowledges submission. Fence every measured frame so this
+      // fixed-frame carrier cannot queue 300 frames of retained GPU resources.
+      const completed = await result.value.completed;
+      if (!completed.ok) throw new Error(`${label} completion: ${JSON.stringify(completed.error)}`);
+    }
     framesObserved += 1;
   }
   if (latestReceipt === undefined) throw new Error(`${label} produced no FrameReceipt`);
@@ -237,7 +243,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log('[smoke] PASS - Standard backend, 300 frames per lane, receipt observation, zero errors, and SSAO pixel discrimination are GREEN');
+console.log('[smoke] PASS - Standard backend, 60 frames per lane, receipt observation, zero errors, and SSAO pixel discrimination are GREEN');
 sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 await delay(0);

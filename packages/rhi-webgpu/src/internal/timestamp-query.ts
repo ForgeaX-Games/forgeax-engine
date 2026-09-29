@@ -30,30 +30,3 @@ export function resolveTimestampQueries(args: {
     );
   }
 }
-
-export function writeTimestamp(args: {
-  rawEncoder: GPUCommandEncoder;
-  rawQuerySet: GPUQuerySet;
-  queryIndex: number;
-}): void {
-  const encoderWithTimestamp = args.rawEncoder as unknown as {
-    writeTimestamp?: (querySet: GPUQuerySet, queryIndex: number) => void;
-  };
-  if (typeof encoderWithTimestamp.writeTimestamp !== 'function') {
-    throw new RhiError({
-      code: 'webgpu-runtime-error',
-      expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
-      hint: 'timestamp-query is advertised but the raw encoder has no writeTimestamp method',
-    });
-  }
-  try {
-    encoderWithTimestamp.writeTimestamp(args.rawQuerySet, args.queryIndex);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new RhiError({
-      code: 'webgpu-runtime-error',
-      expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
-      hint: `writeTimestamp raised: ${message}`,
-    });
-  }
-}

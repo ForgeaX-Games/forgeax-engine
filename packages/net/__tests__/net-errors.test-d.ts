@@ -1,3 +1,5 @@
+// Error variants intersect the backing class. Check detail assignability in both
+// directions so equivalent intersection representations retain exact contracts.
 import { expectTypeOf } from 'vitest';
 import { NetError } from '../src/replication/errors';
 import type { NetError as NetErrorType, NetErrorCode, NetErrorDetail } from '../src/replication/errors';
@@ -10,7 +12,8 @@ switch (error.code) {
     expectTypeOf(error.detail.remoteFingerprint).toEqualTypeOf<string>();
     break;
   case 'decode-invalid-payload':
-    expectTypeOf(error.detail).toEqualTypeOf<{ readonly reason: string }>();
+    expectTypeOf(error.detail).toMatchTypeOf<{ readonly reason: string }>();
+    expectTypeOf<{ readonly reason: string }>().toMatchTypeOf<typeof error.detail>();
     break;
   case 'decode-limit-exceeded':
     expectTypeOf(error.detail.limit).toEqualTypeOf<string>();
@@ -34,7 +37,8 @@ switch (error.code) {
     expectTypeOf(error.detail.referencedId).toEqualTypeOf<number>();
     break;
   case 'apply-invariant-failed':
-    expectTypeOf(error.detail).toEqualTypeOf<{ readonly reason: string }>();
+    expectTypeOf(error.detail).toMatchTypeOf<{ readonly reason: string }>();
+    expectTypeOf<{ readonly reason: string }>().toMatchTypeOf<typeof error.detail>();
     break;
 }
 
@@ -87,11 +91,11 @@ new NetError({
   detail: { reason: 'stopped' },
 });
 
-// @ts-expect-error code/detail pairs remain correlated even when their fields overlap.
 new NetError({
   code: 'identity-invalid',
   expected: 'a valid identity',
   hint: 'use a session identity',
+  // @ts-expect-error code/detail pairs remain correlated even when their fields overlap.
   detail: { component: 'Position', reason: 'wrong detail for this code' },
 });
 
@@ -113,6 +117,16 @@ function describe(error: NetErrorType): string {
       return `${error.detail.id}:${error.detail.referencedId}`;
     case 'apply-invariant-failed':
       return `apply:${error.detail.reason}`;
+    case 'protocol-unsupported-version':
+      return `${error.detail.receivedVersion}:${error.detail.supportedVersion}`;
+    case 'session-illegal-transition':
+      return `${error.detail.from}:${error.detail.to}`;
+    case 'recovery-policy-invalid':
+      return `${error.detail.field}:${error.detail.reason}`;
+    case 'recovery-rejected':
+      return error.detail.reason;
+    case 'recovery-exhausted':
+      return `${error.detail.attempts}/${error.detail.maxAttempts}`;
   }
 }
 
@@ -127,6 +141,11 @@ expectTypeOf<NetErrorCode>().toEqualTypeOf<
   | 'schema-invalid'
   | 'remap-unresolved-reference'
   | 'apply-invariant-failed'
+  | 'protocol-unsupported-version'
+  | 'session-illegal-transition'
+  | 'recovery-policy-invalid'
+  | 'recovery-rejected'
+  | 'recovery-exhausted'
 >();
 
 expectTypeOf<NetErrorDetail>().toEqualTypeOf<
@@ -137,4 +156,8 @@ expectTypeOf<NetErrorDetail>().toEqualTypeOf<
   | { readonly id: number; readonly reason: string }
   | { readonly component: string; readonly reason: string }
   | { readonly id: number; readonly referencedId: number }
+  | { readonly receivedVersion: number; readonly supportedVersion: number }
+  | { readonly from: string; readonly to: string }
+  | { readonly field: string; readonly reason: string }
+  | { readonly attempts: number; readonly maxAttempts: number }
 >();

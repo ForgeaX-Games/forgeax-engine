@@ -132,7 +132,7 @@ export function transparentSortEntries(
     if (va !== vb) return va < vb ? -1 : 1;
     // Tertiary tiebreaker for modes 0/1/2: group same-materialHandle entries
     // together so consecutive equal-(layer, sortVal, materialHandle) runs can
-    // collapse into fold buckets. Matches sortTransparentDispatch semantics.
+    // collapse into fold buckets. Matches TransparentSortCache semantics.
     // Not applied for DISTANCE (mode 3) — ties at exact same camera distance
     // are undefined in depth order; stable insertion order is preserved there.
     if (mode !== TRANSPARENT_SORT_MODE_DISTANCE) {

@@ -1,9 +1,9 @@
 import { expectTypeOf, it } from 'vitest';
-import type { ExecutionReport, ExecutionTier } from '../index';
+import type { ExecutionReport, ExecutionSelection } from '../index';
 
 it('exposes stable report fields without transport internals', () => {
   const report = null as unknown as ExecutionReport;
-  expectTypeOf(report.actualTier).toEqualTypeOf<ExecutionTier | null>();
+  expectTypeOf(report.workers).toEqualTypeOf<ExecutionSelection>();
   expectTypeOf(report.world.partialWrite).toBeBoolean();
   expectTypeOf(report.world.retryable).toBeBoolean();
   expectTypeOf(report.kernelDispatch.dispatched).toBeNumber();

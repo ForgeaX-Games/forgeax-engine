@@ -2,8 +2,8 @@
 // remote-live.mjs — drive an ALREADY-OPEN browser engine via the DEV bridge.
 //
 // A browser engine cannot host a Node WS server (packages/remote/src/server.ts),
-// so the classic `forgeax-engine-remote eval` CLI has nothing to connect to in a
-// real dev browser. This driver instead POSTs a JS snippet to the loopback relay
+// the legacy fixture relay is kept only for existing browser smoke scripts; the product
+// path is `forgeax dev` and its persistent owner. This driver instead POSTs a JS snippet to the loopback relay
 // (remote-bridge-server.mjs), which forwards it to the live page bridge →
 // @forgeax/engine-remote/execute in YOUR open window. Same in-memory world; a
 // world.set shows up on screen immediately, no rebuild/refresh.

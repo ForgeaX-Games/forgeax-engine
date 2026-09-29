@@ -76,7 +76,7 @@ export function validateVertexColorReadback(input: VertexColorReadbackEvidence):
   if (input.readback !== 'copyTextureToBuffer' && input.readback !== 'readRenderTargetPixelsAsync') {
     return invalidVertex('readback', 'vertex-color readback must identify its producer-owned operation');
   }
-  if (input.frameCount !== 300 || input.frameId !== 299) return invalidVertex('frameCount', 'vertex-color readback does not cover the final 300-frame sample');
+  if (input.frameCount !== 60 || input.frameId !== 59) return invalidVertex('frameCount', 'vertex-color readback does not cover the final 60-frame sample');
   if (input.finalBytes.byteLength === 0 || input.linearBytes.byteLength === 0) return invalidVertex('bytes', 'vertex-color readback bytes are missing');
   if (input.rawHash.length < 8) return invalidVertex('rawHash', 'vertex-color readback hash is missing');
   return { ok: true, value: input };

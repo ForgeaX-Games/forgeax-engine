@@ -40,6 +40,8 @@ import {
   TEXTURE_USAGE_COPY_SRC,
 } from './core';
 import { createCommandEncoderProxy } from './encoder';
+import { createRenderBundleProxy } from './pass';
+import { wrapPipeline } from './pipeline';
 import { createQueueProxy } from './queue';
 
 export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): RhiDevice {
@@ -65,6 +67,9 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
     get limits() {
       return realDevice.limits;
     },
+    probeTextureFormatCapability() {
+      return realDevice.probeTextureFormatCapability();
+    },
     get queue() {
       return proxiedQueue;
     },
@@ -87,6 +92,7 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         kind: 'createBuffer',
         handleId: '' as HandleId,
         desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
           size: desc.size ?? 0,
           usage: promotedUsage,
           mappedAtCreation: desc.mappedAtCreation,
@@ -113,13 +119,15 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         (desc.usage ?? 0) |
         TEXTURE_USAGE_COPY_SRC |
         TEXTURE_USAGE_COPY_DST |
-        (isDepthOrStencilFormat(desc.format) ? TEXTURE_USAGE_BINDING : 0);
+        (isDepthOrStencilFormat(desc.format) ? TEXTURE_USAGE_BINDING : 0) |
+        (desc.format === 'depth32float' ? 0x10 : 0);
       const res = realDevice.createTexture({ ...desc, usage: promotedUsage });
       if (!res.ok) return res;
       const event: RhiCallEvent = {
         kind: 'createTexture',
         handleId: '' as HandleId,
         desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
           size: desc.size ?? { width: 1, height: 1 },
           mipLevelCount: desc.mipLevelCount,
           sampleCount: desc.sampleCount,
@@ -335,9 +343,9 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         vertexShaderModuleHandleId,
         fragmentShaderModuleHandleId,
       };
-      registerHandle(s, res.value as object, 'renderPipeline', event);
+      const pipelineId = registerHandle(s, res.value as object, 'renderPipeline', event);
       pushEvent(s, event);
-      return res;
+      return makeOk(wrapPipeline(s, res.value, pipelineId));
     },
 
     createComputePipeline(desc: ComputePipelineDescriptor) {
@@ -361,13 +369,26 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         layoutHandleId: layoutId,
         computeShaderModuleHandleId,
       };
-      registerHandle(s, res.value as object, 'computePipeline', event);
+      const pipelineId = registerHandle(s, res.value as object, 'computePipeline', event);
       pushEvent(s, event);
-      return res;
+      return makeOk(wrapPipeline(s, res.value, pipelineId));
     },
 
     createQuerySet(desc: QuerySetDescriptor) {
-      return realDevice.createQuerySet(desc);
+      const res = realDevice.createQuerySet(desc);
+      if (!res.ok) return res;
+      const event: RhiCallEvent = {
+        kind: 'createQuerySet',
+        handleId: '' as HandleId,
+        desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
+          type: desc.type ?? 'occlusion',
+          count: desc.count ?? 0,
+        },
+      };
+      registerHandle(s, res.value as object, 'querySet', event);
+      pushEvent(s, event);
+      return res;
     },
 
     destroyBuffer(buf: Buffer) {
@@ -416,7 +437,20 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
     },
 
     destroyQuerySet(querySet: QuerySet) {
-      return realDevice.destroyQuerySet(querySet);
+      const hId = s.handleMap.get(querySet as object);
+      const res = realDevice.destroyQuerySet(querySet);
+      if (!res.ok) return res;
+      if (hId !== undefined) {
+        if (
+          !retainsCaptureBootstrap(s) &&
+          !s.snapshotSeededHandles.has(hId) &&
+          !hasBootstrapDependency(s, hId)
+        ) {
+          s.bootstrapCreates.delete(hId);
+        }
+        pushEvent(s, { kind: 'destroyQuerySet', handleId: hId });
+      }
+      return res;
     },
 
     destroyTexture(tex: Texture) {
@@ -436,6 +470,11 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         pushEvent(s, { kind: 'destroyTexture', handleId: hId });
       }
       return res;
+    },
+
+    createRenderBundleEncoder(desc) {
+      const result = realDevice.createRenderBundleEncoder(desc);
+      return result.ok ? makeOk(createRenderBundleProxy(s, result.value)) : result;
     },
 
     createCommandEncoder(desc?: CommandEncoderDescriptor | undefined) {

@@ -106,7 +106,7 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     ]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.entities).toHaveLength(6);
+    expect(Object.keys(result.value.entities)).toHaveLength(6);
   });
 
   it('ancestor-descendant overlapping roots silently de-duplicate', () => {
@@ -123,7 +123,7 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     const result = rootsToSceneAsset(reg, world, [e0 as EntityHandle, e1 as EntityHandle]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.entities).toHaveLength(4);
+    expect(Object.keys(result.value.entities)).toHaveLength(4);
   });
 
   it('localIds are 0..N-1 continuous in BFS order', () => {
@@ -142,10 +142,10 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    expect(scene.entities).toHaveLength(5);
+    expect(Object.keys(scene.entities)).toHaveLength(5);
 
-    const localIds = scene.entities.map((e) => e.localId as unknown as number);
-    expect(localIds).toEqual([0, 1, 2, 3, 4]);
+    const keys = Object.keys(scene.entities);
+    expect(keys).toEqual(['entity-0', 'entity-1', 'entity-2', 'entity-3', 'entity-4']);
   });
 
   it('empty roots produces empty SceneAsset (no error)', () => {
@@ -154,7 +154,7 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     const result = rootsToSceneAsset(reg, world, []);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.entities).toHaveLength(0);
+    expect(Object.keys(result.value.entities)).toHaveLength(0);
   });
 });
 
@@ -175,15 +175,14 @@ describe('m2-t2: entity / array<entity> -> localId', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    expect(scene.entities).toHaveLength(2);
+    expect(Object.keys(scene.entities)).toHaveLength(2);
 
-    const e1 = scene.entities[1];
+    const e1 = scene.entities['entity-1'];
     if (!e1) throw new Error('entity 1 missing');
     const refComps = (e1.components as Record<string, Record<string, unknown>>).Test_EntityRef;
     expect(refComps).toBeDefined();
     if (!refComps) throw new Error('Test_EntityRef missing');
-    expect(refComps.target).toBeTypeOf('number');
-    expect(refComps.target).toBe(0);
+    expect(refComps.target).toBe('entity-0');
   });
 
   it('array<entity> field round-trips each element as localId', () => {
@@ -205,9 +204,9 @@ describe('m2-t2: entity / array<entity> -> localId', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    expect(scene.entities).toHaveLength(3);
+    expect(Object.keys(scene.entities)).toHaveLength(3);
 
-    const rootEnt = scene.entities[0];
+    const rootEnt = scene.entities['entity-0'];
     if (!rootEnt) throw new Error('entity 0 missing');
     const elComps = (rootEnt.components as Record<string, Record<string, unknown>>)
       .Test_EntityArray;
@@ -215,7 +214,7 @@ describe('m2-t2: entity / array<entity> -> localId', () => {
     if (!elComps) throw new Error('Test_EntityArray missing');
     const targetsArr = elComps.targets as unknown[];
     expect(Array.isArray(targetsArr)).toBe(true);
-    expect(targetsArr).toEqual([1, 2]);
+    expect(targetsArr).toEqual(['entity-1', 'entity-2']);
   });
 });
 
@@ -248,7 +247,7 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = (ent0.components as Record<string, Record<string, unknown>>).Test_HasShared;
     expect(comps).toBeDefined();
@@ -286,7 +285,7 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = (ent0.components as Record<string, Record<string, unknown>>).Test_HasSharedArray;
     expect(comps).toBeDefined();
@@ -323,7 +322,7 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ent0 = result.value.entities[0];
+    const ent0 = result.value.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = (ent0.components as Record<string, Record<string, unknown>>).Test_EmptyMaterials;
     // An empty shared array serializes to [] (or the component is omitted when it
@@ -390,7 +389,7 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ent0 = result.value.entities[0];
+    const ent0 = result.value.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = (ent0.components as Record<string, Record<string, unknown>>)
       .Test_UnsetScalarShared;
@@ -429,7 +428,7 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ent0 = result.value.entities[0];
+    const ent0 = result.value.entities['entity-0'];
     if (!ent0) throw new Error('entity 0 missing');
     const comps = (ent0.components as Record<string, Record<string, unknown>>)
       .Test_SparseSharedArray;
@@ -460,9 +459,9 @@ describe('m2-t4: root ChildOf strip + cross-root closure refs', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    expect(scene.entities).toHaveLength(1);
+    expect(Object.keys(scene.entities)).toHaveLength(1);
 
-    const ent0 = scene.entities[0];
+    const ent0 = scene.entities['entity-0'];
     if (!ent0) throw new Error('entity missing');
     const comps = ent0.components as Record<string, Record<string, unknown>>;
     expect(comps.ChildOf).toBeUndefined();
@@ -481,9 +480,9 @@ describe('m2-t4: root ChildOf strip + cross-root closure refs', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const scene = result.value;
-    expect(scene.entities).toHaveLength(3);
+    expect(Object.keys(scene.entities)).toHaveLength(3);
 
-    const childEntity = scene.entities.find(
+    const childEntity = Object.values(scene.entities).find(
       (e) =>
         (e.components as Record<string, Record<string, unknown>>).Test_EntityRef?.target !==
         undefined,
@@ -493,9 +492,8 @@ describe('m2-t4: root ChildOf strip + cross-root closure refs', () => {
     const refVal = (childEntity.components as Record<string, Record<string, unknown>>)
       .Test_EntityRef;
     if (!refVal) throw new Error('Test_EntityRef missing');
-    expect(typeof refVal.target).toBe('number');
-    expect(refVal.target as number).toBeGreaterThanOrEqual(0);
-    expect(refVal.target as number).toBeLessThan(3);
+    expect(typeof refVal.target).toBe('string');
+    expect(refVal.target).toBe('entity-2');
   });
 });
 
@@ -639,13 +637,14 @@ describe('w19 — end-to-end round-trip value equivalence (AC-07)', () => {
     // Child (GLB-like) scene + parent scene that mounts it.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
+      entities: { 'entity-0': { components: { Transform: { pos: [1, 0, 0] } } } },
     };
     reg.catalog(pgc(W19_CHILD), child as Asset);
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [0, 0, 0] } } }],
-      mounts: [{ localId: 1 as never, source: W19_CHILD, memberFirst: 2 as never, memberCount: 1 }],
+      entities: {
+        wrapper: { components: { Transform: { pos: [0, 0, 0] } }, instance: { source: W19_CHILD } },
+      },
     };
     reg.catalog(pgc(W19_PARENT), parent as Asset);
 

@@ -1,8 +1,13 @@
+import { validateMeshCardLayout } from '@forgeax/engine-geometry';
 // @forgeax/engine-assets-runtime -- inline pack-payload loader bodies
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
 
-import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import {
+  createProceduralMesh,
+  PROCEDURAL_FLOATS_PER_VERTEX,
+  prepareMeshData,
+} from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   AddressMode,
@@ -23,11 +28,98 @@ import type {
   ParticleEffectAsset,
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
-import { resolveMaterialTextureCoordinates } from '@forgeax/engine-types';
+import {
+  AssetError,
+  MATERIAL_CHILD_FORBIDDEN_FIELDS,
+  parseShadowCapsuleSet,
+  resolveMaterialTextureCoordinates,
+} from '@forgeax/engine-types';
 import { MeshBinAssetError } from '../errors/asset';
 import { parseScenePayload } from '../scene-payload';
-import { unpackMeshBinV4 } from './mesh-bin';
+import { unpackMeshBin } from './mesh-bin';
 import { renderPipelineLoader, tilesetLoader } from './pack-artifact';
+
+type ParsedMeshLodPayload = {
+  readonly lods?: TypesMeshAsset['lods'];
+  readonly lodHysteresis?: number;
+};
+
+function parseLodGuid(
+  raw: unknown,
+  refs: readonly string[] | undefined,
+): AssetGuidType | undefined {
+  if (raw instanceof Uint8Array) {
+    return raw.byteLength === 16 ? (raw as AssetGuidType) : undefined;
+  }
+  if (Array.isArray(raw)) {
+    if (
+      raw.length !== 16 ||
+      raw.some((byte) => !Number.isInteger(byte) || (byte as number) < 0 || (byte as number) > 255)
+    )
+      return undefined;
+    return new Uint8Array(raw as number[]) as AssetGuidType;
+  }
+  if (typeof raw === 'string') {
+    const parsed = AssetGuid.parse(raw);
+    return parsed.ok ? parsed.value : undefined;
+  }
+  if (typeof raw === 'number' && Number.isInteger(raw) && refs !== undefined) {
+    const ref = refs[raw];
+    if (ref === undefined) return undefined;
+    const parsed = AssetGuid.parse(ref);
+    return parsed.ok ? parsed.value : undefined;
+  }
+  return undefined;
+}
+
+function parseMeshLodPayload(
+  rawLods: unknown,
+  rawHysteresis: unknown,
+  refs: readonly string[] | undefined,
+): { readonly ok: true; readonly value: ParsedMeshLodPayload } | { readonly ok: false } {
+  if (rawLods !== undefined && !Array.isArray(rawLods)) return { ok: false };
+  if (
+    rawHysteresis !== undefined &&
+    (typeof rawHysteresis !== 'number' ||
+      !Number.isFinite(rawHysteresis) ||
+      rawHysteresis < 0 ||
+      rawHysteresis >= 1)
+  )
+    return { ok: false };
+  if (rawLods === undefined) {
+    return {
+      ok: true,
+      value: rawHysteresis === undefined ? {} : { lodHysteresis: rawHysteresis as number },
+    };
+  }
+  if (rawLods.length > 7) return { ok: false };
+  let previousCoverage = 1;
+  const lods: NonNullable<TypesMeshAsset['lods']>[number][] = [];
+  for (const rawLod of rawLods) {
+    if (rawLod === null || typeof rawLod !== 'object') return { ok: false };
+    const entry = rawLod as Record<string, unknown>;
+    const mesh = parseLodGuid(entry.mesh ?? entry.meshRef, refs);
+    const screenCoverage = entry.screenCoverage;
+    if (
+      mesh === undefined ||
+      typeof screenCoverage !== 'number' ||
+      !Number.isFinite(screenCoverage) ||
+      screenCoverage <= 0 ||
+      screenCoverage > 1 ||
+      screenCoverage >= previousCoverage
+    )
+      return { ok: false };
+    lods.push({ mesh, screenCoverage });
+    previousCoverage = screenCoverage;
+  }
+  return {
+    ok: true,
+    value: {
+      lods,
+      ...(rawHysteresis === undefined ? {} : { lodHysteresis: rawHysteresis as number }),
+    },
+  };
+}
 
 // === Inline pack-payload loader bodies (feat-20260603-asset-import-loader-injection
 // M1 / w4) ===
@@ -56,6 +148,9 @@ import { renderPipelineLoader, tilesetLoader } from './pack-artifact';
 export const meshLoader: Loader = {
   kind: 'mesh',
   load(payload) {
+    const procedural = createProceduralMesh(payload);
+    if (procedural !== undefined) return procedural.ok ? procedural.value : undefined;
+
     const vertexData = payload.vertices;
     const indexData = payload.indices;
     const rawAttributes = (payload.attributes as Record<string, unknown> | undefined) ?? {};
@@ -91,7 +186,7 @@ export const meshLoader: Loader = {
         } = {};
         for (const [key, value] of Object.entries(source)) {
           if (key !== 'position' && key !== 'normal' && key !== 'tangent') return undefined;
-          if (value instanceof Float32Array) target[key] = new Float32Array(value);
+          if (value instanceof Float32Array) target[key] = value;
           else if (Array.isArray(value)) target[key] = new Float32Array(value as number[]);
           else return undefined;
         }
@@ -103,13 +198,16 @@ export const meshLoader: Loader = {
     let morphWeights: Float32Array | undefined;
     const rawMorphWeights = payload.morphWeights;
     if (rawMorphWeights !== undefined) {
-      if (rawMorphWeights instanceof Float32Array) morphWeights = new Float32Array(rawMorphWeights);
+      if (rawMorphWeights instanceof Float32Array) morphWeights = rawMorphWeights;
       else if (Array.isArray(rawMorphWeights))
         morphWeights = new Float32Array(rawMorphWeights as number[]);
       else return undefined;
       if (morphTargets !== undefined && morphWeights.length !== morphTargets.length)
         return undefined;
     }
+
+    const parsedLods = parseMeshLodPayload(payload.lods, payload.lodHysteresis, undefined);
+    if (!parsedLods.ok) return undefined;
 
     const skinIndexRaw = rawAttributes.skinIndex;
     if (skinIndexRaw instanceof Uint16Array) {
@@ -218,29 +316,62 @@ export const meshLoader: Loader = {
           };
         })
       : rawSubmeshes.map((_, slotIndex) => ({ slotName: `LegacySlot_${slotIndex}` }));
-    const submeshes = rawSubmeshes.map((submesh, submeshIndex) => ({
+    const submeshes: TypesMeshAsset['submeshes'] = rawSubmeshes.map((submesh, submeshIndex) => ({
       ...submesh,
       materialSlot: Number.isInteger((submesh as { materialSlot?: unknown }).materialSlot)
         ? (submesh as { materialSlot: number }).materialSlot
         : submeshIndex,
     }));
 
+    const cardLayout = payload.cardLayout as TypesMeshAsset['cardLayout'];
+    if (submeshes.some((section) => 'cardLayout' in section)) return undefined;
+    if (
+      cardLayout !== undefined &&
+      (!validateMeshCardLayout(cardLayout).ok ||
+        submeshes.some((section) => section.topology !== 'triangle-list') ||
+        morphTargets !== undefined ||
+        attributes.skinIndex !== undefined)
+    )
+      return undefined;
     return {
       kind: 'mesh',
+      ...(cardLayout === undefined ? {} : { cardLayout }),
       vertices,
       ...(indices !== undefined ? { indices } : {}),
       attributes: attributes as TypesMeshAsset['attributes'],
       ...(aabb !== undefined ? { aabb } : {}),
       ...(morphTargets !== undefined ? { morphTargets } : {}),
       ...(morphWeights !== undefined ? { morphWeights } : {}),
+      ...(parsedLods.value.lods === undefined ? {} : { lods: parsedLods.value.lods }),
+      ...(parsedLods.value.lodHysteresis === undefined
+        ? {}
+        : { lodHysteresis: parsedLods.value.lodHysteresis }),
       submeshes,
       materialSlots,
     };
   },
   loadPack(input, ctx) {
+    if (input.payload.vertices instanceof Float32Array && input.payload.kind === 'mesh') {
+      if (input.artifacts.body !== undefined)
+        return {
+          ok: false,
+          error: new AssetError({
+            code: 'asset-parse-failed',
+            expected: 'one Mesh geometry source',
+            hint: 'submit native Mesh data or a body artifact, never both',
+          }),
+        } as never;
+      const result = prepareMeshData(
+        input.payload as unknown as TypesMeshAsset,
+        input.guid,
+        input.refs,
+      );
+      if (!result.ok) return { ok: false, error: result.error } as never;
+      return input.payload as unknown as TypesMeshAsset;
+    }
     const artifact = input.artifacts.body;
     if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
-    const decoded = unpackMeshBinV4(artifact.bytes, input.guid);
+    const decoded = unpackMeshBin(artifact.bytes, input.guid);
     if (!decoded.ok) return { ok: false, error: decoded.error } as never;
     const materialSlots = decoded.value.materialSlots.map((slot) => {
       const refIndex = slot.defaultMaterialRef;
@@ -272,11 +403,29 @@ export const meshLoader: Loader = {
         }),
       } as never;
     }
+    const parsedLods = parseMeshLodPayload(
+      decoded.value.lods,
+      decoded.value.lodHysteresis,
+      input.refs,
+    );
+    if (!parsedLods.ok) {
+      return {
+        ok: false,
+        error: new MeshBinAssetError({
+          sourceKey: input.guid,
+          expected: 'LOD mesh references must resolve through the pack refs table',
+          actual: 'LOD reference is out of bounds, malformed, or has invalid coverage metadata',
+          reason: 'metadata-invalid',
+          actualFacts: { field: 'metadata' },
+        }),
+      } as never;
+    }
     return meshLoader.load(
       {
         vertices: decoded.value.vertices,
         ...(decoded.value.indices !== undefined ? { indices: decoded.value.indices } : {}),
         submeshes: decoded.value.submeshes,
+        ...(decoded.value.cardLayout === undefined ? {} : { cardLayout: decoded.value.cardLayout }),
         materialSlots,
         ...(decoded.value.aabb !== undefined ? { aabb: decoded.value.aabb } : {}),
         ...(decoded.value.morphTargets !== undefined
@@ -285,6 +434,10 @@ export const meshLoader: Loader = {
         ...(decoded.value.morphWeights !== undefined
           ? { morphWeights: decoded.value.morphWeights }
           : {}),
+        ...(parsedLods.value.lods === undefined ? {} : { lods: parsedLods.value.lods }),
+        ...(parsedLods.value.lodHysteresis === undefined
+          ? {}
+          : { lodHysteresis: parsedLods.value.lodHysteresis }),
         attributes: decoded.value.attributes,
       },
       input.refs,
@@ -303,7 +456,7 @@ export const sceneLoader: Loader = {
     // return it inline through LoaderOutput so the caller (parseAndReturnAsset)
     // can build a precise AssetError without a shared instance slot (F21).
     if ('index' in result) {
-      return { ok: false, error: result as ParseErrorDetail };
+      return { ok: false, error: result as unknown as ParseErrorDetail };
     }
     return result as Asset;
   },
@@ -410,21 +563,21 @@ export const materialLoader: Loader = {
       }
     }
 
-    // bug-20260610: values fields that are typed `handle<TextureAsset>`
-    // arrive on disk as a refs[] index (small int 0..refs.length-1). The
-    // build-time gltfImporter writes these as refs indices, mirroring the
-    // scene's HANDLE_FIELD_NAMES treatment.
-    //
-    // feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
-    // texture-field discovery now derives from the registered shader's
-    // paramSchema via `ctx.getMaterialShaderTextureFieldNames`. When the
-    // shader is registered (the common case), only declared texture fields
-    // are resolved — identical to the old hardcoded-Set behaviour without the
-    // SSOT duplication. Authored material parameters are an equally valid
-    // schema source and remain available before shader registration; this is
-    // what keeps a scalar zero (for example metallic) distinct from texture
-    // ref index zero. Only legacy payloads with neither schema retain the
-    // try-every-integer fallback.
+    // A parent-bearing row is a strict child contract. Root-owned fields are
+    // rejected before values/ref projection so an invalid child can never be
+    // registered with a half-inherited pass/schema payload. Object.hasOwn is
+    // intentional: even `{ passes: undefined }` is an authored forbidden
+    // field at the JSON loading boundary.
+    if (
+      parentGuid !== undefined &&
+      MATERIAL_CHILD_FORBIDDEN_FIELDS.some((field) => Object.hasOwn(matPayload, field))
+    ) {
+      return undefined;
+    }
+
+    // Numeric refs require a declared texture field. Children carry no schema,
+    // so their serialized texture references use { texture, sampler? }; bare
+    // numbers remain values even when they happen to index refs (including parent).
     const values: Record<string, unknown> = { ...rawParamValues };
     if (refs && refs.length > 0) {
       const shaderTextureFields = collectShaderTextureFieldNames(passesFromPayload, ctx);
@@ -438,7 +591,7 @@ export const materialLoader: Loader = {
                   'name' in parameter &&
                   typeof parameter.name === 'string' &&
                   'type' in parameter &&
-                  parameter.type === 'texture',
+                  (parameter.type === 'texture' || parameter.type === 'texture_cube'),
               )
               .map((parameter) => parameter.name),
           )
@@ -456,19 +609,15 @@ export const materialLoader: Loader = {
       for (const fieldName of candidateFields) {
         const value = values[fieldName];
         if (typeof value === 'number' && Number.isInteger(value)) {
-          if (textureFields !== undefined && !textureFields.has(fieldName)) {
+          if (!textureFields?.has(fieldName)) {
             continue;
           }
           const refGuid = refGuidAt(refs, value);
           if (refGuid === undefined) {
-            // Only emit a parse-error breadcrumb when the field is declared as
-            // a texture by the shader paramSchema (the OOB is unambiguous).
-            // For the graceful "try every int" fallback, OOB simply means
-            // "this scalar was not a refs index" — don't spam parse errors.
-            if (textureFields !== undefined) delete values[fieldName];
+            delete values[fieldName];
             continue;
           }
-          values[fieldName] = textureFields === undefined ? refGuid : { texture: refGuid };
+          values[fieldName] = { texture: refGuid };
           continue;
         }
 
@@ -505,6 +654,12 @@ export const materialLoader: Loader = {
         kind: 'material',
         passes: passesFromPayload as readonly MaterialPass[],
         parameters: matPayload.parameters,
+        ...(matPayload.particleInputs === undefined
+          ? {}
+          : { particleInputs: matPayload.particleInputs as MaterialAsset['particleInputs'] }),
+        ...(matPayload.surface === undefined
+          ? {}
+          : { surface: matPayload.surface as MaterialAsset['surface'] }),
         values,
         colorSpace: matPayload.colorSpace,
         parentGuid,
@@ -514,9 +669,7 @@ export const materialLoader: Loader = {
     if (parentGuid !== undefined) {
       return {
         kind: 'material',
-        parameters: matPayload.parameters,
         values,
-        colorSpace: matPayload.colorSpace,
         parentGuid,
       } as unknown as MaterialAsset & { parentGuid?: string };
     }
@@ -618,10 +771,25 @@ export const skeletonLoader: Loader = {
       return undefined;
     }
     if (ibm.byteLength !== jointCount * 64) return undefined;
+    const boundsRaw = payload.bounds;
+    const bounds =
+      boundsRaw instanceof Float32Array
+        ? boundsRaw
+        : Array.isArray(boundsRaw)
+          ? new Float32Array(boundsRaw as number[])
+          : undefined;
+    if (bounds !== undefined && bounds.length !== 6) return undefined;
+    const shadowCapsules =
+      payload.shadowCapsules === undefined
+        ? undefined
+        : parseShadowCapsuleSet(payload.shadowCapsules, jointCount);
+    if (payload.shadowCapsules !== undefined && shadowCapsules === undefined) return undefined;
     return {
       kind: 'skeleton',
       inverseBindMatrices: ibm,
       jointCount,
+      ...(bounds === undefined ? {} : { bounds }),
+      ...(shadowCapsules === undefined ? {} : { shadowCapsules }),
     };
   },
 };

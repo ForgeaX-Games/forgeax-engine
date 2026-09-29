@@ -10,10 +10,15 @@ import {
   TONEMAP_REINHARD,
   type Renderer,
 } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import type {
+  BundlerOptions,
+  RendererLegacyHostAdapter,
+} from '@forgeax/engine-render/internal/construct-renderer';
 import { Transform } from '@forgeax/engine-scene';
 import type { SceneCase } from '../contracts/types';
-import type { ForgeaxCaptureOutput } from './forgeax-adapter';
+import { readCanvasPixels } from '../capture/canvas-readback';
+import { projectForgeaxSurfaceEvidence, type ForgeaxCaptureOutput } from './forgeax-adapter';
 import { threeToneMappingId, type ThreeCaptureOutput } from './three-adapter';
 import { WebGPURenderer } from 'three/webgpu';
 import {
@@ -40,10 +45,8 @@ function makeMaterial(world: World): void {
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const materialHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
     baseColor: [0.8, 0.28, 0.12, 0.5],
-    colorSpace: 'linear',
     metallic: 0,
     roughness: 1,
-    castShadow: false,
     queue: 3000,
     renderState: { cullMode: 'none', depthWriteEnabled: false, blend },
   }));
@@ -73,20 +76,6 @@ export function makeTransparencyWorld(sceneCase: SceneCase): World {
     data: { direction: [0, 0, -1], color: [1, 1, 1], intensity: 1, castShadow: false },
   }).unwrap();
   return world;
-}
-
-async function readCanvasPixels(canvas: HTMLCanvasElement): Promise<Uint8Array> {
-  const bitmap = await createImageBitmap(canvas);
-  const offscreen = new OffscreenCanvas(canvas.width, canvas.height);
-  const context = offscreen.getContext('2d', { willReadFrequently: true });
-  if (context === null) {
-    bitmap.close();
-    throw new Error('transparent canvas RGBA8 readback unavailable');
-  }
-  context.drawImage(bitmap, 0, 0);
-  const data = context.getImageData(0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  return new Uint8Array(data.data.buffer, data.data.byteOffset, data.data.byteLength);
 }
 
 function configFor(sceneCase: SceneCase) {
@@ -124,14 +113,21 @@ async function settleWebglRenderer(renderer: Renderer): Promise<void> {
 export async function captureTransparencyForgeaxBrowser(
   sceneCase: SceneCase,
   rendererKind: 'webgpu' | 'webgl' = 'webgpu',
+  fallbackBackendId?: 'webkit-webgl2' | 'chromium-webgl2',
+  bundler: BundlerOptions = {},
 ): Promise<ForgeaxCaptureOutput> {
-  const { forgeaxBundlerAdapter } = await import('virtual:forgeax/bundler');
   const canvas = document.createElement('canvas');
   canvas.width = sceneCase.scene.width;
   canvas.height = sceneCase.scene.height;
-  const created = await createRenderer(canvas, {}, forgeaxBundlerAdapter() as never);
+  const created = await constructRuntimeRendererHost(canvas, {}, bundler);
   if (!created.ok) throw created.error;
-  const renderer = created.value;
+  const { renderer, debugDrawHost } = created.value;
+  const legacyHost = debugDrawHost as unknown as RendererLegacyHostAdapter;
+  // Three's WebGPU renderer does not apply an equivalent final dither in this
+  // strict fixture. Disable the engine's pipeline-asset output policy so the
+  // parity comparison isolates lighting/blending/colour-space behavior. The
+  // production default remains outputDither=true when no override is installed.
+  legacyHost.configureStandard({ outputDither: false });
   try {
     const renderErrors: string[] = [];
     const removeRenderErrorListener = renderer.subscribe((event) => {
@@ -165,7 +161,22 @@ export async function captureTransparencyForgeaxBrowser(
     removeRenderErrorListener();
     if (renderErrors.length > 0) throw new Error(`transparent ForgeaX render errors: ${renderErrors.join(' | ')}`);
     const pixels = await readCanvasPixels(canvas);
-    return { linear: [], final: Array.from(pixels), config: configFor(sceneCase) };
+    const surfaceEvidence = rendererKind === 'webgl' && fallbackBackendId !== undefined
+      ? await projectForgeaxSurfaceEvidence({
+          inspection: renderer.inspect(),
+          backendId: fallbackBackendId,
+          caseId: sceneCase.caseId,
+          pixels,
+          width: sceneCase.scene.width,
+          height: sceneCase.scene.height,
+        })
+      : undefined;
+    return {
+      linear: [],
+      final: Array.from(pixels),
+      config: configFor(sceneCase),
+      ...(surfaceEvidence === undefined ? {} : { surfaceEvidence }),
+    };
   } finally {
     if (rendererKind === 'webgpu') renderer.dispose();
     else await settleWebglRenderer(renderer);
@@ -219,8 +230,9 @@ export async function captureTransparencyThreeBrowser(
   light.position.set(0, 0, 3);
   light.target.position.set(0, 0, 0);
   scene.add(light, light.target);
-  if (rendererKind === 'webgpu') await renderer.renderAsync(scene, camera);
-  else renderer.render(scene, camera);
+  // WebGPU was explicitly initialized above. Avoid Three r184's deprecated
+  // renderAsync() wrapper, which repeats the init path for every capture.
+  renderer.render(scene, camera);
   if (rendererKind === 'webgl') await waitForAnimationFrameOrTimeout();
   const pixels = await readCanvasPixels(canvas);
   renderer.dispose();

@@ -12,16 +12,15 @@
 // not actually happen — the 4th texture (heightTexture) would silently fall
 // through.
 //
-// Scope of the gate — the three USER-REGION texture fields only:
+// Scope of the gate — the three user-authored base texture fields:
 //   baseColorTexture / metallicRoughnessTexture / normalTexture
 // These are the fields `derive(default-standard-pbr).textureFieldNames`
 // produces and that w7/w8 route through iteration.
 //
 // Deliberately NOT gated (legitimate residual naming):
-//   - emissiveTexture / occlusionTexture: these live in the engine-injection
-//     LIGHTMAP region (appendInjection 'lightmap'), are NOT in any paramSchema
-//     textureFieldNames set, and are assembled by the injection path — naming
-//     them there is the engine-managed region, not user-region hardcoding.
+//   - emissiveTexture / occlusionTexture: legacy engine-owned snapshot fields
+//     still have named reads, while the production Standard BGL no longer adds
+//     a duplicate engine injection region.
 //   - USER_REGION_TEXTURE_FIELDS in derive-paramschema.ts: the 3-field
 //     register-time under-declaration validator (charter P3 safety net from
 //     the 4.3 blending regression). Orthogonal to binding; lives in a

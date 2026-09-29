@@ -1,12 +1,12 @@
-import { mat3 } from '@forgeax/engine-math';
 import { type BindGroup, type Buffer, RhiError, type RhiQueue } from '@forgeax/engine-rhi';
+import { ok, type Result } from '@forgeax/engine-types';
 import type { DispatchEntry } from '../render-system-extract';
 import {
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_Z,
   type TransparentSortConfig,
 } from '../systems/transparent-sort-config';
-import type { ValidatedRenderable } from './frame-snapshot';
+import { type ValidatedRenderable, worldEntityKey } from './frame-snapshot';
 
 /**
  * Stride between per-renderable `entity_world` mat4 slots inside the
@@ -17,18 +17,19 @@ import type { ValidatedRenderable } from './frame-snapshot';
  */
 export const MESH_PER_ENTITY_STRIDE = 256;
 
-// The storage-buffer Mesh struct also carries the temporal previous transform
-// and reactive metadata when STORAGE_BUFFER_AVAILABLE is true:
-// mat4 (64 B) + mat3 (48 B) + previous mat4 (64 B) + vec4 (16 B) = 192 B.
-// The BindGroup entry's `size` must cover the complete reflected struct, not
-// only the first world transform and normal matrix.
-export const MESH_SSBO_BYTES = 192;
+// current mat4 + previous mat4 + temporal vec4. See common.wgsl::Mesh.
+export const MESH_SSBO_BYTES = 144;
 
-// bug-20260610: WebGL2 fallback shader declares `array<Mesh, 128>` as a
-// uniform buffer; binding must cover the full array size. The storage
-// variant binds a single 112-B slot via dynamic offset, but the uniform
-// variant requires the whole 14336-B range visible to the shader.
-export const MESH_UBO_FULL_ARRAY_BYTES = 112 * 128;
+/** `Mesh.temporal.y` bit set: 1 = previous transform valid, 2 = shadow sampling off. */
+export function meshSurfaceFlags(source: {
+  readonly temporal?: { readonly motionValid?: boolean };
+  readonly shadowReceiver?: false;
+}): number {
+  return (
+    (source.temporal?.motionValid === false ? 0 : 1) | (source.shadowReceiver === false ? 2 : 0)
+  );
+}
+export const MESH_UBO_FULL_ARRAY_BYTES = 64 * 128;
 
 // bug-20260723-webgl2-instancing-uniform-range: the WebGL2 fallback shader
 // declares `array<InstanceData, 128>` in the instances bind group. Even when
@@ -42,23 +43,58 @@ export const MAX_UNIFORM_INSTANCES = 128;
 /** The storage-backed InstanceData layout is current + previous mat4. */
 export const INSTANCE_STORAGE_STRIDE_FLOATS = 32;
 
+function hasStableGenerationColumn(generations: Uint32Array | undefined, count: number): boolean {
+  if (generations === undefined || generations.length !== count) return false;
+  const seen = new Set<number>();
+  for (const generation of generations) {
+    if (generation === 0 || seen.has(generation)) return false;
+    seen.add(generation);
+  }
+  return true;
+}
+
 /**
  * Project the ECS transform snapshot into the storage-backed InstanceData
- * layout. The extract contract carries one current mat4 per instance; until
- * the ECS snapshot owns a previous-instance column, current is the honest
- * previous value as well. Uniform-backed variants keep the compact 16-float
- * payload and do not use this projection.
+ * layout. Unique identity generations select the previous matrix only when
+ * the producer proves that the instance survived. Replaced slots seed
+ * previous=current; reordered slots map back to the real prior ordinal so a
+ * compaction cannot exchange velocities. Uniform-backed variants keep the
+ * compact 16-float payload and do not use this projection.
  */
-export function packInstanceStorageBuffer(transforms: Float32Array): Float32Array {
+export function packInstanceStorageBuffer(
+  transforms: Float32Array,
+  previousTransforms: Float32Array = transforms,
+  generations?: Uint32Array,
+  previousGenerations?: Uint32Array,
+): Float32Array {
   const count = Math.floor(transforms.length / 16);
   const out = new Float32Array(count * INSTANCE_STORAGE_STRIDE_FLOATS);
+  const previousCount = Math.floor(previousTransforms.length / 16);
+  const generationInput = generations !== undefined || previousGenerations !== undefined;
+  const identityProof =
+    hasStableGenerationColumn(generations, count) &&
+    hasStableGenerationColumn(previousGenerations, previousCount);
+  const previousIndexByGeneration = identityProof
+    ? new Map(
+        Array.from(previousGenerations ?? [], (generation, index) => [generation, index] as const),
+      )
+    : undefined;
   for (let i = 0; i < count; i++) {
     const sourceBase = i * 16;
     const targetBase = i * INSTANCE_STORAGE_STRIDE_FLOATS;
+    const previousIndex = identityProof
+      ? previousIndexByGeneration?.get(generations?.[i] ?? 0)
+      : !generationInput && previousCount === count
+        ? i
+        : undefined;
+    const sameIdentity = previousIndex !== undefined && previousIndex < previousCount;
+    const previousBase = (previousIndex ?? i) * 16;
     for (let k = 0; k < 16; k++) {
       const value = transforms[sourceBase + k] ?? 0;
       out[targetBase + k] = value;
-      out[targetBase + 16 + k] = value;
+      out[targetBase + 16 + k] = sameIdentity
+        ? (previousTransforms[previousBase + k] ?? value)
+        : value;
     }
   }
   return out;
@@ -79,12 +115,18 @@ export function extractEntryResourceHandle(entry: {
   return v as object;
 }
 
+// Object-only terminal marker keeps a shorter resource chain from colliding
+// with a longer chain that shares the same prefix.
+const BIND_GROUP_CHAIN_LEAF_KEY: object = {};
+
 /**
  * feat-20260622-handle-to-id-allocator-elimination M2 / w7: walks a nested
  * WeakMap chain to find or create a BindGroup leaf. Each handle in the
- * `handles` array is a chain node; the final leaf is a Map<string, BindGroup>
- * keyed by `variant` (D-2). Chain keys are always object references, never
- * numeric ids — GC reclaims entries for dead handles automatically.
+ * `handles` array is a chain node; a dedicated object terminal marker points
+ * to the final Map<string, BindGroup> keyed by `variant` (D-2). The marker
+ * prevents variable-depth chains with a shared prefix from treating a nested
+ * WeakMap as a leaf. Chain keys are always object references, never numeric
+ * ids — GC reclaims entries for dead handles automatically.
  *
  * On cache hit returns the cached BindGroup. On miss calls `factory`,
  * bumps `bindGroupCounts.createBindGroup`, stores the result at the leaf,
@@ -99,9 +141,7 @@ export function getOrCreateFromChain(
   counts: { createBindGroup: number; keys: string[] },
 ): BindGroup {
   let node = root;
-  for (let i = 0; i < handles.length - 1; i++) {
-    // biome-ignore lint/style/noNonNullAssertion: handles length guards the index
-    const h = handles[i]!;
+  for (const h of handles) {
     let next = node.get(h) as WeakMap<object, unknown> | undefined;
     if (next === undefined) {
       next = new WeakMap();
@@ -109,12 +149,10 @@ export function getOrCreateFromChain(
     }
     node = next;
   }
-  // biome-ignore lint/style/noNonNullAssertion: known non-empty at call sites
-  const last = handles[handles.length - 1]!;
-  let leaf = node.get(last) as Map<string, BindGroup> | undefined;
+  let leaf = node.get(BIND_GROUP_CHAIN_LEAF_KEY) as Map<string, BindGroup> | undefined;
   if (leaf === undefined) {
     leaf = new Map();
-    node.set(last, leaf);
+    node.set(BIND_GROUP_CHAIN_LEAF_KEY, leaf);
   }
   const hit = leaf.get(variant);
   if (hit !== undefined) return hit;
@@ -123,6 +161,62 @@ export function getOrCreateFromChain(
   counts.keys.push(variant);
   leaf.set(variant, bg);
   return bg;
+}
+
+/**
+ * Result-preserving sibling of `getOrCreateFromChain`.  RHI creation can fail
+ * transiently during recovery or capability probing; a failed attempt must
+ * not enter the cache and must remain a structured Result for the caller.
+ */
+export function getOrCreateFromChainResult<E>(
+  root: WeakMap<object, unknown>,
+  handles: readonly object[],
+  variant: string,
+  factory: () => Result<BindGroup, E>,
+  counts: { createBindGroup: number; keys: string[] },
+): Result<BindGroup, E> {
+  let node = root;
+  for (const h of handles) {
+    let next = node.get(h) as WeakMap<object, unknown> | undefined;
+    if (next === undefined) {
+      next = new WeakMap();
+      node.set(h, next);
+    }
+    node = next;
+  }
+  let leaf = node.get(BIND_GROUP_CHAIN_LEAF_KEY) as Map<string, BindGroup> | undefined;
+  if (leaf === undefined) {
+    leaf = new Map();
+    node.set(BIND_GROUP_CHAIN_LEAF_KEY, leaf);
+  }
+  const hit = leaf.get(variant);
+  if (hit !== undefined) return ok(hit);
+  const created = factory();
+  if (!created.ok) return created;
+  counts.createBindGroup += 1;
+  counts.keys.push(variant);
+  leaf.set(variant, created.value);
+  return created;
+}
+
+/**
+ * Read a cached bind group using the same variable-depth chain contract as
+ * `getOrCreateFromChain`. Readers must traverse the terminal marker instead
+ * of assuming that the last handle directly stores the variant map.
+ */
+export function findFromChain(
+  root: WeakMap<object, unknown>,
+  handles: readonly object[],
+  variant: string,
+): BindGroup | undefined {
+  let node = root;
+  for (const handle of handles) {
+    const next = node.get(handle);
+    if (next === undefined) return undefined;
+    node = next as WeakMap<object, unknown>;
+  }
+  const leaf = node.get(BIND_GROUP_CHAIN_LEAF_KEY) as Map<string, BindGroup> | undefined;
+  return leaf?.get(variant);
 }
 
 /**
@@ -317,94 +411,185 @@ export function isMeshSsboDevMode(): boolean {
   return true;
 }
 
-/**
- * Module-scoped reusable scratch for batched mesh-SSBO uploads (O2).
- * Grows monotonically; never shrinks. One allocation per render session
- * instead of one per entity per frame.
- *
- * @internal
- */
-let _meshSsboScratch = new Uint8Array(0);
+// The optional 16-byte surface tail fits the existing 256-byte direct slot.
+const MESH_SLOT_FLOATS = 40;
+const MESH_STRIDE_FLOATS = MESH_PER_ENTITY_STRIDE / Float32Array.BYTES_PER_ELEMENT;
+// Clean slots this close together are re-sent with their neighbours so a
+// scattered change still flushes as a few contiguous writes.
+const MESH_DIRTY_MERGE_GAP_SLOTS = 8;
 
 /**
- * feat-20260704 M3/w21: per-renderable `entity_world` upload (batched). All N
- * mat4+normalMatrix slots are assembled into a single contiguous scratch
- * buffer, then flushed as one `writeBuffer` call instead of N individual
- * calls. Extracted verbatim from `recordFrame` (frame.ts) — the module-scoped
- * `_meshSsboScratch` let and its only reassignment site now co-locate in this
- * file so the two mesh-SSBO module lets live together (AC-06).
+ * CPU copy of what the GPU mesh storage buffer holds. The buffer is written
+ * only by {@link uploadMeshSsboBatch}, so its identity is the mirror key and a
+ * replaced buffer starts with no known slots.
+ */
+interface MeshSsboMirror {
+  bytes: Uint8Array;
+  bits: Uint32Array;
+  known: Uint8Array;
+}
+
+const mirrors = new WeakMap<Buffer, MeshSsboMirror>();
+const candidate = new Float32Array(MESH_SLOT_FLOATS);
+const candidateBits = new Uint32Array(candidate.buffer);
+
+function meshSsboMirror(buffer: Buffer, slotCount: number): MeshSsboMirror {
+  let mirror = mirrors.get(buffer);
+  if (mirror === undefined) {
+    mirror = { bytes: new Uint8Array(0), bits: new Uint32Array(0), known: new Uint8Array(0) };
+    mirrors.set(buffer, mirror);
+  }
+  if (mirror.known.length < slotCount) {
+    const capacity = Math.max(slotCount, mirror.known.length * 2);
+    const bytes = new Uint8Array(capacity * MESH_PER_ENTITY_STRIDE);
+    bytes.set(mirror.bytes);
+    const known = new Uint8Array(capacity);
+    known.set(mirror.known);
+    mirror.bytes = bytes;
+    mirror.bits = new Uint32Array(bytes.buffer);
+    mirror.known = known;
+  }
+  return mirror;
+}
+
+function writeMeshSlotCandidate(entry: ValidatedRenderable, foldHead: boolean): void {
+  candidate.fill(0);
+  if (foldHead) {
+    candidate[0] = 1;
+    candidate[5] = 1;
+    candidate[10] = 1;
+    candidate[15] = 1;
+    // Fold heads use the instance storage path; keep the mesh temporal
+    // fields deterministic for shader variants that still read the slot.
+    candidate[16] = 1;
+    candidate[21] = 1;
+    candidate[26] = 1;
+    candidate[31] = 1;
+    candidate[32] = 1;
+    candidate[33] = 1;
+    return;
+  }
+  const worldFromLocal = entry.source.transform.world;
+  for (let k = 0; k < 16; k++) candidate[k] = worldFromLocal[k] ?? 0;
+  const previousWorld = entry.source.temporal?.previousTransform.world ?? worldFromLocal;
+  for (let k = 0; k < 16; k++) candidate[16 + k] = previousWorld[k] ?? 0;
+  let reactiveMaterial = false;
+  for (const material of entry.source.materials) {
+    const shader = material.materialShaderId;
+    // Published Standard programs use content hashes, not authored module names.
+    // Their accepted Surface contract still owns exact opacity/motion projection.
+    // Unknown custom programs retain the conservative reactive classification.
+    if (
+      material.transparent === true ||
+      shader === 'forgeax::sprite' ||
+      shader === 'forgeax::sprite-lit' ||
+      (shader !== undefined &&
+        !shader.startsWith('forgeax::') &&
+        !(material.surfaceModel === 'standard' && material.materialProgramKeys !== undefined))
+    ) {
+      reactiveMaterial = true;
+      break;
+    }
+  }
+  candidate[32] = entry.source.temporal?.reactive === true || reactiveMaterial ? 1 : 0;
+  candidate[33] = meshSurfaceFlags(entry.source);
+}
+
+/** Returns whether the slot differed from the mirrored GPU contents. */
+function stageMeshSlot(mirror: MeshSsboMirror, slot: number): boolean {
+  const base = slot * MESH_STRIDE_FLOATS;
+  let dirty = mirror.known[slot] !== 1;
+  for (let k = 0; k < MESH_SLOT_FLOATS; k++) {
+    const value = candidateBits[k] ?? 0;
+    if (mirror.bits[base + k] !== value) {
+      mirror.bits[base + k] = value;
+      dirty = true;
+    }
+  }
+  mirror.known[slot] = 1;
+  return dirty;
+}
+
+function flushMeshRun(
+  queue: RhiQueue,
+  buffer: Buffer,
+  mirror: MeshSsboMirror,
+  first: number,
+  end: number,
+): void {
+  const offset = first * MESH_PER_ENTITY_STRIDE;
+  const upload = queue.writeBuffer(
+    buffer,
+    offset,
+    mirror.bytes,
+    offset,
+    (end - first) * MESH_PER_ENTITY_STRIDE,
+  );
+  if (!upload.ok) throw upload.error;
+}
+
+/**
+ * Per-renderable `entity_world` upload for the main slots `[0, main.length)`
+ * and the ShadowCaster residual slots that follow them. Both lanes are packed
+ * into one persistent mirror and only slots whose bytes changed since the
+ * last upload to this buffer are written, as coalesced contiguous runs.
  *
- * feat-20260518 M3 / w14 (AC-08): each 256-byte slot carries a 16-float mat4
- * at [0..64B) and a 48-byte mat3 normalMatrix at [64..112B) (3 vec4 columns;
- * padding at indices 19/23/27 stays 0). The mat3 =
- * transpose(invert(mat3(worldFromLocal))) for correct normal transform under
- * non-uniform scale.
- *
- * feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap (D-1):
- * fold-bucket heads write identity into their slot; the fold path assembles
- * per-instance world matrices into the @group(3) instances buffer instead
- * (sprite/unlit shaders ignore normals; AC-01/AC-02).
+ * Each aligned slot carries current/previous mat4 at bytes 0/64, followed
+ * by temporal metadata at byte 128. Normals are derived in the shader.
+ * Fold-bucket heads write identity into their slot; the fold path assembles
+ * per-instance world matrices into the @group(3) instances buffer instead.
  *
  * @internal
  */
 export function uploadMeshSsboBatch(
   queue: RhiQueue,
   meshStorageBuffer: { readonly buffer: Buffer },
-  validatedOrdered: readonly ValidatedRenderable[],
+  main: readonly ValidatedRenderable[],
   foldDispatchPlan: FoldDispatchPlan | null,
-): void {
-  const slotCount = validatedOrdered.length;
-  const neededBytes = slotCount * MESH_PER_ENTITY_STRIDE;
-  // Grow the module-scoped scratch monotonically; zero the used range.
-  if (_meshSsboScratch.length < neededBytes) {
-    _meshSsboScratch = new Uint8Array(neededBytes);
-  } else {
-    _meshSsboScratch.fill(0, 0, neededBytes);
-  }
-  const normalMatrixScratch = mat3.create();
-  for (let i = 0; i < slotCount; i++) {
-    const entry = validatedOrdered[i];
-    if (entry === undefined) continue;
-    // Float32Array view into this entity's 256-byte slot (28 floats used,
-    // rest remains 0 from the fill above). Byte offset i*256 is always
-    // 4-byte aligned since MESH_PER_ENTITY_STRIDE=256 is divisible by 4.
-    const slot = new Float32Array(_meshSsboScratch.buffer, i * MESH_PER_ENTITY_STRIDE, 28);
-    const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
-    if (isFoldHead) {
-      // identity mat4
-      slot[0] = 1;
-      slot[5] = 1;
-      slot[10] = 1;
-      slot[15] = 1;
-      // identity mat3 normal (cols at slot offsets 16/20/24)
-      slot[16] = 1;
-      slot[20] = 1;
-      slot[24] = 1;
+  shadow: readonly ValidatedRenderable[] = [],
+  visibleSurfaceBases?: ReadonlyMap<number, number>,
+): number {
+  const slotCount = main.length + shadow.length;
+  if (slotCount === 0) return 0;
+  const buffer = meshStorageBuffer.buffer;
+  const mirror = meshSsboMirror(buffer, slotCount);
+  let runFirst = -1;
+  let runEnd = -1;
+  let runs = 0;
+  for (let slot = 0; slot < slotCount; slot++) {
+    const shadowSlot = slot >= main.length;
+    const entry = shadowSlot ? shadow[slot - main.length] : main[slot];
+    if (entry === undefined) {
+      candidate.fill(0);
     } else {
-      const worldFromLocal = entry.source.transform.world;
-      for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
-      const normal = mat3.normalMatrix(normalMatrixScratch, worldFromLocal);
-      slot[16] = normal[0] ?? 0;
-      slot[17] = normal[1] ?? 0;
-      slot[18] = normal[2] ?? 0;
-      slot[20] = normal[3] ?? 0;
-      slot[21] = normal[4] ?? 0;
-      slot[22] = normal[5] ?? 0;
-      slot[24] = normal[6] ?? 0;
-      slot[25] = normal[7] ?? 0;
-      slot[26] = normal[8] ?? 0;
+      writeMeshSlotCandidate(
+        entry,
+        !shadowSlot && foldDispatchPlan?.headBuckets.has(slot) === true,
+      );
+      if (!shadowSlot && visibleSurfaceBases !== undefined) {
+        candidateBits[36] =
+          visibleSurfaceBases.get(worldEntityKey(entry.source.worldId, entry.source.entityKey)) ??
+          0;
+        candidateBits[37] = entry.source.instances?.instanceCount ?? 1;
+      }
     }
+    if (!stageMeshSlot(mirror, slot)) continue;
+    if (runFirst >= 0 && slot - runEnd <= MESH_DIRTY_MERGE_GAP_SLOTS) {
+      runEnd = slot + 1;
+      continue;
+    }
+    if (runFirst >= 0) {
+      flushMeshRun(queue, buffer, mirror, runFirst, runEnd);
+      runs += 1;
+    }
+    runFirst = slot;
+    runEnd = slot + 1;
   }
-  if (neededBytes > 0) {
-    const meshUpload = queue.writeBuffer(
-      meshStorageBuffer.buffer,
-      0,
-      _meshSsboScratch,
-      0,
-      neededBytes,
-    );
-    if (!meshUpload.ok) throw meshUpload.error;
+  if (runFirst >= 0) {
+    flushMeshRun(queue, buffer, mirror, runFirst, runEnd);
+    runs += 1;
   }
+  return runs;
 }
 
 /**
@@ -459,15 +644,41 @@ export interface FoldBucket {
  * minimal shape. The gate read inside the helper uses `=== true` /
  * `!== true` so both `false` and `undefined` enter the singleton branch.
  *
- * feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up: gate
- * migrated from `shadingModel === 'sprite'` (the union member was
- * removed in M3 / w15) to `transparent === true` (the new SSOT for
- * "routes through the LDR split sub-pass" — same predicate the
- * `splitLdrSprite` filter at render-system-record.ts:4826/5612 uses).
+ * feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up: the
+ * transparent flag identifies the LDR split sub-pass, while the shader id
+ * identifies the sprite owner that is safe to fold. Standard PBR Alpha Blend
+ * remains singleton so its geometry pass keeps one projection row per draw.
  */
 export interface FoldRenderableLike {
   readonly transform: { readonly world: Float32Array };
   readonly material: { readonly transparent?: boolean | undefined };
+}
+
+const FOLDABLE_TRANSPARENT_SHADER_IDS = new Set(['forgeax::sprite', 'forgeax::sprite-lit']);
+
+type ParamSnapshot = DispatchEntry['paramSnapshot'];
+
+function sameParamSnapshot(a: ParamSnapshot, b: ParamSnapshot): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) {
+    const va = a[key];
+    const vb = b[key];
+    if (va === vb) continue;
+    if (!Array.isArray(va) || !Array.isArray(vb) || va.length !== vb.length) return false;
+    for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return false;
+  }
+  return true;
+}
+
+function isFoldEligible(entry: DispatchEntry, renderables: readonly FoldRenderableLike[]): boolean {
+  return (
+    renderables[entry.renderableIndex]?.material.transparent === true &&
+    entry.materialShaderId !== undefined &&
+    FOLDABLE_TRANSPARENT_SHADER_IDS.has(entry.materialShaderId)
+  );
 }
 
 /**
@@ -536,7 +747,7 @@ export function foldDispatchBuckets(
   // identity and renders the 3D geometry at the origin — collapsing the
   // frame to black (hello-room CI regression).
   //
-  // Concept-count fix: encode "fold is transparent-sub-pass-only" at the
+  // Concept-count fix: encode "fold is transparent-sprite-sub-pass-only" at the
   // head selection point — the gate is the single bucket-key invariant
   // that makes both dispatch sites correct without coupling identity-
   // overwrite logic to a separate check (avoiding the D-9 shared-exit
@@ -551,10 +762,9 @@ export function foldDispatchBuckets(
   //
   // feat-20260625 R2 fix-up: pre-feat the gate was `shadingModel ===
   // 'sprite'`; M3 / w15 narrowed the shadingModel union to
-  // `'unlit' | undefined` (the `'sprite'` discriminator was the design
-  // ablation target), so the gate now reads `material.transparent` —
-  // the new SSOT for "routes through the LDR split sub-pass" mirrored
-  // on `computeSplitLdrSprite` + the `splitLdrSprite` skip filter.
+  // `'unlit' | undefined`. The current gate retains the transparent SSOT
+  // and adds the explicit sprite shader identity so Standard PBR Alpha Blend
+  // cannot enter this fold path.
   const buckets: FoldBucket[] = [];
   let runStart = 0;
   while (runStart < orderedEntries.length) {
@@ -569,8 +779,7 @@ export function foldDispatchBuckets(
     // carrier (extract stage derives it from the first pass's
     // `renderState.blend !== undefined`, post-feat-20260626-collapse;
     // see `MaterialSnapshot.transparent`).
-    const headTransparent = renderables[head.renderableIndex]?.material.transparent;
-    if (headTransparent !== true) {
+    if (!isFoldEligible(head, renderables)) {
       buckets.push(makeSingletonBucket(head, renderables, mode));
       runStart += 1;
       continue;
@@ -582,12 +791,15 @@ export function foldDispatchBuckets(
       if (cand === undefined) break;
       if (cand.layer !== head.layer) break;
       if (cand.materialHandle !== head.materialHandle) break;
+      // A bucket draws with its head's material slot, so differing per-entity
+      // values (SpriteRegionOverride regions) split the run. Each override owns
+      // its snapshot object, so equal regions must compare by value to fold.
+      if (!sameParamSnapshot(cand.paramSnapshot, head.paramSnapshot)) break;
       // Defensive: cand transparent must also be true to join the run.
       // Same materialHandle implies same transparent flag in production
       // (material asset identity), but the check costs O(1) per cand and
       // makes the bucket invariant locally readable.
-      const candTransparent = renderables[cand.renderableIndex]?.material.transparent;
-      if (candTransparent !== true) break;
+      if (!isFoldEligible(cand, renderables)) break;
       const candSortKey = readSortKey(mode, cand.renderableIndex, renderables);
       if (candSortKey !== headSortKey) break;
       runEnd += 1;

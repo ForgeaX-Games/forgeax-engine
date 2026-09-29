@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -71,6 +71,10 @@ export function probeSharedInputEvidence(root, output) {
     const evidence = {
       schemaVersion: 1,
       producer: 'shared-evidence-probe',
+      testedRevision: execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: root,
+        encoding: 'utf8',
+      }).trim(),
       inputFingerprint: baseline.inputFingerprint,
       baseline,
       samples: [cold, warm],

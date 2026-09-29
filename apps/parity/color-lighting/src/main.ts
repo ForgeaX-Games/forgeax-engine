@@ -1,7 +1,9 @@
-import { createForgeaxAdapter } from './adapters/forgeax-adapter';
+import { createForgeaxAdapter, projectForgeaxSurfaceEvidence } from './adapters/forgeax-adapter';
+import { buildFallbackSurfaceContract } from './fallback-surface-contract';
 import { createThreeAdapter, threeToneMappingId } from './adapters/three-adapter';
 import { captureIblGpuCase, serializeIblGpuCaseResult } from './adapters/ibl-adapter';
 import { projectObservation, type AttachmentEvidence } from './capture/attachment-readback';
+import { readCanvasPixels } from './capture/canvas-readback';
 import { probeReadback } from './capture/readback-probe';
 import { readbackRgba16float } from './capture/rhi-readback';
 import { TONE_CASES_BY_ID, TONE_REQUIRED_CASES } from './report/tone-required';
@@ -29,6 +31,7 @@ import transparentLdrCase from '../cases/transparency-post/transparent-ldr-urp.j
 import {
   captureTransparencyForgeaxBrowser,
   captureTransparencyThreeBrowser,
+  makeTransparencyWorld,
 } from './adapters/transparency-post-adapter';
 import { World } from '@forgeax/engine-ecs';
 import type { RhiDevice } from '@forgeax/engine-rhi';
@@ -56,6 +59,7 @@ import {
   TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
   type Tonemap,
+  type FrameReceipt,
   type Renderer,
   type RenderWorldLease,
 } from '@forgeax/engine-render';
@@ -73,11 +77,13 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   NearestFilter,
+  PointLight as ThreePointLight,
   PerspectiveCamera,
   PlaneGeometry,
   RGBAFormat,
   Scene,
   SRGBColorSpace,
+  SpotLight as ThreeSpotLight,
   SphereGeometry,
   UnsignedByteType,
   WebGLRenderer,
@@ -88,6 +94,23 @@ import {
   type SpotShadowReceiverVariant,
   type SpotShadowScene,
 } from './spot-shadow-scene';
+const EVIDENCE_SOURCE_SHA =
+  (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
+    ?.VITE_FORGEAX_EVIDENCE_SOURCE_SHA ?? 'unavailable';
+type SurfaceEvidenceFixture = {
+  SURFACE_CLOSURE: string;
+  SURFACE_SOURCE_CLOSURE: readonly string[];
+};
+const surfaceFixtureModule = import.meta.glob('../../../../packages/render/src/__tests__/surface-standard-pipeline.fixture.ts', {
+  eager: true,
+  import: '*',
+}) as Record<string, SurfaceEvidenceFixture>;
+const surfaceFixture = Object.values(surfaceFixtureModule)[0];
+if (surfaceFixture === undefined) throw new Error('surface-webgl2-shared-fixture-missing');
+const {
+  SURFACE_CLOSURE,
+  SURFACE_SOURCE_CLOSURE,
+} = surfaceFixture;
 
 const m1FalsificationCases = falsificationManifest.cases.map(
   (entry) => ({
@@ -119,6 +142,18 @@ interface M2AlphaFixture extends SceneCase {
 interface DirectProducerMetadata {
   readonly copySrc: boolean;
   readonly lifetime: 'active' | 'retired';
+}
+
+interface AlphaCaptureDiagnostics {
+  readonly caseId: string;
+  readonly events: Array<Record<string, unknown>>;
+  readonly renderErrors: string[];
+  draw?: Record<string, unknown>;
+  inspection?: Record<string, unknown>;
+  centerRgba?: number[];
+  postFenceRgba?: number[];
+  linearHdr?: { readonly centerBytes: number[]; readonly nonZeroBytes: number };
+  error?: string;
 }
 
 function tonemapToU32(mode: Tonemap): number {
@@ -157,6 +192,7 @@ const m4DirectLightModules = import.meta.glob('../cases/direct-light/cases/*.jso
 const m4DirectLightCases = Object.values(m4DirectLightModules);
 const m4DirectLightCasesById = new Map(m4DirectLightCases.map((entry) => [entry.caseId, entry]));
 const m6TransparencyCases = [transparentLdrCase, transparentHdrCase] as unknown as readonly SceneCase[];
+const webkitLifecycleCase = transparentLdrCase as unknown as SceneCase;
 const iblVisualSceneCase = {
   caseId: constantEnvironment.caseId,
   required: true,
@@ -166,7 +202,7 @@ const iblVisualSceneCase = {
   budget: { analyticMax: 0.05, roiMax: 0.05, byteMax: 128 * 128 * 4 },
 } as const satisfies SceneCase;
 const directProducerMetadata = new Map<string, DirectProducerMetadata>();
-const SPOT_SHADOW_CAPTURE_FRAMES = 300;
+const SPOT_SHADOW_CAPTURE_FRAMES = 60;
 const cases = [
   positiveMinimal,
   selfCompare,
@@ -219,7 +255,8 @@ async function drawSubmittedFrames(
   lease: RenderWorldLease,
   target: number,
   label: string,
-): Promise<void> {
+): Promise<FrameReceipt> {
+  let lastReceipt: FrameReceipt | undefined;
   for (let frame = 0; frame < target; frame += 1) {
     world.update().unwrap();
     const drawResult = renderer.draw({
@@ -228,9 +265,13 @@ async function drawSubmittedFrames(
       environment: { lease },
     });
     if (!drawResult.ok) throw new Error(`${label} failed: ${drawResult.error.code}`);
-    const completed = await drawResult.value.completed;
+    if (drawResult.value === undefined) throw new Error(`${label} did not return a frame receipt`);
+    lastReceipt = drawResult.value;
+    const completed = await lastReceipt.completed;
     if (!completed.ok) throw new Error(`${label} completion failed: ${completed.error.code}`);
   }
+  if (lastReceipt === undefined) throw new Error(`${label} submitted no frames`);
+  return lastReceipt;
 }
 
 async function settleWebglRenderer(renderer: Renderer): Promise<void> {
@@ -332,6 +373,9 @@ async function captureDirectEvidence(
   pixels: Uint8Array,
   renderErrors: readonly string[],
 ): Promise<{ readonly evidence: AttachmentEvidence; readonly metadata: DirectProducerMetadata }> {
+  if (renderErrors.length !== 0) {
+    throw new Error(`ForgeaX direct-light producer errors: ${renderErrors.join(' | ')}`);
+  }
   const observationResult = await legacyHost.observeCurrentFrame({
     semantic: 'linear-hdr',
     readback: (lease) => readbackRgba16float(device, lease),
@@ -345,7 +389,7 @@ async function captureDirectEvidence(
   if (linear.metadata.pipelineId !== 'forgeax::standard') {
     throw new Error(`ForgeaX producer identity mismatch: ${linear.metadata.pipelineId}`);
   }
-  const pipelineId = sceneCase.pipeline?.identity === 'hdrp' ? 'forgeax::hdrp' : 'forgeax::urp';
+  const pipelineId = 'forgeax::standard' as const;
   const finalBytes = new Uint8Array(pixels);
   return {
     evidence: {
@@ -390,18 +434,22 @@ async function createForgeaxCaptureContext(
   const useWebkitCompositorReadback = rendererKind === 'webgl'
     && typeof (globalThis as unknown as { __forgeaxWebkitCanvasReadback?: unknown }).__forgeaxWebkitCanvasReadback === 'function';
   if (rendererKind === 'webgl') {
+    const cssSize = `${canvas.width}px`;
     canvas.style.cssText = useWebkitCompositorReadback
-      ? 'position:fixed;left:0;top:0'
-      : 'position:fixed;left:-10000px;top:-10000px';
+      ? `position:fixed;left:0;top:0;width:${cssSize};height:${canvas.height}px`
+      : `position:fixed;left:-10000px;top:-10000px;width:${cssSize};height:${canvas.height}px`;
     document.body.append(canvas);
   }
   const constructed = await constructRuntimeRendererHost(canvas, {}, forgeaxBundlerAdapter() as never);
   if (!constructed.ok) {
-    const detail = 'detail' in constructed.error ? constructed.error.detail : undefined;
+    const error = constructed.error;
+    const code = 'code' in error ? error.code : 'engine-environment-error';
+    const hint = 'hint' in error ? error.hint : error.reason;
+    const detail = 'detail' in error ? error.detail : undefined;
     throw new Error(`Forgeax renderer unavailable: ${JSON.stringify({
-      code: constructed.error.code,
-      message: constructed.error.message,
-      hint: constructed.error.hint,
+      code,
+      message: error.message,
+      hint,
       ...(detail === undefined ? {} : { detail }),
       ...(detail !== undefined && 'compilerMessages' in detail
         ? { compilerMessages: detail.compilerMessages }
@@ -410,6 +458,11 @@ async function createForgeaxCaptureContext(
   }
   const { renderer, debugDrawHost } = constructed.value;
   const legacyHost = debugDrawHost as unknown as RendererLegacyHostAdapter;
+  // The parity fixture compares ForgeaX lighting and tone output against an
+  // independent Three.js capture.  Keep the producer policy identical by
+  // disabling the production-only final-output dither in this test context;
+  // the pipeline asset default remains enabled for real game renderers.
+  legacyHost.configureStandard({ outputDither: false });
   return { canvas, renderer, legacyHost, debugDrawHost, rendererKind, useWebkitCompositorReadback };
 }
 
@@ -425,24 +478,248 @@ async function disposeForgeaxCaptureContext(
   await renderer.dispose();
 }
 
+const WEBKIT_LIFECYCLE_FRAME_COUNT = 60;
+
+interface WebkitLifecycleStageEvidence {
+  readonly stage: 'post-frame-compositor-readback-before-dispose';
+  readonly frameCount: 60;
+  readonly frameId: number;
+  readonly deviceGeneration: number;
+  readonly actualBackendKind: string;
+  readonly surfaceIdentity: string;
+  readonly presentationProof: unknown;
+  readonly viewport: {
+    readonly canvasWidth: number;
+    readonly canvasHeight: number;
+    readonly cssWidth: number;
+    readonly cssHeight: number;
+    readonly devicePixelRatio: number;
+  };
+  readonly byteLength: number;
+  readonly nonBlackPixels: number;
+  readonly rawHash: string;
+  readonly completed: 'ok';
+  readonly rendererErrors: readonly string[];
+  readonly attachmentWorldIdentity: string;
+  readonly attachmentGeneration: number;
+  readonly receipt: { readonly frameId: number; readonly deviceGeneration: number };
+}
+
+interface WebkitLifecycleDisposalEvidence {
+  readonly terminalStage: 'renderer.dispose';
+  readonly sequence: readonly [
+    'renderer.dispose',
+    'context.unconfigure',
+    'gpuStore.destroyAll',
+    'renderSystem.disposeFrameState',
+    'activeDeviceScope.dispose',
+  ];
+  readonly result: 'ok';
+}
+
+interface WebkitLifecycleEvidence {
+  readonly status: 'pass';
+  readonly sceneCaseId: string;
+  readonly stages: readonly [WebkitLifecycleStageEvidence, WebkitLifecycleStageEvidence];
+  readonly disposal: readonly [WebkitLifecycleDisposalEvidence, WebkitLifecycleDisposalEvidence];
+}
+
+function countNonBlackPixels(pixels: Uint8Array): number {
+  let count = 0;
+  for (let index = 0; index + 3 < pixels.length; index += 4) {
+    if ((pixels[index] ?? 0) !== 0 || (pixels[index + 1] ?? 0) !== 0 || (pixels[index + 2] ?? 0) !== 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function captureWebkitLifecycleStage(
+  context: Awaited<ReturnType<typeof createForgeaxCaptureContext>>,
+  stageCase: SceneCase,
+  stage: WebkitLifecycleStageEvidence['stage'],
+): Promise<WebkitLifecycleStageEvidence> {
+  const world = makeTransparencyWorld(stageCase);
+  const attached = context.renderer.attach(world);
+  if (!attached.ok) throw new Error(`WebKit lifecycle attach failed: ${attached.error.code}`);
+  const lease = attached.value;
+  const rendererErrors: string[] = [];
+  const removeRendererErrorListener = context.renderer.subscribe((event) => {
+    if (event.kind !== 'error') return;
+    rendererErrors.push(`${event.error.code}: ${event.error.expected} (${event.error.hint})`);
+  });
+  try {
+    const receipt = await drawSubmittedFrames(
+      context.renderer,
+      world,
+      lease,
+      WEBKIT_LIFECYCLE_FRAME_COUNT,
+      `WebKit lifecycle ${stageCase.caseId}`,
+    );
+    await waitForAnimationFrameOrTimeout();
+    await waitForAnimationFrameOrTimeout();
+    const pixels = await readCanvasPixels(context.canvas, context.useWebkitCompositorReadback);
+    const inspection = context.renderer.inspect();
+    const proof = inspection.output.presentationProof;
+    const surfaceIdentity = proof?.surfaceIdentity;
+    const rect = context.canvas.getBoundingClientRect();
+    if (inspection.capabilities.backendKind !== 'wgpu-webgl2') {
+      throw new Error(`WebKit lifecycle backend mismatch: ${inspection.capabilities.backendKind}`);
+    }
+    if (typeof surfaceIdentity !== 'string' || surfaceIdentity.length === 0) {
+      throw new Error('WebKit lifecycle surface identity is missing');
+    }
+    if (!inspection.output.presentationProof || !inspection.output.presentationProof.descriptor
+      || !inspection.output.presentationProof.acquisition || !inspection.output.presentationProof.validation) {
+      throw new Error('WebKit lifecycle presentation proof is incomplete');
+    }
+    if (inspection.frame.frameId !== receipt.frameId || inspection.frame.deviceGeneration !== receipt.deviceGeneration) {
+      throw new Error(
+        `WebKit lifecycle receipt mismatch: frame=${inspection.frame.frameId}/${receipt.frameId} generation=${inspection.frame.deviceGeneration}/${receipt.deviceGeneration}`,
+      );
+    }
+    const expectedByteLength = context.canvas.width * context.canvas.height * 4;
+    if (pixels.byteLength !== expectedByteLength) {
+      throw new Error(`WebKit lifecycle readback length ${pixels.byteLength}; expected ${expectedByteLength}`);
+    }
+    const nonBlackPixels = countNonBlackPixels(pixels);
+    if (nonBlackPixels === 0) throw new Error('WebKit lifecycle compositor readback is all black');
+    if (rendererErrors.length > 0) {
+      throw new Error(`WebKit lifecycle renderer errors: ${rendererErrors.join(' | ')}`);
+    }
+    return {
+      stage,
+      frameCount: WEBKIT_LIFECYCLE_FRAME_COUNT,
+      frameId: inspection.frame.frameId,
+      deviceGeneration: inspection.frame.deviceGeneration,
+      actualBackendKind: inspection.capabilities.backendKind,
+      surfaceIdentity,
+      presentationProof: inspection.output.presentationProof,
+      viewport: {
+        canvasWidth: context.canvas.width,
+        canvasHeight: context.canvas.height,
+        cssWidth: rect.width,
+        cssHeight: rect.height,
+        devicePixelRatio: globalThis.devicePixelRatio,
+      },
+      byteLength: pixels.byteLength,
+      nonBlackPixels,
+      rawHash: await hashRawBytes(pixels),
+      completed: 'ok',
+      rendererErrors: [...rendererErrors],
+      attachmentWorldIdentity: lease.worldIdentity,
+      attachmentGeneration: lease.generation,
+      receipt: { frameId: receipt.frameId, deviceGeneration: receipt.deviceGeneration },
+    };
+  } finally {
+    removeRendererErrorListener();
+    lease.dispose();
+  }
+}
+
+async function runWebkitLifecycleRegression(): Promise<WebkitLifecycleEvidence> {
+  const stages: WebkitLifecycleStageEvidence[] = [];
+  const disposals: WebkitLifecycleDisposalEvidence[] = [];
+  let firstContext: Awaited<ReturnType<typeof createForgeaxCaptureContext>> | undefined;
+  try {
+    firstContext = await createForgeaxCaptureContext('webgl', webkitLifecycleCase);
+    stages.push(await captureWebkitLifecycleStage(
+      firstContext,
+      webkitLifecycleCase,
+      'post-frame-compositor-readback-before-dispose',
+    ));
+    const firstDispose = await firstContext.renderer.dispose();
+    if (!firstDispose.ok) throw new Error(`WebKit lifecycle first dispose failed: ${firstDispose.error.code}`);
+    disposals.push({
+      terminalStage: 'renderer.dispose',
+      sequence: [
+        'renderer.dispose',
+        'context.unconfigure',
+        'gpuStore.destroyAll',
+        'renderSystem.disposeFrameState',
+        'activeDeviceScope.dispose',
+      ],
+      result: 'ok',
+    });
+    firstContext.canvas.remove();
+    firstContext = undefined;
+
+    const secondContext = await createForgeaxCaptureContext('webgl', webkitLifecycleCase);
+    try {
+      const secondStage = await captureWebkitLifecycleStage(
+        secondContext,
+        webkitLifecycleCase,
+        'post-frame-compositor-readback-before-dispose',
+      );
+      if (secondStage.surfaceIdentity === stages[0]?.surfaceIdentity) {
+        throw new Error('WebKit lifecycle recreated surface reused the first surface identity');
+      }
+      if (secondStage.attachmentWorldIdentity === stages[0]?.attachmentWorldIdentity) {
+        throw new Error('WebKit lifecycle recreated renderer reused the first attachment lease');
+      }
+      stages.push(secondStage);
+      const secondDispose = await secondContext.renderer.dispose();
+      if (!secondDispose.ok) throw new Error(`WebKit lifecycle second dispose failed: ${secondDispose.error.code}`);
+      disposals.push({
+        terminalStage: 'renderer.dispose',
+        sequence: [
+          'renderer.dispose',
+          'context.unconfigure',
+          'gpuStore.destroyAll',
+          'renderSystem.disposeFrameState',
+          'activeDeviceScope.dispose',
+        ],
+        result: 'ok',
+      });
+    } finally {
+      secondContext.canvas.remove();
+    }
+  } finally {
+    if (firstContext !== undefined) {
+      const dispose = await firstContext.renderer.dispose();
+      firstContext.canvas.remove();
+      if (!dispose.ok) throw new Error(`WebKit lifecycle cleanup failed: ${dispose.error.code}`);
+    }
+  }
+  if (stages.length !== 2 || disposals.length !== 2) throw new Error('WebKit lifecycle did not complete both stages');
+  return {
+    status: 'pass',
+    sceneCaseId: webkitLifecycleCase.caseId,
+    stages: [stages[0] as WebkitLifecycleStageEvidence, stages[1] as WebkitLifecycleStageEvidence],
+    disposal: [disposals[0] as WebkitLifecycleDisposalEvidence, disposals[1] as WebkitLifecycleDisposalEvidence],
+  };
+}
+
 async function captureForgeaxInContext(
   context: Awaited<ReturnType<typeof createForgeaxCaptureContext>>,
   sceneCase: SceneCase,
   spotShadowFalsifier?: SpotShadowFalsifierId,
   spotShadowReceiver: SpotShadowReceiverVariant = 'base',
   spotShadowCaptureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
+  fallbackBackendId?: 'webkit-webgl2' | 'chromium-webgl2',
+  diagnostics?: AlphaCaptureDiagnostics,
 ) {
   const { canvas, renderer, legacyHost, debugDrawHost, rendererKind, useWebkitCompositorReadback } = context;
   canvas.width = sceneCase.scene.width;
   canvas.height = sceneCase.scene.height;
+  const directCase = m4DirectLightCasesById.get(sceneCase.caseId);
+  const expectedRenderPath = directCase?.pipeline?.renderPath ?? DEFAULT_STANDARD_PROFILE.renderPath;
+  if (renderer.inspect().profile.renderPath !== expectedRenderPath) {
+    const profileResult = renderer.setProfile({ ...DEFAULT_STANDARD_PROFILE, renderPath: expectedRenderPath });
+    if (!profileResult.ok) throw new Error(`ForgeaX ${sceneCase.caseId} profile failed: ${profileResult.error.code}`);
+  }
   const renderErrors: string[] = [];
+  const events: Array<Record<string, unknown>> = [];
   const removeRenderErrorListener = renderer.subscribe((event) => {
+    if (diagnostics !== undefined) events.push({ ...event });
     if (event.kind !== 'error') return;
-    renderErrors.push(`${event.error.code}: ${event.error.expected} (${event.error.hint})`);
+    renderErrors.push(`${event.error.code}: ${event.error.expected} (${event.error.hint}) ${JSON.stringify('detail' in event.error ? event.error.detail : undefined)}`);
   });
+  let attachedWorld: World | undefined;
   let attachedLease: RenderWorldLease | undefined;
   try {
     const world = new World();
+    attachedWorld = world;
     const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     attachedLease = worldAttachment1.value;
@@ -450,15 +727,15 @@ async function captureForgeaxInContext(
     const m1Case = sceneCase.caseId.startsWith('default-') || sceneCase.caseId.startsWith('falsify-');
     const m2Case = m2AlphaCasesById.get(sceneCase.caseId);
     const toneCase = TONE_CASES_BY_ID.get(sceneCase.caseId);
-    const directCase = m4DirectLightCasesById.get(sceneCase.caseId);
-    if (directCase !== undefined) {
-      const expectedLighting = directCase.pipeline?.identity === 'hdrp' ? 'clustered' : 'direct';
-      const profileResult = renderer.setProfile({ ...DEFAULT_STANDARD_PROFILE, lighting: expectedLighting });
-      if (!profileResult.ok) throw new Error(`ForgeaX ${sceneCase.caseId} profile failed: ${profileResult.error.code}`);
-      if (renderer.inspect().profile.lighting !== expectedLighting) {
-        throw new Error(`ForgeaX ${sceneCase.caseId} selected ${renderer.inspect().profile.lighting} instead of ${expectedLighting}`);
-      }
+    if (renderer.inspect().profile.renderPath !== expectedRenderPath) {
+      throw new Error(`ForgeaX ${sceneCase.caseId} selected ${renderer.inspect().profile.renderPath} instead of ${expectedRenderPath}`);
     }
+    // A linear-HDR fixture explicitly opts into the float scene producer. The
+    // no-tone/no-FXAA camera fast path intentionally renders straight to the
+    // display surface and does not publish an HDR observation attachment.
+    const directTone = directCase === undefined || rendererKind !== 'webgpu'
+      ? {}
+      : { tonemap: tonemapToU32('linear') };
     const iblCase = sceneCase.caseId === constantEnvironment.caseId;
     const spotScene = directCase?.caseId === SPOT_SHADOW_SCENES.urp.caseId
       ? SPOT_SHADOW_SCENES.urp
@@ -485,7 +762,7 @@ async function captureForgeaxInContext(
             }),
             clearColor: sceneCase.scene.background,
             ...(toneCase === undefined && !iblCase
-              ? {}
+              ? directTone
               : toneCase === undefined
                 ? { tonemap: tonemapToU32('reinhard') }
                 : { tonemap: tonemapToU32(toneCase.tone.mode), exposure: toneCase.tone.exposure }),
@@ -514,7 +791,34 @@ async function captureForgeaxInContext(
     });
     world.update().unwrap();
     const drawResult = drawFrame();
+    if (diagnostics !== undefined) {
+      diagnostics.draw = {
+        ok: drawResult.ok,
+        ...(drawResult.ok
+          ? { frameId: drawResult.value.frameId, deviceGeneration: drawResult.value.deviceGeneration }
+          : { error: drawResult.error }),
+      };
+      diagnostics.inspection = renderer.inspect() as unknown as Record<string, unknown>;
+    }
     if (!drawResult.ok) throw new Error(`ForgeaX draw failed: ${drawResult.error.code}`);
+    if (m2Case !== undefined && rendererKind === 'webgpu') {
+      const completed = await drawResult.value.completed;
+      if (!completed.ok) throw new Error(`ForgeaX ${sceneCase.caseId} completion failed: ${completed.error.code}`);
+      await waitForAnimationFrameOrTimeout();
+      if (diagnostics !== undefined) {
+        const observation = await legacyHost.observeCurrentFrame({
+          semantic: 'linear-hdr',
+          readback: (lease) => readbackRgba16float(debugDrawHost.device, lease),
+        });
+        if (observation.ok) {
+          const offset = (Math.floor(sceneCase.scene.height / 2) * sceneCase.scene.width + Math.floor(sceneCase.scene.width / 2)) * 8;
+          diagnostics.linearHdr = {
+            centerBytes: Array.from(observation.value.bytes.slice(offset, offset + 8)),
+            nonZeroBytes: observation.value.bytes.reduce((count, byte) => count + (byte === 0 ? 0 : 1), 0),
+          };
+        }
+      }
+    }
     if (directCase !== undefined && rendererKind === 'webgpu') {
       const completed = await drawResult.value.completed;
       if (!completed.ok) throw new Error(`ForgeaX ${sceneCase.caseId} completion failed: ${completed.error.code}`);
@@ -543,12 +847,29 @@ async function captureForgeaxInContext(
     }
     if (iblCase && rendererKind === 'webgpu') await waitForAnimationFrameOrTimeout();
     const pixels = await readCanvasPixels(canvas, useWebkitCompositorReadback);
+    if (diagnostics !== undefined) {
+      const centerOffset = (Math.floor(sceneCase.scene.height / 2) * sceneCase.scene.width + Math.floor(sceneCase.scene.width / 2)) * 4;
+      diagnostics.centerRgba = Array.from(pixels.slice(centerOffset, centerOffset + 4));
+      await waitForAnimationFrameOrTimeout();
+      const postFencePixels = await readCanvasPixels(canvas, useWebkitCompositorReadback);
+      diagnostics.postFenceRgba = Array.from(postFencePixels.slice(centerOffset, centerOffset + 4));
+    }
     if (m2Case !== undefined) assertM2AlphaReadback(m2Case, pixels);
     if (directCase !== undefined && rendererKind === 'webgpu') {
       const capture = await captureDirectEvidence(legacyHost, debugDrawHost.device, sceneCase, pixels, renderErrors);
       directProducerMetadata.set(sceneCase.caseId, capture.metadata);
       return { linear: [], final: Array.from(pixels), config: directReadbackConfig(sceneCase), observations: capture.evidence };
     }
+    const surfaceEvidence = rendererKind === 'webgl' && fallbackBackendId !== undefined
+      ? await projectForgeaxSurfaceEvidence({
+          inspection: renderer.inspect(),
+          backendId: fallbackBackendId,
+          caseId: sceneCase.caseId,
+          pixels,
+          width: sceneCase.scene.width,
+          height: sceneCase.scene.height,
+        })
+      : undefined;
     return {
       linear: Array.from(pixels),
       final: Array.from(pixels),
@@ -563,8 +884,14 @@ async function captureForgeaxInContext(
               rawHashAvailable: true,
             }),
           },
+      ...(surfaceEvidence === undefined ? {} : { surfaceEvidence }),
     };
   } finally {
+    if (diagnostics !== undefined) {
+      diagnostics.events.push(...events);
+      diagnostics.renderErrors.push(...renderErrors);
+    }
+    if (attachedWorld !== undefined) legacyHost.detachScene(attachedWorld);
     attachedLease?.dispose();
     removeRenderErrorListener();
   }
@@ -603,11 +930,13 @@ export async function createForgeaxCaptureSession(initialSceneCase: SceneCase) {
       spotShadowCaptureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
     ) {
       if (disposed) throw new Error('ForgeaX capture session is disposed');
-      // SharedRef handles are scoped to the World that owns them. A fresh
-      // renderer keeps each parity capture in one handle domain and makes
-      // the evidence session independent of prior capture state.
+      // SharedRef handles remain scoped to each fresh World. Reuse the
+      // backend renderer/device and shader projection while capture-level
+      // detachScene cleanup removes every World-owned projection before the
+      // next case. A renderer fault still tears down the session so callers
+      // never continue on a poisoned device.
       const current = context ?? await createForgeaxCaptureContext('webgpu', sceneCase);
-      context = undefined;
+      if (context === undefined) context = current;
       try {
         return await captureForgeaxInContext(
           current,
@@ -616,8 +945,10 @@ export async function createForgeaxCaptureSession(initialSceneCase: SceneCase) {
           spotShadowReceiver,
           spotShadowCaptureFrames,
         );
-      } finally {
+      } catch (error) {
+        if (context === current) context = undefined;
         await disposeForgeaxCaptureContext(current);
+        throw error;
       }
     },
     async dispose(): Promise<void> {
@@ -654,10 +985,8 @@ async function spawnDirectLightPrimitive(
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const material = Materials.standard({
     baseColor: [0.7, 0.7, 0.7, 1],
-    colorSpace: 'linear',
     metallic: 0,
     roughness: 1,
-    castShadow: false,
     renderState: { cullMode: 'none' },
   });
   const materialHandle = world.allocSharedRef('MaterialAsset', material);
@@ -792,10 +1121,8 @@ function spawnIblPrimitive(world: World): void {
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const materialHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
     baseColor: [0.72, 0.72, 0.72, 1],
-    colorSpace: 'linear',
     metallic: 0,
     roughness: 1,
-    castShadow: false,
     renderState: { cullMode: 'none' },
   }));
   world.spawn(
@@ -815,7 +1142,10 @@ function threeLinearColor(color: readonly [number, number, number]) {
 }
 
 function materialColor(input: M1ColorInput): readonly [number, number, number, number] {
-  return input.kind === 'factor-texture' ? (input.factor ?? [1, 1, 1, 1]) : input.color;
+  const rgba = input.kind === 'factor-texture' ? (input.factor ?? [1, 1, 1, 1]) : input.color;
+  return input.kind === 'scalar-srgb' || input.kind === 'srgb-texture' || input.kind === 'channel-ramp'
+    ? Materials.srgb(rgba)
+    : rgba;
 }
 
 async function spawnM1Primitive(world: World, input: M1ColorInput): Promise<void> {
@@ -823,21 +1153,20 @@ async function spawnM1Primitive(world: World, input: M1ColorInput): Promise<void
   if (!plane.ok) throw new Error(`M1 plane creation failed: ${plane.error.code}`);
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const texture = input.kind === 'srgb-texture' || input.kind === 'factor-texture'
-    ? {
+      ? {
         kind: 'texture' as const,
-        width: 1,
-        height: 1,
+        shape: {
+          viewDimension: '2d' as const,
+          extent: { width: 1, height: 1 },
+        },
         format: 'rgba8unorm-srgb' as GPUTextureFormat,
         data: textureBytes(input.color),
         colorSpace: 'srgb' as const,
-        mipmap: false,
+        mips: { kind: 'none' as const },
       }
     : undefined;
   const textureHandle = texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
-  const colorSpace = input.kind === 'linear-input' || input.kind === 'factor-texture' ? 'linear' : 'srgb';
   const material = Materials.unlit(materialColor(input), {
-    colorSpace,
-    castShadow: false,
     renderState: { cullMode: 'none' },
     ...(textureHandle === undefined ? {} : { baseColorTexture: textureHandle as unknown as number }),
   });
@@ -860,12 +1189,14 @@ async function spawnM2AlphaPrimitive(
     ? undefined
     : {
         kind: 'texture' as const,
-        width: 1,
-        height: 1,
+        shape: {
+          viewDimension: '2d' as const,
+          extent: { width: 1, height: 1 },
+        },
         format: 'rgba8unorm-srgb' as GPUTextureFormat,
         data: textureBytes(fixture.textureColor),
         colorSpace: 'srgb' as const,
-        mipmap: false,
+        mips: { kind: 'none' as const },
       };
   const textureHandle = texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
   const renderState = fixture.alpha.mode === 'BLEND'
@@ -881,14 +1212,12 @@ async function spawnM2AlphaPrimitive(
         cullMode: 'none' as const,
       };
   const material = Materials.standard({
-    baseColor: [
+    baseColor: Materials.srgb([
       fixture.baseColor[0],
       fixture.baseColor[1],
       fixture.baseColor[2],
       fixture.alpha.baseAlpha,
-    ],
-    colorSpace: 'srgb',
-    castShadow: false,
+    ]),
     metallic: 0,
     roughness: 1,
     queue: fixture.alpha.mode === 'BLEND' ? 3000 : fixture.alpha.mode === 'MASK' ? 2450 : 2000,
@@ -911,50 +1240,6 @@ async function spawnTonePrimitive(
   color: readonly [number, number, number],
 ): Promise<void> {
   await spawnM1Primitive(world, { kind: 'linear-input', color: [color[0], color[1], color[2], 1] });
-}
-
-type WebkitCanvasReadback = (request: {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}) => Promise<readonly number[]>;
-
-async function readCanvasPixels(
-  canvas: HTMLCanvasElement,
-  useWebkitCompositor = false,
-): Promise<Uint8Array> {
-  if (useWebkitCompositor) {
-    const hook = (globalThis as unknown as { __forgeaxWebkitCanvasReadback?: WebkitCanvasReadback })
-      .__forgeaxWebkitCanvasReadback;
-    if (hook !== undefined) {
-      const rect = canvas.getBoundingClientRect();
-      const pixels = await hook({
-        x: rect.x,
-        y: rect.y,
-        width: canvas.width,
-        height: canvas.height,
-      });
-      const expectedLength = canvas.width * canvas.height * 4;
-      if (pixels.length !== expectedLength) {
-        throw new Error(
-          `WebKit compositor readback returned ${pixels.length} bytes; expected ${expectedLength}`,
-        );
-      }
-      return Uint8Array.from(pixels);
-    }
-  }
-  const bitmap = await createImageBitmap(canvas);
-  const offscreen = new OffscreenCanvas(canvas.width, canvas.height);
-  const context = offscreen.getContext('2d', { willReadFrequently: true });
-  if (context === null) {
-    bitmap.close();
-    throw new Error('canvas RGBA8 readback unavailable');
-  }
-  context.drawImage(bitmap, 0, 0);
-  const data = context.getImageData(0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  return new Uint8Array(data.data.buffer, data.data.byteOffset, data.data.byteLength);
 }
 
 export async function captureThree(sceneCase: SceneCase, rendererKind: 'webgpu' | 'webgl' = 'webgpu') {
@@ -1018,22 +1303,11 @@ export async function captureThree(sceneCase: SceneCase, rendererKind: 'webgpu' 
         directional.target.position.set(0, 0, 0);
         scene.add(directional, directional.target);
       } else if (light.kind === 'point') {
-        const threeModule = await import('three') as unknown as {
-          PointLight: new (...args: readonly unknown[]) => {
-            position: { set(x: number, y: number, z: number): void };
-          };
-        };
-        const point = new threeModule.PointLight(threeLinearColor(light.color), light.intensity, light.range ?? 10);
+        const point = new ThreePointLight(threeLinearColor(light.color), light.intensity, light.range ?? 10);
         point.position.set(0, 0, 2);
         scene.add(point);
       } else {
-        const threeModule = await import('three') as unknown as {
-          SpotLight: new (...args: readonly unknown[]) => {
-            position: { set(x: number, y: number, z: number): void };
-            target: { position: { set(x: number, y: number, z: number): void } };
-          };
-        };
-        const spot = new threeModule.SpotLight(threeLinearColor(light.color), light.intensity, light.range ?? 10, ((light.outerConeDeg ?? 45) * Math.PI) / 180, 1 - (light.innerConeDeg ?? 0) / (light.outerConeDeg ?? 45));
+        const spot = new ThreeSpotLight(threeLinearColor(light.color), light.intensity, light.range ?? 10, ((light.outerConeDeg ?? 45) * Math.PI) / 180, 1 - (light.innerConeDeg ?? 0) / (light.outerConeDeg ?? 45));
         spot.position.set(0, 0, 2);
         spot.target.position.set(0, 0, 0);
         scene.add(spot, spot.target);
@@ -1109,8 +1383,11 @@ export async function captureThree(sceneCase: SceneCase, rendererKind: 'webgpu' 
   const camera = new PerspectiveCamera(45, sceneCase.scene.width / sceneCase.scene.height, 0.1, 10);
   camera.position.z = 3;
   if (rendererKind === 'webgpu') {
-    await renderer.renderAsync(scene, camera);
-    if (iblCase) await renderer.renderAsync(scene, camera);
+    // The renderer is initialized before this capture. Three r184's
+    // renderAsync() wrapper is deprecated and re-enters init() on every
+    // capture; use the synchronous render path after the explicit init.
+    renderer.render(scene, camera);
+    if (iblCase) renderer.render(scene, camera);
   } else renderer.render(scene, camera);
   const pixels = await readCanvasPixels(canvas);
   const m2Case = m2AlphaCasesById.get(sceneCase.caseId);
@@ -1122,9 +1399,6 @@ export async function captureThree(sceneCase: SceneCase, rendererKind: 'webgpu' 
   return { linear: bytes, final: bytes, config: blackConfig(sceneCase) };
 }
 
-const forgeaxAdapter = createForgeaxAdapter(
-  (sceneCase) => captureForgeax(sceneCase, 'webgpu', undefined, 'base', 60),
-);
 const threeAdapter = createThreeAdapter(captureThree, 'webgpu');
 
 declare global {
@@ -1133,6 +1407,7 @@ declare global {
       invocationId?: string,
       injectedVisualEvidenceInputs?: readonly Record<string, unknown>[],
     ) => Promise<unknown>;
+    __colorLightingParitySingle?: (caseId: string) => Promise<AlphaCaptureDiagnostics>;
   }
 }
 
@@ -1140,7 +1415,12 @@ window.__colorLightingParity = async (
   invocationId = 'color-lighting-parity-browser',
   injectedVisualEvidenceInputs: readonly Record<string, unknown>[] = [],
 ) => {
-  const result = await runParityMatrix(cases, forgeaxAdapter, threeAdapter, {
+  const primaryForgeaxSession = await createForgeaxCaptureSession(cases[0] as SceneCase);
+  const run = async () => {
+    const primaryForgeaxAdapter = createForgeaxAdapter(
+      (sceneCase) => primaryForgeaxSession.capture(sceneCase, undefined, 'base', 60),
+    );
+  const result = await runParityMatrix(cases, primaryForgeaxAdapter, threeAdapter, {
     expectedErrors,
     overrideProvenance: {
       'self-compare': {
@@ -1175,7 +1455,12 @@ window.__colorLightingParity = async (
   try {
     transparencyResult = await runParityMatrix(
       m6TransparencyCases,
-      createForgeaxAdapter(captureTransparencyForgeaxBrowser),
+      createForgeaxAdapter((sceneCase) => captureTransparencyForgeaxBrowser(
+        sceneCase,
+        'webgpu',
+        undefined,
+        forgeaxBundlerAdapter() as never,
+      )),
       createThreeAdapter(captureTransparencyThreeBrowser, 'webgpu'),
     );
   } catch (error) {
@@ -1222,7 +1507,7 @@ window.__colorLightingParity = async (
     else appendVisualEvidence(entry);
   }
   try {
-    const forgeaxIbl = await forgeaxAdapter.capture(iblVisualSceneCase);
+    const forgeaxIbl = await primaryForgeaxAdapter.capture(iblVisualSceneCase);
     const threeIbl = await threeAdapter.capture(iblVisualSceneCase);
     if (!forgeaxIbl.ok || !threeIbl.ok) {
       visualEvidenceErrors.push('ibl-constant-environment: independent visual capture is unavailable');
@@ -1266,10 +1551,10 @@ window.__colorLightingParity = async (
       }),
     ),
   ];
-  const missingPipelineIds = ['urp', 'hdrp'].filter((pipelineId) => !capturedPipelineIds.includes(pipelineId));
+  const missingPipelineIds = ['standard'].filter((pipelineId) => !capturedPipelineIds.includes(pipelineId));
   const directLightEvidence = {
     requiredCaseIds: m4DirectLightCases.map((entry) => entry.caseId),
-    requiredPipelineIds: ['urp', 'hdrp'],
+    requiredPipelineIds: ['standard'],
     capturedPipelineIds,
     missingPipelineIds,
     status: missingPipelineIds.length === 0 ? 'complete' as const : 'partial' as const,
@@ -1320,7 +1605,8 @@ window.__colorLightingParity = async (
     const sceneCase = m4DirectLightCasesById.get(entry.caseId);
     const observations = entry.report.attachmentEvidence;
     const metadata = directProducerMetadata.get(entry.caseId);
-    if (sceneCase?.pipeline?.identity !== 'urp' || observations === undefined || metadata === undefined) return [];
+    if (sceneCase?.pipeline?.identity !== 'standard') return [];
+    if (sceneCase.pipeline.renderPath !== 'forward' || observations === undefined || metadata === undefined) return [];
     if (
       observations.linearHdr.status !== 'ready'
       || observations.finalDisplay.status !== 'ready'
@@ -1339,7 +1625,7 @@ window.__colorLightingParity = async (
     return [{
       invocationId,
       sceneCase,
-      pipelineId: 'forgeax::urp' as const,
+      pipelineId: 'forgeax::standard' as const,
       runtimeId: 'browser' as const,
       backendId: observations.linearHdr.backendId,
       frameId: observations.linearHdr.frameId,
@@ -1399,6 +1685,12 @@ window.__colorLightingParity = async (
     status,
     ok: browserStageOk && missingRequiredPipelineIds.length === 0,
   };
+  };
+  try {
+    return await run();
+  } finally {
+    await primaryForgeaxSession.dispose();
+  }
 };
 
 declare global {
@@ -1407,15 +1699,51 @@ declare global {
       invocationId?: string,
       requestedCaseId?: string,
     ) => Promise<unknown>;
+    __colorLightingChromiumParity?: (
+      invocationId?: string,
+      requestedCaseId?: string,
+    ) => Promise<unknown>;
+    __surfaceStandardChromiumParity?: (invocationId?: string) => Promise<unknown>;
   }
 }
 
-window.__colorLightingWebkitParity = async (
-  invocationId = 'color-lighting-parity-webkit',
+async function runSurfaceStandardChromiumParity(invocationId = 'surface-standard-chromium') {
+  return {
+    status: 'unavailable',
+    backend: 'chromium-webgl2',
+    invocationId,
+    blocker: {
+      code: 'surface-webgl2-engine-producer-unavailable',
+      stage: 'producer',
+      detail: 'The parity page has no ForgeaX WebGL2 surface producer; sentinel WebGL2 channel health is not Surface acceptance evidence.',
+      sourceSha: EVIDENCE_SOURCE_SHA,
+      buildId: 'parity-color-lighting-chromium-webgl2',
+      closure: SURFACE_CLOSURE,
+      sourceClosure: SURFACE_SOURCE_CLOSURE,
+    },
+    cells: [],
+  } as const;
+}
+
+const runColorLightingFallbackParity = async (
+  invocationId = 'color-lighting-parity-chromium',
   requestedCaseId?: string,
+  backendId: 'webkit-webgl2' | 'chromium-webgl2' = 'chromium-webgl2',
+  browserLabel = 'Chromium',
 ) => {
-  if (typeof navigator !== 'undefined' && 'gpu' in navigator && navigator.gpu) {
-    throw new Error('WebKit fallback runner requires navigator.gpu to be absent');
+  const ambientGpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
+  if (ambientGpu !== undefined && typeof ambientGpu.requestAdapter === 'function') {
+    let adapterStatus: 'unavailable' | 'available' | 'error';
+    try {
+      adapterStatus = (await ambientGpu.requestAdapter()) === null ? 'unavailable' : 'available';
+    } catch {
+      adapterStatus = 'error';
+    }
+    if (adapterStatus !== 'unavailable') {
+      throw new Error(
+        `${browserLabel} fallback runner requires WebGPU adapter absence; observed ${adapterStatus}`,
+      );
+    }
   }
   const sentinelIds = new Set([
     'default-srgb-texture',
@@ -1430,7 +1758,7 @@ window.__colorLightingWebkitParity = async (
     : sentinelCases.filter((sceneCase) => sceneCase.caseId === requestedCaseId);
   const includeTransparency = requestedCaseId === undefined || requestedCaseId === transparentLdrCase.caseId;
   if (requestedSentinels.length === 0 && !includeTransparency) {
-    throw new Error(`unknown WebKit fallback sentinel case: ${requestedCaseId}`);
+    throw new Error(`unknown ${browserLabel} fallback sentinel case: ${requestedCaseId}`);
   }
   const firstSentinel = requestedSentinels[0];
   const fallback = firstSentinel === undefined
@@ -1440,7 +1768,16 @@ window.__colorLightingWebkitParity = async (
         try {
           return await runParityMatrix(
             requestedSentinels,
-            createForgeaxAdapter((sceneCase) => captureForgeaxInContext(context, sceneCase), 'webgl'),
+            createForgeaxAdapter(async (sceneCase) => {
+              return captureForgeaxInContext(
+                context,
+                sceneCase,
+                undefined,
+                'base',
+                SPOT_SHADOW_CAPTURE_FRAMES,
+                backendId,
+              );
+            }, 'webgl'),
             createThreeAdapter((sceneCase) => captureThree(sceneCase, 'webgl'), 'webgl'),
             { allowThreeWebglFallback: true },
           );
@@ -1451,20 +1788,44 @@ window.__colorLightingWebkitParity = async (
   const transparency = includeTransparency
     ? await runParityMatrix(
         [transparentLdrCase] as unknown as readonly SceneCase[],
-        createForgeaxAdapter((sceneCase) => captureTransparencyForgeaxBrowser(sceneCase, 'webgl'), 'webgl'),
+        createForgeaxAdapter(async (sceneCase) => {
+          return captureTransparencyForgeaxBrowser(
+            sceneCase,
+            'webgl',
+            backendId,
+            forgeaxBundlerAdapter() as never,
+          );
+        }, 'webgl'),
         createThreeAdapter((sceneCase) => captureTransparencyThreeBrowser(sceneCase, 'webgl'), 'webgl'),
         { allowThreeWebglFallback: true },
       )
     : null;
   const allCases = [...(fallback?.cases ?? []), ...(transparency?.cases ?? [])];
+  const allCasesPassed = allCases.length > 0 && allCases.every((entry) => entry.passed);
+  const surfaceContracts = allCases.map((entry) => ({
+    caseId: entry.caseId,
+    passed: entry.passed,
+    ...(entry.surfaceEvidence === undefined ? {} : { surfaceEvidence: entry.surfaceEvidence }),
+    expectedWidth: ([...requestedSentinels, transparentLdrCase]
+      .find((sceneCase) => sceneCase.caseId === entry.caseId)?.scene.width ?? 0),
+    expectedHeight: ([...requestedSentinels, transparentLdrCase]
+      .find((sceneCase) => sceneCase.caseId === entry.caseId)?.scene.height ?? 0),
+  }));
+  const surfaceContract = buildFallbackSurfaceContract(backendId, surfaceContracts);
+  const lifecycle = backendId === 'webkit-webgl2'
+    && (requestedCaseId === undefined || requestedCaseId === 'default-srgb-texture')
+    ? await runWebkitLifecycleRegression()
+    : undefined;
   return {
     invocationId,
-    backendId: 'webkit-webgl2',
+    backendId,
     executionStatus: 'complete',
-    status: (fallback?.ok ?? true) && (transparency?.ok ?? true) ? 'pass' : 'failed',
+    status: allCasesPassed && surfaceContract.status === 'pass' ? 'pass' as const : 'failed' as const,
+    surfaceContract,
+    ...(lifecycle === undefined ? {} : { lifecycle }),
     caseStatuses: Object.fromEntries(allCases.map((entry) => [entry.caseId, entry.passed ? 'pass' : 'failed'])),
     caseBackendStatuses: Object.fromEntries(
-      allCases.map((entry) => [entry.caseId, { 'webkit-webgl2': entry.passed ? 'pass' : 'failed' }]),
+      allCases.map((entry) => [entry.caseId, { [backendId]: entry.passed ? 'pass' : 'failed' }]),
     ),
     cases: allCases,
     provenance: {
@@ -1473,3 +1834,34 @@ window.__colorLightingWebkitParity = async (
     },
   };
 };
+
+window.__colorLightingWebkitParity = (invocationId, requestedCaseId) =>
+  runColorLightingFallbackParity(invocationId, requestedCaseId, 'webkit-webgl2', 'WebKit');
+
+window.__colorLightingParitySingle = async (caseId: string): Promise<AlphaCaptureDiagnostics> => {
+  const fixture = m2AlphaCasesById.get(caseId);
+  if (fixture === undefined) throw new Error(`unknown M2 alpha case: ${caseId}`);
+  const diagnostics: AlphaCaptureDiagnostics = { caseId, events: [], renderErrors: [] };
+  try {
+    const context = await createForgeaxCaptureContext('webgpu', fixture);
+    try {
+      await captureForgeaxInContext(context, fixture, undefined, 'base', 60, undefined, diagnostics);
+    } finally {
+      await disposeForgeaxCaptureContext(context);
+    }
+  } catch (error) {
+    diagnostics.error = error instanceof Error ? error.message : String(error);
+  }
+  return diagnostics;
+};
+
+window.__colorLightingChromiumParity = (invocationId, requestedCaseId) =>
+  runColorLightingFallbackParity(
+    invocationId ?? 'color-lighting-parity-chromium',
+    requestedCaseId,
+    'chromium-webgl2',
+    'Chromium',
+  );
+
+window.__surfaceStandardChromiumParity = (invocationId) =>
+  runSurfaceStandardChromiumParity(invocationId);

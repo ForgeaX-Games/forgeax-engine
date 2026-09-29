@@ -1,6 +1,6 @@
 // color.ts — RGBA color namespace (M5 / T-032)
 //
-// 6-function surface: create / clone / srgbToLinear / linearToSrgb / fromHex / toHex
+// 7-function surface: create / clone / srgbToLinear / linearToSrgb / fromHex / fromCss / toHex
 //
 // Design anchors:
 //   - branded Float32Array length 4 [r, g, b, a]; `as Color` casts are funneled inside factories (D-P15)
@@ -8,13 +8,16 @@
 //     - srgbToLinear: cutoff 0.04045 / linear segment v/12.92 / power segment ((v+0.055)/1.055)^2.4
 //     - linearToSrgb: cutoff 0.0031308 / linear segment 12.92*v / power segment 1.055*v^(1/2.4) - 0.055
 //     - negatives / NaN returned verbatim (HDR-friendly + IEEE-754 NaN propagation)
-//   - fromHex (D-P7): only `#RRGGBB` (7 chars) and `#RRGGBBAA` (9 chars); illegal inputs silently fall
+//   - fromHex (D-P7): only `#RRGGBB` (7 chars) and `#RRGGBBAA` (9 chars); RGB channels are decoded
+//     from sRGB to linear; illegal inputs silently fall
 //     back to (0, 0, 0, 1) without throwing (D-P12 degenerate family / AC-06)
 //     - #RGB / #RGBA short forms are not supported (stricter than bevy_color::Srgba::hex; less ambiguous
 //       in practice; wiki/sources/2026-05-05-bevy-0-19-math-transform-color §Srgba::hex mentions short
 //       forms but D-P7 actively tightens the contract)
-//   - toHex: alpha=1 → `#rrggbb`; alpha<1 → `#rrggbbaa`; components are clamped to [0, 1] then
-//     multiplied by 255 and rounded; output is lowercase, symmetric with fromHex's tolerant input
+//   - fromCss: deterministic CSS color boundary for full hex plus common rgb()/rgba()/hsl()/hsla()
+//     and named colors; output is linear and illegal inputs use the same black fallback
+//   - toHex: alpha=1 → `#rrggbb`; alpha<1 → `#rrggbbaa`; linear components are encoded to sRGB,
+//     clamped to [0, 1], multiplied by 255 and rounded; output is lowercase
 //
 // Related: requirements §Surface color lower bound 6 + AC-06 silent fall-back (never raises);
 //          plan-strategy D-P7 / D-P12 / §appendix A degenerate registry #14-#16;
@@ -120,8 +123,8 @@ const HEX_PATTERN = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA
  *
  * @example
  * ```ts
- * color.fromHex(out, '#ff8000');   // → (1, 0.502, 0, 1)
- * color.fromHex(out, '#ff800080'); // → (1, 0.502, 0, 0.502)
+ * color.fromHex(out, '#ff8000');   // → (1, ~0.216, 0, 1)
+ * color.fromHex(out, '#ff800080'); // → (1, ~0.216, 0, 0.502)
  * color.fromHex(out, '#fff');      // → (0, 0, 0, 1) short form unsupported → silent fall-back
  * ```
  */
@@ -134,17 +137,222 @@ export function fromHex(out: Color, hex: string): Color {
     out[3] = 1;
     return out;
   }
-  out[0] = Number.parseInt(match[1] as string, 16) / 255;
-  out[1] = Number.parseInt(match[2] as string, 16) / 255;
-  out[2] = Number.parseInt(match[3] as string, 16) / 255;
+  out[0] = srgbChannelToLinear(Number.parseInt(match[1] as string, 16) / 255);
+  out[1] = srgbChannelToLinear(Number.parseInt(match[2] as string, 16) / 255);
+  out[2] = srgbChannelToLinear(Number.parseInt(match[3] as string, 16) / 255);
   out[3] = match[4] !== undefined ? Number.parseInt(match[4], 16) / 255 : 1;
   return out;
 }
 
-/** Per-component [0, 1] clamp + ×255 + round + 2-digit hex (lowercase). */
-function toHexByte(v: number): string {
+const CSS_HEX_PATTERN = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const CSS_RGB_PATTERN = /^rgba?\(([^()]*)\)$/i;
+const CSS_HSL_PATTERN = /^hsla?\(([^()]*)\)$/i;
+const CSS_DECIMAL_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+
+const CSS_NAMED_COLORS: Readonly<Record<string, string>> = {
+  black: '#000000',
+  blue: '#0000ff',
+  cyan: '#00ffff',
+  fuchsia: '#ff00ff',
+  gray: '#808080',
+  green: '#008000',
+  grey: '#808080',
+  lime: '#00ff00',
+  magenta: '#ff00ff',
+  maroon: '#800000',
+  navy: '#000080',
+  olive: '#808000',
+  orange: '#ffa500',
+  purple: '#800080',
+  red: '#ff0000',
+  silver: '#c0c0c0',
+  teal: '#008080',
+  transparent: '#00000000',
+  white: '#ffffff',
+  yellow: '#ffff00',
+};
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+function parseCssChannel(token: string): number | undefined {
+  const trimmed = token.trim();
+  if (trimmed.endsWith('%')) {
+    const raw = trimmed.slice(0, -1).trim();
+    if (!CSS_DECIMAL_PATTERN.test(raw)) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? clamp01(value / 100) : undefined;
+  }
+  if (!CSS_DECIMAL_PATTERN.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? clamp01(value / 255) : undefined;
+}
+
+function parseCssAlpha(token: string): number | undefined {
+  const trimmed = token.trim();
+  if (trimmed.endsWith('%')) {
+    const raw = trimmed.slice(0, -1).trim();
+    if (!CSS_DECIMAL_PATTERN.test(raw)) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? clamp01(value / 100) : undefined;
+  }
+  if (!CSS_DECIMAL_PATTERN.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? clamp01(value) : undefined;
+}
+
+function parseCssHue(token: string): number | undefined {
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+))(deg|grad|rad|turn)?$/i.exec(token.trim());
+  if (match === null) return undefined;
+  const raw = Number(match[1] as string);
+  if (!Number.isFinite(raw)) return undefined;
+  const unit = (match[2] ?? 'deg').toLowerCase();
+  const degrees =
+    unit === 'grad'
+      ? raw * 0.9
+      : unit === 'rad'
+        ? (raw * 180) / Math.PI
+        : unit === 'turn'
+          ? raw * 360
+          : raw;
+  return ((degrees % 360) + 360) % 360;
+}
+
+function parseCssPercentage(token: string): number | undefined {
+  const trimmed = token.trim();
+  if (!trimmed.endsWith('%')) return undefined;
+  const raw = trimmed.slice(0, -1).trim();
+  if (!CSS_DECIMAL_PATTERN.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? clamp01(value / 100) : undefined;
+}
+
+function splitCssColorArgs(
+  body: string,
+): { channels: [string, string, string]; alpha?: string } | undefined {
+  const source = body.trim();
+  if (source.length === 0) return undefined;
+  if (source.includes(',')) {
+    if (source.includes('/')) return undefined;
+    const parts = source.split(',').map((part) => part.trim());
+    if (parts.length !== 3 && parts.length !== 4) return undefined;
+    if (parts.some((part) => part.length === 0)) return undefined;
+    return {
+      channels: [parts[0] as string, parts[1] as string, parts[2] as string],
+      ...(parts.length === 4 ? { alpha: parts[3] as string } : {}),
+    };
+  }
+  const tokens = source.replaceAll('/', ' / ').split(/\s+/);
+  const slash = tokens.indexOf('/');
+  if (slash === -1) {
+    if (tokens.length !== 3) return undefined;
+    return { channels: [tokens[0] as string, tokens[1] as string, tokens[2] as string] };
+  }
+  if (slash !== 3 || tokens.length !== 5 || tokens[4] === undefined) return undefined;
+  return {
+    channels: [tokens[0] as string, tokens[1] as string, tokens[2] as string],
+    alpha: tokens[4],
+  };
+}
+
+function hslToSrgb(hue: number, saturation: number, lightness: number): [number, number, number] {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const h = hue / 60;
+  const x = chroma * (1 - Math.abs((h % 2) - 1));
+  const [r1, g1, b1] =
+    h < 1
+      ? [chroma, x, 0]
+      : h < 2
+        ? [x, chroma, 0]
+        : h < 3
+          ? [0, chroma, x]
+          : h < 4
+            ? [0, x, chroma]
+            : h < 5
+              ? [x, 0, chroma]
+              : [chroma, 0, x];
+  const m = lightness - chroma / 2;
+  return [r1 + m, g1 + m, b1 + m];
+}
+
+function cssFallback(out: Color): Color {
+  out[0] = 0;
+  out[1] = 0;
+  out[2] = 0;
+  out[3] = 1;
+  return out;
+}
+
+/**
+ * Write a Color from a deterministic CSS color string.
+ *
+ * Supports full and short hex, common named colors, rgb()/rgba() channel
+ * numbers or percentages, and hsl()/hsla() with an optional alpha. RGB
+ * channels are decoded to linear-sRGB; alpha is passed through unchanged.
+ * Unsupported or malformed input silently falls back to opaque black.
+ */
+export function fromCss(out: Color, css: string): Color {
+  if (typeof css !== 'string') return cssFallback(out);
+  const source = css.trim().toLowerCase();
+  const named = CSS_NAMED_COLORS[source];
+  if (named !== undefined) return fromHex(out, named);
+  const fullHex = CSS_HEX_PATTERN.exec(source);
+  if (fullHex !== null) {
+    const digits = fullHex[1] as string;
+    if (digits.length === 3 || digits.length === 4) {
+      const expanded = [...digits].map((channel) => `${channel}${channel}`).join('');
+      return fromHex(out, `#${expanded}`);
+    }
+    return fromHex(out, source);
+  }
+
+  const rgb = CSS_RGB_PATTERN.exec(source);
+  if (rgb !== null) {
+    const args = splitCssColorArgs(rgb[1] as string);
+    if (args === undefined) return cssFallback(out);
+    const r = parseCssChannel(args.channels[0]);
+    const g = parseCssChannel(args.channels[1]);
+    const b = parseCssChannel(args.channels[2]);
+    const alpha = args.alpha === undefined ? 1 : parseCssAlpha(args.alpha);
+    if (r === undefined || g === undefined || b === undefined || alpha === undefined)
+      return cssFallback(out);
+    out[0] = srgbChannelToLinear(r);
+    out[1] = srgbChannelToLinear(g);
+    out[2] = srgbChannelToLinear(b);
+    out[3] = alpha;
+    return out;
+  }
+
+  const hsl = CSS_HSL_PATTERN.exec(source);
+  if (hsl !== null) {
+    const args = splitCssColorArgs(hsl[1] as string);
+    if (args === undefined) return cssFallback(out);
+    const hue = parseCssHue(args.channels[0]);
+    const saturation = parseCssPercentage(args.channels[1]);
+    const lightness = parseCssPercentage(args.channels[2]);
+    const alpha = args.alpha === undefined ? 1 : parseCssAlpha(args.alpha);
+    if (
+      hue === undefined ||
+      saturation === undefined ||
+      lightness === undefined ||
+      alpha === undefined
+    )
+      return cssFallback(out);
+    const [r, g, b] = hslToSrgb(hue, saturation, lightness);
+    out[0] = srgbChannelToLinear(r);
+    out[1] = srgbChannelToLinear(g);
+    out[2] = srgbChannelToLinear(b);
+    out[3] = alpha;
+    return out;
+  }
+  return cssFallback(out);
+}
+
+/** Encode one linear component to sRGB, then clamp + ×255 + round. */
+function toHexByte(v: number, encodeLinear = true): string {
   if (Number.isNaN(v)) return '00';
-  const clamped = Math.max(0, Math.min(1, v));
+  const clamped = Math.max(0, Math.min(1, encodeLinear ? linearChannelToSrgb(v) : v));
   const byte = Math.round(clamped * 255);
   return byte.toString(16).padStart(2, '0');
 }
@@ -159,7 +367,7 @@ function toHexByte(v: number): string {
  *
  * @example
  * ```ts
- * color.toHex(color.create(2, -0.1, 0.5, 1));    // → '#ff0080' (HDR/negative clamp)
+ * color.toHex(color.create(2, -0.1, 0.5, 1));    // → '#ff00bc' (linear HDR/negative clamp)
  * color.toHex(color.create(1, 0, 0, 0.5));        // → '#ff000080'
  * color.toHex(color.create(NaN, 0, 0, NaN));      // → '#000000' (NaN→'00', alpha=NaN takes short form)
  * ```
@@ -172,6 +380,6 @@ export function toHex(c: ColorLike): string {
   if (aValue >= 1 || Number.isNaN(aValue)) {
     return `#${r}${g}${b}`;
   }
-  const a = toHexByte(aValue);
+  const a = toHexByte(aValue, false);
   return `#${r}${g}${b}${a}`;
 }

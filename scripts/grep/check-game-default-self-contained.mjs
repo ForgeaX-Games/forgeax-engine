@@ -14,7 +14,7 @@ const result = spawnSync(
     '-E',
     forbidden,
     '--',
-    'templates/game-default',
+    'apps/game-capability-lab',
     'apps/preview',
     'vitest.config.ts',
   ],
@@ -22,17 +22,21 @@ const result = spawnSync(
 );
 
 if (result.status === 1) {
-  console.log('[check-game-default-self-contained] OK — no generated projectile asset dependency');
+  console.log(
+    '[check-game-capability-lab-self-contained] OK - no generated projectile asset dependency',
+  );
   process.exit(0);
 }
 
 if (result.status === 0) {
   console.error(
-    '[check-game-default-self-contained] generated projectile asset dependency returned:',
+    '[check-game-capability-lab-self-contained] generated projectile asset dependency returned:',
   );
   console.error(result.stdout.trim());
   process.exit(1);
 }
 
-console.error(`[check-game-default-self-contained] git grep failed: ${result.stderr.trim()}`);
+console.error(
+  `[check-game-capability-lab-self-contained] git grep failed: ${result.stderr.trim()}`,
+);
 process.exit(2);

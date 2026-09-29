@@ -27,19 +27,20 @@ import { deriveRenderDataTexture } from '../../../render/src/render-data';
 function tex(overrides: Partial<TextureAsset>): TextureAsset {
   return {
     kind: 'texture',
-    width: 8,
-    height: 8,
+    shape: { viewDimension: '2d', extent: { width: 8, height: 8 } },
     format: 'rgba8unorm',
     data: new Uint8Array(8 * 8 * 4),
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
     ...overrides,
   };
 }
 
 describe('deriveRenderDataTexture -- mip gate on compressed formats (w30, AC-09)', () => {
   it('compressed format + mipmap:true (runtime mip-gen requested) -> error', () => {
-    const res = deriveRenderDataTexture(tex({ format: 'bc7-rgba-unorm', mipmap: true }));
+    const res = deriveRenderDataTexture(
+      tex({ format: 'bc7-rgba-unorm', mips: { kind: 'generate' } }),
+    );
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.error.code).toBe('mipgen-unsupported-compressed-format');
@@ -50,7 +51,9 @@ describe('deriveRenderDataTexture -- mip gate on compressed formats (w30, AC-09)
   });
 
   it('mip-gate error fires for an ETC2 compressed format too', () => {
-    const res = deriveRenderDataTexture(tex({ format: 'etc2-rgba8unorm', mipmap: true }));
+    const res = deriveRenderDataTexture(
+      tex({ format: 'etc2-rgba8unorm', mips: { kind: 'generate' } }),
+    );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('mipgen-unsupported-compressed-format');
   });
@@ -59,20 +62,20 @@ describe('deriveRenderDataTexture -- mip gate on compressed formats (w30, AC-09)
     // The KTX2 loader baked the mip chain offline; this is the normal
     // compressed-upload path and must NOT trip the runtime-mip-gen gate.
     const res = deriveRenderDataTexture(
-      tex({ format: 'bc7-rgba-unorm', mipmap: true, mipLevelCount: 4 }),
+      tex({ format: 'bc7-rgba-unorm', mips: { kind: 'packed', levelCount: 4 } }),
     );
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.mipLevelCount).toBe(4);
   });
 
   it('compressed format + mipmap:false -> ok (single level)', () => {
-    const res = deriveRenderDataTexture(tex({ format: 'bc7-rgba-unorm', mipmap: false }));
+    const res = deriveRenderDataTexture(tex({ format: 'bc7-rgba-unorm', mips: { kind: 'none' } }));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.mipLevelCount).toBe(1);
   });
 
   it('uncompressed format + mipmap:true -> ok (existing runtime mip-gen path unchanged)', () => {
-    const res = deriveRenderDataTexture(tex({ format: 'rgba8unorm', mipmap: true }));
+    const res = deriveRenderDataTexture(tex({ format: 'rgba8unorm', mips: { kind: 'generate' } }));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.mipLevelCount).toBeGreaterThan(1);
   });

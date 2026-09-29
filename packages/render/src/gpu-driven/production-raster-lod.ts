@@ -1,0 +1,236 @@
+import { mat4, vec3 } from '@forgeax/engine-math';
+import { isStandardPbrMaterialShader } from '../pbr-pipeline';
+import type { CameraSnapshot } from '../render-contract';
+import type { RenderSceneSlot } from '../scene/render-scene-types';
+import { lodDraws, selectLod } from '../scene/visibility/lod-selector';
+import {
+  batchLodLevelCount,
+  type GpuDrivenBatch,
+  type GpuDrivenBatchLod,
+  type GpuDrivenCandidate,
+  projectedHeightForCandidate,
+  type SubmissionPlan,
+} from './batch-topology';
+
+export function selectedLodLevel(
+  lod: GpuDrivenBatchLod | undefined,
+  projectedHeight: number,
+): number {
+  const coverages = lod?.coverages;
+  if (coverages === undefined || coverages.length <= 1) return 0;
+  return selectLod({
+    levels: coverages.slice(1).map((screenCoverage) => ({ screenCoverage })),
+    projectedHeight,
+    previousLevel: 0,
+    hysteresis: lod?.hysteresis ?? 0.08,
+    ready: coverages.map(() => true),
+    historyValid: false,
+  }).level;
+}
+
+export function selectedLodRange(
+  batch: Pick<GpuDrivenBatch, 'key'>,
+  lod: GpuDrivenBatchLod | undefined,
+  level: number,
+): { readonly first: number; readonly count: number; readonly baseVertex: number } {
+  return (
+    (level === 0 ? undefined : lod?.ranges?.[level - 1]) ?? {
+      first: batch.key.first,
+      count: batch.key.count,
+      baseVertex: batch.key.baseVertex,
+    }
+  );
+}
+
+/** Indirect raster commands of admitted batches: one per LOD level slot. */
+export function admittedRasterBatchCount(plan: SubmissionPlan): number {
+  return plan.batches.reduce(
+    (count, batch) => count + (batch.visibleCapacity > 0 ? batchLodLevelCount(batch) : 0),
+    0,
+  );
+}
+
+export function gpuDrawEntityCount(drawKeys: ReadonlySet<string>): number {
+  const entities = new Set<string>();
+  for (const key of drawKeys) {
+    const separator = key.indexOf(':');
+    if (separator > 0) entities.add(key.slice(0, separator));
+  }
+  return entities.size;
+}
+
+/** Only rigid Standard PBR shading reads the per-item LOD fade. */
+export function lodCrossfadeCapable(batch: Pick<GpuDrivenBatch, 'prepared'>): boolean {
+  return (
+    isStandardPbrMaterialShader(batch.prepared?.identity.material) &&
+    batch.prepared?.identity.deformation === 'rigid'
+  );
+}
+
+/** Raster draws for one LOD owner at an explicit projected height. */
+export function rasterLodDraws(
+  batch: Pick<GpuDrivenBatch, 'prepared'>,
+  lod: GpuDrivenBatchLod | undefined,
+  projectedHeight: number,
+) {
+  if (!lodCrossfadeCapable(batch)) {
+    return [{ level: selectedLodLevel(lod, projectedHeight), fade: 0 }];
+  }
+  const coverages = lod?.coverages ?? [1];
+  return lodDraws({
+    levels: coverages.slice(1).map((screenCoverage) => ({ screenCoverage })),
+    projectedHeight,
+    hysteresis: lod?.hysteresis ?? 0.08,
+    ready: coverages.map((_, level) => level === 0 || lod?.ranges?.[level - 1] !== undefined),
+  });
+}
+
+export interface LodProjectionState {
+  readonly selectionFingerprint: string;
+  /** Selected raster levels per `prepared.lodCandidates` entry. */
+  readonly selections: readonly (readonly number[])[];
+  readonly projectedHeights?: ReadonlyMap<number, number>;
+}
+
+const NO_LOD_SELECTIONS: readonly (readonly number[])[] = Object.freeze([]);
+
+/** Candidates whose selected levels differ between two selections of one prepared plan. */
+export function lodSelectionChangeCount(
+  previous: readonly (readonly number[])[],
+  next: readonly (readonly number[])[],
+): number {
+  if (previous.length !== next.length) return next.length;
+  let changed = 0;
+  for (let index = 0; index < next.length; index += 1) {
+    const left = previous[index] as readonly number[];
+    const right = next[index] as readonly number[];
+    if (left.length !== right.length || left.some((level, at) => level !== right[at])) changed += 1;
+  }
+  return changed;
+}
+
+/**
+ * Keep camera-dependent LOD payload separate from the filtered-plan identity.
+ * The selected level remains structural because one indirect command owns one
+ * geometry range; continuous height changes travel through the compact view
+ * payload and do not rebuild an otherwise identical plan.
+ */
+export function lodProjectionState(
+  prepared: {
+    readonly lodCandidates: readonly {
+      readonly source: GpuDrivenBatch;
+      readonly candidate: GpuDrivenCandidate;
+    }[];
+    readonly lodPrimitives: readonly number[];
+  },
+  camera: CameraSnapshot,
+  slotAt: (primitiveIndex: number) => RenderSceneSlot | undefined,
+): LodProjectionState {
+  if (prepared.lodCandidates.length === 0) {
+    return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
+  }
+  const projectedHeights = new Map<number, number>();
+  for (const primitive of prepared.lodPrimitives) {
+    const slot = slotAt(primitive);
+    if (slot !== undefined)
+      projectedHeights.set(primitive, projectedHeightForCandidate(slot, camera));
+  }
+  const selections = prepared.lodCandidates.map(({ source, candidate }) =>
+    rasterLodDraws(
+      source,
+      source.lod,
+      projectedHeights.get(candidate.primitiveIndex) ?? Number.NaN,
+    ).map((draw) => draw.level),
+  );
+  return { selectionFingerprint: JSON.stringify(selections), selections, projectedHeights };
+}
+
+/**
+ * The LOD camera equivalent of a light view-projection, so shadow casters
+ * rank by their footprint in the shadow target with the main camera's height
+ * semantics. The clip-y row norm is `2 / orthoHeight` (orthographic) or
+ * `1 / tan(fov / 2)` (perspective); a perspective eye is the point clip w
+ * vanishes at, `M^-1 * (0, 0, 1, 0)`.
+ */
+export function lodViewCameraFromMatrix(
+  matrix: Float32Array,
+): Pick<CameraSnapshot, 'position' | 'projection' | 'fov' | 'orthoTop' | 'orthoBottom'> {
+  const rowY = Math.hypot(matrix[1] ?? 0, matrix[5] ?? 0, matrix[9] ?? 0);
+  const perspective = (matrix[3] ?? 0) !== 0 || (matrix[7] ?? 0) !== 0 || (matrix[11] ?? 0) !== 0;
+  if (!perspective) {
+    const half = rowY > 0 ? 1 / rowY : 0;
+    return {
+      position: vec3.create(),
+      projection: 'orthographic',
+      fov: 0,
+      orthoTop: half,
+      orthoBottom: -half,
+    };
+  }
+  const inverse = mat4.invert(mat4.create(), matrix);
+  const w = inverse[11] ?? 0;
+  return {
+    position: vec3.create((inverse[8] ?? 0) / w, (inverse[9] ?? 0) / w, (inverse[10] ?? 0) / w),
+    projection: 'perspective',
+    fov: rowY > 0 ? 2 * Math.atan(1 / rowY) : 0,
+    orthoTop: 1,
+    orthoBottom: -1,
+  };
+}
+
+/**
+ * Levels a shadow caster may be coarser than the main camera draws it. A
+ * coarser silhouette would self-shadow the visible mesh with depth it does not
+ * have, so the light-view height is floored at the height that selects this
+ * bound.
+ */
+export const SHADOW_LOD_MAX_COARSER = 1;
+
+/** Lowest shadow height that keeps the selection within the clamp of `mainLevel`. */
+export function shadowLodHeightFloor(
+  lod: Pick<GpuDrivenBatchLod, 'coverages' | 'hysteresis'> | undefined,
+  mainLevel: number,
+): number {
+  const coverages = lod?.coverages;
+  const bound = mainLevel + SHADOW_LOD_MAX_COARSER;
+  const threshold = coverages?.[bound + 1];
+  if (threshold === undefined) return 0;
+  // Stay clear of the cross-fade band that would blend in the next level.
+  return threshold * (1 + (lod?.hysteresis ?? 0.08));
+}
+
+/**
+ * LOD projection of one shadow view: casters select by their footprint in the
+ * light view-projection, never more than `SHADOW_LOD_MAX_COARSER` levels
+ * coarser than `main` selects for the same candidate.
+ */
+export function shadowLodProjectionState(
+  prepared: {
+    readonly lodCandidates: readonly {
+      readonly source: GpuDrivenBatch;
+      readonly candidate: GpuDrivenCandidate;
+    }[];
+  },
+  matrix: Float32Array,
+  main: LodProjectionState,
+  slotAt: (primitiveIndex: number) => RenderSceneSlot | undefined,
+): LodProjectionState {
+  if (prepared.lodCandidates.length === 0) {
+    return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
+  }
+  const camera = lodViewCameraFromMatrix(matrix);
+  const projectedHeights = new Map<number, number>();
+  const selections = prepared.lodCandidates.map(({ source, candidate }, index) => {
+    const primitive = candidate.primitiveIndex;
+    const slot = slotAt(primitive);
+    const mainLevel = Math.min(...(main.selections[index] ?? [0]));
+    const light = slot === undefined ? Number.NaN : projectedHeightForCandidate(slot, camera);
+    // An invalid light height resolves to the root, as in the GPU cull.
+    const height = Number.isFinite(light)
+      ? Math.max(light, shadowLodHeightFloor(source.lod, mainLevel))
+      : Number.NaN;
+    projectedHeights.set(primitive, height);
+    return rasterLodDraws(source, source.lod, height).map((draw) => draw.level);
+  });
+  return { selectionFingerprint: JSON.stringify(selections), selections, projectedHeights };
+}

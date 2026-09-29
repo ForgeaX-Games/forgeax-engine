@@ -7,6 +7,7 @@ import { createFrameLoop } from '../internal/frame-loop';
 
 function makeRenderer(): Renderer {
   return {
+    state: () => 'alive' as const,
     backend: 'webgpu',
     ready: Promise.resolve({ ok: true, value: undefined }),
     attach: () => ({ ok: true, value: undefined }),

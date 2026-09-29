@@ -1,13 +1,18 @@
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
+import { createRenderFeatureHost } from '../features/host';
 import {
+  cloneRenderFeaturePlanSignatureSnapshot,
   deriveRenderFeaturePassAccess,
   freezeRenderFeaturePlan,
-  type RenderFeaturePlan,
+  type RenderFeatureWorkPlan,
+  rememberRenderFeaturePlanSignature,
   renderFeaturePlanSignature,
+  renderFeaturePlanSignatureEvidenceMatches,
+  renderFeaturePlanSignatureSnapshotEquals,
 } from '../features/plan';
 import type { RenderFeature } from '../features/types';
+import { runSingleViewFeatureFrame } from './single-view-feature-fixture';
 
 const plan = (data = new Uint32Array([1, 2, 3, 4])) =>
   ({
@@ -100,9 +105,36 @@ const plan = (data = new Uint32Array([1, 2, 3, 4])) =>
         ],
       },
     ],
-  }) satisfies RenderFeaturePlan;
+  }) satisfies RenderFeatureWorkPlan;
 
 describe('RenderFeature plan authority', () => {
+  it('validates shadow draws without author-owned light targets and derives their buffer reads', () => {
+    const source = plan();
+    const raster = source.passes[1];
+    if (raster?.kind !== 'raster') throw new Error('Missing fixture draw');
+    const shadow: RenderFeatureWorkPlan = {
+      resources: source.resources.map((resource) =>
+        resource.kind === 'graphics-program'
+          ? {
+              ...resource,
+              program: { ...resource.program, colorFormats: [], depthFormat: 'depth32float' },
+            }
+          : resource,
+      ),
+      passes: [{ kind: 'shadow-caster', name: 'shadow', draws: raster.draws }],
+    };
+    expect(freezeRenderFeaturePlan('shadow', shadow).ok).toBe(true);
+    const shadowPass = shadow.passes[0];
+    if (shadowPass === undefined) throw new Error('Missing shadow fixture');
+    expect(deriveRenderFeaturePassAccess(shadow, shadowPass)).toEqual([
+      { resource: 'particles', usage: 'vertex-read' },
+      { resource: 'indirect', usage: 'indirect-read' },
+    ]);
+    expect(
+      freezeRenderFeaturePlan('invalid-shadow', { ...shadow, resources: source.resources }).ok,
+    ).toBe(false);
+    expect(renderFeaturePlanSignature(shadow)).not.toBe(renderFeaturePlanSignature(source));
+  });
   it('derives compute and raster access from descriptors', () => {
     const value = plan();
     expect(deriveRenderFeaturePassAccess(value, value.passes[0] as never)).toEqual([
@@ -122,8 +154,224 @@ describe('RenderFeature plan authority', () => {
     );
   });
 
+  it('accounts typed-array signature work per feature without changing identity', () => {
+    const metrics = { calls: 0, typedArrayBytes: 0, outputChars: 0 };
+    const first = renderFeaturePlanSignature(plan(new Uint32Array([1, 2])), metrics);
+    const second = renderFeaturePlanSignature(plan(new Uint32Array([3, 4])), metrics);
+    expect(first).toBe(second);
+    // Buffer payloads stay out of the topology identity, but the detached
+    // accounting still reports the bytes examined on both validation calls.
+    expect(metrics).toMatchObject({ calls: 2, typedArrayBytes: 16 });
+    expect(metrics.outputChars).toBeGreaterThan(0);
+  });
+
+  it('keeps vertex and index payloads in the canonical producer signature', () => {
+    const vertex = (value: number): RenderFeatureWorkPlan => ({
+      resources: [
+        {
+          kind: 'vertex-data',
+          name: 'vertices',
+          layout: 'position',
+          data: new Float32Array([value]),
+        },
+      ],
+      passes: [],
+    });
+    const index = (value: number): RenderFeatureWorkPlan => ({
+      resources: [
+        {
+          kind: 'index-data',
+          name: 'indices',
+          format: 'uint16',
+          data: new Uint16Array([value]),
+        },
+      ],
+      passes: [],
+    });
+    expect(renderFeaturePlanSignature(vertex(1))).not.toBe(renderFeaturePlanSignature(vertex(2)));
+    expect(renderFeaturePlanSignature(index(1))).not.toBe(renderFeaturePlanSignature(index(2)));
+  });
+
+  it('encodes every inline payload byte exactly across views and slices', () => {
+    const bytes = new Uint8Array([0, 1, 2, 15, 16, 127, 128, 254, 255]);
+    const sliced = bytes.subarray(2, 8);
+    const shared = new Uint16Array(sliced.buffer, sliced.byteOffset, 3);
+    const vertex = (data: ArrayBufferView): RenderFeatureWorkPlan => ({
+      resources: [{ kind: 'vertex-data', name: 'vertices', layout: 'position', data }],
+      passes: [],
+    });
+    expect(renderFeaturePlanSignature(vertex(sliced))).toBe(
+      renderFeaturePlanSignature(vertex(shared)),
+    );
+    const mutated = new Uint8Array(sliced);
+    const original = mutated[3];
+    if (original === undefined) throw new Error('Missing mutation byte');
+    mutated[3] = original ^ 0x01;
+    expect(renderFeaturePlanSignature(vertex(mutated))).not.toBe(
+      renderFeaturePlanSignature(vertex(sliced)),
+    );
+    expect(renderFeaturePlanSignature(vertex(new Uint8Array()))).not.toBe(
+      renderFeaturePlanSignature(vertex(new Uint8Array([0]))),
+    );
+  });
+
+  it('matches detached snapshots without treating buffer uploads as topology changes', () => {
+    const first = plan(new Uint32Array([1, 2]));
+    const snapshot = cloneRenderFeaturePlanSignatureSnapshot(first);
+    expect(renderFeaturePlanSignatureSnapshotEquals(plan(new Uint32Array([9, 8])), snapshot)).toBe(
+      true,
+    );
+
+    const vertex = {
+      resources: [
+        {
+          kind: 'vertex-data',
+          name: 'vertices',
+          layout: 'position',
+          data: new Float32Array([1]),
+        },
+      ],
+      passes: [],
+    } satisfies RenderFeatureWorkPlan;
+    const vertexSnapshot = cloneRenderFeaturePlanSignatureSnapshot(vertex);
+    (vertex.resources[0] as { data: Float32Array }).data[0] = 2;
+    expect(renderFeaturePlanSignatureSnapshotEquals(vertex, vertexSnapshot)).toBe(false);
+  });
+
+  it('shares unchanged detached subtrees across a changed plan revision', () => {
+    const first = plan();
+    const firstSnapshot = cloneRenderFeaturePlanSignatureSnapshot(first);
+    const changed: RenderFeatureWorkPlan = {
+      resources: first.resources.map((resource, index) =>
+        index === 3 && resource.kind === 'buffer'
+          ? { ...resource, size: resource.size + 16 }
+          : resource,
+      ),
+      passes: first.passes.map((pass, index) =>
+        index === 0 && pass.kind === 'compute' ? { ...pass, name: 'simulate-next' } : pass,
+      ),
+    };
+
+    const nextSnapshot = cloneRenderFeaturePlanSignatureSnapshot(changed, firstSnapshot);
+    expect(nextSnapshot).not.toBe(firstSnapshot);
+    expect(nextSnapshot.resources[0]).toBe(firstSnapshot.resources[0]);
+    expect(nextSnapshot.resources[1]).toBe(firstSnapshot.resources[1]);
+    expect(nextSnapshot.resources[2]).toBe(firstSnapshot.resources[2]);
+    expect(nextSnapshot.resources[3]).not.toBe(firstSnapshot.resources[3]);
+    expect(nextSnapshot.resources[4]).toBe(firstSnapshot.resources[4]);
+    expect(nextSnapshot.passes).not.toBe(firstSnapshot.passes);
+    if (nextSnapshot.passes.kind !== 'array' || firstSnapshot.passes.kind !== 'array') return;
+    expect(nextSnapshot.passes.values[1]).toBe(firstSnapshot.passes.values[1]);
+    expect(renderFeaturePlanSignatureSnapshotEquals(first, firstSnapshot)).toBe(true);
+    expect(renderFeaturePlanSignatureSnapshotEquals(changed, nextSnapshot)).toBe(true);
+  });
+
+  it('reuses the prior snapshot for buffer-upload-only changes', () => {
+    const first = plan(new Uint32Array([1, 2]));
+    const firstSnapshot = cloneRenderFeaturePlanSignatureSnapshot(first);
+    const nextSnapshot = cloneRenderFeaturePlanSignatureSnapshot(
+      plan(new Uint32Array([9, 8])),
+      firstSnapshot,
+    );
+    expect(nextSnapshot).toBe(firstSnapshot);
+  });
+
+  it('does not share changed inline payload bytes', () => {
+    const vertex = (value: number): RenderFeatureWorkPlan => ({
+      resources: [
+        {
+          kind: 'vertex-data',
+          name: 'vertices',
+          layout: 'position',
+          data: new Float32Array([value]),
+        },
+      ],
+      passes: [],
+    });
+    const first = vertex(1);
+    const firstSnapshot = cloneRenderFeaturePlanSignatureSnapshot(first);
+    const nextSnapshot = cloneRenderFeaturePlanSignatureSnapshot(vertex(2), firstSnapshot);
+    expect(nextSnapshot).not.toBe(firstSnapshot);
+    expect(nextSnapshot.resources[0]).not.toBe(firstSnapshot.resources[0]);
+    expect(renderFeaturePlanSignatureSnapshotEquals(vertex(2), nextSnapshot)).toBe(true);
+    expect(renderFeaturePlanSignatureSnapshotEquals(first, firstSnapshot)).toBe(true);
+  });
+
+  it('detects nested mutation after evidence is remembered', () => {
+    const value = {
+      resources: [
+        {
+          kind: 'vertex-data',
+          name: 'vertices',
+          layout: 'position',
+          data: new Float32Array([1]),
+        },
+      ],
+      passes: [],
+    } satisfies RenderFeatureWorkPlan;
+    const signature = renderFeaturePlanSignature(value);
+    const snapshot = cloneRenderFeaturePlanSignatureSnapshot(value);
+    rememberRenderFeaturePlanSignature(value, signature, snapshot);
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(true);
+    (value.resources[0] as { data: Float32Array }).data[0] = 2;
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(false);
+  });
+
+  it('records host cache hits separately from canonical signature calls', () => {
+    const feature: RenderFeature<undefined> = {
+      identity: 'synthetic.signature-cache',
+      extract: () => ok(undefined),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
+    };
+    const host = createRenderFeatureHost([feature]);
+    expect(host.ok).toBe(true);
+    if (!host.ok || host.value.recordPlanSignature === undefined) return;
+
+    const empty: RenderFeatureWorkPlan = { resources: [], passes: [] };
+    host.value.recordPlanSignature(feature.identity, empty);
+    host.value.recordPlanSignature(feature.identity, { resources: [], passes: [] });
+    expect(host.value.inspection?.().signatures).toMatchObject([
+      { featureIdentity: feature.identity, calls: 1, cacheHits: 1, cacheMisses: 1 },
+    ]);
+  });
+
+  it('does not request a graph revision for retired GPU leases that the candidate does not use', () => {
+    const feature: RenderFeature<undefined> = {
+      identity: 'synthetic.retired-gpu-lease',
+      extract: () => ok(undefined),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
+    };
+    const host = createRenderFeatureHost([feature]);
+    expect(host.ok).toBe(true);
+    if (!host.ok) return;
+    const release = vi.fn(() => ok(undefined));
+    const gpuWork = {
+      beginFeature: () => ({
+        retainResources: () => {},
+        changedResourceNames: new Set(),
+        commitFrame: () => [{ release }],
+        abortFrame: () => ok(undefined),
+      }),
+    } as never;
+
+    const result = runSingleViewFeatureFrame(host.value, {
+      worlds: [],
+      owner: 0,
+      frameNumber: 1,
+      generation: 1,
+      caps: {} as never,
+      gpuWork,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.preparedResourceBatches).toHaveLength(0);
+    result.onSubmitted();
+    expect(result.preparedResourceBatches).toHaveLength(1);
+    expect(result.requiresPreparedResourceKey).toBe(false);
+  });
+
   it('rejects descriptor references that do not exist', () => {
-    const invalid: RenderFeaturePlan = {
+    const invalid: RenderFeatureWorkPlan = {
       resources: [],
       passes: [
         {
@@ -144,7 +392,7 @@ describe('RenderFeature plan authority', () => {
     const legacyShaped = {
       identity: 'synthetic.plan-only',
       extract: () => ok(undefined),
-      plan: () => ok({ resources: [], passes: [] }),
+      plan: () => ok({ work: [{ scope: { view: 'main' }, resources: [], passes: [] }] }),
       prepare,
       contribute,
     };
@@ -153,7 +401,7 @@ describe('RenderFeature plan authority', () => {
     expect(host.ok).toBe(true);
     if (!host.ok) return;
 
-    const result = runRenderFeatureFrame(host.value, {
+    const result = runSingleViewFeatureFrame(host.value, {
       worlds: [],
       owner: 0,
       frameNumber: 1,
@@ -164,6 +412,9 @@ describe('RenderFeature plan authority', () => {
     expect(result.plans).toHaveLength(1);
     expect(result.plans[0]).not.toHaveProperty('execution');
     expect(result.stageEvents.map((event) => event.stage)).toEqual(['extract', 'plan']);
+    expect(host.value.inspection?.().signatures).toMatchObject([
+      { featureIdentity: 'synthetic.plan-only', calls: 1 },
+    ]);
     expect(prepare).not.toHaveBeenCalled();
     expect(contribute).not.toHaveBeenCalled();
   });

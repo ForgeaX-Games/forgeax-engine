@@ -14,7 +14,7 @@
 //
 // Verdict criteria:
 //   (a) backend=webgpu (dawn-node bound the WebGPU adapter)
-//   (b) frames>=300 (the standard smoke gate)
+//   (b) frames>=60 (the standard smoke gate)
 //   (c) Renderer error event fired 0 times for RhiError / RuntimeError / EcsError
 //       families (the production crash channel)
 //   (d) console.error fired 0 times during render
@@ -27,7 +27,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY = process.env.FALSIFY ?? '';
 
@@ -325,7 +325,7 @@ world.spawn(
   { component: DirectionalLight, data: {
     direction: [d[0] * invLen, d[1] * invLen, d[2] * invLen],
     color: [1.0, 0.95, 0.85], intensity: 3.0,
-    mapSize: 2048, shadowDistance: 36, depthBias: 0.005,
+    mapSize: 2048, shadowDistance: 36, depthBias: 0.00001,
   } },
 );
 

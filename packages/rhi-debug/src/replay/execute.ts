@@ -10,6 +10,7 @@ import type {
   RhiDevice,
   RhiError,
   RhiQueue,
+  RhiRenderPipelineOps,
   Texture,
 } from '@forgeax/engine-rhi';
 import { ok, type Result } from '@forgeax/engine-types';
@@ -70,10 +71,20 @@ export async function executeEvent(
             kind: 'texture',
           },
         );
+      case 'createQuerySet':
+        return createResource(
+          context,
+          eventIndex,
+          event,
+          context.device.createQuerySet(event.desc),
+          { kind: 'query-set' },
+        );
       case 'destroyBuffer':
         return destroyResource(context, eventIndex, event, 'buffer');
       case 'destroyTexture':
         return destroyResource(context, eventIndex, event, 'texture');
+      case 'destroyQuerySet':
+        return destroyQuerySet(context, event, eventIndex);
       case 'createTextureView': {
         const texture = requireResource<Texture>(
           context,
@@ -110,6 +121,28 @@ export async function executeEvent(
           context.device.createBindGroupLayout(event.desc as never),
           { kind: 'binding', role: 'bind-group-layout' },
         );
+      case 'getBindGroupLayout': {
+        const pipeline = requireReplayResource(
+          context,
+          event.pipelineHandleId,
+          'pipeline',
+          eventIndex,
+          event.kind,
+        );
+        if (!pipeline.ok) return pipeline;
+        return createResource(
+          context,
+          eventIndex,
+          event,
+          ok(
+            (
+              pipeline.value.value as import('@forgeax/engine-rhi').RenderPipeline &
+                RhiRenderPipelineOps
+            ).getBindGroupLayout(event.index),
+          ),
+          { kind: 'binding', role: 'bind-group-layout' },
+        );
+      }
       case 'createBindGroup':
         return createBindGroup(context, event, eventIndex);
       case 'createPipelineLayout':
@@ -141,6 +174,22 @@ export async function executeEvent(
         return beginRenderPass(context, event, eventIndex);
       case 'beginComputePass':
         return beginComputePass(context, event, eventIndex);
+      case 'resolveQuerySet':
+        return resolveQuerySet(context, event, eventIndex);
+      case 'beginOcclusionQuery':
+        return passCall(context, event, eventIndex, 'render-pass', (pass) => {
+          const result = pass.beginOcclusionQuery(event.queryIndex);
+          return result.ok
+            ? ok(undefined)
+            : eventFailure(eventIndex, event, 'encode', result.error);
+        });
+      case 'endOcclusionQuery':
+        return passCall(context, event, eventIndex, 'render-pass', (pass) => {
+          const result = pass.endOcclusionQuery();
+          return result.ok
+            ? ok(undefined)
+            : eventFailure(eventIndex, event, 'encode', result.error);
+        });
       case 'copyBufferToBuffer':
         return copyBufferToBuffer(context, event, eventIndex);
       case 'copyBufferToTexture':
@@ -247,6 +296,13 @@ export async function executeEvent(
         return passCall(context, event, eventIndex, 'render-pass', (pass) => {
           pass.setStencilReference(event.reference);
           return ok(undefined);
+        });
+      case 'resetRenderState':
+        return passCall(context, event, eventIndex, 'render-pass', (pass) => {
+          const result = pass.executeBundles([]);
+          return result.ok
+            ? ok(undefined)
+            : eventFailure(eventIndex, event, 'encode', result.error);
         });
       case 'endRenderPass':
         return endPass(context, event, eventIndex, 'render-pass');
@@ -386,6 +442,60 @@ function destroyResource(
   return ok(undefined);
 }
 
+function destroyQuerySet(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'destroyQuerySet' }>,
+  eventIndex: number,
+): Result<void, RhiDebugError> {
+  const entry = context.table.get(event.handleId);
+  if (entry?.resource.kind !== 'query-set')
+    return missingResource(eventIndex, event, event.handleId, 'query-set');
+  const result = context.device.destroyQuerySet(entry.resource.value);
+  if (!result.ok) return eventFailure(eventIndex, event, 'create', result.error);
+  context.table.delete(event.handleId);
+  return ok(undefined);
+}
+
+function resolveQuerySet(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'resolveQuerySet' }>,
+  eventIndex: number,
+): Result<void, RhiDebugError> {
+  const encoder = requireResource<RhiCommandEncoder>(
+    context,
+    event.cmdHandleId,
+    'encoder',
+    eventIndex,
+    event.kind,
+    'command',
+  );
+  const querySet = requireResource<import('@forgeax/engine-rhi').QuerySet>(
+    context,
+    event.querySetHandleId,
+    'query-set',
+    eventIndex,
+    event.kind,
+  );
+  const destination = requireResource<Buffer>(
+    context,
+    event.destinationHandleId,
+    'buffer',
+    eventIndex,
+    event.kind,
+  );
+  if (!encoder.ok) return encoder;
+  if (!querySet.ok) return querySet;
+  if (!destination.ok) return destination;
+  const result = encoder.value.resolveQuerySet(
+    querySet.value,
+    event.firstQuery,
+    event.queryCount,
+    destination.value,
+    event.destinationOffset,
+  );
+  return result.ok ? ok(undefined) : eventFailure(eventIndex, event, 'encode', result.error);
+}
+
 async function createShaderModule(
   context: ReplayExecutionContext,
   event: Extract<RhiCallEvent, { kind: 'createShaderModule' }>,
@@ -473,15 +583,8 @@ function createRenderPipeline(
   event: Extract<RhiCallEvent, { kind: 'createRenderPipeline' }>,
   eventIndex: number,
 ): Result<void, RhiDebugError> {
-  const layout = requireReplayResource(
-    context,
-    event.layoutHandleId,
-    'binding',
-    eventIndex,
-    event.kind,
-  );
-  if (!layout.ok || layout.value.role !== 'pipeline-layout')
-    return pipelineError(layout, event, eventIndex);
+  const layout = replayPipelineLayout(context, event, eventIndex);
+  if (!layout.ok) return layout;
   const vertex = event.desc.vertex;
   const fragment = event.desc.fragment;
   const vertexShader =
@@ -490,7 +593,7 @@ function createRenderPipeline(
     fragment === undefined ? undefined : shaderValue(context, event.fragmentShaderModuleHandleId);
   const descriptor = {
     ...event.desc,
-    layout: layout.value.value as PipelineLayout,
+    layout: layout.value,
     ...(vertex === undefined ? {} : { vertex: { ...vertex, module: vertexShader } }),
     ...(fragment === undefined
       ? {}
@@ -529,15 +632,8 @@ function createComputePipeline(
   event: Extract<RhiCallEvent, { kind: 'createComputePipeline' }>,
   eventIndex: number,
 ): Result<void, RhiDebugError> {
-  const layout = requireReplayResource(
-    context,
-    event.layoutHandleId,
-    'binding',
-    eventIndex,
-    event.kind,
-  );
-  if (!layout.ok || layout.value.role !== 'pipeline-layout')
-    return pipelineError(layout, event, eventIndex);
+  const layout = replayPipelineLayout(context, event, eventIndex);
+  if (!layout.ok) return layout;
   const shader = shaderValue(context, event.computeShaderModuleHandleId);
   if (shader === undefined)
     return eventFailure(
@@ -552,11 +648,35 @@ function createComputePipeline(
     event,
     context.device.createComputePipeline({
       ...event.desc,
-      layout: layout.value.value as PipelineLayout,
+      layout: layout.value,
       compute: { ...event.desc.compute, module: shader },
     } as never),
     { kind: 'pipeline', role: 'compute' },
   );
+}
+
+function replayPipelineLayout(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'createRenderPipeline' | 'createComputePipeline' }>,
+  eventIndex: number,
+): Result<PipelineLayout | 'auto', RhiDebugError> {
+  if (event.layoutHandleId === 'layout:auto') return ok('auto');
+  const layout = requireReplayResource(
+    context,
+    event.layoutHandleId,
+    'binding',
+    eventIndex,
+    event.kind,
+  );
+  if (!layout.ok) return layout;
+  if (layout.value.role !== 'pipeline-layout')
+    return eventFailure(
+      eventIndex,
+      event,
+      'lookup',
+      'pipeline layout resource has the wrong binding role',
+    );
+  return ok(layout.value.value as PipelineLayout);
 }
 
 function shaderValue(
@@ -673,8 +793,18 @@ function beginRenderPass(
     event.depthStencilViewHandleId === undefined
       ? undefined
       : context.table.get(event.depthStencilViewHandleId)?.resource;
+  const querySet =
+    event.occlusionQuerySetHandleId === undefined
+      ? undefined
+      : context.table.get(event.occlusionQuerySetHandleId)?.resource;
+  if (event.occlusionQuerySetHandleId !== undefined && querySet?.kind !== 'query-set') {
+    return missingResource(eventIndex, event, event.occlusionQuerySetHandleId, 'query-set');
+  }
+  const timestamp = replayTimestampWrites(context, event, eventIndex);
+  if (!timestamp.ok) return timestamp;
   const descriptor = {
     ...event.desc,
+    ...(timestamp.value === undefined ? {} : { timestampWrites: timestamp.value }),
     colorAttachments: colors,
     ...(depth?.kind === 'texture-view'
       ? {
@@ -684,6 +814,7 @@ function beginRenderPass(
           } as RenderPassDepthStencilAttachment,
         }
       : {}),
+    ...(querySet?.kind === 'query-set' ? { occlusionQuerySet: querySet.value } : {}),
   };
   const pass = encoder.value.beginRenderPass(descriptor as never);
   return context.table.set(
@@ -691,6 +822,29 @@ function beginRenderPass(
     { kind: 'encoder', role: 'render-pass', value: pass },
     eventRecord(event),
   );
+}
+
+function replayTimestampWrites(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'beginRenderPass' | 'beginComputePass' }>,
+  eventIndex: number,
+): Result<import('@forgeax/engine-rhi').RenderPassTimestampWrites | undefined, RhiDebugError> {
+  if (event.desc?.timestampWrites === undefined) return ok(undefined);
+  const handle = event.timestampQuerySetHandleId;
+  if (handle === undefined)
+    return missingResource(eventIndex, event, 'timestamp-query-set', 'query-set');
+  const query = requireResource<import('@forgeax/engine-rhi').QuerySet>(
+    context,
+    handle,
+    'query-set',
+    eventIndex,
+    event.kind,
+  );
+  if (!query.ok) return query;
+  return ok({
+    ...event.desc.timestampWrites,
+    querySet: query.value,
+  });
 }
 
 function beginComputePass(
@@ -707,7 +861,12 @@ function beginComputePass(
     'command',
   );
   if (!encoder.ok) return encoder;
-  const pass = encoder.value.beginComputePass(JSON.parse(JSON.stringify(event.desc)));
+  const timestamp = replayTimestampWrites(context, event, eventIndex);
+  if (!timestamp.ok) return timestamp;
+  const pass = encoder.value.beginComputePass({
+    ...(event.desc?.label === undefined ? {} : { label: event.desc.label }),
+    ...(timestamp.value === undefined ? {} : { timestampWrites: timestamp.value }),
+  });
   return context.table.set(
     event.passHandleId,
     { kind: 'encoder', role: 'compute-pass', value: pass },

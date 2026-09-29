@@ -15,9 +15,14 @@ const renderReadme = read('../../README.md');
 const runtimeReadme = read('../../../runtime/README.md');
 const appSkill = read('../../../../skills/forgeax-engine-app/SKILL.md');
 
-// M4-06 prepends the direct-light contract; keep the existing first-read
-// vocabulary assertion wide enough to cover that approved contract.
-const topSurface = renderReadme.slice(0, 18000);
+const firstReadHeading = '## RenderFeature: the producer seam (first-read index)';
+const firstReadStart = renderReadme.indexOf(firstReadHeading);
+const firstReadEnd = renderReadme.indexOf('\n## ', firstReadStart + firstReadHeading.length);
+const topSurface = renderReadme.slice(
+  firstReadStart,
+  firstReadEnd === -1 ? undefined : firstReadEnd,
+);
+const searchableTopSurface = topSurface.replace(/\s+/g, ' ');
 
 describe('RenderFeature documentation surface', () => {
   it('keeps the first-read public route and four-term vocabulary indexable', () => {
@@ -32,11 +37,11 @@ describe('RenderFeature documentation surface', () => {
       'Standard Pipeline',
       'RenderGraph pass',
     ]) {
-      expect(topSurface).toContain(token);
+      expect(searchableTopSurface).toContain(token);
     }
-    expect(topSurface).not.toContain('passContext.commands');
-    expect(topSurface).not.toContain('context.staging.addPass');
-    expect(topSurface).not.toContain('graph-only Wave 1 feature');
+    expect(searchableTopSurface).not.toContain('passContext.commands');
+    expect(searchableTopSurface).not.toContain('context.staging.addPass');
+    expect(searchableTopSurface).not.toContain('graph-only Wave 1 feature');
     expect(runtimeReadme).toContain('createRenderer(canvas, options?, bundler?)');
     expect(appSkill).toContain('Renderer feature assembly');
   });

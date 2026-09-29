@@ -84,7 +84,9 @@ async function composeSpriteWithPir(perInstanceRegion: boolean): Promise<string>
   const r = await compileShader(spriteSrc, {
     id: `sprite-pir-${perInstanceRegion}`,
     imports: {
+      'forgeax_clipping::planes': readWgsl('clipping.wgsl'),
       'forgeax_view::common': commonSrc,
+      forgeax_scene_temporal: readWgsl('scene-temporal.wgsl'),
       'forgeax_view::fog': readWgsl('fog.wgsl'),
     },
     defines: {

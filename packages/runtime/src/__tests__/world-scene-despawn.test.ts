@@ -34,10 +34,10 @@ describe('world.despawnScene (w19)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: {} } },
-        { localId: 1 as never, components: { Transform: {} } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': { components: { Transform: {} } },
+      },
     };
     const handle = registerSceneAsset(world, asset);
     const r = worldInstantiateScene(world, handle);
@@ -64,10 +64,10 @@ describe('world.despawnScene (w19)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: {} } },
-        { localId: 1 as never, components: { Transform: {} } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': { components: { Transform: {} } },
+      },
     };
     const handle = registerSceneAsset(world, asset);
     const r = worldInstantiateScene(world, handle);

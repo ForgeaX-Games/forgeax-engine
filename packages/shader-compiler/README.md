@@ -19,6 +19,49 @@ cook 使用的 reflection 与 artifact 输入。`coordinateSet`、transform 和
 
 **Single entry.** `compileShader(source, options)` — pure function, `Promise<Result<CompileResult, ShaderError>>`. Same input produces same output; no mutable global state.
 
+For graphics consumers, `renderEntries: { vertex, fragment? }` checks the
+selected stages against the validated Naga IR, including fragment input
+locations, types, and interpolation. Material cooking supplies its selected
+entries; an absent or wrong-stage entry fails before publication. Pack cooking
+propagates the structured compiler error without serializing it into a string.
+
+The closed material context derives local-light and ProbeBlend support from
+`capability: 'storage-buffer'` for both Forward and Deferred. Custom Standard
+Surface programs retain the same lighting modules as built-in Standard before
+WGSL publication; runtime binding layouts follow the published program, without
+reconstructing a missing lazy variant key. Uniform-buffer contexts disable both
+storage-only branches. Standard Surface scene-index programs and their GPU Scene
+receipts are also emitted only for storage-buffer contexts; uniform fallback
+publishes its direct program without requesting storage-only Mesh metadata.
+
+Material publications use `material-cook/4`: one validated root contract and a
+complete program set selected by Pass and compiler context. Pack and Native
+cookers share the publication builder. Independent modules retain independent
+WGSL; shared modules reuse code while entry choices remain pipeline facts.
+
+The Native Pack cooker derives `skinned` geometry from a resolved Standard skin
+root, including inherited roots. Its color, visible-surface and shadow programs
+share that context and palette ABI. Readiness alone does not prove selection:
+the consumer must find one program for its exact pass, geometry and address.
+
+Sprite materials publish both ordinary mesh and `sprite-instances` geometry
+programs. The latter derives `PER_INSTANCE_REGION` from the component-owned
+context: storage instances have current/previous matrices plus a UV region
+(144 bytes); uniform instances have one matrix plus a region (80 bytes).
+The Native Pack cooker publishes the default WebGPU/storage pair for built-in
+sprite and sprite-lit roots, including source aliases and inherited passes.
+Other backend/capability contexts remain explicit cooker inputs. Re-cook old
+material publications to obtain the missing program; runtime never replaces a
+published artifact with a legacy shader variant.
+
+| Contract | Compile-time rule |
+|:--|:--|
+| Root parameter storage | All used UBO members keep the generated offsets and span. |
+| Per-Pass resources | Unused bindings may be absent; used resources keep root binding numbers and types. |
+| Custom resource names | Names such as `clearcoatTexture` do not enable Standard semantics or relocation. |
+| Default shadow coverage | `forgeax::default-shadow-caster` without an explicit Surface slot uses opaque coverage and adds no PBR parameters. Standard helpers explicitly select their shared Surface. |
+| Layout failure | The error carries the material, Pass, module, source, context, and actual/expected layout facts where available. |
+
 ```ts
 import { compileShader } from '@forgeax/engine-shader-compiler';
 
@@ -105,5 +148,71 @@ The plugin builds a `reverseDeps: Map<moduleId, Set<rootEntryId>>` during `trans
 
 - plan-strategy §S-5 / §S-7 / §S-9 — [`feat-20260508-shader-pipeline-mvp/plan-strategy.md`](../../.forgeax-harness/forgeax-loop/feat-20260508-shader-pipeline-mvp/plan-strategy.md)
 - M2/M3/M4 decisions — [`feat-20260512-naga-oil-composition-hmr/plan-decisions.md`](../../.forgeax-harness/forgeax-loop/feat-20260512-naga-oil-composition-hmr/plan-decisions.md) — D-04 / D-05 / D-07 / D-08 / D-11 / D-12 (moduleId convention + error taxonomy + anonymous-entry placeholder + offset passthrough)
-- charter proposition 3 (machine-readable > prose) + AC-15 (no `err.message.match()`) — [AI User Charter](../../.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md)
+- charter proposition 3 (machine-readable > prose) + AC-15 (no `err.message.match()`) — [AI-first contract](../../AGENTS.md#design-axiom--compression--intelligence)
 - AGENTS.md §Error model — family-level `ShaderErrorCode` + `ShaderErrorDetail` row (T-22 anchored).
+
+## Pack compilation lifetime
+
+Each `createMaterialPackCooker()` owns bounded reuse of successful raster
+compilations: at most 64 programs and 16 MiB of serialized compiler results.
+The key includes the exact source and all compiler options, including imported
+bytes, defines, selected entries and output formats. Sources are still read on
+every cook; material values, references, generations and receipts are published
+anew. Shader bytes stay binary until the Pack transport projection. Failed
+compilations are never retained, and returned results cannot mutate
+the retained copy. The pure `compileShader()` entry keeps no global cache.
+
+## Standard Surface composition
+
+Build-time composition resolves `program.moduleSlots.surface`, loads the
+transitive `#import` closure, validates the Surface ABI, generates the material
+parameter module, and reflects one cooked Standard artifact. The player receives
+only the content-addressed artifact; compiler and Naga dependencies do not cross
+the runtime boundary.
+
+Surface helper imports are hoisted ahead of template declarations. Active group
+imports from the same module are combined after conditional specialization, so
+a Surface and its template can share normal helpers without replacing each
+other's imported symbols. Disabled imports do not add required symbols.
+
+| Stage | Evidence | Failure owner |
+|:--|:--|:--|
+| Slot resolution | Standard module plus one Surface module | Material contract |
+| Source closure | Ordered module IDs and closure digest | Shader source catalog |
+| ABI validation | `evaluate_surface(SurfaceInput) -> SurfaceData` | Surface WGSL |
+| Reflection/cook | Layout, program, and cook identities | Shader compiler / cooker |
+
+> [!IMPORTANT]
+> A valid Surface cannot repair an invalid root contract. Fix authored source
+> or the producer, cold-cook the same GUID, and verify publication before
+> retrying runtime load.
+
+
+## Material MRT admission
+
+The cooker validates `passes[].outputs` before publishing the material. For the
+selected fragment entry, Naga checks output count, contiguous location coverage,
+and scalar class against each declared attachment format. `uint`/`sint` require
+unsigned/signed shader outputs; normalized and float formats require float
+outputs. A declaration mismatch fails cooking; the existing Pack publication
+retains its last-known-good generation. Device limits and format capabilities
+remain runtime admission. See [public MRT](../render/README.md#public-material-mrt).
+
+### Shared ray material cook
+
+`cookRayMaterial({ material, table, sources, context })` resolves the existing
+MaterialAsset inheritance, lowers the same Standard schema, composes its Surface
+slot and compiles either `ray-hit` compute or `raster-probe` diagnostic fragment
+WGSL. It returns the resolved asset, source closure and `RaySurfaceProgram`. Value edits retain
+program identity; source edits change `sourceClosureDigest`. Contexts own texture
+sampling policy, not separate material definitions.
+
+The ordinary Pack cooker publishes the eligible rigid Standard ray-hit derivative
+alongside its raster programs in the same receipt and artifact set. Unsupported
+materials remain raster publications; a ray consumer must report their admission
+failure or missing context, never substitute the raster program. Runtime never
+imports the compiler. Texture/MASK and normal maps require their qualified UV
+and tangent inputs; unsupported coverage, physical layers and resource profiles
+fail admission. Custom Surface code must compile for compute and pass the GPU
+geometric-normal/finite-output checks. This delivery path alone does not install
+Renderer GI, cards or a hardware query pipeline.

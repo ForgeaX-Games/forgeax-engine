@@ -11,7 +11,8 @@
 //     AudioClipAsset / FontAsset / RenderPipelineAsset / TilesetAsset /
 //     VideoAsset / ParticleEffectAsset) has gained a `name`
 //     field. The check scans
-//     each Asset member interface block between `export interface <N>Asset`
+//     each Asset member interface block in the core contract owner between
+//     `export interface <N>Asset`
 //     and the next `}` for `readonly name` and asserts exactly 1 hit
 //     (MaterialRuntimeInfo).
 //
@@ -26,13 +27,24 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { Asset, ParticleEffectAsset, TilesetAsset } from '../index';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? '.', '..', '..', '..', '..');
-const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts');
+const TYPES_SOURCES = [
+  'mesh-contracts.ts',
+  'font-contracts.ts',
+  'asset-union-contracts.ts',
+  'scene-contracts.ts',
+  'animation-contracts.ts',
+  'media-contracts.ts',
+  'material/asset.ts',
+  'vfx.ts',
+].map((file) => resolve(REPO_ROOT, 'packages', 'types', 'src', file));
 
 // Exhaustive switch over Asset.kind -- when a 14th variant is added,
 // TS2322 fires on the `_exhaustiveCheck: never` line, blocking the
 // PR until this test is updated (charter P4 explicit failure).
 function exhaustiveAssetKindSwitch(asset: Asset): string {
   switch (asset.kind) {
+    case 'plugin':
+      return 'PluginAsset';
     case 'mesh':
       return 'MeshAsset';
     case 'texture':
@@ -55,6 +67,8 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'AnimationGraph';
     case 'audio':
       return 'AudioClipAsset';
+    case 'ies-profile':
+      return 'IesProfileAsset';
     case 'font':
       return 'FontAsset';
     case 'render-pipeline':
@@ -101,7 +115,7 @@ const ASSET_MEMBER_NAMES = [
  * method), then grep for `readonly name` within that span.
  */
 function countNameFieldsPerAssetInterface(): Map<string, number> {
-  const raw = execSync(`cat ${TYPES_INDEX}`, { encoding: 'utf-8' });
+  const raw = execSync(`cat ${TYPES_SOURCES.join(' ')}`, { encoding: 'utf-8' });
   const lines = raw.split('\n');
   const result = new Map<string, number>();
   let i = 0;

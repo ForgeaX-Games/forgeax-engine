@@ -1,0 +1,110 @@
+import type { RhiAdapter, RhiDevice } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
+import {
+  deriveDeviceFeatureAdmission,
+  isTimestampQueryAdmitted,
+} from '../assembly/device-feature-admission.js';
+
+function adapter(
+  features: string[],
+  limits?: Readonly<Record<string, number>>,
+): Pick<RhiAdapter, 'features'> & Partial<Pick<RhiAdapter, 'limits'>> {
+  return {
+    features: new Set(features) as RhiAdapter['features'],
+    ...(limits === undefined ? {} : { limits }),
+  };
+}
+
+function deviceCaps(
+  timestampQuery: boolean,
+  timestampPeriodNanoseconds: number | null,
+): Pick<RhiDevice['caps'], 'timestampQuery' | 'timestampPeriodNanoseconds'> {
+  return { timestampQuery, timestampPeriodNanoseconds };
+}
+
+describe('shared device feature admission', () => {
+  it('admits visible-surface features only with the complete attachment capability', () => {
+    const limits = { maxColorAttachments: 8, maxColorAttachmentBytesPerSample: 48 };
+    const admitted = deriveDeviceFeatureAdmission(adapter(['primitive-index'], limits));
+    expect(admitted.requiredFeatures).toContain('primitive-index');
+    expect(admitted.requiredLimits?.maxColorAttachmentBytesPerSample).toBe(48);
+    // The six-target opt-in must not lower WebGPU's ordinary eight-target default.
+    expect(admitted.requiredLimits).toEqual({ maxColorAttachmentBytesPerSample: 48 });
+    for (const [features, supported] of [
+      [[], limits],
+      [['primitive-index'], { ...limits, maxColorAttachmentBytesPerSample: 32 }],
+      [['primitive-index'], { ...limits, maxColorAttachments: 5 }],
+    ] as const) {
+      expect(
+        deriveDeviceFeatureAdmission(adapter([...features], supported)).requiredFeatures,
+      ).not.toContain('primitive-index');
+    }
+  });
+  it('admits supported timestamps for a late DRS component and omits unsupported features', () => {
+    const supported = adapter(['timestamp-query', 'texture-compression-bc']);
+    const available = deriveDeviceFeatureAdmission(supported);
+    const unsupported = deriveDeviceFeatureAdmission(adapter(['texture-compression-bc']));
+
+    expect(available.requiredFeatures).toEqual([
+      'depth32float-stencil8',
+      'texture-compression-bc',
+      'timestamp-query',
+    ]);
+    expect(unsupported.requiredFeatures).toEqual([
+      'depth32float-stencil8',
+      'texture-compression-bc',
+    ]);
+  });
+
+  it('admits adapter-supported indirect-first-instance for two-phase GPU occlusion', () => {
+    expect(
+      deriveDeviceFeatureAdmission(adapter(['indirect-first-instance'])).requiredFeatures,
+    ).toEqual(['depth32float-stencil8', 'indirect-first-instance']);
+  });
+
+  it('adds only adapter-supported timestamp-query once for either timing producer', () => {
+    const result = deriveDeviceFeatureAdmission(adapter(['timestamp-query']));
+
+    expect(result.requiredFeatures).toEqual(['depth32float-stencil8', 'timestamp-query']);
+  });
+
+  it.each([
+    [48, 26],
+    [26, 26],
+    [25, 24],
+    [24, 24],
+    [23, 21],
+    [21, 21],
+    [20, undefined],
+    [18, undefined],
+    [17, undefined],
+    [16, undefined],
+  ])('requests an admitted topology within adapter limit %s', (limit, requested) => {
+    expect(
+      deriveDeviceFeatureAdmission(
+        adapter([], { maxSampledTexturesPerShaderStage: limit as number }),
+      ),
+    ).toEqual({
+      requiredFeatures: ['depth32float-stencil8'],
+      ...(requested === undefined
+        ? {}
+        : { requiredLimits: { maxSampledTexturesPerShaderStage: requested } }),
+    });
+  });
+
+  it('requires both device capability and a finite positive period before admission', () => {
+    expect(isTimestampQueryAdmitted(deviceCaps(true, 1))).toBe(true);
+    expect(isTimestampQueryAdmitted(deviceCaps(false, 1))).toBe(false);
+    expect(isTimestampQueryAdmitted(deviceCaps(true, null))).toBe(false);
+    expect(isTimestampQueryAdmitted(deviceCaps(true, Number.NaN))).toBe(false);
+    expect(isTimestampQueryAdmitted(deviceCaps(true, 0))).toBe(false);
+  });
+
+  it('derives byte-identical initial and recovery request descriptors', () => {
+    const supported = adapter(['texture-compression-etc2', 'timestamp-query']);
+
+    expect(deriveDeviceFeatureAdmission(supported)).toEqual(
+      deriveDeviceFeatureAdmission(supported),
+    );
+  });
+});

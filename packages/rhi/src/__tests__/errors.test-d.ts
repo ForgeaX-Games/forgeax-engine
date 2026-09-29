@@ -178,6 +178,8 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
           return 'empty-worlds';
         case 'render-system-owner-out-of-range':
           return 'owner-oob';
+        case 'rhi-texture-format-capability-unavailable':
+          return 'texture-format-unavailable';
       }
       // No default — TS guards: union drift here triggers compile-time red.
     }

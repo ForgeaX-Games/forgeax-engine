@@ -80,14 +80,14 @@ bootstrap().catch((err: unknown) => {
 async function bootstrap(): Promise<void> {
   const directRendererResult = await createRenderer(
     directCanvas,
-    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'direct' } },
+    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, renderPath: 'forward' } },
     forgeaxBundlerAdapter(),
   );
   if (!directRendererResult.ok) throw directRendererResult.error;
   const directRenderer = directRendererResult.value;
   const clusteredRendererResult = await createRenderer(
     clusteredCanvas,
-    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered' } },
+    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, renderPath: 'deferred' } },
     forgeaxBundlerAdapter(),
   );
   if (!clusteredRendererResult.ok) throw clusteredRendererResult.error;

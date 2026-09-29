@@ -1,0 +1,66 @@
+{
+  "schema": "forgeax.render-scene-benchmark.v1",
+  "label": "unified-cpu-1",
+  "sourceRoot": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/wave1-ssot",
+  "sourceHead": "05f597b2a9cb72cfbaeddb174cd5dc95ddcc6c2f",
+  "sourceStatus": {
+    "trackedDirty": false,
+    "entries": []
+  },
+  "workload": {
+    "worlds": 2,
+    "ordinaryEntitiesPerWorld": 256,
+    "mixedFields": ["Instances", "GlobalTransform", "MaterialAsset", "Visibility", "ChildOf"],
+    "instanceCounts": [3, 0, 1, 2]
+  },
+  "timing": {
+    "warmupCount": 8,
+    "sampleCount": 31,
+    "medianMs": 3.3288749999999823,
+    "p95Ms": 7.086375000000032,
+    "minMs": 2.637999999999977,
+    "maxMs": 7.680125000000004,
+    "samplesMs": [
+      7.680125000000004, 3.459707999999978, 4.039374999999978, 5.3913330000000315, 3.358542,
+      3.345875000000035, 3.132958999999971, 3.176333999999997, 5.3624999999999545,
+      2.9970420000000217, 3.159167000000025, 4.640291999999988, 3.3387500000000045,
+      2.977374999999995, 2.8804590000000303, 3.238916999999958, 7.086375000000032,
+      3.0400840000000358, 3.1642499999999814, 4.285374999999988, 2.9554999999999723,
+      2.9306250000000205, 3.003667000000007, 3.444999999999993, 4.512666999999965,
+      3.3288749999999823, 3.314875000000029, 6.657333999999992, 2.637999999999977,
+      2.7837089999999876, 4.4058749999999804
+    ],
+    "oracleChecks": 31,
+    "oracleTimed": false
+  },
+  "touched": {
+    "median": 259,
+    "p95": 259,
+    "samples": [
+      259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259,
+      259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259, 259
+    ]
+  },
+  "scene": {
+    "fullRebuilds": 1,
+    "projectionRecords": 518,
+    "deltaFrames": 39,
+    "noChangeFrames": 0,
+    "transformUpdates": 10101
+  },
+  "gpu": {
+    "probe": "disabled",
+    "status": "inactive",
+    "uploadCallsPerSample": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    "uploadBytesPerSample": [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    "uploadCalls": 0,
+    "uploadBytes": 0,
+    "inspection": {
+      "status": "inactive"
+    }
+  }
+}

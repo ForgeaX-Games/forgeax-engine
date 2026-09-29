@@ -12,7 +12,7 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const FIXTURE = resolve(ROOT, 'templates/game-default/assets/base-material.pack.json');
+const FIXTURE = resolve(ROOT, 'apps/game-capability-lab/assets/base-material.pack.json');
 const GUID = 'eb5bf6e6-2e47-4d9a-99fd-81843228c9b3';
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_PRODUCTION_MATERIAL_EDIT_DIR ?? resolve(ROOT, '.forgeax-debug/production-material-edit'),

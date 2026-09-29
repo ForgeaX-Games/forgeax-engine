@@ -69,6 +69,7 @@ describe('source package producer', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('source-package-guid-closure-mismatch');
+    if (result.error.code !== 'source-package-guid-closure-mismatch') return;
     expect(result.error.detail.declaredGuids).toEqual([GUID_A, GUID_B]);
     expect(result.error.detail.producedGuids).toEqual(
       expect.arrayContaining([...new Set(produced.map((item) => item.guid))]),

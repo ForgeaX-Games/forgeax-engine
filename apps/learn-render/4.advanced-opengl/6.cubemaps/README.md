@@ -125,6 +125,6 @@ The smoke script uses a **dual-state pixel-diff** approach (not single-state sel
 - **Black screen / no skybox visible**: Verify the `forgeax-engine-assets` submodule is initialised (`git submodule update --init --recursive`). The `newport_loft.hdr` file is in the CC BY-NC 4.0 carve-out vendor subtree. If the file is missing, `loadByGuid` will fail with a structured error (charter P3 explicit failure).
 - **Reflective cube appears matte**: Check that `Skylight` is spawned (PBR IBL requires it) and the material uses `metallic: 1, roughness: 0`.
 - **Tonemap issues**: The camera must use a non-none tonemap (`TONEMAP_REINHARD_EXTENDED` here). The skybox pass writes HDR values; a `'none'` tonemap clips them.
-- **Smoke flakiness**: The dual-state diff threshold is 0.05% of (512x512) = 131 pixels. If the smoke fails with diff slightly below threshold, try increasing `SMOKE_MIN_FRAMES` to ensure the IBL pipeline has fully settled (default 300).
+- **Smoke flakiness**: The dual-state diff threshold is 0.05% of (512x512) = 131 pixels. If the smoke fails with diff slightly below threshold, try increasing `SMOKE_MIN_FRAMES` to ensure the IBL pipeline has fully settled (default 60).
 
 For rendering / smoke debugging, load `forgeax-engine-debug` and walk the symptom chain.

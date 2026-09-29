@@ -47,7 +47,7 @@
 // (closed-union exhaustive switch).
 
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
+import type { ExecutionCapabilityName, ExecutionWorker } from './execution/types';
 
 /**
  * Closed AppErrorCode union (12 members).
@@ -107,13 +107,13 @@ export interface AppDetailPointerLockFailed {
 export interface AppDetailFrameStepInvalid {
   readonly state: 'idle' | 'running' | 'paused' | 'stopped';
   readonly deltaSeconds: number;
-  readonly reason: 'state' | 'delta';
+  readonly reason: 'state' | 'delta' | 'credit';
 }
 
-export interface AppDetailExecutionTierUnavailable {
-  readonly requestedTier: ExecutionTier;
+export interface AppDetailExecutionWorkerUnavailable {
+  readonly worker: ExecutionWorker;
+  readonly reason: 'engine-disabled' | 'capability-unavailable';
   readonly missingCapabilities: readonly ExecutionCapabilityName[];
-  readonly sharedEvidencePassed: boolean;
 }
 
 export interface AppDetailExecutionBootstrapFailed {
@@ -128,7 +128,7 @@ export interface AppDetailPluginActivationFailed {
 }
 
 export interface AppDetailExecutionDeadlineExceeded {
-  readonly phase: 'startup' | 'handshake' | 'frame';
+  readonly phase: 'startup' | 'handshake' | 'frame' | 'dispose';
   readonly timeoutMs: number;
 }
 
@@ -176,8 +176,8 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
         ? AppDetailPointerLockFailed
         : C extends 'app-plugin-activation-failed'
           ? AppDetailPluginActivationFailed
-          : C extends 'app-execution-tier-unavailable'
-            ? AppDetailExecutionTierUnavailable
+          : C extends 'app-execution-worker-unavailable'
+            ? AppDetailExecutionWorkerUnavailable
             : C extends 'app-execution-bootstrap-failed'
               ? AppDetailExecutionBootstrapFailed
               : C extends 'app-execution-deadline-exceeded'
@@ -384,10 +384,10 @@ const appErrorPolicy = {
     expected: 'every requested Cordis plugin fiber reaches a stable active or pending state',
     hint: 'inspect detail.cause and the plugin fiber effects; repair the failing activation before creating the App again',
   },
-  'app-execution-tier-unavailable': {
+  'app-execution-worker-unavailable': {
     expected:
-      'the explicitly requested execution tier has every required observed capability and the shipped shared evidence gate',
-    hint: 'inspect detail.missingCapabilities and detail.sharedEvidencePassed; use tier="auto" only when an observed fallback is acceptable',
+      'the explicitly enabled worker has its required browser capabilities and an Engine Worker owner',
+    hint: 'inspect detail.worker, detail.reason and detail.missingCapabilities; use auto for capability fallback or enable the Engine Worker dependency',
   },
   'app-execution-bootstrap-failed': {
     expected:

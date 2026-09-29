@@ -5,9 +5,11 @@
 // Delegates to the shared harness; this file only supplies the demo identity +
 // its live-pixel hook (window.__captureFramebuffers, installed by src/index.ts).
 //
-// pixel mode: capture a frame -> replay on a fresh dawn-node device -> compare
-// the replayed RT against the live canvas readback (mean/maxChannel/coveredMean).
-// Local-only gate (no Chrome+WebGPU on CI runners).
+// pixel mode: capture a frame -> replay on a fresh browser WebGPU device ->
+// compare the same-backend replay against the live canvas readback. The shared
+// verifier still runs the independent Node Dawn replay and records its metrics,
+// but Chrome/WebGPU owns the strict pixel verdict because cross-backend
+// software-rasterization can differ at sparse edge pixels.
 
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +22,8 @@ await verifyDemoCapture({
   label: 'learn-render 4.5 framebuffers',
   mode: 'pixel',
   liveHook: '__captureFramebuffers',
+  browserReplayHook: '__replayFramebuffersCapture',
+  pixelVerdictOwner: 'browser-fresh',
   rtIdx: 0,
   appDir: dirname(here),
 });

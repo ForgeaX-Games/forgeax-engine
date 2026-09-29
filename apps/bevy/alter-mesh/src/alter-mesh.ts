@@ -1,3 +1,4 @@
+import { RuntimeMeshVertices } from '@forgeax/engine-assets-runtime';
 import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
@@ -30,6 +31,7 @@ const INDICES = new Uint16Array([
 ]);
 
 export interface AlterMeshState {
+  readonly meshContent: EntityHandle;
   readonly leftEntity: EntityHandle;
   readonly rightEntity: EntityHandle;
   readonly sharedMeshHandle: Handle<'MeshAsset', 'shared'>;
@@ -85,6 +87,7 @@ export function buildAlterMeshWorld(world: World): AlterMeshState {
     Materials.unlit([0.2, 0.75, 1, 1]),
   );
   const sharedMeshHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', cubeMesh(cubeVertices(1)));
+  const meshContent = world.spawn({ component: RuntimeMeshVertices, data: { asset: sharedMeshHandle, vertices: cubeVertices(1) } }).unwrap();
   const leftEntity = world.spawn(
     { component: Transform, data: { pos: [-0.9, 0, 0], quat: [0, 0, 0, 1], scale: [1.1, 1.1, 1.1] } },
     { component: MeshFilter, data: { assetHandle: sharedMeshHandle } },
@@ -101,6 +104,7 @@ export function buildAlterMeshWorld(world: World): AlterMeshState {
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 4 / 3, near: 0.1, far: 100 }) },
   );
   return {
+    meshContent,
     leftEntity,
     rightEntity,
     sharedMeshHandle,
@@ -115,12 +119,9 @@ export function buildAlterMeshWorld(world: World): AlterMeshState {
 }
 
 export function mutateSharedMesh(world: World, state: AlterMeshState): void {
-  const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(state.sharedMeshHandle);
-  if (!mesh.ok) return;
   state.altered = !state.altered;
   state.mutations += 1;
-  mesh.value.vertices.set(state.altered ? state.alteredVertices : state.baseVertices);
-  world.sharedRefs.markChanged(state.sharedMeshHandle);
+  world.set(state.meshContent, RuntimeMeshVertices, { vertices: state.altered ? state.alteredVertices : state.baseVertices }).unwrap();
 }
 
 export function swapRightMesh(world: World, state: AlterMeshState): void {

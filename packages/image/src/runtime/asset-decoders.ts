@@ -37,11 +37,32 @@ function compressedImageTarget(colorSpace: TextureAsset['colorSpace']): TextureA
   return colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm';
 }
 
-function validImageSurface(
+function validTextureSurface(
   value: unknown,
-): value is Pick<TextureAsset, 'width' | 'height' | 'format' | 'data' | 'colorSpace'> {
+): value is Pick<TextureAsset, 'shape' | 'format' | 'data' | 'colorSpace' | 'mips'> {
   if (value === null || typeof value !== 'object') return false;
   const candidate = value as Partial<TextureAsset>;
+  const shape = candidate.shape;
+  const extent = shape?.viewDimension === '2d' ? shape.extent : undefined;
+  const mips = candidate.mips;
+  return (
+    extent !== undefined &&
+    validDimensions(extent.width, extent.height) &&
+    mips !== undefined &&
+    (mips.kind === 'none' ||
+      mips.kind === 'generate' ||
+      (mips.kind === 'packed' && Number.isSafeInteger(mips.levelCount) && mips.levelCount > 0)) &&
+    typeof candidate.format === 'string' &&
+    imageBytes(candidate.data) !== undefined &&
+    (candidate.colorSpace === 'srgb' || candidate.colorSpace === 'linear')
+  );
+}
+
+function validEquirectSurface(
+  value: unknown,
+): value is Pick<EquirectAsset, 'width' | 'height' | 'format' | 'data' | 'colorSpace'> {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<EquirectAsset>;
   return (
     validDimensions(candidate.width ?? 0, candidate.height ?? 0) &&
     typeof candidate.format === 'string' &&
@@ -96,17 +117,24 @@ async function readImageSurface<P extends TextureAsset | EquirectAsset>(
       const mip = transcoded.value.mips[0];
       if (mip === undefined) return invalid(envelope.guid, expected, 'codec:base-mip-missing');
       data = mip.data;
-      return readDecodedSurface(envelope.guid, expected, {
-        ...payload,
-        width: mip.width,
-        height: mip.height,
-        format: target,
-        data,
-      });
+      return readDecodedSurface(
+        envelope.guid,
+        expected,
+        kind,
+        kind === 'texture'
+          ? {
+              ...payload,
+              shape: { viewDimension: '2d', extent: { width: mip.width, height: mip.height } },
+              format: target,
+              data,
+              mips: { kind: 'none' },
+            }
+          : { ...payload, width: mip.width, height: mip.height, format: target, data },
+      );
     }
   }
 
-  return readDecodedSurface(envelope.guid, expected, {
+  return readDecodedSurface(envelope.guid, expected, kind, {
     ...payload,
     ...(data === undefined ? {} : { data }),
   });
@@ -115,9 +143,10 @@ async function readImageSurface<P extends TextureAsset | EquirectAsset>(
 function readDecodedSurface<P extends TextureAsset | EquirectAsset>(
   guid: string,
   expected: string,
+  kind: P['kind'],
   candidate: unknown,
 ): ReturnType<typeof ok<P>> | ReturnType<typeof err<AssetLoadError>> {
-  if (!validImageSurface(candidate)) {
+  if (kind === 'texture' ? !validTextureSurface(candidate) : !validEquirectSurface(candidate)) {
     return invalid(guid, expected, 'image owner validation failed');
   }
   return ok(candidate as P);

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
-const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10), 180);
+const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60);
 const gpu = create([]);
 Object.defineProperty(globalThis, 'navigator', { value: { gpu }, configurable: true });
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';

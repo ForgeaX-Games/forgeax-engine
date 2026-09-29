@@ -19,12 +19,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const pixels = makeTransparencyPixels();
   const texture = {
     kind: 'texture' as const,
-    width: TEXTURE_SIZE,
-    height: TEXTURE_SIZE,
+    shape: { viewDimension: '2d' as const, extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE } },
     format: 'rgba8unorm-srgb' as const,
     data: pixels,
     colorSpace: 'srgb' as const,
-    mipmap: false,
+    mips: { kind: 'none' as const },
   };
   const handle = app.world.allocSharedRef('TextureAsset', texture);
   buildTransparencyWorld(app.world, unwrapHandle(handle));

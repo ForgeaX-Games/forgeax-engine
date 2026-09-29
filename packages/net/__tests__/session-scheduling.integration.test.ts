@@ -87,6 +87,31 @@ describe('NetSession scheduling integration', () => {
     expect(replica.readComponent(1, PositionScheduled)).toEqual({ x: 2 });
   });
 
+  it('keeps the World healthy when the authority ACK ledger applies backpressure', async () => {
+    const [authorityEndpoint] = createMemoryEndpointPair();
+    const profile = scheduledProfile();
+    const authorityWorld = new World({ time: { fixedDeltaSeconds: 1, maxDeltaSeconds: 5 } });
+    authorityWorld.spawn(
+      { component: NetworkedScheduled, data: { enabled: true } },
+      { component: PositionScheduled, data: { x: 1 } },
+    );
+
+    await createWorldContext(
+      authorityWorld,
+      [netPlugin({ endpoint: authorityEndpoint, recovery: { maxPendingPackets: 1 } })],
+    );
+    const authoritySession = authorityWorld.getResource<NetSession>('net-session');
+    authoritySession.attachAuthority(createAuthorityCoordinator(authorityWorld, profile));
+
+    authorityWorld.update(1).unwrap();
+    expect(authoritySession.getRecoverySnapshot().pendingPackets).toBe(1);
+    // The second publication is rejected by the direct NetSession contract,
+    // but the scheduled adapter treats that bounded backpressure as retryable
+    // and must not poison the authority World.
+    authorityWorld.update(1).unwrap();
+    expect(authoritySession.getRecoverySnapshot().pendingPackets).toBe(1);
+  });
+
   it('sender identity is preserved through endpoint', () => {
     const [epA, epB] = createMemoryEndpointPair();
     const sessionA = new NetSession({ endpoint: epA, maxRawMessages: 256 });

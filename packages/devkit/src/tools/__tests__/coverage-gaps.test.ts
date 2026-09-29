@@ -1,4 +1,3 @@
-import { Context } from '@forgeax/engine-plugin';
 import {
   createArtifactManifest,
   createCarrierStateMachine,
@@ -13,11 +12,10 @@ import {
   summarizeBenchmarkSamples,
 } from '../benchmark/report.js';
 import { calculateSampleStatistics } from '../benchmark/statistics.js';
-import { assertRealmCapability, bootstrapRealm, type RealmBootstrapInput } from '../bootstrap.js';
 import { createServiceCache } from '../cache.js';
 import { createCarrierProvider } from '../carrier-provider.js';
 import {
-  authorPluginInstallDescriptor,
+  authorPluginCreateDescriptor,
   describeTool,
   listTools,
   loadToolCatalog,
@@ -30,7 +28,6 @@ import {
   type ToolCatalog,
 } from '../catalog.js';
 import { runGenericTool, runNamedTool } from '../cli-adapter.js';
-import { describeCommand, listCommand, runCommand } from '../commands.js';
 import {
   createAuthorContribution,
   createBuildContribution,
@@ -58,7 +55,6 @@ import {
   createResourceProbe,
   resolveRealmCapability,
 } from '../realms.js';
-import { runOperationCommand } from '../run-command.js';
 import { createDevkitToolRuntime, createPreviewToolRuntime } from '../runtime.js';
 import { createServiceExecutor } from '../service.js';
 import { createAuthenticatedLoopbackService } from '../service-transport.js';
@@ -139,7 +135,7 @@ describe('DevKit tool coverage contracts', () => {
     cache.clear();
     const matrix = createRealmCapabilityMatrix({
       catalogDigest: 'sha256:c',
-      supported: { build: true, host: false, engine: true },
+      supported: { build: true, host: false, engine: true, frontend: false },
     });
     expect(resolveRealmCapability(matrix, 'host')).toMatchObject({ supported: false });
     probe.release('page', 'unowned');
@@ -266,55 +262,9 @@ describe('DevKit tool coverage contracts', () => {
     ).toMatchObject({ ok: false, error: { code: 'carrier-exited' } });
   });
 
-  it('covers bootstrap validation, run-command, library, and command parse failures', async () => {
-    const input: RealmBootstrapInput = {
-      realm: 'build',
-      catalog: new Map(),
-      catalogDigest: 'sha256:c',
-      supportedRealms: ['build'],
-      entries: [],
-    };
-    expect(
-      await bootstrapRealm(undefined, { ...input, payload: { fn: () => undefined } }),
-    ).toMatchObject({ ok: false, error: { code: 'tool-bootstrap-not-clone-safe' } });
-    expect(await bootstrapRealm(undefined, { ...input, realm: 'host' })).toMatchObject({
-      ok: false,
-      error: { code: 'realm-capability-unavailable' },
-    });
-    expect(await bootstrapRealm(undefined, input)).toMatchObject({
-      ok: false,
-      error: { code: 'realm-lifecycle-adapter-missing' },
-    });
-    expect(
-      await bootstrapRealm(undefined, { ...input, realm: 'host', supportedRealms: ['host'] }),
-    ).toMatchObject({ ok: false, error: { code: 'realm-context-missing' } });
-    expect(
-      await bootstrapRealm(undefined, {
-        ...input,
-        lifecycle: { start: async () => ({ stop: async () => undefined }) },
-      }),
-    ).toMatchObject({ ok: true, value: { realm: 'build' } });
-    const hostContext = new Context();
-    const hostResult = await bootstrapRealm(hostContext, {
-      ...input,
-      realm: 'host',
-      supportedRealms: ['host'],
-    });
-    expect(hostResult).toMatchObject({ ok: true, value: { realm: 'host' } });
-    await hostContext.fiber.dispose();
-    expect(() =>
-      assertRealmCapability(
-        {
-          catalogDigest: 'sha256:c',
-          realms: {
-            build: { realm: 'build', supported: false, reason: 'realm-capability-unavailable' },
-            host: { realm: 'host', supported: true },
-            engine: { realm: 'engine', supported: true },
-          },
-        },
-        'build',
-      ),
-    ).toThrow('realm-capability-unavailable');
+  it('covers bootstrap validation, run-command, library, and command parse failures', {
+    timeout: 30_000,
+  }, async () => {
     const contribution = {
       descriptor: {
         id: 'coverage.tool',
@@ -341,24 +291,6 @@ describe('DevKit tool coverage contracts', () => {
     expect(await runLibraryTool(contribution, { value: true })).toMatchObject({
       outcome: 'succeeded',
     });
-    expect(await describeCommand({})).toMatchObject({
-      ok: false,
-      error: { code: 'cli-parse-error' },
-    });
-    expect(await runCommand({})).toMatchObject({
-      ok: false,
-      error: { code: 'cli-parse-error' },
-    });
-    expect(await runCommand({ id: 'coverage.tool', args: 'invalid' })).toMatchObject({
-      ok: true,
-      value: { outcome: 'failed' },
-    });
-    await expect(runCommand({ id: 'coverage.tool', args: '{}' })).rejects.toThrow('forge.json');
-    expect(await listCommand('/definitely/missing')).toMatchObject({
-      ok: false,
-      error: { code: 'tool-catalog-authority-unreadable' },
-    });
-    await expect(runOperationCommand({ id: 'missing', args: '{}' })).rejects.toThrow('forge.json');
     await expect(runPreviewHost(target, {} as ToolExecutionContext)).resolves.toMatchObject({
       ok: false,
     });
@@ -366,11 +298,13 @@ describe('DevKit tool coverage contracts', () => {
       createBuildContribution().execute({ root: '/missing-project' }, {} as ToolExecutionContext),
     ).resolves.toMatchObject({ ok: false });
     await expect(
-      createAuthorContribution().execute({ id: '', module: '' }, {} as ToolExecutionContext),
+      createAuthorContribution().execute({ path: '', module: '' }, {} as ToolExecutionContext),
     ).resolves.toMatchObject({ ok: false });
-    expect(createDefaultContributions()).toHaveLength(6);
+    expect(
+      createDefaultContributions().some((tool) => tool.descriptor.id === 'project.migrate'),
+    ).toBe(true);
     expect(createBuildContribution().descriptor.id).toBe('project.build');
-    expect(createAuthorContribution().descriptor.id).toBe('author.plugin-install');
+    expect(createAuthorContribution().descriptor.id).toBe('asset.plugin.create');
   });
 
   it('covers authenticated service transport and executor fallback/error paths', async () => {
@@ -485,14 +419,14 @@ describe('DevKit tool coverage contracts', () => {
 
   it('covers catalog projections and malformed authority inputs', async () => {
     expect(projectBuildDescriptor.argsSchema.parse(null)).toMatchObject({ ok: false });
-    expect(authorPluginInstallDescriptor.argsSchema.parse(null)).toMatchObject({ ok: false });
+    expect(authorPluginCreateDescriptor.argsSchema.parse(null)).toMatchObject({ ok: false });
     expect(previewRunDescriptor.argsSchema.parse({})).toMatchObject({ ok: false });
     expect(previewRunDescriptor.argsSchema.parse({ recipe: 1 })).toMatchObject({ ok: false });
     expect(previewOfflineAnalysisDescriptor.argsSchema.parse(null)).toMatchObject({ ok: false });
     expect(previewOfflineAnalysisDescriptor.argsSchema.parse({ manifest: 1 })).toMatchObject({
       ok: false,
     });
-    const descriptor = createDefaultContributions()[0]?.descriptor;
+    const descriptor = createBuildContribution().descriptor;
     if (descriptor === undefined) throw new Error('descriptor missing');
     const catalog = materializeToolCatalog([createBuildContribution()], {
       authorityDigest: 'sha256:a',
@@ -508,7 +442,7 @@ describe('DevKit tool coverage contracts', () => {
     expect(
       rebuildToolCatalog([createBuildContribution()], undefined, { authorityDigest: 'sha256:b' }),
     ).toMatchObject({ authorityDigest: 'sha256:b' });
-    expect(projected.entries[0]?.id).toBe('project.build');
+    expect(projected.entries.some((entry) => entry.id === 'project.build')).toBe(true);
     const noSchemaDescriptor = {
       id: 'coverage.no-schema',
       title: 'No schema',

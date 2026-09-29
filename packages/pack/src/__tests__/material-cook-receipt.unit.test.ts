@@ -10,7 +10,7 @@ const artifactDigest = 'sha256:output';
 
 function receipt(overrides: Record<string, unknown> = {}): MaterialCookReceipt {
   return {
-    schemaVersion: 'material-cook/3',
+    schemaVersion: 'material-cook/4',
     sourceClosure: ['b.wgsl', 'a.material.json'],
     profile: 'webgpu/v1',
     compilerVersion: 'compiler/1',
@@ -40,9 +40,9 @@ function receipt(overrides: Record<string, unknown> = {}): MaterialCookReceipt {
 }
 
 describe('material cook receipt', () => {
-  it('requires the v3 identity and provenance tuple', () => {
-    const v3 = {
-      schemaVersion: 'material-cook/3',
+  it('requires the v4 identity and provenance tuple', () => {
+    const v4 = {
+      schemaVersion: 'material-cook/4',
       sourceClosure: ['materials/mat.material.json', 'shaders/pbr.wgsl'],
       profile: 'webgpu/v1',
       compilerVersion: 'compiler/1',
@@ -68,12 +68,12 @@ describe('material cook receipt', () => {
       },
       derivedInterface: { layoutIdentity },
     };
-    expect(validateMaterialCookReceipt(v3)).toMatchObject({ ok: true, value: v3 });
+    expect(validateMaterialCookReceipt(v4)).toMatchObject({ ok: true, value: v4 });
     expect(validateMaterialCookReceipt(receipt())).toMatchObject({ ok: true });
     expect(
       validateMaterialCookReceipt({
-        ...v3,
-        identity: { ...v3.identity, compilerFingerprint: undefined },
+        ...v4,
+        identity: { ...v4.identity, compilerFingerprint: undefined },
       }),
     ).toMatchObject({
       ok: false,
@@ -81,14 +81,14 @@ describe('material cook receipt', () => {
     });
   });
 
-  it('serializes a material-cook/3 receipt stably for equivalent cooks', () => {
+  it('serializes a material-cook/4 receipt stably for equivalent cooks', () => {
     const first = serializeMaterialCookReceipt(receipt());
     const second = serializeMaterialCookReceipt(
       receipt({ sourceClosure: ['a.material.json', 'b.wgsl'] }),
     );
     expect(first).toBe(second);
     expect(JSON.parse(first)).toMatchObject({
-      schemaVersion: 'material-cook/3',
+      schemaVersion: 'material-cook/4',
       identity: { layoutIdentity },
       derivedInterface: { layoutIdentity },
     });

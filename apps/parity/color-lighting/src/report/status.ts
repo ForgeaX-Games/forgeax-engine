@@ -67,11 +67,11 @@ export function deriveAttachmentReportStatus(input: AttachmentReport): DerivedCa
   return 'complete';
 }
 
-const REQUIRED_PIPELINES = ['forgeax::urp', 'forgeax::hdrp'] as const;
+const REQUIRED_PIPELINES = ['forgeax::standard'] as const;
 
 export interface PipelineAuditObservation {
   readonly caseId: string;
-  readonly pipelineId: 'forgeax::urp' | 'forgeax::hdrp';
+  readonly pipelineId: 'forgeax::standard';
   readonly evidence: AttachmentEvidence;
   readonly semantic: 'linear-hdr';
   readonly source: 'live-producer' | 'replay' | 'final-canvas';
@@ -156,8 +156,8 @@ function auditObservation(
 
 export function auditCrossPipelineEvidence(input: CrossPipelineAuditInput): CrossPipelineAuditResult {
   const reasons = [
-    ...auditObservation(input.caseId, 'forgeax::urp', input.size, input.urp),
-    ...auditObservation(input.caseId, 'forgeax::hdrp', input.size, input.hdrp),
+    ...auditObservation(input.caseId, 'forgeax::standard', input.size, input.urp),
+    ...auditObservation(input.caseId, 'forgeax::standard', input.size, input.hdrp),
   ];
   const observedPipelineIds = new Set([input.urp.pipelineId, input.hdrp.pipelineId]);
   const missingPipelineIds = [
@@ -168,7 +168,6 @@ export function auditCrossPipelineEvidence(input: CrossPipelineAuditInput): Cros
   ];
   if (missingPipelineIds.length > 0) reasons.push('required pipeline evidence is missing');
   if (input.urp === input.hdrp || input.urp.evidence === input.hdrp.evidence) reasons.push('same evidence object used for both pipelines');
-  if (input.urp.evidence.linearHdr.pipelineId === input.hdrp.evidence.linearHdr.pipelineId) reasons.push('pipeline provenance is not distinct');
   return {
     ok: reasons.length === 0,
     missingPipelineIds,

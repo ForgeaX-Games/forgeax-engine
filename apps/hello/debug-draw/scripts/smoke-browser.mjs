@@ -15,6 +15,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
+import { observeViteHttpReadiness } from '../../../../scripts/lib/vite-http-readiness.mjs';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
@@ -25,6 +27,12 @@ const CANVAS_CLIP = { x: 0, y: 64, width: 256, height: 192 };
 const RESIZED_CANVAS_CLIP = { x: 0, y: 64, width: 384, height: 192 };
 const FOREGROUND_CHANNEL_MIN = 24;
 const APP_ROOT = resolve(HERE, '..');
+const softwareGraphics = process.platform === 'linux';
+// Exact software raster counts verified against main before the worker change.
+// Keep the original platform oracle for the native browser path.
+const expectedForeground = softwareGraphics
+  ? { normal: 1908, resized: 1394 }
+  : { normal: 1809, resized: 1320 };
 
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
@@ -34,12 +42,9 @@ const viteProc = spawn(process.execPath, [resolve(REPO_ROOT, 'node_modules/vite/
   detached: true,
 });
 let portUrl;
-viteProc.stdout.on('data', (chunk) => {
-  const text = chunk.toString();
-  process.stdout.write(`[vite] ${text}`);
-  portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1];
+const viteReadiness = observeViteHttpReadiness(viteProc, {
+  timeoutEnvName: 'FORGEAX_DEBUG_DRAW_SERVER_READINESS_TIMEOUT_MS',
 });
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
 
 let viteStopStarted = false;
 async function stopVite() {
@@ -123,6 +128,57 @@ function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+const RUNTIME_CONTROLLER_METHODS = [
+  'setCameraPan',
+  'setCameraViewport',
+  'setCameraZoom',
+  'setCameraClip',
+  'setCameraRoll',
+];
+
+async function waitForRuntimeController(page, pageErrors, label) {
+  try {
+    await page.waitForFunction(
+      (methods) => {
+        const hud = document.querySelector('#debug-draw-hud')?.textContent ?? '';
+        const controller = globalThis.__forgeax_debug_draw__;
+        return (
+          hud.includes('mode=runtime') &&
+          hud.includes('state=ready') &&
+          controller !== null &&
+          typeof controller === 'object' &&
+          methods.every((method) => typeof controller[method] === 'function')
+        );
+      },
+      RUNTIME_CONTROLLER_METHODS,
+      { timeout: 10_000 },
+    );
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const controller = globalThis.__forgeax_debug_draw__;
+      return {
+        hud: document.querySelector('#debug-draw-hud')?.textContent ?? null,
+        controllerKeys:
+          controller !== null && typeof controller === 'object'
+            ? Object.keys(controller).sort()
+            : [],
+      };
+    });
+    const url = page.url();
+    throw new Error(
+      `debug-draw runtime controller did not become ready: ${JSON.stringify({
+        label,
+        url,
+        mode: new URL(url).searchParams.get('mode'),
+        hud: state.hud,
+        controllerKeys: state.controllerKeys,
+        pageErrors,
+        cause: error instanceof Error ? error.message : String(error),
+      })}`,
+    );
+  }
+}
+
 async function runCase(browser, query, label) {
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const pageErrors = [];
@@ -138,11 +194,7 @@ async function runCase(browser, query, label) {
     waitUntil: 'networkidle',
     timeout: 30_000,
   });
-  await page.waitForFunction(
-    () => document.querySelector('#debug-draw-hud')?.textContent?.includes('runtime'),
-    undefined,
-    { timeout: 10_000 },
-  );
+  await waitForRuntimeController(page, pageErrors, label);
   await page.waitForTimeout(500);
 
   const path = resolve(ARTIFACT_DIR, `${label}.png`);
@@ -454,14 +506,13 @@ function assertEqualSnapshots(label, first, second) {
 }
 
 try {
-  const deadline = Date.now() + 30_000;
-  while (!portUrl && Date.now() < deadline) await sleep(200);
-  if (!portUrl) throw new Error('vite did not become ready in 30s');
+  const readiness = await viteReadiness.wait();
+  portUrl = readiness.origin;
 
   const browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: [
+    channel: process.env.FORGEAX_CHROME_CHANNEL ?? (softwareGraphics ? browserLaunch.channel : 'chrome'),
+    args: softwareGraphics ? [...browserLaunch.args, '--use-angle=swiftshader'] : [
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--ignore-gpu-blocklist',
@@ -475,7 +526,7 @@ try {
       ['runtime-1', normal],
       ['runtime-2', normalRepeat],
     ]) {
-      if (result.stats.foreground !== 1809 || result.resizedStats.foreground !== 1320) {
+      if (result.stats.foreground !== expectedForeground.normal || result.resizedStats.foreground !== expectedForeground.resized) {
         throw new Error(`${label} foreground oracle mismatch: ${JSON.stringify(repeatabilitySnapshot(result))}`);
       }
       if (result.stats.maxChannel < 128 || result.resizedStats.maxChannel < 128) {
@@ -543,7 +594,7 @@ try {
       `[smoke-browser] artifacts: capBaseline=${capRecovery.baseline.path} capOverflow=${capRecovery.overflow.path} capRecovery=${capRecovery.recovery.path} normal=${normal.path} normalRoll=${normal.rollPath} normalClipNear=${normal.clipNearPath} normalClipFar=${normal.clipFarPath} normalZoom=${normal.zoomPath} normalViewport=${normal.viewportPath} normalPan=${normal.panPath} normalPanResized=${normal.panResizedPath} normalResized=${normal.resizedPath} falsified=${falsified.path} falsifiedRoll=${falsified.rollPath} falsifiedClipNear=${falsified.clipNearPath} falsifiedClipFar=${falsified.clipFarPath} falsifiedZoom=${falsified.zoomPath} falsifiedViewport=${falsified.viewportPath} falsifiedPan=${falsified.panPath} falsifiedPanResized=${falsified.panResizedPath} falsifiedResized=${falsified.resizedPath}`,
     );
     console.log(
-      `[smoke-browser] PASS - cap-recovery kept one page/device alive through bounded truncation and cleanup; createApp(canvas) auto-attached app.debugDraw and survived repeatable camera roll, near/far clipping, zoom, viewport/aspect change, pan + live resize; capWarnings=${capRecovery.capWarnings.length}, capBaselineForeground=${capRecovery.baseline.foreground.foreground}, capOverflowForeground=${capRecovery.overflow.foreground.foreground}, capRecoveryForeground=${capRecovery.recovery.foreground.foreground}, normalForeground=${normal.stats.foreground}, normalRollForeground=${normal.rollStats.foreground}, normalClipNearForeground=${normal.clipNearStats.foreground}, normalClipFarForeground=${normal.clipFarStats.foreground}, normalZoomForeground=${normal.zoomStats.foreground}, normalViewportForeground=${normal.viewportStats.foreground}, normalPanForeground=${normal.panStats.foreground}, normalPanResizedForeground=${normal.panResizedStats.foreground}, normalResizedForeground=${normal.resizedStats.foreground}, falsifiedForeground=${falsified.stats.foreground}, falsifiedRollForeground=${falsified.rollStats.foreground}, falsifiedClipNearForeground=${falsified.clipNearStats.foreground}, falsifiedClipFarForeground=${falsified.clipFarStats.foreground}, falsifiedZoomForeground=${falsified.zoomStats.foreground}, falsifiedViewportForeground=${falsified.viewportStats.foreground}, falsifiedPanForeground=${falsified.panStats.foreground}, falsifiedPanResizedForeground=${falsified.panResizedStats.foreground}, falsifiedResizedForeground=${falsified.resizedStats.foreground}, normalSha256=${normal.sha256}, normalRollSha256=${normal.rollSha256}, normalClipNearSha256=${normal.clipNearSha256}, normalClipFarSha256=${normal.clipFarSha256}, normalZoomSha256=${normal.zoomSha256}, normalViewportSha256=${normal.viewportSha256}, normalPanSha256=${normal.panSha256}, normalPanResizedSha256=${normal.panResizedSha256}, normalResizedSha256=${normal.resizedSha256}, falsifiedSha256=${falsified.sha256}, falsifiedRollSha256=${falsified.rollSha256}, falsifiedClipNearSha256=${falsified.clipNearSha256}, falsifiedClipFarSha256=${falsified.clipFarSha256}, falsifiedZoomSha256=${falsified.zoomSha256}, falsifiedViewportSha256=${falsified.viewportSha256}, falsifiedPanSha256=${falsified.panSha256}, falsifiedPanResizedSha256=${falsified.panResizedSha256}, falsifiedResizedSha256=${falsified.resizedSha256}.`,
+      `[smoke-browser] PASS - cap-recovery kept one page/device alive through bounded truncation and cleanup; createApp(canvas) auto-attached app.debugDraw and survived repeatable camera roll, near/far clipping, zoom, viewport/aspect change, pan + live resize; serverReadyElapsedMs=${readiness.elapsedMs}, capWarnings=${capRecovery.capWarnings.length}, capBaselineForeground=${capRecovery.baseline.foreground.foreground}, capOverflowForeground=${capRecovery.overflow.foreground.foreground}, capRecoveryForeground=${capRecovery.recovery.foreground.foreground}, normalForeground=${normal.stats.foreground}, normalRollForeground=${normal.rollStats.foreground}, normalClipNearForeground=${normal.clipNearStats.foreground}, normalClipFarForeground=${normal.clipFarStats.foreground}, normalZoomForeground=${normal.zoomStats.foreground}, normalViewportForeground=${normal.viewportStats.foreground}, normalPanForeground=${normal.panStats.foreground}, normalPanResizedForeground=${normal.panResizedStats.foreground}, normalResizedForeground=${normal.resizedStats.foreground}, falsifiedForeground=${falsified.stats.foreground}, falsifiedRollForeground=${falsified.rollStats.foreground}, falsifiedClipNearForeground=${falsified.clipNearStats.foreground}, falsifiedClipFarForeground=${falsified.clipFarStats.foreground}, falsifiedZoomForeground=${falsified.zoomStats.foreground}, falsifiedViewportForeground=${falsified.viewportStats.foreground}, falsifiedPanForeground=${falsified.panStats.foreground}, falsifiedPanResizedForeground=${falsified.panResizedStats.foreground}, falsifiedResizedForeground=${falsified.resizedStats.foreground}, normalSha256=${normal.sha256}, normalRollSha256=${normal.rollSha256}, normalClipNearSha256=${normal.clipNearSha256}, normalClipFarSha256=${normal.clipFarSha256}, normalZoomSha256=${normal.zoomSha256}, normalViewportSha256=${normal.viewportSha256}, normalPanSha256=${normal.panSha256}, normalPanResizedSha256=${normal.panResizedSha256}, normalResizedSha256=${normal.resizedSha256}, falsifiedSha256=${falsified.sha256}, falsifiedRollSha256=${falsified.rollSha256}, falsifiedClipNearSha256=${falsified.clipNearSha256}, falsifiedClipFarSha256=${falsified.clipFarSha256}, falsifiedZoomSha256=${falsified.zoomSha256}, falsifiedViewportSha256=${falsified.viewportSha256}, falsifiedPanSha256=${falsified.panSha256}, falsifiedPanResizedSha256=${falsified.panResizedSha256}, falsifiedResizedSha256=${falsified.resizedSha256}.`,
     );
   } finally {
     await stopVite();

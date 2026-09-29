@@ -80,7 +80,7 @@ import { Update } from '@forgeax/engine-ecs';
 //   - Transform.scale numeric values updated for visual equivalence
 //     under the F-4 unit-quad change (scale^2 -> scale^1): the sprite
 //     quad is a local-space unit quad and world scale flows entirely
-//     through Transform.world. New scale = old scale^2 keeps the same
+//     through GlobalTransform.world. New scale = old scale^2 keeps the same
 //     screen footprint (0.4 -> 0.16, [0.3,0.18] -> [0.09,0.0324],
 //     [0.6,0.4] -> [0.36,0.16]).
 

@@ -10,7 +10,6 @@ import { Update } from '../schedule-token';
 //   resolve(handle)            -> Result<T, SharedRefReleasedError>
 //   retain(handle)             -> Result<void, SharedRefReleasedError>
 //   release(handle)            -> Result<release evidence | undefined, ...>
-//   readReleaseEvidence()     -> bounded final-release records
 //
 // Tests are split across three describe blocks tracking the w6 / w7 / w8
 // task boundary. The first two run as TDD red against the still-absent
@@ -62,41 +61,6 @@ describe('w6 SharedRefStore: alloc + resolve', () => {
     }
   });
 
-  it('publishes explicit in-place payload changes through one monotonic epoch', () => {
-    const store = new SharedRefStore();
-    const handle = store.alloc('MaterialAsset', { value: 1 });
-
-    expect(store.getMutationEpoch()).toBe(0);
-    expect(store.markChanged(handle).ok).toBe(true);
-    expect(store.getMutationEpoch()).toBe(1);
-    expect(store.readChangesSince(0)).toEqual({
-      status: 'ok',
-      cursor: 1,
-      records: [{ epoch: 1, handle: unwrapHandle(handle) }],
-    });
-
-    expect(store.release(handle).ok).toBe(true);
-    expect(store.markChanged(handle).ok).toBe(false);
-    expect(store.getMutationEpoch()).toBe(1);
-  });
-
-  it('reports bounded-journal overflow instead of hiding changed handles', () => {
-    const store = new SharedRefStore();
-    const handle = store.alloc('MaterialAsset', { value: 1 });
-    for (let index = 0; index < 4097; index += 1) store.markChanged(handle).unwrap();
-
-    expect(store.readChangesSince(0)).toEqual({
-      status: 'overflow',
-      cursor: 4097,
-      oldestAvailable: 2,
-    });
-    const latest = store.readChangesSince(4096);
-    expect(latest.status).toBe('ok');
-    if (latest.status === 'ok') {
-      expect(latest.records).toEqual([{ epoch: 4097, handle: unwrapHandle(handle) }]);
-    }
-  });
-
   it('resolve returns SharedRefStaleError after rc drops to 0 (gen incremented on release)', () => {
     const store = new SharedRefStore();
     const handle = store.alloc('MeshAsset', { id: 7 });
@@ -135,6 +99,25 @@ describe('w6 SharedRefStore: alloc + resolve', () => {
 });
 
 describe('SharedRefStore.intern: producer identity', () => {
+  it('acquires independent grants without duplicating the payload handle', () => {
+    const store = new SharedRefStore();
+    const payload = { material: 'shared' };
+    const first = store.acquire('MaterialAsset', payload);
+    const second = store.acquire('MaterialAsset', payload);
+    expect(second).toBe(first);
+    expect(store.refcount(first)).toBe(2);
+    store.release(first).unwrap();
+    expect(store.resolve(second).unwrap()).toBe(payload);
+    store.release(second).unwrap();
+    expect(store._liveCount()).toBe(0);
+    const producer = store.intern('MaterialAsset', payload);
+    const borrowed = store.acquire('MaterialAsset', payload);
+    expect(borrowed).toBe(producer);
+    store.release(borrowed).unwrap();
+    expect(store.refcount(producer)).toBe(1);
+    store.release(producer).unwrap();
+    expect(store._liveCount()).toBe(0);
+  });
   it('returns one producer handle for the same target and payload object', () => {
     const store = new SharedRefStore();
     const payload = { id: 1 };
@@ -189,9 +172,8 @@ describe('w29 SharedRefStore: retain + structured release evidence', () => {
       expect(store.release(handle).ok).toBe(true);
     }
     expect(store.refcount(handle)).toBe(0);
-    expect(store.readReleaseEvidence()).toEqual([
-      { payload, refcount: 0, generation: 1, evidence: 'released' },
-    ]);
+    expect(store.resolve(handle).ok).toBe(false);
+    expect(store.refcount(handle)).toBe(0);
   });
 
   it('final release returns the same payload/refcount/generation evidence', () => {

@@ -1,9 +1,10 @@
-import type { Result, ShaderError } from '@forgeax/engine-shader-compiler';
+import type { ShaderError } from '@forgeax/engine-shader-compiler';
 import {
   type CompileOptions,
   type CompileResult,
   compileShader,
 } from '@forgeax/engine-shader-compiler';
+import type { Result } from '@forgeax/engine-types';
 
 export type MaterialCookResult = Result<CompileResult, ShaderError>;
 

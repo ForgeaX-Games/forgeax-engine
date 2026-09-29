@@ -23,7 +23,6 @@ import { fileURLToPath } from 'node:url';
 import { verifyDemoCapture } from '../../../../shared/scripts/rhi-debug-verify.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-
 await verifyDemoCapture({
   pkg: '@forgeax/app-learn-render-2-lighting-5-light-casters',
   label: 'learn-render 2.5 light-casters',

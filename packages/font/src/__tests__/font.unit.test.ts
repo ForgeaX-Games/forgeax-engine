@@ -324,7 +324,7 @@ describe('font package root surface', () => {
   const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
   describe('plugin-discoverable.test.ts', () => {
-    describe('plugin-discoverable (forgeax-engine-remote-font)', () => {
+    describe('plugin-discoverable (forgeax asset import)', () => {
       describe('bake subcommand routing (a)', () => {
         it('--help on root exits 0 and prints usage', async () => {
           const code = await runCliFont(['--help']);
@@ -352,25 +352,12 @@ describe('font package root surface', () => {
         });
       });
 
-      describe('plugin bin naming contract (b)', () => {
-        it('package.json bin field is forgeax-engine-remote-font -> ./dist/cli-font.mjs', async () => {
+      describe('unified command ownership (b)', () => {
+        it('does not publish a standalone bin', async () => {
           const pkgPath = join(PKG_DIR, 'package.json');
           const raw = await readFile(pkgPath, 'utf-8');
           const pkg = JSON.parse(raw) as Record<string, unknown>;
-          const bin = pkg.bin as Record<string, string>;
-          expect(bin).toBeDefined();
-          expect(typeof bin).toBe('object');
-          expect(bin['forgeax-engine-remote-font']).toBe('./dist/cli-font.mjs');
-        });
-
-        it('bin name starts with forgeax-engine-remote- (PLUGIN_PREFIX contract)', async () => {
-          const pkgPath = join(PKG_DIR, 'package.json');
-          const raw = await readFile(pkgPath, 'utf-8');
-          const pkg = JSON.parse(raw) as Record<string, unknown>;
-          const bin = pkg.bin as Record<string, string>;
-          const binNames = Object.keys(bin);
-          expect(binNames.length).toBe(1);
-          expect(binNames[0]).toBe('forgeax-engine-remote-font');
+          expect(pkg.bin).toBeUndefined();
         });
       });
 

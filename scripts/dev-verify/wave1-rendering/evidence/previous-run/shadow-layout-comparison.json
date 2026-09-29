@@ -1,0 +1,430 @@
+[
+  {
+    "state": "red",
+    "tape": {
+      "digest": "sha256:bddd4188c23d5cc9c84742a5be8c9c08edeffb94e2bfb558b5cee272660f3740",
+      "byteLength": 18485838,
+      "formatVersion": 7,
+      "eventCount": 189,
+      "bootstrapCount": 98
+    },
+    "archive": "red-wave1-shadow-diagnostic.rhitape.gz",
+    "archiveSha256": "66112e196222f7a552efbf94db52e0e14145de08e8547c3f1e058aa442e2a727",
+    "matchedDraws": [
+      {
+        "workIndex": 0,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 1,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 2,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 3,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 4,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 5,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 6,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 7,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 8,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 9,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 10,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 11,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 12,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 13,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 14,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 15,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 16,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 17,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 18,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 19,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          48
+        ],
+        "forwardStrides": [
+          64
+        ]
+      }
+    ]
+  },
+  {
+    "state": "fixed",
+    "tape": {
+      "digest": "sha256:641ae39f47e95e2333a30c1903c8157cc0b04a7b84f33c571e75669208be2c50",
+      "byteLength": 18527393,
+      "formatVersion": 7,
+      "eventCount": 189,
+      "bootstrapCount": 105
+    },
+    "archive": "fixed-wave1-shadow-diagnostic.rhitape.gz",
+    "archiveSha256": "d9458f7002bde3fc86c2f3abe17b5055ca33f44bb4fe5a065c6ccb86f7ca27e6",
+    "matchedDraws": [
+      {
+        "workIndex": 0,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 1,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 2,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 3,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 4,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 5,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 6,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 7,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 8,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 9,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 10,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 11,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 12,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 13,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 14,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 15,
+        "buffer": "buffer:164",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 16,
+        "buffer": "buffer:166",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 17,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 18,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      },
+      {
+        "workIndex": 19,
+        "buffer": "buffer:168",
+        "shadowStrides": [
+          64
+        ],
+        "forwardStrides": [
+          64
+        ]
+      }
+    ]
+  }
+]

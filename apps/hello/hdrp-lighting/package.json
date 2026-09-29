@@ -14,7 +14,7 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-hdrp-lighting smoke",
-    "_comment": "smokeInvocation = self-contained SSOT: the Standard clustered lane + 256-light spawn must survive the dawn-node 300-frame loop with 0 RhiError and receipt evidence.",
+    "_comment": "smokeInvocation = self-contained SSOT: the Standard clustered lane + 256-light spawn must survive the dawn-node 60-frame loop with 0 RhiError and receipt evidence.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -51,7 +51,7 @@
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "webgpu": "^0.4.0"
   }
 }

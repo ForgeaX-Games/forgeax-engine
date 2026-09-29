@@ -50,8 +50,8 @@ export const INPUT_BACKEND_KEY = 'InputBackend' as const;
  * Module-level `defineSystem` with the real fn body — no factory, no closure.
  * Each `world.update()` tick:
  *   1. reads the {@link InputBackend} from `INPUT_BACKEND_KEY` and calls
- *      `backend.sample()` to drain the per-frame accumulator (movement delta +
- *      up-edge set);
+ *      `backend.sample()` once to atomically drain the per-frame accumulators
+ *      (movement delta plus key/code/button press and release edge sets);
  *   2. derives a fresh `InputSnapshot` via `snapshotFromSample`;
  *   3. writes it under `INPUT_SNAPSHOT_RESOURCE_KEY` via
  *      `world.insertResource` -- idempotent overwrite, charter P4

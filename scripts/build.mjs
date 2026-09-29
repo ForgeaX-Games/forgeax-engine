@@ -2,9 +2,12 @@
 // Full repository build graph. Package JavaScript, shared engine inputs, app
 // projections, and TypeScript declarations are separate observable stages.
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { buildCanonicalKit } from '../packages/preview/scripts/build-canonical-kit.mjs';
 
 const root = resolve('.');
 const requestedModes = [
@@ -17,6 +20,15 @@ const mode = requestedModes[0] ?? 'full';
 const clean = process.argv.includes('--clean');
 const summaryPath = join(root, 'node_modules/.cache/forgeax-build/summary.json');
 const packageFactsPath = join(root, 'node_modules/.cache/forgeax-build/package-facts.json');
+// The contributor checkout keeps the package-owned canonical-kit receipt as
+// the stable SDK transport record. Preview's producer still cooks from the
+// hydrated private asset source, but its generated receipt is staged outside
+// the package root so a successful Engine build remains clean and its
+// provenance fingerprints the bytes consumers actually resolve.
+const canonicalKitOutput =
+  process.env.FORGEAX_CANONICAL_KIT_OUTPUT ??
+  resolve(root, 'node_modules/.cache/forgeax-build/canonical-kit');
+const canonicalKitPackageRoot = resolve(root, 'packages/preview/assets/canonical-kit');
 mkdirSync(resolve(summaryPath, '..'), { recursive: true });
 
 const summary = {
@@ -42,34 +54,149 @@ function persist() {
 
 function runStage(name, command, args, env = process.env) {
   const startedAt = performance.now();
-  const result = spawnSync(command, args, {
-    cwd: root,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-    env,
+  return new Promise((resolveStage) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+      env,
+    });
+    child.once('error', (error) => {
+      console.error(`[build] ${name} failed to start: ${error.message}`);
+      process.exit(1);
+    });
+    child.once('close', (status) => {
+      summary.stageDurationMs[name] = Number((performance.now() - startedAt).toFixed(1));
+      if (name === 'apps' && existsSync(summaryPath)) {
+        Object.assign(summary, JSON.parse(readFileSync(summaryPath, 'utf8')));
+        summary.stageDurationMs[name] = Number((performance.now() - startedAt).toFixed(1));
+      }
+      persist();
+      if (status !== 0) process.exit(status ?? 1);
+      resolveStage();
+    });
   });
-  summary.stageDurationMs[name] = Number((performance.now() - startedAt).toFixed(1));
-  if (name === 'apps' && existsSync(summaryPath)) {
-    const childSummary = JSON.parse(readFileSync(summaryPath, 'utf8'));
-    Object.assign(summary, childSummary);
-    summary.stageDurationMs[name] = Number((performance.now() - startedAt).toFixed(1));
+}
+
+function commandOutput(command, args) {
+  try {
+    return execFileSync(command, args, { cwd: root, encoding: 'utf8' }).trim();
+  } catch {
+    return null;
   }
-  persist();
-  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+function materializeCanonicalKitSources() {
+  for (const file of ['sky.hdr', 'sky.hdr.meta.json']) {
+    const staged = resolve(canonicalKitOutput, file);
+    if (!existsSync(staged))
+      throw new Error(`canonical kit producer did not stage ${file}: ${staged}`);
+    cpSync(staged, resolve(canonicalKitPackageRoot, file));
+  }
+}
+
+async function ensureCanonicalKitStage() {
+  const requiredFiles = ['sky.hdr', 'sky.hdr.meta.json', 'cook-receipt.json'];
+  if (requiredFiles.every((file) => existsSync(resolve(canonicalKitOutput, file)))) return;
+  console.error(
+    `[build] canonical kit staging is incomplete; invoking ${'packages/preview/scripts/build-canonical-kit.mjs'}`,
+  );
+  // Keep source selection, Meta/GUID identity, and cook receipt ownership in
+  // the Preview producer. This path is needed when package JavaScript is a
+  // cache hit but its fresh output staging directory is empty or partial.
+  await buildCanonicalKit({ outputRoot: canonicalKitOutput });
+}
+
+// Build stages may refresh tracked cook receipts as a producer side effect.
+// Record the source identity before those stages so provenance describes the
+// checkout that was built, while the consumer still requires that checkout to
+// be clean again before it is selected.
+const sourceHead = commandOutput('git', ['rev-parse', 'HEAD']);
+const sourceStatus = commandOutput('git', ['status', '--porcelain=v1', '--untracked-files=no']);
+const sourceSnapshot = {
+  head: sourceHead,
+  trackedClean: sourceStatus === null ? null : sourceStatus === '',
+};
+
+async function writeEngineBuildProvenance() {
+  const devkitEntry = resolve(root, 'packages/devkit/dist/index.mjs');
+  if (!existsSync(devkitEntry))
+    throw new Error('engine provenance requires the built DevKit entry');
+  const { inspectEngineWorkspace } = await import(pathToFileURL(devkitEntry).href);
+  const workspace = await inspectEngineWorkspace(root);
+  if (!workspace.ok)
+    throw new Error(
+      `engine provenance workspace inspection failed: ${JSON.stringify(workspace.error)}`,
+    );
+  const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+  const lockfile = readFileSync(resolve(root, 'pnpm-lock.yaml'));
+  const pnpmVersion = commandOutput('pnpm', ['--version']);
+  const provenance = {
+    schemaVersion: 1,
+    producer: 'scripts/build.mjs',
+    command: summary.command,
+    source: {
+      head: sourceSnapshot.head,
+      trackedClean: sourceSnapshot.trackedClean,
+    },
+    toolchain: {
+      node: process.version,
+      pnpm: pnpmVersion,
+      packageManager: packageJson.packageManager ?? null,
+      lockfileDigest: `sha256:${createHash('sha256').update(lockfile).digest('hex')}`,
+    },
+    workspace: {
+      digest: workspace.value.digest,
+      packageCount: workspace.value.packageCount,
+      builtPackages: workspace.value.builtPackages,
+      packages: workspace.value.packages.map((item) => ({
+        name: item.name,
+        version: item.version,
+        entryDigest: item.entryDigest,
+        manifestDigest: item.manifestDigest,
+        runtimeDigest: item.runtimeDigest,
+        runtimeFiles: item.runtimeFiles,
+      })),
+    },
+  };
+  writeFileSync(
+    resolve(root, 'node_modules/.cache/forgeax-build/engine-provenance.json'),
+    `${JSON.stringify(provenance, null, 2)}\n`,
+  );
 }
 
 persist();
-if (clean) runStage('clean', process.execPath, ['scripts/clean-build-outputs.mjs']);
+if (clean) await runStage('clean', process.execPath, ['scripts/clean-build-outputs.mjs']);
 
-runStage('packages', process.execPath, ['scripts/build-packages.mjs'], {
+await runStage('packages', process.execPath, ['scripts/build-packages.mjs'], {
   ...process.env,
   FORGEAX_REPO_ROOT: root,
   FORGEAX_PACKAGE_FACTS_PATH: packageFactsPath,
+  FORGEAX_CANONICAL_KIT_OUTPUT: canonicalKitOutput,
 });
+await ensureCanonicalKitStage();
+materializeCanonicalKitSources();
+await runStage('package-runtime-dependencies', process.execPath, [
+  'scripts/forgeax/check-package-runtime-dependencies.mjs',
+]);
+
+async function buildTypes() {
+  await runStage('types-preflight', process.execPath, ['scripts/typecheck-output-preflight.mjs'], {
+    ...process.env,
+    FORGEAX_REPO_ROOT: root,
+  });
+  await runStage('types', 'pnpm', ['exec', 'tsc', '-b']);
+}
+
+// Declarations are independent of shader production: tsc emits only .d.ts
+// while the producer compiles WGSL on worker threads, so the engine build
+// overlaps them. The full build keeps types after apps, whose child summary
+// shares the summary file.
+const engineTypes = mode === 'engine' ? buildTypes() : null;
 
 let sharedManifest = null;
 if (mode !== 'packages-only') {
-  runStage('producer', process.execPath, ['scripts/build-shared-inputs.mjs', '--root', root]);
+  await runStage('producer', process.execPath, ['scripts/build-shared-inputs.mjs', '--root', root]);
 
   sharedManifest = resolve(root, 'shared-build-inputs/manifest.json');
   const producerFactsPath = resolve(root, 'shared-build-inputs/production-facts.json');
@@ -80,7 +207,7 @@ if (mode !== 'packages-only') {
 }
 
 if (mode === 'full') {
-  runStage(
+  await runStage(
     'apps',
     process.execPath,
     ['scripts/build-apps.mjs', '--shared-input-manifest', sharedManifest],
@@ -95,10 +222,7 @@ if (mode === 'full') {
     Object.assign(summary, JSON.parse(readFileSync(summaryPath, 'utf8')));
 }
 
-runStage('types-preflight', process.execPath, ['scripts/typecheck-output-preflight.mjs'], {
-  ...process.env,
-  FORGEAX_REPO_ROOT: root,
-});
-runStage('types', 'pnpm', ['exec', 'tsc', '-b']);
+await (engineTypes ?? buildTypes());
+await writeEngineBuildProvenance();
 persist();
 console.log(`[build] summary ${summaryPath}`);

@@ -16,7 +16,7 @@
 
 // Re-exports from engine-audio for convenience
 export { AUDIO_ENGINE_RESOURCE_KEY, type AudioBackend } from '@forgeax/engine-audio';
-// audio listener sync system (Transform.world mat4 -> Web Audio listener)
+// audio listener sync system (GlobalTransform.world mat4 -> Web Audio listener)
 export {
   audioListenerSyncSystem,
   syncListenerFromWorldMatrix,
@@ -26,6 +26,7 @@ export {
   createHostAudioConsumer,
   createWebAudioBackend,
   type HostAudioConsumer,
+  type HostAudioConsumerOptions,
 } from './host-audio-consumer';
 export { webAudioPlugin } from './plugin';
 export { WebAudioEngine } from './web-audio-engine';

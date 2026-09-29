@@ -37,7 +37,8 @@
 //     `world.get(root, SceneInstance)` path as another component)
 
 import { defineComponent, type EntityHandle } from '@forgeax/engine-ecs';
-import type { LocalEntityId, MountOverride } from '@forgeax/engine-types';
+import type { MountOverride } from '@forgeax/engine-scene';
+import type { LocalEntityId } from '@forgeax/engine-types';
 
 /**
  * Per-component, per-field override record carried in `SceneInstanceState`.
@@ -93,6 +94,12 @@ export interface SceneInstanceState {
    * `world.get` round-trip.
    */
   readonly source: import('@forgeax/engine-types').Handle<'SceneAsset', 'shared'>;
+
+  /** Author scene identity used by instance-relative SceneEntityRef resolution. */
+  readonly sceneSourceKey?: string;
+
+  /** Stable author bindingKey to live Entity mapping for this concrete instance. */
+  readonly bindings: Map<string, EntityHandle>;
 
   /**
    * Reverse mapping (live `Entity` -> source `LocalEntityId`). Used by

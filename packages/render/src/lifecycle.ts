@@ -3,6 +3,7 @@ import type { RenderGraphError } from '@forgeax/engine-render-graph';
 import type { RhiError } from '@forgeax/engine-rhi';
 import type { SkinError } from '@forgeax/engine-skinning';
 import type { ImageError } from '@forgeax/engine-types';
+import type { GpuDrivenPreparationError } from './errors/gpu-driven';
 import type { RenderError } from './errors/render';
 import type { PostProcessError } from './post-process-errors';
 
@@ -18,6 +19,7 @@ export type RendererError =
   | RenderGraphError
   | ImageError
   | RenderError
+  | GpuDrivenPreparationError
   | AssetRuntimeError
   | SkinError
   | PostProcessError;

@@ -6,21 +6,19 @@ import {
 } from '@forgeax/engine-tool-runtime';
 import { describe, expect, it } from 'vitest';
 import { createPreviewHost, previewHostCapability } from '../index.js';
-import materialPreviewPlugin from '../material.js';
-import texturePreviewPlugin from '../texture.js';
-import vfxPreviewPlugin from '../vfx.js';
+import materialPreviewPlugin, { materialPreview } from '../material.js';
+import { texturePreview } from '../texture.js';
+import { vfxPreview } from '../vfx.js';
 
-describe('native preview ToolPlugin consumer', () => {
+describe('native preview plugin consumer', () => {
   it('exposes one native contribution for each VFX and Texture subpath', () => {
-    expect(vfxPreviewPlugin.tools.map(({ descriptor }) => descriptor.id)).toEqual(['vfx.preview']);
-    expect(texturePreviewPlugin.tools.map(({ descriptor }) => descriptor.id)).toEqual([
-      'texture.preview',
-    ]);
+    expect([vfxPreview.descriptor.id]).toEqual(['vfx.preview']);
+    expect([texturePreview.descriptor.id]).toEqual(['texture.preview']);
   });
 
   it('activates a Fiber, leases previewHost, and returns structured subject failure', async () => {
     const ctx = new Context();
-    const fiber = await ctx.plugin(materialPreviewPlugin.plugin);
+    const fiber = await ctx.plugin(materialPreviewPlugin);
     const host = createPreviewHost({
       runId: 'material.preview:smoke',
       snapshot: { revision: 1, digest: 'sha256:smoke' },
@@ -28,8 +26,9 @@ describe('native preview ToolPlugin consumer', () => {
       backend: 'webgpu',
       signal: new AbortController().signal,
     });
-    const contribution = materialPreviewPlugin.tools[0];
-    if (contribution === undefined) throw new Error('material preview ToolPlugin has no tool');
+    const contribution = materialPreview;
+    if (contribution === undefined)
+      throw new Error('material preview native plugin tool has no tool');
     const terminal = await createRuntime([contribution]).run(
       contribution,
       { guid: 'material-1' },
@@ -48,8 +47,9 @@ describe('native preview ToolPlugin consumer', () => {
   });
 
   it('fails closed when render observation or evidence is incomplete', async () => {
-    const contribution = materialPreviewPlugin.tools[0];
-    if (contribution === undefined) throw new Error('material preview ToolPlugin has no tool');
+    const contribution = materialPreview;
+    if (contribution === undefined)
+      throw new Error('material preview native plugin tool has no tool');
     const material = {
       kind: 'material',
       digest: 'sha256:material',

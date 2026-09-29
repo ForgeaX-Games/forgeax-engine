@@ -36,6 +36,7 @@
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-graphics-extras": "workspace:*",
+    "@forgeax/engine-host": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-input": "workspace:*",

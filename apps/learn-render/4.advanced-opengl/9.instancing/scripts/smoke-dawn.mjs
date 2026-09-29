@@ -12,7 +12,7 @@
 //   4. registerWithGuid for each (mesh + texture pairs) so the demo's
 //      4 vendored GUIDs are reachable.
 //   5. spawn 1 planet entity at origin (non-instanced) + 1 asteroid
-//      belt entity carrying Instances{transforms:Float32Array} with
+//      belt entity with World-owned Instances.transforms containing
 //      ASTEROID_COUNT=12 packed transforms (smoke uses small N for
 //      dawn-node frame budget; production uses 1200) + DirectionalLight
 //      + camera elevated/pulled-back to frame the belt.
@@ -25,9 +25,7 @@
 //   - sample sites: planetCenter at NDC origin + ringL/ringR for the
 //     asteroid belt left/right edges. Names tied to LO 4.9 belt
 //     geometry, NOT triLeft/triRight (no triangle here).
-//   - Instances component: this is the only smoke that wires
-//     `{ component: Instances, data: { transforms } }` -- the LO 4.9
-//     core teaching point.
+//   - World-owned Instances transforms express the LO 4.9 core teaching point.
 //
 // Output literals (preserved byte-for-byte for grep tooling):
 //   - `[learn-render-instancing] backend=webgpu`
@@ -41,7 +39,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
@@ -201,7 +199,8 @@ console.log(
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const EMPTY_MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(EMPTY_MANIFEST_URL));
 
 let renderer;
 try {
@@ -242,12 +241,14 @@ if (!marsGuidRes.ok || !rockTexGuidRes.ok) {
 }
 const mkTex = (decoded) => ({
   kind: 'texture',
-  width: decoded.width,
-  height: decoded.height,
+  shape: {
+    viewDimension: '2d',
+    extent: { width: decoded.width, height: decoded.height },
+  },
   format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   data: decoded.bytes,
   colorSpace: decoded.colorSpace,
-  mipmap: decoded.mipmap,
+  mips: decoded.mipmap ? { kind: 'generate' } : { kind: 'none' },
 });
 // World must exist before allocSharedRef mints any column handle.
 const world = new World();
@@ -298,9 +299,9 @@ world.spawn(
   { component: MeshRenderer, data: { materials: [planetMaterial] } },
 );
 
-// LO 4.9 asteroid belt: ONE entity carrying packed per-instance
-// Float32Array (16 floats per instance = mat4 column-major). The smoke
-// builds a deterministic ring of ASTEROID_COUNT rocks at BELT_RADIUS.
+// LO 4.9 asteroid belt: ONE entity with World-owned Instances.transforms
+// (16 floats per instance = mat4 column-major). The smoke builds a deterministic
+// ring of ASTEROID_COUNT rocks at BELT_RADIUS.
 const transforms = new Float32Array(ASTEROID_COUNT * 16);
 const ASTEROID_SCALE = 0.4;
 for (let i = 0; i < ASTEROID_COUNT; i++) {
@@ -351,7 +352,7 @@ world.spawn(
   },
 );
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

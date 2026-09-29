@@ -4,6 +4,7 @@ export type {
   PreparedExecutionBootstrap,
 } from './bootstrap-entry';
 export {
+  activateExecutionRoot,
   executionBootstrapHostPlugin,
   loadBootstrapEntry,
   prepareBootstrapEntry,
@@ -15,9 +16,9 @@ export {
   unavailableExecutionCapabilities,
 } from './capabilities';
 export { cloneExecutionReport } from './control';
-export { createExecutionReport } from './report';
+export { createExecutionFrameInspection, createExecutionReport } from './report';
 export { EXECUTION_REPORT_SCHEMA_VERSION, isExecutionReport } from './schema';
-export { type ExecutionSelectionInput, selectExecutionTier } from './selector';
+export { type ExecutionSelectionInput, selectExecutionWorkers } from './selector';
 export type {
   ExecutionAssetCatalog,
   ExecutionBootstrapValue,
@@ -25,20 +26,22 @@ export type {
   ExecutionCapabilityFact,
   ExecutionCapabilityName,
   ExecutionControl,
+  ExecutionDiagnosticsOptions,
   ExecutionEngineHealth,
   ExecutionFault,
+  ExecutionFrameInspection,
   ExecutionMeasurement,
   ExecutionOptions,
   ExecutionReport,
-  ExecutionRequestedTier,
   ExecutionSelection,
-  ExecutionSelectionReason,
-  ExecutionTier,
+  ExecutionWorker,
+  ExecutionWorkerDecision,
+  ExecutionWorkerPolicy,
+  ExecutionWorkersOptions,
   ExecutionWorldHealth,
   KernelDispatchReason,
 } from './types';
 export {
   EXECUTION_CAPABILITY_NAMES,
-  EXECUTION_REQUESTED_TIERS,
-  EXECUTION_TIERS,
+  EXECUTION_WORKERS,
 } from './types';

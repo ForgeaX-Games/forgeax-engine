@@ -1,8 +1,8 @@
-import { parseParticleEffectSourceV2 } from '@forgeax/engine-vfx';
+import { parseParticleEffectSourceV3 } from '@forgeax/engine-vfx';
 import { describe, expect, it } from 'vitest';
 
 const base = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   emitters: [
     {
       id: 'bolt',
@@ -39,7 +39,7 @@ const base = {
 
 describe('VFX event reflection source contract', () => {
   it('reflects bounded channels and same-effect sub-emitter metadata', () => {
-    const result = parseParticleEffectSourceV2(base);
+    const result = parseParticleEffectSourceV3(base);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.emitters[0]).toMatchObject({
@@ -79,7 +79,7 @@ describe('VFX event reflection source contract', () => {
     ],
   ])('fails closed for %s with structured detail', (_name, event) => {
     const emitter = { ...base.emitters[0], ...event };
-    const result = parseParticleEffectSourceV2({ ...base, emitters: [emitter, base.emitters[1]] });
+    const result = parseParticleEffectSourceV3({ ...base, emitters: [emitter, base.emitters[1]] });
     expect(result.ok).toBe(false);
     if (!result.ok)
       expect(result.error).toMatchObject({

@@ -133,6 +133,14 @@ async function capture(page, label) {
       (element).style.visibility = 'visible';
     });
   }
+  if (process.env.FORGEAX_M3_VARIANT_TAPES === '1') {
+    const bytes = await page.evaluate(async () => {
+      const capture = await globalThis.__forgeax.captureFrame();
+      if (!capture.ok) throw new Error(JSON.stringify(capture.error));
+      return Array.from(capture.value.bytes);
+    });
+    writeFileSync(resolve(ARTIFACT_DIR, `${label}.rhitape`), Buffer.from(bytes));
+  }
   return decodePngStats(png);
 }
 

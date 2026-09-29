@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "forgeax-render-visual-evidence/1",
+  "featureId": "feat-20260827-render-temporal-environment-bloom-syntax-corrected",
+  "source": {
+    "path": "apps/hello/taa/src/main.ts",
+    "sha256": "266033ba440f891e8eee3ae319884b5cc0f6818c1f3b1ef637271ae4dd6d19a6"
+  },
+  "build": {
+    "command": "pnpm --filter @forgeax/hello-taa build",
+    "sha256": "4b3769a7084e21ce99937a70a3f3582bf678667b57443f95bb3153b83846d282"
+  },
+  "backend": "browser-webgpu",
+  "runner": "playwright",
+  "frames": 300,
+  "captures": [
+    {
+      "id": "taa-temporal-dynamics",
+      "png": "evidence/taa-visual.png",
+      "observed": "TAA carrier canvas captured after 300 frames; 15376 non-white pixels",
+      "verdict": "pass",
+      "confidence": "high",
+      "pixelStats": {
+        "width": 640,
+        "height": 360,
+        "nonWhitePixels": 15376,
+        "nonBackgroundPixels": 0
+      }
+    }
+  ],
+  "falsify": [
+    {
+      "id": "taa-dynamics",
+      "result": "pass"
+    }
+  ],
+  "status": "pass"
+}

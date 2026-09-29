@@ -27,7 +27,7 @@ vi.mock('@forgeax/engine-codec/encode', () => ({
   basisEncode: (...args: unknown[]) => basisEncodeSpy(...args),
 }));
 
-const SRGB: EncodeSourceInfo = { colorSpace: 'srgb', isHdr: false };
+const SRGB: EncodeSourceInfo = { colorSpace: 'srgb', isHdr: false, mipmap: false };
 
 describe('encodeTextureToKtx2 -- source-pixel ceiling fail-fast', () => {
   it('MAX_ENCODE_SOURCE_PIXELS is 4096x4096 (16.78 Mpx)', () => {
@@ -63,9 +63,11 @@ describe('encodeTextureToKtx2 -- source-pixel ceiling fail-fast', () => {
     basisEncodeSpy.mockResolvedValue({ ok: true, value: new Uint8Array([1, 2, 3]) });
     const r = await encodeTextureToKtx2(new Uint8Array(4), 4096, 4096, 'etc1s', SRGB);
     expect(basisEncodeSpy).toHaveBeenCalledTimes(1);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.value.mode).toBe('etc1s');
+    // The stub bytes are not a KTX2, so the header read-back rejects them; the
+    // ceiling itself did not.
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatchObject({ code: 'ktx2-encode-failed', mode: 'etc1s' });
   });
 
   it("the 'none' path still short-circuits before the ceiling check", async () => {

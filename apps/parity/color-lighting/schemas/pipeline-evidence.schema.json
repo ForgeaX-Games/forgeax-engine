@@ -12,7 +12,7 @@
     "sceneCase": { "type": "object", "minProperties": 1 },
     "sourceHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "semanticHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "pipelineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] },
+    "pipelineId": { "const": "forgeax::standard" },
     "runtimeId": { "enum": ["browser", "dawn"] },
     "backendId": { "type": "string", "minLength": 1 },
     "frameId": { "type": "integer", "minimum": 0 },
@@ -68,7 +68,7 @@
         },
         "rawHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "frameId": { "type": "integer", "minimum": 0 },
-        "pipelineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] },
+        "pipelineId": { "const": "forgeax::standard" },
         "backendId": { "type": "string", "minLength": 1 }
       }
     }

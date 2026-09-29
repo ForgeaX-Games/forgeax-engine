@@ -1,4 +1,4 @@
-import type { VfxGpuEffectAsset, VfxGpuEmitterProgram } from './gpu-program.js';
+import type { VfxGpuEffectAssetAny, VfxGpuEmitterProgramAny } from './gpu-program.js';
 
 export type VfxAuthoringValue =
   | null
@@ -61,7 +61,7 @@ export interface VfxAuthoringCapabilityDescriptor {
 export interface VfxAuthoringDescriptor {
   readonly version: 1;
   readonly assetGuid: string;
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly artifactFingerprint: string;
   readonly emitters: readonly VfxAuthoringEmitterDescriptor[];
   readonly timeline: readonly VfxAuthoringTimelineDescriptor[];
@@ -69,25 +69,19 @@ export interface VfxAuthoringDescriptor {
   readonly capabilities: readonly VfxAuthoringCapabilityDescriptor[];
 }
 
-const CAPABILITIES: readonly VfxAuthoringCapabilityDescriptor[] = Object.freeze([
+const V3_CAPABILITIES: readonly VfxAuthoringCapabilityDescriptor[] = Object.freeze([
   Object.freeze({ id: 'wgsl-behavior', state: 'executable' }),
   Object.freeze({ id: 'multi-emitter', state: 'executable' }),
   Object.freeze({ id: 'deterministic-replay', state: 'executable' }),
   Object.freeze({ id: 'emitter-visibility', state: 'executable' }),
-  Object.freeze({
-    id: 'runtime-parameters',
-    state: 'partial',
-    reason: 'reflected and packed, but not yet bound to managed author WGSL',
-  }),
-  Object.freeze({
-    id: 'custom-attributes',
-    state: 'partial',
-    reason: 'reflected without executable per-particle custom storage',
-  }),
+  Object.freeze({ id: 'runtime-parameters', state: 'executable' }),
+  Object.freeze({ id: 'custom-attributes', state: 'executable' }),
+  Object.freeze({ id: 'renderer-semantics', state: 'executable' }),
+  Object.freeze({ id: 'material-particle-inputs', state: 'executable' }),
   Object.freeze({
     id: 'data-interfaces',
     state: 'partial',
-    reason: 'requirements resolve provider readiness without author resource bindings',
+    reason: 'camera, single-sample scene depth, and noise require generation-owned providers',
   }),
 ]);
 
@@ -95,19 +89,20 @@ const CAPABILITIES: readonly VfxAuthoringCapabilityDescriptor[] = Object.freeze(
  * the cooked program shape. This deliberately validates the stable producer
  * discriminants only; detailed artifact validation remains the pack loader's
  * responsibility. */
-export function isVfxGpuEffectAsset(value: unknown): value is VfxGpuEffectAsset {
+export function isVfxGpuEffectAsset(value: unknown): value is VfxGpuEffectAssetAny {
   if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<VfxGpuEffectAsset>;
+  const candidate = value as Partial<VfxGpuEffectAssetAny>;
+  const program = candidate.program;
   return (
     candidate.kind === 'particle-effect' &&
-    candidate.schemaVersion === 2 &&
+    candidate.schemaVersion === 3 &&
     typeof candidate.guid === 'string' &&
     candidate.guid.length > 0 &&
-    typeof candidate.program === 'object' &&
-    candidate.program !== null &&
-    candidate.program.format === 'forgeax-vfx-program-2' &&
-    typeof candidate.program.fingerprint === 'string' &&
-    Array.isArray(candidate.program.emitters)
+    typeof program === 'object' &&
+    program !== null &&
+    program.format === 'forgeax-vfx-program-4' &&
+    typeof program.fingerprint === 'string' &&
+    Array.isArray(program.emitters)
   );
 }
 
@@ -174,7 +169,7 @@ function node(
 }
 
 function reflectionNodes(
-  emitter: VfxGpuEmitterProgram,
+  emitter: VfxGpuEmitterProgramAny,
   path: string,
 ): VfxAuthoringNodeDescriptor[] {
   const nodes: VfxAuthoringNodeDescriptor[] = [];
@@ -235,7 +230,10 @@ function reflectionNodes(
   return nodes;
 }
 
-function emitterNode(emitter: VfxGpuEmitterProgram, index: number): VfxAuthoringEmitterDescriptor {
+function emitterNode(
+  emitter: VfxGpuEmitterProgramAny,
+  index: number,
+): VfxAuthoringEmitterDescriptor {
   const path = `emitters[${index}]`;
   const children: VfxAuthoringNodeDescriptor[] = [
     node({
@@ -293,7 +291,7 @@ function emitterNode(emitter: VfxGpuEmitterProgram, index: number): VfxAuthoring
   });
 }
 
-function dependencies(effect: VfxGpuEffectAsset): readonly VfxAuthoringDependencyDescriptor[] {
+function dependencies(effect: VfxGpuEffectAssetAny): readonly VfxAuthoringDependencyDescriptor[] {
   const entries: VfxAuthoringDependencyDescriptor[] = [];
   const seen = new Set<string>();
   const add = (entry: VfxAuthoringDependencyDescriptor): void => {
@@ -330,11 +328,11 @@ function dependencies(effect: VfxGpuEffectAsset): readonly VfxAuthoringDependenc
 }
 
 /** Project the cooked runtime asset into a compiler-free, UI-neutral authoring read model. */
-export function describeVfxGpuEffect(effect: VfxGpuEffectAsset): VfxAuthoringDescriptor {
+export function describeVfxGpuEffect(effect: VfxGpuEffectAssetAny): VfxAuthoringDescriptor {
   return Object.freeze({
     version: 1,
     assetGuid: effect.guid,
-    schemaVersion: 2,
+    schemaVersion: effect.schemaVersion,
     artifactFingerprint: effect.program.fingerprint,
     emitters: Object.freeze(effect.program.emitters.map(emitterNode)),
     timeline: Object.freeze(
@@ -350,6 +348,6 @@ export function describeVfxGpuEffect(effect: VfxGpuEffectAsset): VfxAuthoringDes
       ),
     ),
     dependencies: dependencies(effect),
-    capabilities: CAPABILITIES,
+    capabilities: V3_CAPABILITIES,
   });
 }

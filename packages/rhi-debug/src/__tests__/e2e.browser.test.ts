@@ -7,6 +7,7 @@ import { decodeTape } from '../protocol/codec';
 import type { Tape } from '../protocol/types';
 import { attachRecorder, type RecordableBackend } from '../recorder/session';
 import { openReplay } from '../replay/session';
+import { runQuerySetReplayFixture } from './query-set-replay-fixture';
 
 const GPU_AVAILABLE = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 const SIZE = 64;
@@ -141,6 +142,7 @@ async function captureBrowserTape(): Promise<CapturedBrowserTape> {
     'write source texture',
   );
   const encoder = must(device.createCommandEncoder({}), 'create command encoder');
+  encoder.pushDebugGroup('frame');
   const pass = encoder.beginRenderPass({
     colorAttachments: [
       {
@@ -153,8 +155,13 @@ async function captureBrowserTape(): Promise<CapturedBrowserTape> {
   } as never);
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup, []);
+  pass.pushDebugGroup('outer');
+  pass.pushDebugGroup('inner');
   pass.draw(3, 1, 0, 0);
+  pass.popDebugGroup();
+  pass.popDebugGroup();
   pass.end();
+  encoder.popDebugGroup();
   const command = must(encoder.finish(), 'finish command encoder');
   must(device.queue.submit([command]), 'submit command buffer');
   await device.queue.onSubmittedWorkDone();
@@ -235,5 +242,54 @@ describe.skipIf(!GPU_AVAILABLE)('M4 browser capture and replay gate', () => {
     } else {
       expect(replay.error.code).toBeDefined();
     }
+  }, 60_000);
+
+  it('captures and replays an occlusion QuerySet with an eight-byte readback', async () => {
+    const backend = await loadBackend();
+    const attachment = must(attachRecorder(backend), 'attachRecorder query set');
+    const adapter = must(await attachment.backend.rhi.requestAdapter(), 'query set requestAdapter');
+    const device = must(await adapter.requestDevice(), 'query set requestDevice');
+    const capture = attachment.captureFrame();
+    must(await attachment.frameBoundary(), 'query set capture snapshot boundary');
+    const evidence = await runQuerySetReplayFixture({
+      runner: 'browser',
+      device,
+      createShaderModule: attachment.backend.createShaderModule,
+      replayCreateShaderModule: backend.createShaderModule,
+      finishCapture: async () => {
+        must(await attachment.frameBoundary(), 'query set capture recording boundary');
+        return must(await capture, 'query set capture frame');
+      },
+      createFreshDevice: async () => {
+        const freshAdapter = must(await backend.rhi.requestAdapter(), 'query set fresh adapter');
+        return must(await freshAdapter.requestDevice(), 'query set fresh device');
+      },
+    });
+    await attachment.dispose();
+    expect(evidence, JSON.stringify(evidence.errorReceipts)).toMatchObject({
+      status: 'available',
+      tapeFormatVersion: 7,
+      resolveDestinationOffset: 256,
+      originalQueryValues: expect.arrayContaining([expect.any(String), '0']),
+      originalResultHalfWords: [15360, 0, 0, 15360, 0, 0, 0, 15360],
+      freshQueryValues: ['1', '0'],
+      errorReceipts: [],
+      deviceLost: null,
+    });
+    expect(evidence.originalQueryValues[0]).not.toBe('0');
+    expect(evidence.originalColorBytes.some((byte) => byte > 0)).toBe(true);
+    expect(evidence.eventKinds).toEqual(
+      expect.arrayContaining([
+        'createQuerySet',
+        'beginRenderPass',
+        'beginOcclusionQuery',
+        'endOcclusionQuery',
+        'resolveQuerySet',
+        'submit',
+        'destroyQuerySet',
+      ]),
+    );
+    expect(evidence.querySetHandleId).toBeDefined();
+    expect(evidence.resolveDestinationHandleId).toBeDefined();
   }, 60_000);
 });

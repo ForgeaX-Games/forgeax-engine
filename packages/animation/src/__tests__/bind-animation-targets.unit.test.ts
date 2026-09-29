@@ -86,6 +86,17 @@ describe('bindAnimationTargets', () => {
     expect([...world.get(player, AnimationTargets).unwrap().targets]).toEqual([target]);
   });
 
+  it('keeps self-target binding migration on the live archetype', () => {
+    const world = new World();
+    const player = spawnPlayer(world, false);
+
+    expect(bindAnimationTargets(world, player, [player]).ok).toBe(true);
+    expect(world.get(player, AnimationTargets).unwrap().targets).toEqual(new Uint32Array([player]));
+    expect(world.get(player, AnimatedBy).unwrap().player).toBe(player);
+    expect(world.inspect().tables.every((table) => table.entityCount >= 0)).toBe(true);
+    expect(world.inspect().archetypes.every((archetype) => archetype.entityCount >= 0)).toBe(true);
+  });
+
   it('reports invalid player, target, hierarchy, and missing-name failures', () => {
     const world = new World();
     const player = spawnPlayer(world);

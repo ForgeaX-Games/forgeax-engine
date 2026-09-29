@@ -87,7 +87,7 @@ export function createPointsLinesRecordPlan(
   const conservativeMarginPx =
     snapshot.style?.kind === 'points'
       ? snapshot.style.sizePx * 0.5
-      : (snapshot.style?.widthPx ?? 0) * 0.5;
+      : (snapshot.style?.widthPx ?? 0) * 2;
   return {
     lane: contract.lane,
     backend: contract.backend,

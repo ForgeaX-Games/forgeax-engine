@@ -1,6 +1,7 @@
 import type { AssetLoadError, Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { freezeRuntimePayload } from './immutable-payload.js';
+import { assetLoadCancelled as cancelled, waitForAsset } from './wait-for-asset.js';
 
 export interface AssetGraphValue<P> {
   readonly value: P;
@@ -33,15 +34,6 @@ export interface AssetGraphSnapshot {
 
 type GraphResult<P> = Result<P, AssetLoadError>;
 type GraphListener = (snapshot: AssetGraphSnapshot) => void;
-
-function cancelled(guid: string): AssetLoadError {
-  return {
-    code: 'asset-load-cancelled',
-    expected: 'the request AbortSignal to remain live until asset closure completes',
-    hint: 'retry with a live AbortSignal when the request is still needed',
-    detail: { guid },
-  };
-}
 
 function disposed(scopeId = 'asset-runtime'): AssetLoadError {
   return {
@@ -88,6 +80,7 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   private readonly reads = new Map<string, Promise<GraphResult<P>>>();
   private readonly requests = new Map<string, Promise<GraphResult<P>>>();
   private readonly listeners = new Set<GraphListener>();
+  private readonly lifetime = new AbortController();
   private readonly sccs: (readonly string[])[] = [];
   private activeReads = 0;
   private readWaiters: (() => void)[] = [];
@@ -100,7 +93,7 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
     noChange: 0,
     listenerFailures: 0,
   };
-  private currentSnapshot: AssetGraphSnapshot;
+  private currentSnapshot: AssetGraphSnapshot | undefined;
 
   constructor(options: AssetGraphOptions<P>) {
     this.read = options.read;
@@ -132,17 +125,19 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
     const existing = this.requests.get(canonicalGuid);
     if (existing !== undefined) {
       this.counters = { ...this.counters, cacheHits: this.counters.cacheHits + 1 };
-      return existing;
+      return waitForAsset(existing, signal, canonicalGuid);
     }
     this.counters = { ...this.counters, loads: this.counters.loads + 1 };
     const ticketEpoch = this.epoch;
-    const request = this.loadClosure(canonicalGuid, signal, ticketEpoch).finally(() => {
-      if (this.requests.get(canonicalGuid) === request) this.requests.delete(canonicalGuid);
-      this.publish();
-    });
+    const request = this.loadClosure(canonicalGuid, this.lifetime.signal, ticketEpoch).finally(
+      () => {
+        if (this.requests.get(canonicalGuid) === request) this.requests.delete(canonicalGuid);
+        this.publish();
+      },
+    );
     this.requests.set(canonicalGuid, request);
     this.publish();
-    return request;
+    return waitForAsset(request, signal, canonicalGuid);
   }
 
   invalidate(guid: string): readonly string[] {
@@ -170,6 +165,14 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   }
 
   snapshot(): AssetGraphSnapshot {
+    this.currentSnapshot ??= freezeSnapshot({
+      epoch: this.epoch,
+      ready: [...this.ready.keys()].sort(),
+      pending: this.requests.size + this.reads.size,
+      resources: this.ready.size,
+      sccs: this.sccs,
+      counters: this.counters,
+    });
     return this.currentSnapshot;
   }
 
@@ -187,11 +190,13 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.lifetime.abort();
     this.epoch += 1;
     this.ready.clear();
     this.forward.clear();
     this.reverse.clear();
     this.reads.clear();
+    this.requests.clear();
     const waiters = this.readWaiters;
     this.readWaiters = [];
     for (const resolve of waiters) resolve();
@@ -207,11 +212,11 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
     const visiting = new Set<string>();
     const visited = new Set<string>();
     const group = new Set<string>();
-    const result = await this.visit(root, signal, visiting, visited, values, group);
-    if (!result.ok) return result;
+    const result = await this.visit(root, signal, visiting, visited, values, group, ticketEpoch);
     if (this.disposed) return err(disposed());
-    if (signal.aborted) return err(cancelled(root));
     if (ticketEpoch !== this.epoch) return err(superseded(root, ticketEpoch));
+    if (!result.ok) return result;
+    if (signal.aborted) return err(cancelled(root));
     for (const [guid, value] of values) this.promote(guid, value);
     this.recordScc();
     return ok(values.get(root) as P);
@@ -224,6 +229,7 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
     visited: Set<string>,
     values: Map<string, P>,
     group: Set<string>,
+    ticketEpoch: number,
   ): Promise<GraphResult<P>> {
     if (visiting.has(guid)) {
       group.add(guid);
@@ -242,11 +248,15 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
       visiting.delete(guid);
       return read;
     }
+    if (this.disposed) return err(disposed());
+    if (ticketEpoch !== this.epoch) return err(superseded(guid, ticketEpoch));
     values.set(guid, read.value);
     group.add(guid);
     this.link(guid, read.value.refs);
-    for (const ref of read.value.refs) {
-      const child = await this.visit(ref, signal, visiting, visited, values, group);
+    const references = (read.value as P & { readonly references?: 'eager' | 'deferred' })
+      .references;
+    for (const ref of references === 'deferred' ? [] : read.value.refs) {
+      const child = await this.visit(ref, signal, visiting, visited, values, group, ticketEpoch);
       if (!child.ok) {
         visiting.delete(guid);
         return err({
@@ -269,7 +279,7 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
       if (this.disposed) return err(disposed());
       if (signal.aborted) return err(cancelled(guid));
       try {
-        const result = await this.read(guid, signal);
+        const result = await waitForAsset(this.read(guid, signal), signal, guid);
         if (signal.aborted) return err(cancelled(guid));
         if (!result.ok)
           this.counters = { ...this.counters, readErrors: this.counters.readErrors + 1 };
@@ -394,14 +404,9 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   }
 
   private publish(): void {
-    this.currentSnapshot = freezeSnapshot({
-      epoch: this.epoch,
-      ready: [...this.ready.keys()].sort(),
-      pending: this.requests.size + this.reads.size,
-      resources: this.ready.size,
-      sccs: this.sccs,
-      counters: this.counters,
-    });
+    this.currentSnapshot = undefined;
+    if (this.listeners.size === 0) return;
+    this.currentSnapshot = this.snapshot();
     for (const listener of [...this.listeners]) {
       try {
         listener(this.currentSnapshot);

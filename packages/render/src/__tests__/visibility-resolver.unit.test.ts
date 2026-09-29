@@ -82,4 +82,19 @@ describe('visibility resolver truth table', () => {
     expect(result.get(parent)?.intent).toBeUndefined();
     expect(result.get(child)?.effective).toBe('visible');
   });
+
+  it('invalidates the cached snapshot when visibility intent changes', () => {
+    const world = new World();
+    const parent = spawn(world, 'visible');
+    const child = spawn(world, 'inherited', parent);
+
+    const visible = resolveVisibility(world);
+    expect(visible.effective(child)).toBe('visible');
+
+    world.set(parent, Visibility, { state: VisibilityStateValue.hidden }).unwrap();
+
+    const hidden = resolveVisibility(world);
+    expect(hidden).not.toBe(visible);
+    expect(hidden.effective(child)).toBe('hidden');
+  });
 });

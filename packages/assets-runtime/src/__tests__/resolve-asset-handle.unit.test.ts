@@ -140,6 +140,30 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     expect(res.value.values).toEqual({ a: 1 });
   });
 
+  it('applies root defaults before rendering while preserving child zero overrides', () => {
+    const world = new World();
+    const parent = mat({
+      passes: [{ name: 'Forward', program: { module: 'game::toon' } }],
+      parameters: [
+        { name: 'amount', type: 'f32', default: 0.7 },
+        { name: 'tint', type: 'color', default: [0.5, 0.5, 0.5, 1] },
+      ],
+      values: {},
+    });
+    const child = mat({ parent: 'p-guid' as never, values: { amount: 0 } });
+    const rootHandle = world.allocSharedRef('MaterialAsset', parent);
+    const childHandle = world.allocSharedRef('MaterialAsset', child);
+    expect(
+      walkMaterialPassesOverSharedRefs(world, rootHandle, { lookup: () => parent }).unwrap().values,
+    ).toEqual({ amount: 0.7, tint: [0.5, 0.5, 0.5, 1] });
+    expect(
+      walkMaterialPassesOverSharedRefs(world, childHandle, { lookup: () => parent }).unwrap()
+        .values,
+    ).toEqual({ amount: 0, tint: [0.5, 0.5, 0.5, 1] });
+    expect(parent.values).toEqual({});
+    expect(child.values).toEqual({ amount: 0 });
+  });
+
   it('inherits parent passes when the child declares none, merging values', () => {
     const world = new World();
     const parent = mat({
@@ -155,7 +179,7 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     expect(res.value.values).toEqual({ a: 1, b: 20 }); // child overrides
   });
 
-  it('inherits the root parameter contract without child declaration merging', () => {
+  it('rejects child declarations that add parameter bindings', () => {
     const world = new World();
     const parent = mat({
       passes: [{ name: 'base', program: { module: 'forgeax::standard' } }],
@@ -173,15 +197,13 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     });
     const handle = world.allocSharedRef('MaterialAsset', child);
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => parent });
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.value.parameters).toEqual([
-      { name: 'baseColor', type: 'color' },
-      { name: 'roughness', type: 'f32' },
-    ]);
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: 'material-child-contract-invalid' },
+    });
   });
 
-  it('child passes override parent by name and append new ones', () => {
+  it('rejects child pass overrides so the root owns the effective pass contract', () => {
     const world = new World();
     const parent = mat({
       passes: [
@@ -198,12 +220,13 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     });
     const handle = world.allocSharedRef('MaterialAsset', child);
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => parent });
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    const byName = new Map(res.value.passes.map((p) => [p.name, p.program.module]));
-    expect(byName.get('main')).toBe('forgeax::child-main'); // overridden
-    expect(byName.get('extra')).toBe('forgeax::extra'); // appended
-    expect(byName.get('shadow')).toBe('forgeax::shadow'); // inherited
+    expect(res).toMatchObject({
+      ok: false,
+      error: {
+        code: 'material-child-contract-invalid',
+        detail: { forbidden: ['passes'], action: 'remove-forbidden-fields' },
+      },
+    });
   });
 
   it('errors when the parent is not catalogued', () => {

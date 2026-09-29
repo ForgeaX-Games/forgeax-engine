@@ -36,6 +36,30 @@ describe('runtime renderer host assembly', () => {
     host.value.renderer.dispose();
   });
 
+  it('repeats null-device assembly and frame observation without device loss', async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const host = await constructRendererHost(canvas(), { rhi }, { shaderManifestUrl: manifest });
+      expect(host.ok).toBe(true);
+      if (!host.ok) continue;
+      const world = new World();
+      const attached = host.value.renderer.attach(world);
+      expect(attached.ok).toBe(true);
+      if (!attached.ok) {
+        host.value.renderer.dispose();
+        continue;
+      }
+      expect(world.update().ok).toBe(true);
+      const frame = host.value.renderer.draw(frameRequest(attached.value));
+      expect(frame.ok).toBe(true);
+      if (frame.ok) {
+        expect((await host.value.renderer.observe(frame.value, { include: ['timings'] })).ok).toBe(
+          true,
+        );
+      }
+      host.value.renderer.dispose();
+    }
+  });
+
   it('keeps runtime construction errors structured', async () => {
     const result = await createRenderer(canvas(), { rhi: undefined });
     expect(result.ok).toBe(false);

@@ -41,7 +41,7 @@ import { describe, expect, it } from 'vitest';
  *
  * - `backendLine`: console-matched `[hello-triangle] backend=...` string
  *                  value ('webgpu' / 'webgl2' / null)
- * - `framesObserved`: raf frame count (default N=300, overridable via
+ * - `framesObserved`: raf frame count (default N=60, overridable via
  *                     ENV `SMOKE_MIN_FRAMES`)
  * - `pixelSamples`: RGB triplets at 2 sample sites (NDC center / a corner
  *                   point outside any drawn primitive); shape mirrors
@@ -131,7 +131,7 @@ const COUNTEREXAMPLE_IV: SmokeCriteriaInput = {
 };
 
 /**
- * Normal-path fixture: all three criteria PASS (backend webgpu + frames >= 300
+ * Normal-path fixture: all three criteria PASS (backend webgpu + frames >= 60
  * + NDC-center distance to clearColor > threshold) - smoke MUST PASS
  * (reference stance).
  */

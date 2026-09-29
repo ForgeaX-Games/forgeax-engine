@@ -49,8 +49,8 @@ function makeAuditInput(): CrossPipelineAuditInput {
     caseId: 'direct-directional',
     size: REQUIRED_SIZE,
     missingPipelineIds: [],
-    urp: makeObservation('forgeax::urp', 1),
-    hdrp: makeObservation('forgeax::hdrp', 11),
+    urp: makeObservation('forgeax::standard', 1),
+    hdrp: makeObservation('forgeax::standard', 11),
   };
 }
 
@@ -64,11 +64,11 @@ describe('cross-pipeline evidence audit', () => {
   });
 
   it.each([
-    ['missing pipeline', (input: CrossPipelineAuditInput) => ({ ...input, missingPipelineIds: ['forgeax::hdrp'] })],
+    ['missing pipeline', (input: CrossPipelineAuditInput) => ({ ...input, missingPipelineIds: ['forgeax::standard'] })],
     ['COPY_SRC removal', (input: CrossPipelineAuditInput) => ({ ...input, urp: { ...input.urp, copySrc: false } })],
     ['stale lifetime', (input: CrossPipelineAuditInput) => ({ ...input, hdrp: { ...input.hdrp, lifetime: 'retired' as const } })],
     ['replay substitution', (input: CrossPipelineAuditInput) => ({ ...input, hdrp: { ...input.hdrp, source: 'replay' as const } })],
-    ['URP as HDRP', (input: CrossPipelineAuditInput) => ({ ...input, hdrp: { ...input.hdrp, pipelineId: 'forgeax::urp' as const } })],
+    ['same producer evidence', (input: CrossPipelineAuditInput) => ({ ...input, hdrp: input.urp })],
     ['guessed multiplier', (input: CrossPipelineAuditInput) => ({ ...input, urp: { ...input.urp, normalization: { ...input.urp.normalization, intensityScale: 2 } } })],
     ['unsquared curve', (input: CrossPipelineAuditInput) => ({ ...input, hdrp: { ...input.hdrp, normalization: { ...input.hdrp.normalization, rangeModel: 'unsquared' as const } } })],
     ['bad format', (input: CrossPipelineAuditInput) => ({ ...input, urp: { ...input.urp, evidence: { ...input.urp.evidence, linearHdr: { ...input.urp.evidence.linearHdr, format: 'rgba8unorm' } } } })],

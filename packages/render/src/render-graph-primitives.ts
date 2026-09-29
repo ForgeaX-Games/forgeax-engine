@@ -15,6 +15,7 @@ import type {
   TextureFormat,
   TextureView,
 } from '@forgeax/engine-rhi';
+import { RhiError } from '@forgeax/engine-rhi';
 import {
   buildFullscreenPostProcessPass,
   createFullscreenBindGroup,
@@ -28,7 +29,7 @@ import type { _InternalRenderPipelineContext } from './record/render-context';
 import { recordFxaaPass } from './record/skybox-post-pass';
 import type { RenderPipelineContext } from './render-contract';
 import { getOrCreateSsaoBuffers, getOrCreateSsaoFallbackTexture } from './ssao-buffers';
-import { getSsaoParameters } from './ssao-config';
+import { getSsaoParameters, SSAO_SAMPLE_COUNTS } from './ssao-config';
 
 type DepthResolutionContext = Pick<_InternalRenderPipelineContext, 'runtime'> & {
   readonly frameState: {
@@ -193,11 +194,18 @@ function ensureSsaoRecordCompanions(internals: _InternalRenderPipelineContext): 
  *   floats [16..31]  projection        mat4
  *   floats [32..47]  inverseProjection mat4
  *   floats [48..51]  intensityPad      vec4  (x=intensity, y=radius, z=bias)
- *   floats [52..63]  trailing zero-pad to round to 256B / 64f UBO alignment.
+ *   floats [52..55]  algorithmPad (x: 0 = SSAO, 1 = GTAO)
+ *   floats [56..63]  trailing zero-pad to round to 256B / 64f UBO alignment.
  */
 function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Float32Array {
   const { camera, frameState } = internals;
   const sProj = computeProjectionMatrix(camera);
+  if (camera.temporal?.currentJitterUv !== undefined) {
+    const jitter = mat4.identity(mat4.create());
+    jitter[12] = camera.temporal.currentJitterUv[0] * 2;
+    jitter[13] = camera.temporal.currentJitterUv[1] * -2;
+    mat4.multiply(sProj, jitter, sProj);
+  }
   const sView = computeViewMatrix(camera);
   const invProj = mat4.create();
   mat4.invert(invProj, sProj);
@@ -214,6 +222,8 @@ function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Flo
   out[48] = parameters.intensity;
   out[49] = parameters.radius;
   out[50] = parameters.bias;
+  out[51] = SSAO_SAMPLE_COUNTS[parameters.quality];
+  out[52] = parameters.algorithm === 'gtao' ? 1 : 0;
   return out;
 }
 
@@ -256,7 +266,19 @@ export function recordSsaoCalcPass(
   const { runtime, pipelineState, encoder } = _c;
   const pp = pipelineState.perPassResources;
 
-  if (pp.ssaoCalcPipeline === null || pp.ssaoBgl === null) return;
+  if (runtime.device.caps.backendKind === 'wgpu-webgl2') {
+    throw new RhiError({
+      code: 'feature-not-enabled',
+      expected: 'SSAO raw depth sampling on a WebGPU-capable backend',
+      hint: 'use WebGPU for SSAO or disable StandardProfile.ssao on the GLES fallback',
+    });
+  }
+  if (pp.ssaoCalcPipeline === null || pp.ssaoBgl === null) {
+    throw new PostProcessError({
+      code: 'post-process-not-found',
+      detail: { id: 'forgeax::post::ssao-calc' },
+    });
+  }
   if (graphViews === undefined && (resolveCtx === undefined || ssaoRawKey === undefined)) return;
 
   const ssaoRawView =
@@ -392,7 +414,12 @@ export function recordSsaoBlurPass(
   const { runtime, pipelineState, encoder } = _c;
   const pp = pipelineState.perPassResources;
 
-  if (pp.ssaoBlurPipeline === null || pp.ssaoBgl === null) return;
+  if (pp.ssaoBlurPipeline === null || pp.ssaoBgl === null) {
+    throw new PostProcessError({
+      code: 'post-process-not-found',
+      detail: { id: 'forgeax::post::ssao-blur' },
+    });
+  }
   if (
     graphViews === undefined &&
     (resolveCtx === undefined || ssaoBlurredKey === undefined || ssaoRawKey === undefined)
@@ -548,8 +575,11 @@ function dispatchFullscreenPass(
   compositeOverSwapchain = false,
   rawSwapchainOutput = false,
   graphPass?: RhiRenderPassEncoder,
-  graphOutputFormat?: GPUTextureFormat,
+  graphOutputFormats?: readonly GPUTextureFormat[],
   graphDepthView?: TextureView,
+  paramsOverride?: Uint8Array,
+  fragmentEntryPoint?: string,
+  msaaActive = false,
 ): void {
   if (shader === 'fxaa') {
     if (resolveCtx === undefined) {
@@ -558,7 +588,13 @@ function dispatchFullscreenPass(
         detail: { readsKey: reads[0] ?? 'ldrColor', passName: name },
       });
     }
-    recordFxaaPass(requireRenderGraphRecordContext(ctx), resolveCtx, graphPass);
+    recordFxaaPass(
+      requireRenderGraphRecordContext(ctx),
+      resolveCtx,
+      graphPass,
+      paramsOverride,
+      graphOutputFormats?.[0],
+    );
     return;
   }
   const lookup = ctx.runtime.lookupPostProcess;
@@ -616,7 +652,7 @@ function dispatchFullscreenPass(
   const built = buildFullscreenPostProcessPass(
     { device: ctx.runtime.device, errorRegistry: ctx.runtime.errorRegistry },
     entry,
-    ctx.msaaActive,
+    msaaActive,
   );
   if (built === null) return;
 
@@ -665,8 +701,11 @@ function dispatchFullscreenPass(
   // the swap-chain path uses the backend-selected surface view format.
   let writeFormat = ctx.pipelineState?.colorAttachmentFormat ?? 'rgba8unorm-srgb';
   if (graphPass !== undefined) {
-    writeView = ctx.view;
-    writeFormat = graphOutputFormat ?? writeFormat;
+    // Typed graph passes must write their declared output target. The frame
+    // surface view is only the fallback for legacy passes; using it here
+    // leaves a typed output target cleared while the next pass samples it.
+    writeView = (resolveCtx?.resolve(color) as TextureView | undefined) ?? ctx.view;
+    writeFormat = graphOutputFormats?.[0] ?? writeFormat;
   } else if (rawSwapchainOutput && color === 'swapchain') {
     const rawViewRes = ctx.runtime.device.createTextureView(ctx.currentTexture, {});
     if (!rawViewRes.ok) {
@@ -702,7 +741,11 @@ function dispatchFullscreenPass(
   if (entry.params !== undefined) {
     const ubo = ctx.runtime.getPostProcessParamsBuffer?.(shader);
     if (ubo !== undefined) {
-      const data = ctx.postProcessParams.get(shader);
+      // Typed graph passes may make a narrow, per-pass copy of the payload
+      // (for example enabling final-surface dither without changing the
+      // camera-owned SSOT).  Use it when present, while preserving the normal
+      // frame snapshot for legacy callers.
+      const data = paramsOverride ?? ctx.postProcessParams.get(shader);
       if (data !== undefined) {
         if (data.byteLength !== entry.params.byteSize) {
           throw new PostProcessError({
@@ -733,6 +776,20 @@ function dispatchFullscreenPass(
     paramsBuffer,
     depthTexView,
     depthSampler,
+    built.extraColorBindings.map((binding, index) => {
+      const read = entry.reads?.filter(
+        (candidate) => typeof candidate === 'string' || candidate.sampleType !== 'depth',
+      )[index + 1];
+      const key = typeof read === 'string' ? read : read?.key;
+      const view = key === undefined ? undefined : resolveCtx?.resolve(key);
+      if (view === undefined) {
+        throw new PostProcessError({
+          code: 'fullscreen-input-not-found',
+          detail: { readsKey: key ?? 'additional-read', passName: name },
+        });
+      }
+      return { binding, view: view as TextureView };
+    }),
   );
   if (bindGroup === null) return;
 
@@ -751,14 +808,18 @@ function dispatchFullscreenPass(
   const lookupPipeline = ctx.runtime.getPostProcessPipeline;
   if (lookupPipeline === undefined) return;
   const postColorFormat = writeFormat;
-  const pipeline = lookupPipeline(shader, built.bindGroupLayout, postColorFormat);
-  if (pipeline === null) {
-    return;
-  }
+  const pipelineEntry = fragmentEntryPoint === undefined ? entry : { ...entry, fragmentEntryPoint };
+  const pipeline = lookupPipeline(
+    shader,
+    built.bindGroupLayout,
+    graphOutputFormats ?? [postColorFormat],
+    pipelineEntry,
+  );
+  if (pipeline === null) return;
   const handle = built.createHandle(name, pipeline, paramsBuffer);
 
   // Open a render pass writing into the resolved color target. Fullscreen
-  // post-process passes are non-MSAA, depth-less, single-attachment.
+  // post-process passes are non-MSAA and depth-less; the typed graph owns MRT attachments.
   // setBindGroup(1, ...) (group=1 reserved per plan-strategy convention;
   // group=0 is reserved for future view bind groups, mirroring the
   // recordTonemap / recordSkybox pattern that uses slot 0 only when the
@@ -790,9 +851,13 @@ export function encodeFullscreenPass(
     readonly color: string;
     readonly reads: readonly string[];
     readonly resolve: ResolveContext;
-    readonly outputFormat: GPUTextureFormat;
+    readonly outputFormats: readonly GPUTextureFormat[];
     readonly rawSwapchainOutput?: boolean | undefined;
     readonly depthView?: TextureView | undefined;
+    readonly paramsOverride?: Uint8Array | undefined;
+    readonly fragmentEntryPoint?: string | undefined;
+    /** The depth target's actual sample count, when this typed pass reads depth. */
+    readonly msaaActive?: boolean | undefined;
   },
 ): void {
   dispatchFullscreenPass(
@@ -805,7 +870,13 @@ export function encodeFullscreenPass(
     false,
     input.rawSwapchainOutput ?? false,
     pass,
-    input.outputFormat,
+    input.outputFormats,
     input.depthView,
+    input.paramsOverride,
+    input.fragmentEntryPoint,
+    // Legacy callers rely on the frame context's MSAA state. Typed callers
+    // pass the actual depth target sample count explicitly so a single-sample
+    // view can never select the multisampled shader by camera policy alone.
+    input.msaaActive ?? ctx.msaaActive,
   );
 }

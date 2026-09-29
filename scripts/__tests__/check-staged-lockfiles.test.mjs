@@ -52,6 +52,34 @@ describe('check-staged-lockfiles merge-parent closure', () => {
     expect(result.stderr).toContain('pnpm-lock.yaml is NOT');
   });
 
+  it('accepts a staged missing lock that closes the immediate parent delta', () => {
+    const cwd = makeRepo();
+    writeFileSync(join(cwd, 'pnpm-lock.yaml'), 'pnpm-b\n');
+    git(cwd, ['add', 'pnpm-lock.yaml']);
+    git(cwd, ['commit', '-q', '-m', 'incomplete pnpm lock change']);
+    writeFileSync(join(cwd, 'bun.lock'), 'bun-b\n');
+    git(cwd, ['add', 'bun.lock']);
+
+    const result = run(cwd);
+    expect(result.status).toBe(0);
+  });
+
+  it('rejects a lock supplement after a non-lock immediate parent commit', () => {
+    const cwd = makeRepo();
+    writeFileSync(join(cwd, 'pnpm-lock.yaml'), 'pnpm-b\n');
+    git(cwd, ['add', 'pnpm-lock.yaml']);
+    git(cwd, ['commit', '-q', '-m', 'incomplete pnpm lock change']);
+    writeFileSync(join(cwd, 'note.txt'), 'unrelated\n');
+    git(cwd, ['add', 'note.txt']);
+    git(cwd, ['commit', '-q', '-m', 'unrelated change']);
+    writeFileSync(join(cwd, 'bun.lock'), 'bun-b\n');
+    git(cwd, ['add', 'bun.lock']);
+
+    const result = run(cwd);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('pnpm-lock.yaml is NOT');
+  });
+
   it('accepts a merge whose two lockfiles are covered across both parents', () => {
     const cwd = makeRepo();
     git(cwd, ['switch', '-q', '-c', 'other']);

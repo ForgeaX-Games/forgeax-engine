@@ -99,6 +99,21 @@ import { RenderGraph } from '../graph.js';
       const result = graph.compile({ backendKind: 'null', caps });
       expect(result.ok).toBe(true);
     });
+
+    it('preserves explicit domain separately from format and view metadata', () => {
+      const graph = graphWithTargets('display-encoded', 'display-encoded');
+      graph.addPass('present', {
+        reads: ['source'],
+        writes: ['destination'],
+        colorConnections: [{ source: 'source', destination: 'destination' }],
+      } as never);
+      const result = graph.compile({ backendKind: 'null', caps });
+      expect(result.ok).toBe(true);
+      expect(graph.listResources().map((resource) => resource.key)).toEqual([
+        'source',
+        'destination',
+      ]);
+    });
   });
 
   describe('whole-graph retirement', () => {
@@ -312,16 +327,19 @@ import { RenderGraph } from '../graph.js';
       g.addResource('fxaaIntermediate', { kind: 'texture', lifetime: 'transient' });
       g.addResource('hdrColor', { kind: 'texture', lifetime: 'transient' });
       g.addResource('hdrComposited', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBright', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurH', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurV', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample0', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample1', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomUpsample0', { kind: 'texture', lifetime: 'transient' });
       g.addPass('shadow', { reads: [], writes: ['shadowDepth'] });
       g.addPass('main', { reads: ['shadowDepth'], writes: ['hdrColor', 'depth'] });
-      g.addPass('bloom-bright', { reads: ['hdrColor'], writes: ['bloomBright'] });
-      g.addPass('bloom-blur-h', { reads: ['bloomBright'], writes: ['bloomBlurH'] });
-      g.addPass('bloom-blur-v', { reads: ['bloomBlurH'], writes: ['bloomBlurV'] });
+      g.addPass('bloom-downsample-0', { reads: ['hdrColor'], writes: ['bloomDownsample0'] });
+      g.addPass('bloom-downsample-1', {
+        reads: ['bloomDownsample0'],
+        writes: ['bloomDownsample1'],
+      });
+      g.addPass('bloom-upsample-0', { reads: ['bloomDownsample1'], writes: ['bloomUpsample0'] });
       g.addPass('bloom-composite', {
-        reads: ['hdrColor', 'bloomBlurV'],
+        reads: ['hdrColor', 'bloomUpsample0'],
         writes: ['hdrComposited'],
       });
       g.addPass('tonemap', { reads: ['hdrComposited'], writes: [] });
@@ -335,11 +353,11 @@ import { RenderGraph } from '../graph.js';
       const g = new RenderGraph();
       g.addResource('hdrColor', { kind: 'texture', lifetime: 'transient' });
       g.addResource('hdrComposited', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurV', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomUpsample0', { kind: 'texture', lifetime: 'transient' });
       g.addPass('main', { reads: [], writes: ['hdrColor'] });
-      g.addPass('blur-v', { reads: [], writes: ['bloomBlurV'] });
+      g.addPass('bloom-upsample-0', { reads: [], writes: ['bloomUpsample0'] });
       g.addPass('bloom-composite', {
-        reads: ['hdrColor', 'bloomBlurV'],
+        reads: ['hdrColor', 'bloomUpsample0'],
         writes: ['hdrComposited'],
       });
       g.addPass('tonemap', { reads: ['hdrComposited'], writes: [] });
@@ -353,19 +371,22 @@ import { RenderGraph } from '../graph.js';
       expect(compIdx).toBeLessThan(tonemapIdx);
     });
 
-    it('preserves bloom chain order: bright < blur-h < blur-v < composite', () => {
+    it('preserves bloom chain order: downsample-0 < downsample-1 < upsample-0 < composite', () => {
       const g = new RenderGraph();
       g.addResource('hdrColor', { kind: 'texture', lifetime: 'transient' });
       g.addResource('hdrComposited', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBright', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurH', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurV', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample0', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample1', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomUpsample0', { kind: 'texture', lifetime: 'transient' });
       g.addPass('main', { reads: [], writes: ['hdrColor'] });
-      g.addPass('bloom-bright', { reads: ['hdrColor'], writes: ['bloomBright'] });
-      g.addPass('bloom-blur-h', { reads: ['bloomBright'], writes: ['bloomBlurH'] });
-      g.addPass('bloom-blur-v', { reads: ['bloomBlurH'], writes: ['bloomBlurV'] });
+      g.addPass('bloom-downsample-0', { reads: ['hdrColor'], writes: ['bloomDownsample0'] });
+      g.addPass('bloom-downsample-1', {
+        reads: ['bloomDownsample0'],
+        writes: ['bloomDownsample1'],
+      });
+      g.addPass('bloom-upsample-0', { reads: ['bloomDownsample1'], writes: ['bloomUpsample0'] });
       g.addPass('bloom-composite', {
-        reads: ['hdrColor', 'bloomBlurV'],
+        reads: ['hdrColor', 'bloomUpsample0'],
         writes: ['hdrComposited'],
       });
 
@@ -373,35 +394,38 @@ import { RenderGraph } from '../graph.js';
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const order = r.value.passes.map((p) => p.name);
-      const brightIdx = order.indexOf('bloom-bright');
-      const blurHIdx = order.indexOf('bloom-blur-h');
-      const blurVIdx = order.indexOf('bloom-blur-v');
+      const downsample0Idx = order.indexOf('bloom-downsample-0');
+      const downsample1Idx = order.indexOf('bloom-downsample-1');
+      const upsample0Idx = order.indexOf('bloom-upsample-0');
       const compIdx = order.indexOf('bloom-composite');
-      expect(brightIdx).toBeLessThan(blurHIdx);
-      expect(blurHIdx).toBeLessThan(blurVIdx);
-      expect(blurVIdx).toBeLessThan(compIdx);
+      expect(downsample0Idx).toBeLessThan(downsample1Idx);
+      expect(downsample1Idx).toBeLessThan(upsample0Idx);
+      expect(upsample0Idx).toBeLessThan(compIdx);
     });
 
     it('uses hdrComposited to make the temporal version explicit', () => {
-      // bloom-bright reads the hdrColor version written by main.
-      // bloom-composite reads hdrColor + bloomBlurV, writes hdrComposited.
+      // bloom-downsample-0 reads the hdrColor version written by main.
+      // bloom-composite reads hdrColor + bloomUpsample0, writes hdrComposited.
       // tonemap reads hdrComposited.
-      // The chain: main -> bloom-bright -> blur-h -> blur-v -> composite -> tonemap.
+      // The chain: main -> downsample-0 -> downsample-1 -> upsample-0 -> composite -> tonemap.
       // The hdrComposited resource name makes the post-composite version explicit while keeping the real
       // GPU texture the same hdrColor slot (composite writes in-place, tonemap
       // reads from it).
       const g = new RenderGraph();
       g.addResource('hdrColor', { kind: 'texture', lifetime: 'transient' });
       g.addResource('hdrComposited', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBright', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurH', { kind: 'texture', lifetime: 'transient' });
-      g.addResource('bloomBlurV', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample0', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomDownsample1', { kind: 'texture', lifetime: 'transient' });
+      g.addResource('bloomUpsample0', { kind: 'texture', lifetime: 'transient' });
       g.addPass('main', { reads: [], writes: ['hdrColor'] });
-      g.addPass('bloom-bright', { reads: ['hdrColor'], writes: ['bloomBright'] });
-      g.addPass('bloom-blur-h', { reads: ['bloomBright'], writes: ['bloomBlurH'] });
-      g.addPass('bloom-blur-v', { reads: ['bloomBlurH'], writes: ['bloomBlurV'] });
+      g.addPass('bloom-downsample-0', { reads: ['hdrColor'], writes: ['bloomDownsample0'] });
+      g.addPass('bloom-downsample-1', {
+        reads: ['bloomDownsample0'],
+        writes: ['bloomDownsample1'],
+      });
+      g.addPass('bloom-upsample-0', { reads: ['bloomDownsample1'], writes: ['bloomUpsample0'] });
       g.addPass('bloom-composite', {
-        reads: ['hdrColor', 'bloomBlurV'],
+        reads: ['hdrColor', 'bloomUpsample0'],
         writes: ['hdrComposited'],
       });
       g.addPass('tonemap', { reads: ['hdrComposited'], writes: [] });
@@ -410,14 +434,14 @@ import { RenderGraph } from '../graph.js';
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const order = r.value.passes.map((p) => p.name);
-      const brightIdx = order.indexOf('bloom-bright');
-      const blurHIdx = order.indexOf('bloom-blur-h');
-      const blurVIdx = order.indexOf('bloom-blur-v');
+      const downsample0Idx = order.indexOf('bloom-downsample-0');
+      const downsample1Idx = order.indexOf('bloom-downsample-1');
+      const upsample0Idx = order.indexOf('bloom-upsample-0');
       const compIdx = order.indexOf('bloom-composite');
       const tmapIdx = order.indexOf('tonemap');
-      expect(brightIdx).toBeLessThan(blurHIdx);
-      expect(blurHIdx).toBeLessThan(blurVIdx);
-      expect(blurVIdx).toBeLessThan(compIdx);
+      expect(downsample0Idx).toBeLessThan(downsample1Idx);
+      expect(downsample1Idx).toBeLessThan(upsample0Idx);
+      expect(upsample0Idx).toBeLessThan(compIdx);
       expect(compIdx).toBeLessThan(tmapIdx);
     });
   });

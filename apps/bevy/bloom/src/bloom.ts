@@ -11,7 +11,7 @@ import {
   MeshRenderer,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
-} from '@forgeax/engine-render';
+} from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine-scene';
 
 const GRID_RADIUS = 5;
@@ -58,7 +58,7 @@ export function buildBloomWorld(world: World, aspect: number): BloomScene {
   const eye: [number, number, number] = [-2, 10, 16];
   const camera = world.spawn(
     { component: Transform, data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0, 0], [0, 1, 0]), scale: [1, 1, 1] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_DISABLED, bloomThreshold: 1, bloomIntensity: 1, bloomBlurRadius: 4 } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_DISABLED, bloomThreshold: 1, bloomIntensity: 1, bloomSoftKnee: 0.5, bloomScatter: 0.7 } },
   ).unwrap();
 
   return { camera, sphereCount, emissiveCount };

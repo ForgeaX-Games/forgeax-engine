@@ -33,7 +33,7 @@ describe('shadow M1a dawn (w2 RED)', () => {
 
   // ── AC-11: lightSpaceMatrix host-vs-reference epsilon match ───────────
   describe('AC-11 lightSpaceMatrix numerical match', () => {
-    it('host lightSpaceMatrix matches reference mat4.ortho * mat4.lookAt (epsilon <= 1e-5)', () => {
+    it('host lightSpaceMatrix matches reference mat4.orthographicReverseZ * mat4.lookAt (epsilon <= 1e-5)', () => {
       // Reference computation using plan-strategy section 8.1 formula SSOT.
       const dir = FIXTURE_DIRECTION;
 
@@ -56,13 +56,13 @@ describe('shadow M1a dawn (w2 RED)', () => {
       const up: [number, number, number] = [0, 1, 0];
       const V = mat4.lookAt(mat4.create(), lightPos, target, up);
 
-      // Step 3: P = orthographic(zero-to-one NDC)
-      const P = mat4.orthographic(
+      // Step 3: P = orthographicReverseZ(zero-to-one NDC)
+      const P = mat4.orthographicReverseZ(
         mat4.create(),
         -FIXTURE_ORTHO_HALF,
         FIXTURE_ORTHO_HALF,
-        -FIXTURE_ORTHO_HALF,
         FIXTURE_ORTHO_HALF,
+        -FIXTURE_ORTHO_HALF,
         FIXTURE_NEAR,
         FIXTURE_FAR,
       );

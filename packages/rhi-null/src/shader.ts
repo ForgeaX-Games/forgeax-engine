@@ -35,3 +35,15 @@ export function createShaderModule(
 ): Promise<Result<ShaderModule, RhiErrorType>> {
   return Promise.resolve(ok({} as unknown as ShaderModule));
 }
+
+/**
+ * Synchronous companion used by Engine-owned static feature programs. The
+ * null backend has no compiler or device validation, so it can return the same
+ * branded handle without introducing a first-frame pending state.
+ */
+export function createShaderModuleImmediate(
+  _device: RhiDevice,
+  _desc: { label?: string | undefined; code: string },
+): Result<ShaderModule, RhiErrorType> {
+  return ok({} as unknown as ShaderModule);
+}

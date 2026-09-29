@@ -17,6 +17,7 @@
 //   - packages/audio-webaudio/src/__tests__/property-sync.test.ts
 //   - packages/audio-webaudio/src/__tests__/resume-gesture.test.ts
 //   - packages/audio-webaudio/src/__tests__/tick-edge-detect.test.ts
+//   - packages/audio-webaudio/src/__tests__/root-surface.unit.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
@@ -37,6 +38,16 @@ import { audioImporter, sourceKeyForAudioOutput } from '../audio-importer.js';
 import { syncListenerFromWorldMatrix } from '../audio-listener-sync-system';
 import { decodeAudioClipBytes } from '../clip-loader';
 import { WebAudioEngine } from '../web-audio-engine';
+
+{
+  // --- from root-surface.unit.test.ts ---
+  describe('audio decoder registration stays loader-owned', () => {
+    it('does not project the decoder implementation from the public root', async () => {
+      const root = (await import('../index')) as Record<string, unknown>;
+      expect(root).not.toHaveProperty('decodeAudioClipBytes');
+    });
+  });
+}
 
 function makeMockAudioParam(initialValue: number): AudioParam {
   let value = initialValue;

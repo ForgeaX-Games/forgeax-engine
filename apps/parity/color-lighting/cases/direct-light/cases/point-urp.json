@@ -2,7 +2,7 @@
   "caseId": "direct-point-urp",
   "required": true,
   "colorDomain": "linearHdr",
-  "pipeline": { "identity": "urp", "engineId": "forgeax::urp" },
+  "pipeline": { "identity": "standard", "engineId": "forgeax::standard", "renderPath": "forward" },
   "light": {
     "authorityId": "threeR184SquaredWindow",
     "kind": "point",

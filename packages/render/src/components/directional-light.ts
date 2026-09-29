@@ -31,6 +31,14 @@
 // with the shadow atlas owner.
 
 import { defineComponent } from '@forgeax/engine-ecs';
+import { DirectionalShadowFilterValue } from './directional-shadow-filter';
+
+export {
+  type DirectionalShadowFilterLabel,
+  DirectionalShadowFilterValue,
+  type DirectionalShadowQuality,
+  directionalShadowQualityFromF32,
+} from './directional-shadow-filter';
 
 /**
  * Directional light (sun-like infinite light source) with merged shadow
@@ -52,19 +60,31 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   splitLambda    ∈ [0,1]      — PSSM split weight (default 0.75)
  *   cascadeBlend   ∈ [0,0.5]    — blend width between cascades (default 0.2)
  *   mapSize        >= 1         — shadow map resolution (default 2048)
- *   depthBias                    — shadow acne bias (default 0.005)
- *   normalBias                   — shadow acne normal offset (default 0.05)
+ *   depthBias                    — normalized receiver depth floor (default 0.00001),
+ *                                  plus automatic texel/filter/slope coverage
+ *   normalBias                   — world-space receiver normal offset (default 0.05)
  *   shadowDistance > 0           — how far shadows reach in front of the camera,
  *                                  in world units (default 200). This is the sole
  *                                  coverage knob: the CSM cascades are PSSM-split
  *                                  across [camera near, shadowDistance] and each
  *                                  cascade's orthographic bounds are fit to the
- *                                  camera frustum slice automatically. The near
+ *                                  camera frustum slice automatically, with
+ *                                  the same distance of caster reach toward
+ *                                  the light beyond each slice. The near
  *                                  end is derived from the active camera's near
  *                                  plane (no separate near knob — any value other
  *                                  than the camera near either drops near shadows
  *                                  or wastes cascade-0 resolution).
- *   pcfKernelSize  odd >= 1     — PCF kernel width (default 3)
+ *   shadowFilter   ∈ {pcf1, pcf3, pcf5, pcssMedium, pcssHigh} — closed filter profile (default pcf3)
+ *   shadowAngularRadius ∈ [0.0001, 0.05] radians — PCSS angular light radius (default 0.00465)
+ *   maxPenumbraTexels ∈ [1, 64], finite integer — PCSS search/filter cap (default 32)
+ *
+ * contactShadowLength (meters, finite, >= 0, default 0 = off) enables
+ * screen-space contact shadows for this light: a short depth-buffer ray march
+ * toward the light that darkens small-scale occlusion the shadow map cannot
+ * resolve (grass blades, pebbles, feet on the ground). It is independent of
+ * castShadow, so geometry excluded from shadow maps still self-shadows.
+ * Deferred-path only; forward-lit surfaces ignore it. Typical values: 0.1-0.5.
  *
  * @example Spawn a single directional light with default shadows:
  *   world.spawn({ component: DirectionalLight, data: {
@@ -85,7 +105,11 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *     color: [1, 1, 1], intensity: 1, // color is [r, g, b]
  *     cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
  *     mapSize: 2048, shadowDistance: 200,
+ *     shadowFilter: DirectionalShadowFilterValue.pcssHigh,
+ *     shadowAngularRadius: 0.00465, maxPenumbraTexels: 32,
  *   } });
+ *   // shadowFilter uses the numeric DirectionalShadowFilterValue constant,
+ *   // not the serialized label string 'pcssHigh'.
  *
  * @example 0-light scene must use an unlit shader (standard 0 light = physically correct black):
  *   const world = new World();
@@ -109,12 +133,19 @@ export const DirectionalLight = defineComponent('DirectionalLight', {
   splitLambda: { type: 'f32', default: 0.75 },
   cascadeBlend: { type: 'f32', default: 0.2 },
   mapSize: { type: 'f32', default: 2048 },
-  depthBias: { type: 'f32', default: 0.005 },
+  depthBias: { type: 'f32', default: 0.00001 },
   normalBias: { type: 'f32', default: 0.05 },
   // Sole shadow coverage knob (feat replaces nearPlane/farPlane). The PSSM
   // near end derives from the active camera near; shadowDistance is the far
   // reach. Default 200 world units (matches UE-style "dynamic shadow
   // distance"; the old farPlane default was 50).
   shadowDistance: { type: 'f32', default: 200 },
-  pcfKernelSize: { type: 'f32', default: 3 },
+  shadowFilter: {
+    type: 'enum',
+    default: DirectionalShadowFilterValue.pcf3,
+    labels: DirectionalShadowFilterValue,
+  },
+  shadowAngularRadius: { type: 'f32', default: 0.00465 },
+  maxPenumbraTexels: { type: 'f32', default: 32 },
+  contactShadowLength: { type: 'f32', default: 0 },
 });

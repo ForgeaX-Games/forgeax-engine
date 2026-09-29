@@ -21,12 +21,12 @@ boundary declaration below. A **near-leaf** package: depends only on
     `trackFontConcurrency`) + `conservativeCubeAabb`.
   - **tile-bits** -- `encodeTileBits` / `decodeTileBits`, the packed-tile bit
     codec SSOT (tileId + flipH/flipV/flipDiagonal flags in one `u32`).
-  - **video** -- the `VideoPlayer` component, the `VideoElementProvider` host
-    bridge (`VIDEO_ELEMENT_PROVIDER_KEY` + interface), the `videoLoader`
+  - **video** -- the `VideoPlayer` component, the `VideoSourceProvider` host
+    bridge (`VIDEO_SOURCE_PROVIDER_KEY` + interface), the `videoLoader`
     (`Loader<VideoAsset>`), and the `probeVideoHighPerfUpload` capability probe.
 - **Style**: pure functions + POD component/resource definitions -- no renderer,
-  no GPU device, no DOM construction. `videoLoader` and `VideoElementProvider`
-  describe host-supplied `HTMLVideoElement` bridging; the package never
+  no GPU device, no DOM construction. `videoLoader` and `VideoSourceProvider`
+  describe host-supplied `HTMLVideoElement` or decoded `VideoFrame` bridging; the package never
   constructs a `<video>` element or touches the DOM.
 - **Errors**: `layoutGlyphText` returns `Result<GlyphLayoutResult, TextError>`
   (`TextError` union owned by `@forgeax/engine-types`); the font-concurrency
@@ -47,8 +47,8 @@ const { tileId, flipH } = decodeTileBits(cell); // { tileId: 5, flipH: true, ...
 // video: spawn a VideoPlayer entity + register the host element provider
 import {
   VideoPlayer,
-  VIDEO_ELEMENT_PROVIDER_KEY,
-  type VideoElementProvider,
+  VIDEO_SOURCE_PROVIDER_KEY,
+  type VideoSourceProvider,
 } from '@forgeax/engine-graphics-extras';
 ```
 
@@ -71,7 +71,7 @@ cross-package import:**
   `trackFontConcurrency` from this package.
 - the per-frame video upload path in `record/main-pass.ts` +
   `record/main-pass-material.ts` -- consumes `probeVideoHighPerfUpload` /
-  `VIDEO_ELEMENT_PROVIDER_KEY` / `VideoElementProvider` from this package.
+  `VIDEO_SOURCE_PROVIDER_KEY` / `VideoSourceProvider` from this package.
 
 Reading this section means an AI user knows **why `tilemapChunkExtractSystem` is
 not in this package** without a full-repo grep: it depends on runtime's ECS
@@ -91,7 +91,7 @@ This package migrates **7 files (~633 lines)** from `@forgeax/engine-runtime`:
 | `glyph-layout.ts` | 210 |
 | `glyph-mesh-bake.ts` | 140 |
 | `tile-bits.ts` | 77 |
-| `video-element-provider.ts` | 72 |
+| `video-source-provider.ts` | 72 |
 | `video-player-system.ts` | 61 |
 | `video-player.ts` | 49 |
 | `video-loader.ts` | 24 |
@@ -131,13 +131,13 @@ axiom declaration; this package does not overstate the slimming it delivers).
 | `encodeTileBits(tileId, flipH, flipV, flipDiagonal, ...)` | function | packs a tile cell into a `u32` |
 | `decodeTileBits(packed)` | function | `{ tileId, flipH, flipV, flipDiagonal }` |
 
-### video (from `video-player.ts` + `video-player-system.ts` + `video-element-provider.ts` + `video-loader.ts`)
+### video (from `video-player.ts` + `video-player-system.ts` + `video-source-provider.ts` + `video-loader.ts`)
 
 | Symbol | Kind | Notes |
 |:--|:--|:--|
 | `VideoPlayer` | component | `defineComponent('VideoPlayer', ...)`; clip / playing / loop / `currentTime` (field-level `transient: true`, feat-20260709 -- per-frame playback head derived from the `HTMLVideoElement`, excluded from scene collect/serialization) |
-| `VIDEO_ELEMENT_PROVIDER_KEY` | const | World Resource key for the host bridge |
-| `VideoElementProvider` | interface | host returns an `HTMLVideoElement` per entity + clip |
+| `VIDEO_SOURCE_PROVIDER_KEY` | const | World Resource key for the host bridge |
+| `VideoSourceProvider` | interface | `getSource(entity, clip)` returns an `HTMLVideoElement` or decoded `VideoFrame`; the provider retains the source lifetime |
 | `videoLoader` | const | `Loader<VideoAsset>`; wired by assets-runtime defaults |
 | `probeVideoHighPerfUpload(device)` | function | AC-09 capability probe; accepts a structural device shape with `caps.backendKind` and optional `importExternalTexture` |
 
@@ -162,4 +162,4 @@ a component, not an error carrier.
 - glyph mesh bake -- `src/glyph-mesh-bake.ts`
 - tile-bit codec -- `src/tile-bits.ts`
 - video component / host bridge / loader / probe -- `src/video-player.ts`,
-  `src/video-element-provider.ts`, `src/video-loader.ts`, `src/video-player-system.ts`
+  `src/video-source-provider.ts`, `src/video-loader.ts`, `src/video-player-system.ts`

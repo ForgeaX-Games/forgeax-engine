@@ -26,8 +26,21 @@ if (leaked.length > 0) {
 const appCargo = readFileSync(resolve(appRustRoot, 'Cargo.toml'), 'utf8');
 if (/^wgpu\s*=/mu.test(appCargo)) throw new Error('app declares a direct wgpu dependency');
 
+const workspace = readFileSync(resolve(repoRoot, 'third_party/wgpu/Cargo.toml'), 'utf8');
+const version = workspace.split('[workspace.package]')[1]?.split('\n[')[0]?.match(/^version = "([^"]+)"/m)?.[1];
+if (!version) throw new Error('pinned wgpu workspace version is missing');
+const nativeCargo = readFileSync(resolve(nativeRoot, 'Cargo.toml'), 'utf8');
+const dependencyVersions = [...nativeCargo.matchAll(/^(?:wgpu|naga) = \{ version = "=([^"]+)"/gm)];
+if (dependencyVersions.length !== 4 || dependencyVersions.some((entry) => entry[1] !== version))
+  throw new Error('native dependency versions differ from the pinned wgpu source');
+const reportedVersion = readFileSync(resolve(nativeRoot, 'src/lib.rs'), 'utf8').match(/WGPU_VERSION: &str = "([^"]+)"/)?.[1];
+const appSchema = JSON.parse(readFileSync(resolve(appRoot, 'report.schema.json'), 'utf8'));
+const conformanceSchema = JSON.parse(readFileSync(resolve(nativeRoot, 'conformance-report.schema.json'), 'utf8'));
+if (reportedVersion !== version || appSchema.properties.wgpuVersion.const !== version || conformanceSchema.properties.environment.properties.wgpuVersion.const !== version)
+  throw new Error('native report version differs from the pinned wgpu source');
+
 const required = [
-  ['Cargo.toml', '=30.0.0'],
+  ['Cargo.toml', 'path = "../../third_party/wgpu/wgpu"'],
   ['Cargo.toml', 'target_os = "macos"'],
   ['Cargo.toml', 'features = ["metal"]'],
   ['Cargo.toml', 'target_os = "windows", target_os = "linux"'],

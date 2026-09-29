@@ -1,5 +1,4 @@
 import type { CatalogDiagnosticCause } from '@forgeax/engine-types';
-
 export type PluginPackFailureStage =
   | 'config'
   | 'scan'
@@ -59,7 +58,6 @@ export function appendPluginPackCleanup(
   };
 }
 
-/** Bounded public diagnostic projection; never serialize arbitrary cause objects. */
 export function projectFailureCause(value: unknown): CatalogDiagnosticCause | undefined {
   const seen = new Set<object>();
   const project = (value: unknown, depth: number): CatalogDiagnosticCause | undefined => {

@@ -4,16 +4,9 @@
 // Prereq: pnpm install && pnpm build (resolves @forgeax/* workspace symlinks
 // when standalone-invoked outside `pnpm lint:grep`).
 //
-// Replaces packages/shader/src/__tests__/pbr-ibl-callsite.test.ts. Mirrors
-// the AC-08 grep gate: the engine PBR entry's fs_main must contain at least
-// one literal call site to sampleIblDiffuse(...) and sampleIblSpecular(...)
-// on a line that is neither a #import directive nor a // comment, AND the
-// round-1 placeholder pattern (`var ambient = vec3<f32>(0.0); // M3 placeholder`)
-// must NOT survive.
-//
-// Anchors: feat-20260520-skylight-ibl-cubemap M3 / t41+t48 (re-anchored to
-// default-standard-pbr.wgsl by feat-20260523-shader-template-instance-split
-// M5 / T09).
+// The shared Standard lighting owner must sample diffuse and specular IBL.
+// Rigid, skin and fullscreen deferred entries must call that same owner.
+// A placeholder ambient term or a detached shared helper fails this gate.
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -25,6 +18,8 @@ const PBR_PATH = resolve(REPO_ROOT, 'packages', 'shader', 'src', 'default-standa
 
 const failures = [];
 const src = readFileSync(PBR_PATH, 'utf8');
+const shaderRoot = dirname(PBR_PATH);
+const lighting = readFileSync(resolve(shaderRoot, 'standard-lighting.wgsl'), 'utf8');
 
 function countCallSites(source, fnName) {
   let n = 0;
@@ -39,11 +34,43 @@ function countCallSites(source, fnName) {
   return n;
 }
 
-if (countCallSites(src, 'sampleIblDiffuse') < 1) {
-  failures.push('default-standard-pbr.wgsl has no non-import non-comment sampleIblDiffuse( call');
+if (countCallSites(lighting, 'sampleIblDiffuse') < 1) {
+  failures.push('standard-lighting.wgsl has no non-import non-comment sampleIblDiffuse( call');
 }
-if (countCallSites(src, 'sampleIblSpecular') < 1) {
-  failures.push('default-standard-pbr.wgsl has no non-import non-comment sampleIblSpecular( call');
+if (countCallSites(lighting, 'sampleIblSpecular') < 1) {
+  failures.push('standard-lighting.wgsl has no non-import non-comment sampleIblSpecular( call');
+}
+
+for (const entry of [
+  'default-standard-pbr.wgsl',
+  'default-standard-pbr-skin.wgsl',
+  'standard-deferred-lighting.wgsl',
+]) {
+  const source = readFileSync(resolve(shaderRoot, entry), 'utf8');
+  for (const helper of ['evaluateStandardEnvironment', 'evaluateStandardDirect']) {
+    if (
+      !source.includes('#import forgeax_pbr::standard_lighting::') ||
+      countCallSites(source, helper) !== 1 ||
+      new RegExp(`\\bfn\\s+${helper}\\b`).test(source)
+    )
+      failures.push(`${entry} must call the shared ${helper} exactly once, without redefining it`);
+  }
+  // Physical clearcoat legitimately samples a separate specular lobe in the
+  // Forward entries. Base diffuse, SH blending and clustered accumulation
+  // belong only to standard-lighting, regardless of geometry or render path.
+  for (const helper of [
+    'sampleIblDiffuse',
+    'evaluateProbeDiffuse',
+    'evaluateStandardClusterLights',
+  ]) {
+    if (countCallSites(source, helper) !== 0)
+      failures.push(`${entry} duplicates base lighting through ${helper}`);
+  }
+  if (
+    entry !== 'standard-deferred-lighting.wgsl' &&
+    countCallSites(source, 'encodeStandardGBuffer') !== 1
+  )
+    failures.push(`${entry} must use the shared Standard G-buffer encoder exactly once`);
 }
 
 if (/M3 placeholder/.test(src)) {
@@ -62,7 +89,7 @@ if (/var\s+ambient\s*=\s*vec3<f32>\(\s*0\.0\s*\)\s*;/.test(codeOnly)) {
 
 if (failures.length === 0) {
   console.log(
-    'grep-pbr-ibl-callsite: pass (sampleIblDiffuse + sampleIblSpecular present, placeholders gone)',
+    'grep-pbr-ibl-callsite: pass (rigid, skin and Deferred share Standard environment/direct lighting; G-buffer encoder shared)',
   );
   process.exit(0);
 } else {

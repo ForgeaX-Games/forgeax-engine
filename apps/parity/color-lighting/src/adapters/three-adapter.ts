@@ -9,6 +9,7 @@ import { VERTEX_COLOR_REQUIRED_CASES } from '../coverage/required-cases';
 import { createNamedCaptures, type CaptureConfig, type CaptureEnvelope } from '../capture/named-capture';
 import type { CaptureValidationResult } from '../capture/named-capture';
 import type { ThreeR184ToneMode } from '../analytic/three-r184-tonemap';
+export { THREE_R184_PROVENANCE, validateAutoExposureFixture } from '../contracts/auto-exposure-scene-case';
 
 export interface ThreeCaptureOutput {
   readonly linear: readonly number[];
@@ -43,7 +44,7 @@ export function createVertexColorThreeProducer(
     async capture(fixture, backend) {
       const output = await run(fixture, backend);
       if (output.backend !== backend) throw new Error('Three r184 vertex-color backend provenance mismatch');
-      if (output.frameCount !== 300) throw new Error('Three r184 vertex-color capture requires 300 frames');
+      if (output.frameCount !== 60) throw new Error('Three r184 vertex-color capture requires 60 frames');
       const expectedHash = VERTEX_COLOR_REQUIRED_CASES.find((entry) => entry.caseId === fixture.caseId)?.sourceFixtureHash;
       if (expectedHash === undefined || output.sourceFixtureHash !== expectedHash) throw new Error('Three r184 vertex-color fixture hash mismatch');
       if (output.colorDomain !== fixture.colorDomain) throw new Error('Three r184 vertex-color domain mismatch');

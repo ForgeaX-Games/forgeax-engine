@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const encoderSource = readFileSync(
-  new URL('../../../import/src/mesh-bin.ts', import.meta.url),
+  new URL('../../../geometry/src/mesh-data.ts', import.meta.url),
   'utf8',
 );
 const decoderSource = readFileSync(
@@ -15,7 +15,7 @@ describe('mesh-bin consumer owner surface', () => {
     expect(encoderSource).toContain("from '@forgeax/engine-pack/mesh-bin-contract'");
     expect(decoderSource).toContain("from '@forgeax/engine-pack'");
     for (const source of [encoderSource, decoderSource]) {
-      expect(source).toContain('MESH_BIN_HEADER_V4_BYTES');
+      expect(source).toContain('MESH_BIN_HEADER_BYTES');
       expect(source).not.toContain('const HEADER_V2_BYTES = 28');
     }
   });

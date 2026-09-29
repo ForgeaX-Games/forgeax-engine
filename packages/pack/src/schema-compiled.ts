@@ -75,106 +75,69 @@ export function buildSceneAssetValidator(
     componentsProperties[name] = sub;
   }
 
-  // MountOverride schema (feat-20260608-scene-nesting-ecs-fication M1 / w11;
-  // feat-20260713-mount-override-component-add-and-shared-ref-round M1 / w3;
-  // requirements §S-10 / AC-03): validates each entry in mounts[].overrides[].
-  // `field` is optional — it is a component-granular add-or-patch discriminant
-  // (present -> patch one field with `value`; absent -> add/upsert the whole
-  // `comp` with `value` as its per-field map). `localId` / `comp` / `value`
-  // stay required; `additionalProperties: false` rejects any `op`-tag
-  // discriminant so downstream consumers never branch on it. Field-level type
-  // validation (matching the schema vocab) is enforced at runtime via
-  // setSceneOverride (D-9 / EcsErrorCode 'scene-override-type-mismatch').
-  const mountOverrideSchema = {
+  const componentsSchema = {
     type: 'object',
     additionalProperties: false,
-    required: ['localId', 'comp', 'value'],
-    properties: {
-      localId: { type: 'integer', minimum: 0 },
-      comp: { type: 'string', minLength: 1 },
-      field: { type: 'string', minLength: 1 },
-      value: {},
-    },
+    properties: componentsProperties,
   };
-
-  // SceneInstanceMount schema (feat-20260608-scene-nesting-ecs-fication
-  // M1 / w11; requirements §S-10): validates each mounts[] entry. parent /
-  // components / overrides are optional; cross-mount window collision and
-  // mount.source / mount.memberCount agreement with referenced child
-  // SceneAsset are checked at the build-time scanner (D-1, w14), not here.
-  const mountSchema = {
+  const instanceSchema = {
     type: 'object',
     additionalProperties: false,
-    required: ['localId', 'source', 'memberFirst', 'memberCount'],
+    required: ['source'],
     properties: {
-      localId: { type: 'integer', minimum: 0 },
-      source: { type: 'integer', minimum: 0 },
-      memberFirst: { type: 'integer', minimum: 0 },
-      memberCount: { type: 'integer', minimum: 0 },
-      parent: { type: 'integer', minimum: 0 },
-      components: {
-        type: 'object',
-        additionalProperties: false,
-        properties: componentsProperties,
+      // Authored scenes use a GUID string. Pack output may carry a refs[]
+      // index, which is resolved by the Scene decoder before instantiation.
+      source: {
+        oneOf: [
+          { type: 'string', minLength: 1 },
+          { type: 'integer', minimum: 0 },
+        ],
       },
       overrides: {
         type: 'array',
-        items: mountOverrideSchema,
-      },
-      publicationFence: {
-        type: 'object',
-        additionalProperties: false,
-        required: [
-          'schemaVersion',
-          'sourcePath',
-          'sourceRevision',
-          'publicationGeneration',
-          'outputDigest',
-          'outputSetDigest',
-          'receiptIdentity',
-        ],
-        properties: {
-          schemaVersion: { type: 'string', const: 'scene-publication-fence/1' },
-          sourcePath: { type: 'string', minLength: 1 },
-          sourceRevision: { type: 'string', minLength: 1 },
-          publicationGeneration: { type: 'integer', minimum: 1 },
-          outputDigest: { type: 'string', minLength: 1 },
-          outputSetDigest: { type: 'string', minLength: 1 },
-          receiptIdentity: { type: 'string', minLength: 1 },
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['target', 'components'],
+          properties: {
+            target: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+            components: componentsSchema,
+          },
         },
       },
     },
   };
-
+  const entitySchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['components'],
+    properties: {
+      components: componentsSchema,
+      instance: instanceSchema,
+    },
+  };
   const sceneSchema = {
     type: 'object',
     additionalProperties: false,
     required: ['kind', 'entities'],
     properties: {
       kind: { type: 'string', const: 'scene' },
-      entities: {
+      // Skin assets are explicit scene dependencies so async catalog loading
+      // can finish the joint-wiring path before the Scene is instantiated.
+      // Authored producers use GUID strings; Pack output may use refs[] indices.
+      skinGuids: {
         type: 'array',
         items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['localId', 'components'],
-          properties: {
-            localId: { type: 'integer', minimum: 0 },
-            components: {
-              type: 'object',
-              additionalProperties: false,
-              properties: componentsProperties,
-            },
-          },
+          oneOf: [
+            { type: 'string', minLength: 1 },
+            { type: 'integer', minimum: 0 },
+          ],
         },
       },
-      // Optional top-level mounts[] (feat-20260608-scene-nesting-ecs-fication
-      // M1 / w11). Missing mounts is semantically equivalent to mounts: []
-      // (plan-strategy §6.3 back-compat); ajv default produces the empty
-      // array on absent input.
-      mounts: {
-        type: 'array',
-        items: mountSchema,
+      entities: {
+        type: 'object',
+        propertyNames: { type: 'string', minLength: 1 },
+        additionalProperties: entitySchema,
       },
     },
   };

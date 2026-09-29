@@ -40,12 +40,12 @@ world.update(1 / 60).unwrap();
 
 `Time` and `FixedTime` are World-owned resources. Systems read them; hosts never write time resources directly.
 
-## Cordis 只管生命周期，ECS 仍跑热路径
+## Cordis owns lifecycle; ECS runs the hot path
 
-`createWorldContext(world, plugins?)` 创建一个原生 DeepSeek Cordis realm，并用
-`worldPlugin(world)` 提供唯一 World 服务。插件通过 `ctx.effect` 安装/撤销 system、resource、
-simulation participant、resource descriptor 或 transform publisher；Context 不复制 component、
-query row 或 frame data。
+`createWorldContext(world, plugins?)` creates a native DeepSeek Cordis realm and
+`worldPlugin(world)` supplies its single World service. Plugins use `ctx.effect` to install/remove systems, resources,
+simulation participants, resource descriptors, or transform publishers. Context does not copy components,
+query rows, or frame data.
 
 ```ts
 import { Update, createWorldContext } from '@forgeax/engine-ecs';
@@ -66,8 +66,8 @@ const context = await createWorldContext(world, [movementPlugin]);
 await context.fiber.restart();
 ```
 
-Fiber 决定一个 ECS 贡献是否存在；`world.update(deltaSeconds)` 仍直接执行 schedule、query、SoA
-访问与 Commands。不要在 system 内查 Context，也不要把每 entity/per frame 数据注册成服务。
+Fiber determines whether an ECS contribution exists; `world.update(deltaSeconds)` still runs schedules, queries, SoA
+access, and Commands directly. Do not query Context inside systems or register per-entity/per-frame data as services.
 
 ## Shared Kernel
 
@@ -187,7 +187,21 @@ const query = world.query({ read: [Health], with: [Enemy] }).unwrap();
 for (const row of query) console.log(row.entity, row.get(Health).value);
 ```
 
-Use `query.spans()` only for dense, table-only descriptors. It rejects optional data, row-level observation filters, and sparse components with `query-span-unavailable`. Span columns are zero-copy transient TypedArray views.
+Use `query.spans()` only for dense, table-only descriptors. It rejects optional
+data and sparse components with `query-span-unavailable`; `changed` and `added`
+filters are supported and yield only matching contiguous runs. Span columns
+are zero-copy transient TypedArray views and become invalid after a structure
+epoch change.
+
+Relationship sources remain writable through `World.set` and row mutation so
+the ECS owner can update the source, materialized target list, and backpointer
+together. Relationship targets are read-only projections. Numeric writable
+spans and the internal derived writer reject only relationship source/target
+fields that appear in the descriptor's write set; a relationship input listed
+only in `read` remains eligible (Scene reads `ChildOf` while writing
+`GlobalTransform`). Use a row or World source write for relationship changes.
+Liveness, cycle, capacity, version, and epoch failures are reported at the
+owner boundary before relationship facts are committed.
 
 ```ts
 const query = world.query({ write: [Position], read: [Velocity] }).unwrap();
@@ -211,7 +225,36 @@ const Selected = defineComponent('Selected', {}, { storage: 'sparse' });
 
 Use table storage for every data component and for stable identity tags. Use sparse only for frequently flipped membership. Sparse tags still participate in Archetype identity, hooks, cardinality, scene round-trip, inspection, and ordinary row queries, but Archetypes that differ only by sparse membership share the same physical Table.
 
-Sparse tags have no fields, so they belong in `with`, `without`, `changed`, or `added`, never `read`, `write`, or `optional`. A sparse predicate makes `query.spans()` return `query-span-unavailable` with reason `sparse-component`; use row iteration for that query. `Disabled` is always a table tag.
+Sparse tags have no fields, so they belong in `with`, `without`, `changed`, or `added`, never `read`, `write`, or `optional`. A sparse predicate makes `query.spans()` return `query-span-unavailable` with reason `sparse-component`; use row iteration for that query. A writable relationship source or target makes both `query.spans()` and the internal derived writer return `query-span-unavailable` with reason `relationship-component`; route source changes through `World.set`, `row.mut`, or structural commands so the materialized mirror stays atomic. `Disabled` is always a table tag.
+
+### Array fields: replace or write a range
+
+`World.set` replaces an `array<T>` field as one value (O(length)). To change a few elements of a large array, such as moving one row of `Instances.transforms`, write the window in place:
+
+```ts
+world.setArrayRange(entity, Instances, 'transforms', row * 16, matrix).unwrap();
+```
+
+The length never changes (resize with `set`). An out-of-range window or a non-array field returns `array-range-out-of-bounds` with no mutation. Consumers read `readArrayRangesChangedSince(world, entity, component, field, since)` from `@forgeax/engine-ecs/projection`: merged element ranges after an epoch, or `'whole'` when the history cannot prove them. The renderer uses it so a moved instance row costs O(1) instead of O(N).
+
+## Required components
+
+Declare intrinsic structural dependencies once on the component schema:
+
+```ts
+const GlobalTransform = defineComponent('GlobalTransform', { world: 'array<f32, 16>' });
+const Transform = defineComponent('Transform', { x: 'f32' }, {
+  requires: [GlobalTransform],
+});
+```
+
+`World.spawn`, `World.addComponent`, and deferred `Commands` materialization
+expand `requires` transitively at the structural boundary. Explicit data for a
+required component wins; missing identities are appended once. This is generic
+ECS behavior, so scene/import helpers must not duplicate it and systems must
+not perform per-frame repair scans. Removing a requirement does not cascade;
+an owner that does so explicitly gets the owning domain's structured invariant
+error on the next use.
 
 ## Systems and structural mutation
 
@@ -231,6 +274,32 @@ world.addSystem(Update, {
   },
 }).unwrap();
 ```
+
+`Commands.spawn` takes the same component-data entries as `World.spawn` and
+returns a pending handle; each entry is `{ component, data }`. The batch is
+validated before flush, then the pending row is materialized once:
+
+```ts
+const pending = commands.spawn(
+  { component: Transform, data: { pos: [0, 0, 0] } },
+  { component: ChildOf, data: { parent } },
+);
+void pending;
+```
+
+For a generic exclusive relationship, the direct convenience signature passes
+the relationship component and its declared source-field data explicitly:
+`world.reparent(child, newParent, RelationshipSource, sourceData)`.
+`sourceData` must set that schema's source field to `newParent`; the
+relationship component and its source-field data are required. The same owner
+path is also reached by `world.set(child, RelationshipSource, data)` or an
+exclusive `addComponent`.
+
+Expected command/preparation failures leave the World healthy and can be
+retried after correcting the input. An unknown exception after a row or
+derived range may have been written poisons the World; stop using that World
+and let `app.execution.rebuild()` create the replacement rather than retrying
+the old identity.
 
 For component schema, storage, relationship, reflection, and errors, read `packages/ecs/README.md` and `packages/ecs/src/`. Scheduling is token-first and query construction has one entry; no compatibility overload exists.
 
@@ -256,6 +325,40 @@ reflection; ECS remains the component owner.
 
 Out of scope: renderer culling, camera, picking, app lifecycle, assets, and VFX
 shadow policy. Route each question to its owning package skill.
+
+## Mobility declaration
+
+`Mobility { kind }` (from `@forgeax/engine/scene`) declares whether an entity
+moves; absent means movable. Write `static` for placed level geometry that
+never moves, and leave runtime spawns movable.
+
+```ts
+world.spawn(
+  { component: Transform, data: {} },
+  { component: Mobility, data: { kind: MobilityKindValue.static } },
+);
+const stop = subscribeMobilityDiagnostics((w, d) => console.log(d.code, d.detail.entity));
+```
+
+| Code | Cause | Repair |
+|:--|:--|:--|
+| `mobility-static-moved` | `Transform` of a `static` entity changed after its declaring frame | Declare `movable` (rendering stays correct meanwhile) |
+| `mobility-invalid-kind` | `stationary` on a `MeshFilter` entity (lights only) | Use `static` or `movable` |
+| `mobility-physics-conflict` | `static` with `RigidBody` `dynamic`/`kinematic` | Declare `movable`, or make the body `static` |
+
+Each diagnostic is reported once per `(World, code, entity)` and carries
+`detail.entity` plus `detail.sceneEntityRef` for authored scene members.
+`Mobility` and `RigidBody` never derive each other. Details:
+`packages/scene/README.md` §Mobility.
+
+## Render capture authoring boundary
+
+`CubeCamera` and `ReflectionProbe` are ECS authoring facts paired with
+`Transform`; they carry update intent, bounds, and stable revisions, not GPU
+resources. The render owner derives six face cameras, target generations,
+bounded PMREM work, material selection, and recovery from those facts. Keep
+target/source/readback tokens and `FrameReceipt` observation in the Renderer
+contract rather than adding them to World components.
 
 ## Simulation record/restore seam
 

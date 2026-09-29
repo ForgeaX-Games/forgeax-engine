@@ -11,6 +11,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./cli-fbx": {
+      "types": "./dist/cli-fbx.d.ts",
+      "node": "./dist/cli-fbx.mjs",
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
@@ -32,15 +37,16 @@
   },
   "dependencies": {
     "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
-    "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-picking": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@types/node": "^20.14.0"

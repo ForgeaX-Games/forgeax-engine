@@ -1,12 +1,7 @@
 // @forgeax/engine-rhi-null/src/adapter - headless adapter.
 //
-// requestDevice mints a fresh RhiNullDevice, wiring its queue + command-encoder
-// factory. features / limits are empty (the headless backend enables nothing
-// beyond the always-true caps profile); the two-step requestAdapter ->
-// requestDevice path mirrors the spec idiom (research Finding A1 row 2).
-//
-// Related: requirements AC-02 (createRenderer ready chain needs adapter ->
-// device) + AC-12; research Finding A1 row 2.
+// Descriptor support is structural only. Device requests enable the selected
+// advertised features; unavailable features fail before minting a device.
 
 import type {
   RequestDeviceOptions,
@@ -15,25 +10,37 @@ import type {
   RhiDevice,
   RhiError as RhiErrorType,
 } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-types';
+import { RhiError } from '@forgeax/engine-rhi';
+import { err, ok } from '@forgeax/engine-types';
 import { RhiNullCommandEncoder } from './command-encoder';
 import { RhiNullDevice } from './device';
 import { RhiNullQueue } from './queue';
 
-/** Headless adapter. Holds an empty feature set + limits map; requestDevice
- *  builds a fully-wired RhiNullDevice. */
+/** Headless descriptor support, without hardware execution or numeric limits. */
 export class RhiNullAdapter implements RhiAdapter {
-  readonly features: ReadonlySet<GPUFeatureName> = new Set();
+  readonly features: ReadonlySet<GPUFeatureName> = new Set(['depth32float-stencil8']);
   readonly limits: Readonly<Record<string, number>> = {};
 
   // forgeax-async-whitelist is not needed: this returns Promise<Result<...>>
   // per the spec contract; never rejects.
-  requestDevice(
-    _opts?: RequestDeviceOptions | undefined,
-  ): Promise<Result<RhiDevice, RhiErrorType>> {
+  requestDevice(opts?: RequestDeviceOptions | undefined): Promise<Result<RhiDevice, RhiErrorType>> {
+    const features = new Set(opts?.requiredFeatures ?? []);
+    for (const feature of features) {
+      if (!this.features.has(feature))
+        return Promise.resolve(
+          err(
+            new RhiError({
+              code: 'feature-not-enabled',
+              expected: `an advertised RhiNull structural feature; received ${feature}`,
+              hint: 'use adapter.features to select supported descriptors; GPU validation requires a real backend',
+            }),
+          ),
+        );
+    }
     const device = new RhiNullDevice(
       new RhiNullQueue(),
       (bookkeeper, dev) => new RhiNullCommandEncoder(bookkeeper, dev),
+      features,
     );
     return Promise.resolve(ok(device));
   }

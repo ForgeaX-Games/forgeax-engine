@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   Collider,
   ColliderShapeValue,
@@ -13,15 +13,16 @@ import {
   loadRapier3D,
   registerPhysicsSystems,
 } from '@forgeax/engine-physics-rapier3d';
-import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+import { scenePlugin, Transform } from '@forgeax/engine-scene';
+import { statePlugin } from '@forgeax/engine/state';
 import { expect, test } from 'vitest';
 import {
   Projectile,
   ProjectileCover,
   PROJECTILE_ALLEGIANCE_PLAYER,
-} from '../../../templates/game-default/assets/plugins/components/gameplay';
-import { installGameplayState } from '../../../templates/game-default/assets/plugins/gameplay-state';
-import { installProjectileImpactSystem } from '../../../templates/game-default/assets/plugins/projectile-impact';
+} from '../../../apps/game-capability-lab/assets/plugins/components/gameplay';
+import { installGameplayState } from '../../../apps/game-capability-lab/assets/plugins/gameplay-state';
+import { installProjectileImpactSystem } from '../../../apps/game-capability-lab/assets/plugins/projectile-impact';
 
 const outputDirectory = process.env.FORGEAX_SENTINEL_RED_DIR;
 
@@ -31,7 +32,7 @@ function persist(lines: readonly string[]): void {
   writeFileSync(join(outputDirectory, 'probe.log'), `${lines.join('\n')}\n`);
 }
 
-test('public Rapier3D contact reaches the shared projectile owner', async () => {
+test('public Rapier3D contact reaches the shared projectile owner', async ({ onTestFinished }) => {
   const lines: string[] = [];
   const rapier = await loadRapier3D();
   if ('code' in rapier) {
@@ -43,14 +44,24 @@ test('public Rapier3D contact reaches the shared projectile owner', async () => 
 
   const world = new World();
   const physics = createRapier3DPhysicsWorld(rapier);
+  const context = await createWorldContext(world, [scenePlugin(), statePlugin()]);
   world.insertResource('PhysicsWorld', physics);
-  registerPropagateTransforms(world);
-  registerPhysicsSystems(world);
-  installGameplayState({ world, reset: () => {} });
+  const releasePhysics = registerPhysicsSystems(world);
+  const ownedEntities: EntityHandle[] = [];
+  onTestFinished(async () => {
+    for (const entity of ownedEntities)
+      if (world.get(entity, Transform).ok) world.despawn(entity).unwrap();
+    releasePhysics();
+    await context.fiber.dispose();
+    physics.dispose();
+  });
+  installGameplayState({ context, world, reset: () => {} });
 
   const source = world.spawn({ component: Transform, data: { pos: [0, 0.6, -2] } }).unwrap();
+  ownedEntities.push(source);
   const player = world.spawn({ component: Transform, data: { pos: [4, 0.6, 0] } }).unwrap();
 
+  ownedEntities.push(player);
   const projectile = world.spawn(
     { component: Transform, data: { pos: [0, 0.6, 0] } },
     {
@@ -76,6 +87,7 @@ test('public Rapier3D contact reaches the shared projectile owner', async () => 
       },
     },
   ).unwrap();
+  ownedEntities.push(projectile);
   const cover = world.spawn(
     { component: Transform, data: { pos: [0, 0.6, 0] } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -87,6 +99,7 @@ test('public Rapier3D contact reaches the shared projectile owner', async () => 
     { component: ProjectileCover, data: {} },
   ).unwrap();
 
+  ownedEntities.push(cover);
   let coverBlocked = 0;
   let observedContacts: readonly number[] = [];
   let bodiesReady = false;

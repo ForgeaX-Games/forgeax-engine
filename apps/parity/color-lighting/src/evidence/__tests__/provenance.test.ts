@@ -11,7 +11,7 @@ const evidence: AttachmentEvidence = {
     size: { width: 1, height: 1 },
     rawHash: 'linear',
     frameId: 1,
-    pipelineId: 'forgeax::hdrp',
+    pipelineId: 'forgeax::standard',
     backendId: 'dawn',
   },
   finalDisplay: {
@@ -22,7 +22,7 @@ const evidence: AttachmentEvidence = {
     size: { width: 1, height: 1 },
     rawHash: 'display',
     frameId: 1,
-    pipelineId: 'forgeax::hdrp',
+    pipelineId: 'forgeax::standard',
     backendId: 'dawn',
   },
 };
@@ -61,9 +61,9 @@ describe('capture provenance contract', () => {
     const result = validateAttachmentEvidence(
       {
         ...evidence,
-        linearHdr: { ...evidence.linearHdr, pipelineId: 'forgeax::urp' },
+        linearHdr: { ...evidence.linearHdr, pipelineId: 'forgeax::standard' },
       },
-      'forgeax::hdrp',
+      'forgeax::standard',
     );
     expect(result.ok).toBe(false);
   });

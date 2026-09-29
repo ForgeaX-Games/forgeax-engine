@@ -47,7 +47,13 @@ export type { GltfBridgeContext, MaterialBridgeContext } from './bridge.js';
 // hello-gltf + hello-gltf-instancing, feat-20260518 M3 w9; M3 Tier-C material
 // bridge; meshIrToMeshAsset excised from the hello-gltf demo in
 // feat-20260603-asset-import-loader-injection M2 w19).
-export { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from './bridge.js';
+export {
+  gltfDocToSceneAsset,
+  meshIrToMeshAsset,
+  toMaterialAsset,
+  validateMaterialTangentInputs,
+  validateMaterialUvSets,
+} from './bridge.js';
 export type { ExtensionsCheckResult, GltfExtensionsJson } from './check-extensions.js';
 // KHR extensions gate (w14).
 export { checkExtensions, EXTENSION_ALLOWLIST } from './check-extensions.js';
@@ -65,6 +71,8 @@ export type {
   GltfImageMimeUnsupportedDetail,
   GltfInstancingCountMismatchDetail,
   GltfMalformedHeaderDetail,
+  GltfMaterialPhysicalInvalidDetail,
+  GltfMaterialTransmissionInvalidDetail,
   GltfMetaMissingDetail,
   GltfMorphInvalidDetail,
   GltfMorphUnsupportedDetail,
@@ -80,6 +88,8 @@ export { err, GLTF_ERROR_HINTS, gltfErr, ok } from './errors.js';
 // gltfImporter: the build-time `{ key: 'gltf', import }` Importer
 // (feat-20260603-asset-import-loader-injection M2 / w19).
 export { gltfImporter } from './gltf-importer.js';
+export { type GltfLodRelation, parseGltfLodExtension } from './lod/parse-lod.js';
+export { projectGltfLodMeta } from './lod/project-meta.js';
 export type { GlbChunks } from './parse-glb-chunks.js';
 // Header / chunk parsers (w8).
 export { parseGlbChunks, parseGltfHeader } from './parse-glb-chunks.js';

@@ -1,6 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { rhi } from '@forgeax/engine-rhi-null';
 import { describe, expect, it } from 'vitest';
+import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { requireRenderer } from './renderer-test-utils';
 
 function canvas(): HTMLCanvasElement {
@@ -14,6 +15,15 @@ const manifest = `data:application/json,${encodeURIComponent(
       { hash: 'pbr00000', wgsl: '/* pbr */', glsl: '', bindings: '' },
       { hash: 'unlit000', wgsl: '/* unlit */', glsl: '', bindings: '' },
       { hash: 'tonemap0', wgsl: '/* tonemap */', glsl: '', bindings: '' },
+    ],
+    materialShaders: [
+      {
+        identifier: 'forgeax::default-standard-pbr',
+        sourcePath: 'forgeax::default-standard-pbr.wgsl',
+        composedWgsl: '/* stub */',
+        paramSchema: '[]',
+        variants: standardMaterialShaderVariants(),
+      },
     ],
   }),
 )}`;

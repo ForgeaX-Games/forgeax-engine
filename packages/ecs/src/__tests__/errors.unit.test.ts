@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it, test } from 'vitest';
 import { componentSchema, defineComponent } from '../component';
-import type { EcsErrorCode } from '../errors';
+import type { EcsErrorCode, EcsErrorDetail } from '../errors';
 import {
   ComponentAlreadyPresentError,
   ComponentNotPresentError,
@@ -58,8 +58,12 @@ import { World } from '../world';
   const NAME = 'register' + 'Component';
   const CALL_PATTERN = `[.](${NAME}|${NAME}Checked)[(]`;
   const FIELD_PATTERN = `${NAME}:`;
+  // The repo-wide source scan runs inside the coverage pool alongside 180+
+  // instrumented files. Keep the default unit-test budget for normal cases,
+  // but allow a contended runner to finish this I/O-only contract gate.
+  const SOURCE_SCAN_TIMEOUT_MS = 30_000;
 
-  function sourceHits(pattern: string): string[] {
+  function sourceHitsFallback(pattern: string): string[] {
     const expression = new RegExp(pattern);
     const hits: string[] = [];
     const visit = (relativeDir: string): void => {
@@ -85,20 +89,68 @@ import { World } from '../world';
     return hits;
   }
 
+  function sourceHits(pattern: string): string[] {
+    const result = spawnSync(
+      'rg',
+      [
+        '--no-heading',
+        '--color=never',
+        '--line-number',
+        '--glob',
+        '*.ts',
+        '--glob',
+        '*.mjs',
+        '--glob',
+        '!dist/**',
+        '--glob',
+        '!node_modules/**',
+        pattern,
+        ...SCAN_DIRS,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    if (result.error === undefined) {
+      if (result.status === 1) return [];
+      if (result.status !== 0) {
+        throw result.error ?? new Error(`rg exited with status ${result.status}`);
+      }
+      return result.stdout
+        .trimEnd()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const separator = line.indexOf(':');
+          const lineEnd = line.indexOf(':', separator + 1);
+          return `${line.slice(0, separator)}:${line.slice(separator + 1, lineEnd)}:${line
+            .slice(lineEnd + 1)
+            .trim()}`;
+        });
+    }
+    return sourceHitsFallback(pattern);
+  }
+
   describe('ac16-register-component-grep-gate.test.ts', () => {
     describe('AC-16 - register-component call surface is zero repo-wide (w20)', () => {
-      it('layer 1: zero method-call sites for the deleted register* methods', () => {
-        const hits = sourceHits(CALL_PATTERN);
-        expect(hits, `unexpected register-component call sites:\n${hits.join('\n')}`).toEqual([]);
-      });
+      it(
+        'layer 1: zero method-call sites for the deleted register* methods',
+        () => {
+          const hits = sourceHits(CALL_PATTERN);
+          expect(hits, `unexpected register-component call sites:\n${hits.join('\n')}`).toEqual([]);
+        },
+        SOURCE_SCAN_TIMEOUT_MS,
+      );
 
-      it('layer 2: zero mock interface field declarations for the deleted method', () => {
-        const hits = sourceHits(FIELD_PATTERN);
-        expect(
-          hits,
-          `unexpected register-component field declarations:\n${hits.join('\n')}`,
-        ).toEqual([]);
-      });
+      it(
+        'layer 2: zero mock interface field declarations for the deleted method',
+        () => {
+          const hits = sourceHits(FIELD_PATTERN);
+          expect(
+            hits,
+            `unexpected register-component field declarations:\n${hits.join('\n')}`,
+          ).toEqual([]);
+        },
+        SOURCE_SCAN_TIMEOUT_MS,
+      );
     });
   });
 }
@@ -518,6 +570,8 @@ import { World } from '../world';
           // feat-20260822 ECS core reduction — managed array writes reject
           // arbitrary object payloads before row/buffer mutation.
           'managed-array-invalid-value',
+          // P5b per-row Instances updates: in-place range writes never resize.
+          'array-range-out-of-bounds',
           // feat-20260825-engine-feedback-verifiable-remediation M1 / w4 —
           // object-write numeric preflight rejects NaN before mutation.
           'component-numeric-value-invalid',
@@ -666,6 +720,7 @@ import { World } from '../world';
             case 'component-field-invalid-value':
             case 'component-numeric-value-invalid':
             case 'managed-array-invalid-value':
+            case 'array-range-out-of-bounds':
             case 'time-delta-invalid':
             case 'time-config-invalid':
             case 'schedule-scope-mismatch':
@@ -977,25 +1032,41 @@ import { World } from '../world';
         expect(code).toBe('spawn-light-invalid-bounds');
       });
 
-      it("EcsErrorDetail discriminated variant for 'spawn-light-invalid-bounds' carries field three-branch", () => {
-        const range = {
+      it("EcsErrorDetail discriminated variant for 'spawn-light-invalid-bounds' carries scalar and RGB fields", () => {
+        type InvalidLightBoundsDetail = Extract<
+          EcsErrorDetail,
+          { readonly code: 'spawn-light-invalid-bounds' }
+        >;
+        const range: InvalidLightBoundsDetail = {
           code: 'spawn-light-invalid-bounds',
           field: 'range',
           got: -1,
         };
-        const innerOuter = {
+        const innerOuter: InvalidLightBoundsDetail = {
           code: 'spawn-light-invalid-bounds',
           field: 'innerOuter',
           got: 25,
         };
-        const outerNinety = {
+        const outerNinety: InvalidLightBoundsDetail = {
           code: 'spawn-light-invalid-bounds',
           field: 'outerNinety',
           got: 91,
         };
+        const direction: InvalidLightBoundsDetail = {
+          code: 'spawn-light-invalid-bounds',
+          field: 'direction',
+          got: [Number.NaN, 0, 0],
+        };
+        const irradiance: InvalidLightBoundsDetail = {
+          code: 'spawn-light-invalid-bounds',
+          field: 'irradiance',
+          got: Array.from(new Float32Array(27)),
+        };
         expect(range.code).toBe('spawn-light-invalid-bounds');
         expect(innerOuter.code).toBe('spawn-light-invalid-bounds');
         expect(outerNinety.code).toBe('spawn-light-invalid-bounds');
+        expect(direction.field).toBe('direction');
+        expect(irradiance.field).toBe('irradiance');
       });
 
       it("type-level: switch over EcsErrorCode includes 'spawn-light-invalid-bounds' branch", () => {

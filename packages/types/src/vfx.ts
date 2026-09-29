@@ -8,7 +8,7 @@ export interface ParticleEmitterDefinition {
 
 /** Serializable cooked GPU program carried by the ordinary particle asset. */
 export interface ParticleEffectProgram {
-  readonly format: 'forgeax-vfx-program-2';
+  readonly format: 'forgeax-vfx-program-4';
   readonly fingerprint: string;
   readonly emitters: readonly ParticleEffectProgramEmitter[];
 }
@@ -32,9 +32,20 @@ export interface ParticleEffectProgramEmitter {
 /** Cooked particle effect payload shared by asset and ECS consumers. */
 export interface ParticleEffectAsset {
   readonly kind: 'particle-effect';
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   /** Stable producer fingerprint used to detect stale cooked programs. */
   readonly programFingerprint: string;
   readonly emitters: readonly ParticleEmitterDefinition[];
   readonly program: ParticleEffectProgram;
+}
+
+/** Narrow Program v3 payload used by the new code-first compiler boundary. */
+export interface ParticleEffectProgramV3 extends Omit<ParticleEffectProgram, 'format'> {
+  readonly format: 'forgeax-vfx-program-4';
+}
+
+export interface ParticleEffectAssetV3
+  extends Omit<ParticleEffectAsset, 'schemaVersion' | 'program'> {
+  readonly schemaVersion: 3;
+  readonly program: ParticleEffectProgramV3;
 }

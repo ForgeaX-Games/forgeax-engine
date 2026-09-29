@@ -13,11 +13,12 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { initCommand, newCommand } from '../bootstrap-commands.js';
+import { doctorCommand, initCommand, newCommand } from '../bootstrap-commands.js';
 
 const originalPath = process.env.PATH;
 const originalSdkRoot = process.env.FORGEAX_SDK_ROOT;
 const originalInstallState = process.env.FORGEAX_TEST_INSTALL_STATE;
+const originalFailFirstInstall = process.env.FORGEAX_TEST_FAIL_FIRST_INSTALL;
 const originalNpmConfigOffline = process.env.npm_config_offline;
 const temporaryRoots: string[] = [];
 
@@ -33,7 +34,7 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   temporaryRoots.push(temporaryRoot);
   const root = resolve(temporaryRoot, 'sdk');
   await mkdir(root);
-  const template = resolve(root, 'templates', 'game-empty');
+  const template = resolve(root, 'templates', 'empty');
   const fullTemplate = resolve(root, 'templates', 'game-3d');
   const bin = resolve(root, 'bin');
   const installState = resolve(root, 'install-state');
@@ -48,15 +49,15 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   await writeFile(
     resolve(root, 'sdk-manifest.json'),
     `${JSON.stringify({
-      schemaVersion: '1.6.0',
+      schemaVersion: '1.7.0',
       sdkVersion: '0.0.0-test',
       engineCommit: 'test',
       requirements: { node: '>=22.13.0', pnpm: '11.7.0', pnpmStoreFormat: 'v11' },
       capabilities: [],
       packages: [],
       templates: [
-        { id: 'empty', root: 'templates/game-empty', default: true },
-        { id: 'game-3d', root: 'templates/game-3d', default: false },
+        { id: 'empty', root: 'templates/empty' },
+        { id: 'game-3d', root: 'templates/game-3d' },
       ],
       skills: [
         {
@@ -83,9 +84,18 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   );
   await writeFile(
     resolve(template, 'forge.json'),
-    '{"id":"game","name":"Game","entry":"src/main.ts"}\n',
+    '{"id":"game","name":"Game","schemaVersion":"3.0.0","roots":{}}\n',
   );
   await writeFile(resolve(template, 'package.json'), '{"name":"game","version":"0.0.0"}\n');
+  await writeFile(
+    resolve(template, 'template.json'),
+    `${JSON.stringify({
+      id: 'empty',
+      purpose: 'minimal project',
+      defaultIdentity: { name: 'empty-game', packageName: '@local/empty-game' },
+      journeys: ['typecheck', 'unit'],
+    })}\n`,
+  );
   await writeFile(resolve(template, 'src', 'main.ts'), 'export async function bootstrap() {}\n');
   await writeFile(
     resolve(template, 'src', '__tests__', 'starter.test.ts'),
@@ -99,35 +109,61 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   await writeFile(resolve(template, '.npmrc'), 'public-hoist-pattern[]=@forgeax/engine-*\n');
   await writeFile(
     resolve(fullTemplate, 'forge.json'),
-    '{"id":"full-game","name":"Full Game","entry":"main.ts"}\n',
+    '{"id":"full-game","name":"Full Game","schemaVersion":"3.0.0","roots":{}}\n',
   );
   await writeFile(resolve(fullTemplate, 'package.json'), '{"name":"full","version":"0.0.0"}\n');
+  await writeFile(
+    resolve(fullTemplate, 'template.json'),
+    `${JSON.stringify({
+      id: 'game-3d',
+      purpose: 'three-dimensional game project',
+      defaultIdentity: { name: 'game-3d', packageName: '@local/game-3d' },
+      journeys: ['typecheck', 'unit', 'browser'],
+    })}\n`,
+  );
   await writeFile(resolve(fullTemplate, 'main.ts'), 'export default {}\n');
   await writeFile(resolve(fullTemplate, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
   await writeFile(
     resolve(fullTemplate, 'pnpm-workspace.yaml'),
     "allowBuilds:\n  esbuild: true\nminimumReleaseAgeExclude:\n  - '@forgeax/*'\ntrustLockfile: true\nverifyDepsBeforeRun: warn\nenableGlobalVirtualStore: false\n",
   );
-  const pnpm = resolve(bin, 'pnpm');
+  const pnpm = resolve(bin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+  const pnpmScript = resolve(bin, 'pnpm-fixture.mjs');
   await writeFile(
-    pnpm,
-    '#!/bin/sh\n' +
-      'if [ "$1" = "--version" ]; then printf "11.7.0\\n"; exit 0; fi\n' +
-      'printf "%s\\n" "$@" > "$FORGEAX_TEST_INSTALL_STATE.args"\n' +
-      'printf "%s\\n" "$PWD" > "$FORGEAX_TEST_INSTALL_STATE.cwd"\n' +
-      'printf "%s\\n" "$CI" > "$FORGEAX_TEST_INSTALL_STATE.ci"\n' +
-      'if [ ! -e "$FORGEAX_TEST_INSTALL_STATE" ]; then\n' +
-      '  : > "$FORGEAX_TEST_INSTALL_STATE"\n' +
-      (failFirstInstall
-        ? '  echo "deterministic offline install fault" >&2\n' + '  exit 23\n'
-        : '') +
-      'fi\n' +
-      'mkdir -p "$PWD/node_modules"\n',
+    pnpmScript,
+    `${[
+      "import { access, mkdir, realpath, writeFile } from 'node:fs/promises';",
+      "import { resolve } from 'node:path';",
+      'const args = process.argv.slice(2);',
+      "if (args[0] === '--version') { process.stdout.write('11.7.0\\n'); process.exit(0); }",
+      'const state = process.env.FORGEAX_TEST_INSTALL_STATE;',
+      "if (!state) throw new Error('missing FORGEAX_TEST_INSTALL_STATE');",
+      "await writeFile(state + '.args', args.join('\\n') + '\\n');",
+      "await writeFile(state + '.cwd', (await realpath(process.cwd())) + '\\n');",
+      "await writeFile(state + '.ci', (process.env.CI ?? '') + '\\n');",
+      'let alreadyInstalled = true;',
+      'try { await access(state); } catch { alreadyInstalled = false; }',
+      'if (!alreadyInstalled) {',
+      "  await writeFile(state, '');",
+      "  if (process.env.FORGEAX_TEST_FAIL_FIRST_INSTALL === '1') {",
+      "    process.stderr.write('deterministic offline install fault\\n');",
+      '    process.exit(23);',
+      '  }',
+      '}',
+      "await mkdir(resolve(process.cwd(), 'node_modules'), { recursive: true });",
+    ].join('\n')}\n`,
   );
-  await chmod(pnpm, 0o755);
+  if (process.platform === 'win32') {
+    await writeFile(pnpm, `@echo off\r\n"${process.execPath}" "${pnpmScript}" %*\r\n`);
+  } else {
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    await writeFile(pnpm, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(pnpmScript)} "$@"\n`);
+    await chmod(pnpm, 0o755);
+  }
   process.env.FORGEAX_SDK_ROOT = root;
   process.env.FORGEAX_TEST_INSTALL_STATE = installState;
-  process.env.PATH = `${bin}:${originalPath ?? ''}`;
+  process.env.FORGEAX_TEST_FAIL_FIRST_INSTALL = failFirstInstall ? '1' : '0';
+  process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${originalPath ?? ''}`;
   process.env.npm_config_offline = 'true';
   return { root, template, installState, bin };
 }
@@ -142,6 +178,7 @@ afterEach(async () => {
   process.env.PATH = originalPath;
   process.env.FORGEAX_SDK_ROOT = originalSdkRoot;
   process.env.FORGEAX_TEST_INSTALL_STATE = originalInstallState;
+  process.env.FORGEAX_TEST_FAIL_FIRST_INSTALL = originalFailFirstInstall;
   process.env.npm_config_offline = originalNpmConfigOffline;
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -149,11 +186,26 @@ afterEach(async () => {
 });
 
 describe('newCommand', () => {
+  it('pins the supported package manager in shipped templates', async () => {
+    for (const template of ['empty', 'game-3d']) {
+      const packageJson = JSON.parse(
+        await readFile(
+          resolve(import.meta.dirname, '../../../../templates', template, 'package.json'),
+          'utf8',
+        ),
+      ) as { readonly packageManager?: unknown };
+      expect(packageJson.packageManager).toBe('pnpm@11.7.0');
+    }
+  });
+
   it('requires one SDK-root init before creating a game', async () => {
     const sdk = await sdkFixture(false);
     await rm(resolve(sdk.root, '.forgeax', 'sdk-init.json'));
 
-    const result = await newCommand({ root: resolve(sdk.root, '..', 'uninitialized-game') });
+    const result = await newCommand({
+      root: resolve(sdk.root, '..', 'uninitialized-game'),
+      template: 'empty',
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -182,9 +234,9 @@ describe('newCommand', () => {
             resolve(sdk.root, 'skills/forgeax-engine-sdk/SKILL.md'),
             resolve(sdk.root, 'skills/forgeax-engine-sdk/references/feature-catalog.md'),
           ],
-          next: {
-            cwd: sdk.root,
-            argv: ['node', './bin/forgeax.mjs', 'new', '../my-game'],
+          templateSelection: {
+            required: true,
+            available: ['empty', 'game-3d'],
           },
         },
       }),
@@ -211,13 +263,13 @@ describe('newCommand', () => {
     const sdk = await sdkFixture(false);
     const targetRoot = scope === 'root' ? sdk.root : resolve(sdk.root, 'games', 'game');
 
-    const result = await newCommand({ root: targetRoot });
+    const result = await newCommand({ root: targetRoot, template: 'empty' });
 
     expect(result).toEqual({
       ok: false,
       error: {
         code: 'project-target-inside-sdk',
-        expected: 'forgeax new target to be outside the unpacked SDK root',
+        expected: 'forgeax project new target to be outside the unpacked SDK root',
         hint: 'Choose a sibling directory or an absolute path outside the SDK.',
         detail: { root: targetRoot, sdkRoot: sdk.root },
       },
@@ -239,7 +291,7 @@ describe('newCommand', () => {
     if (target === 'empty-game') await mkdir(targetRoot);
     const originalEntries = target === 'empty-game' ? await readdir(targetRoot) : undefined;
 
-    const failed = await newCommand({ root: targetRoot });
+    const failed = await newCommand({ root: targetRoot, template: 'empty' });
     expect(failed.ok).toBe(false);
     if (!failed.ok) {
       expect(failed.error.code).toBe('project-create-failed');
@@ -252,7 +304,7 @@ describe('newCommand', () => {
     }
     expect(await stagingEntries(dirname(targetRoot), targetRoot)).toEqual([]);
 
-    const retried = await newCommand({ root: targetRoot });
+    const retried = await newCommand({ root: targetRoot, template: 'empty' });
     expect(retried.ok).toBe(true);
     expect(await readFile(resolve(targetRoot, 'pnpm-lock.yaml'), 'utf8')).toBe(
       'lockfileVersion: 9.0\n',
@@ -260,8 +312,14 @@ describe('newCommand', () => {
     expect(await readFile(resolve(targetRoot, 'pnpm-workspace.yaml'), 'utf8')).toBe(
       "allowBuilds:\n  esbuild: true\nminimumReleaseAgeExclude:\n  - '@forgeax/*'\ntrustLockfile: true\nverifyDepsBeforeRun: warn\nenableGlobalVirtualStore: false\n",
     );
-    expect(await readFile(resolve(targetRoot, 'forge.json'), 'utf8')).toBe(
-      '{"id":"game","name":"Game","entry":"src/main.ts"}\n',
+    expect(JSON.parse(await readFile(resolve(targetRoot, 'forge.json'), 'utf8'))).toEqual({
+      id: target,
+      name: target,
+      schemaVersion: '3.0.0',
+      roots: {},
+    });
+    expect(JSON.parse(await readFile(resolve(targetRoot, 'package.json'), 'utf8')).name).toBe(
+      `@local/${target}`,
     );
     expect(await readFile(resolve(targetRoot, 'src', '__tests__', 'starter.test.ts'), 'utf8')).toBe(
       'export const starter = true;\n',
@@ -318,9 +376,8 @@ describe('newCommand', () => {
       `${JSON.stringify({
         id: 'game',
         name: 'Game',
-        schemaVersion: '1.0.0',
-        entry: 'main.ts',
-        plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+        schemaVersion: '3.0.0',
+        roots: {},
       })}\n`,
     );
     await writeFile(initFiles.package, '{"name":"game","version":"0.0.0"}\n');
@@ -330,7 +387,7 @@ describe('newCommand', () => {
     );
     await writeFile(manifestPath, '{"schemaVersion":\n');
 
-    const failedNew = await newCommand({ root: newRoot });
+    const failedNew = await newCommand({ root: newRoot, template: 'empty' });
     expect(failedNew.ok).toBe(false);
     if (!failedNew.ok) {
       expect(failedNew.error.code).toBe('project-create-failed');
@@ -353,7 +410,7 @@ describe('newCommand', () => {
     ).toEqual(beforeInit);
 
     await writeFile(manifestPath, validManifest);
-    const retriedNew = await newCommand({ root: newRoot });
+    const retriedNew = await newCommand({ root: newRoot, template: 'empty' });
     expect(retriedNew.ok).toBe(true);
     const retriedInit = await initCommand({ root: initRoot });
     expect(retriedInit.ok).toBe(true);
@@ -375,7 +432,7 @@ describe('newCommand', () => {
     const sentinel = resolve(targetRoot, 'keep.txt');
     await writeFile(sentinel, 'do not overwrite\n');
 
-    const result = await newCommand({ root: targetRoot });
+    const result = await newCommand({ root: targetRoot, template: 'empty' });
 
     expect(result).toEqual({
       ok: false,
@@ -387,18 +444,23 @@ describe('newCommand', () => {
     });
   });
 
-  it('uses empty by default and selects a named SDK template', async () => {
+  it('requires an explicit template and selects each named SDK template', async () => {
     const sdk = await sdkFixture(false);
     const defaultRoot = resolve(sdk.root, '..', 'default-game');
     const fullRoot = resolve(sdk.root, '..', 'full-game');
 
-    const defaultResult = await newCommand({ root: defaultRoot });
+    const requiredResult = await newCommand({ root: resolve(sdk.root, '..', 'required-game') });
+    const defaultResult = await newCommand({ root: defaultRoot, template: 'empty' });
     const fullResult = await newCommand({ root: fullRoot, template: 'game-3d' });
     const missingResult = await newCommand({
       root: resolve(sdk.root, '..', 'missing-game'),
       template: 'missing',
     });
 
+    expect(requiredResult).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'sdk-template-required' }),
+    });
     expect(defaultResult).toEqual({
       ok: true,
       value: expect.objectContaining({
@@ -409,18 +471,29 @@ describe('newCommand', () => {
             resolve(defaultRoot, 'skills/forgeax-engine-sdk/SKILL.md'),
             resolve(defaultRoot, 'skills/forgeax-engine-sdk/references/feature-catalog.md'),
           ],
-          next: { cwd: defaultRoot, argv: ['pnpm', 'exec', 'forgeax', 'list', '--json'] },
+          next: {
+            cwd: defaultRoot,
+            argv: ['pnpm', 'exec', 'forgeax', 'help', '--tree', '--json'],
+          },
         },
         sdkUpdate: { status: 'skipped', currentVersion: '0.0.0-test', reason: 'offline' },
       }),
     });
-    expect(JSON.parse(await readFile(resolve(defaultRoot, 'forge.json'), 'utf8')).id).toBe('game');
+    expect(JSON.parse(await readFile(resolve(defaultRoot, 'forge.json'), 'utf8'))).toEqual(
+      expect.objectContaining({ id: 'default-game', name: 'default-game' }),
+    );
+    expect(JSON.parse(await readFile(resolve(defaultRoot, 'package.json'), 'utf8')).name).toBe(
+      '@local/default-game',
+    );
     expect(fullResult).toEqual({
       ok: true,
       value: expect.objectContaining({ template: 'game-3d' }),
     });
-    expect(JSON.parse(await readFile(resolve(fullRoot, 'forge.json'), 'utf8')).id).toBe(
-      'full-game',
+    expect(JSON.parse(await readFile(resolve(fullRoot, 'forge.json'), 'utf8'))).toEqual(
+      expect.objectContaining({ id: 'full-game', name: 'full-game' }),
+    );
+    expect(JSON.parse(await readFile(resolve(fullRoot, 'package.json'), 'utf8')).name).toBe(
+      '@local/full-game',
     );
     expect(missingResult).toEqual({
       ok: false,
@@ -432,7 +505,7 @@ describe('newCommand', () => {
     const sdk = await sdkFixture(false, false);
     const targetRoot = resolve(sdk.root, '..', 'online-game');
 
-    const result = await newCommand({ root: targetRoot });
+    const result = await newCommand({ root: targetRoot, template: 'empty' });
 
     expect(result).toEqual({
       ok: true,
@@ -441,5 +514,65 @@ describe('newCommand', () => {
     expect(await readFile(`${sdk.installState}.args`, 'utf8')).toContain(
       'install\n--frozen-lockfile\n--ignore-scripts\n',
     );
+  });
+
+  it('accepts explicit identity fields and rejects an unsafe target basename before side effects', async () => {
+    const sdk = await sdkFixture(false);
+    const targetRoot = resolve(sdk.root, '..', 'explicit-game');
+    const explicit = await newCommand({
+      root: targetRoot,
+      template: 'empty',
+      id: 'stable-game',
+      name: 'Stable Game',
+      packageName: '@studio/stable-game',
+    });
+
+    expect(explicit.ok).toBe(true);
+    expect(JSON.parse(await readFile(resolve(targetRoot, 'forge.json'), 'utf8'))).toEqual(
+      expect.objectContaining({ id: 'stable-game', name: 'Stable Game' }),
+    );
+    expect(JSON.parse(await readFile(resolve(targetRoot, 'package.json'), 'utf8')).name).toBe(
+      '@studio/stable-game',
+    );
+
+    const unsafeRoot = resolve(sdk.root, '..', 'Unsafe Game');
+    const unsafe = await newCommand({ root: unsafeRoot, template: 'empty' });
+    expect(unsafe).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'project-identity-invalid' }),
+    });
+    await expect(readdir(unsafeRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('doctorCommand', () => {
+  it('resolves the project package manager through Corepack before plain pnpm', async () => {
+    const sdk = await sdkFixture(false);
+    await writeFile(
+      resolve(sdk.template, 'package.json'),
+      '{"name":"game","version":"0.0.0","packageManager":"pnpm@11.7.0"}\n',
+    );
+    const argsPath = `${sdk.installState}.corepack-args`;
+    const corepack = resolve(sdk.bin, process.platform === 'win32' ? 'corepack.cmd' : 'corepack');
+    const corepackScript = resolve(sdk.bin, 'corepack-fixture.mjs');
+    await writeFile(
+      corepackScript,
+      `import { writeFile } from 'node:fs/promises';\nawait writeFile(${JSON.stringify(argsPath)}, process.argv.slice(2).join('\\n') + '\\n');\nprocess.stdout.write('11.7.0\\n');\n`,
+    );
+    if (process.platform === 'win32') {
+      await writeFile(corepack, `@echo off\r\n"${process.execPath}" "${corepackScript}" %*\r\n`);
+    } else {
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      await writeFile(
+        corepack,
+        `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(corepackScript)} "$@"\n`,
+      );
+      await chmod(corepack, 0o755);
+    }
+
+    const result = await doctorCommand({ root: sdk.template });
+
+    expect(result).toMatchObject({ ok: true, value: { pnpm: '11.7.0' } });
+    expect(await readFile(argsPath, 'utf8')).toBe('pnpm\n--version\n');
   });
 });

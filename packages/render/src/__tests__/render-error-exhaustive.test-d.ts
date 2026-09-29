@@ -11,6 +11,20 @@ import type {
   VertexColorVariantConflictError,
 } from '../errors/render';
 import type { RenderFeatureErrorCode } from '../features/types';
+import type { AutoExposureErrorCode } from '../pipeline/standard-output/auto-exposure/inspection';
+
+function autoExposureCodeLabel(code: AutoExposureErrorCode): string {
+  switch (code) {
+    case 'auto-exposure-invalid-parameter':
+      return code;
+    case 'auto-exposure-capability-unavailable':
+      return code;
+    case 'auto-exposure-stale-generation':
+      return code;
+    case 'auto-exposure-stage-failed':
+      return code;
+  }
+}
 
 function renderFeatureCodeLabel(code: RenderFeatureErrorCode): string {
   switch (code) {
@@ -43,6 +57,7 @@ function renderCodeLabel(code: RenderErrorCode): string {
       return renderFeatureCodeLabel(code);
     case 'vertex-color-variant-conflict':
       return code;
+    case 'scene-data-unavailable':
     case 'points-lines-invalid-style':
       return code;
     case 'points-lines-topology-mismatch':
@@ -106,5 +121,8 @@ function renderFeatureErrorLabel(error: RenderError): string {
   }
 }
 
+const taaErrorCode: RenderErrorCode = 'taa-unavailable';
+void taaErrorCode;
 void renderCodeLabel;
 void renderFeatureErrorLabel;
+void autoExposureCodeLabel;

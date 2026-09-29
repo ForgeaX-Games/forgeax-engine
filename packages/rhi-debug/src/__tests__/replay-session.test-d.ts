@@ -14,6 +14,7 @@ const backend: ReplayBackend = {
 
 expectTypeOf(backend.createShaderModule).toBeFunction();
 expectTypeOf(session.inspectWork(0)).resolves.toHaveProperty('ok');
+expectTypeOf(session.readResourceAtWork('texture:out', 0)).resolves.toHaveProperty('ok');
 expectTypeOf(session.dispose()).resolves.toHaveProperty('ok');
 expectTypeOf<WorkInspection['pipeline']>().not.toBeNever();
 expectTypeOf<WorkInspection['bindings']>().toMatchTypeOf<readonly unknown[] | undefined>();

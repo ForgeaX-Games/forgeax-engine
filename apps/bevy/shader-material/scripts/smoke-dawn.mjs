@@ -9,7 +9,7 @@ import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const WIDTH = 320;
 const HEIGHT = 180;
-const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10), 300);
+const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60);
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 

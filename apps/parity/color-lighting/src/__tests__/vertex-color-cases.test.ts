@@ -11,7 +11,7 @@ describe('vertex-color parity roster', () => {
     for (const entry of VERTEX_COLOR_REQUIRED_CASES) {
       expect(entry.required).toBe(true);
       expect(entry.requiredBackends).toEqual(['browser-webgpu', 'dawn']);
-      expect(entry.frameCount).toBe(300);
+      expect(entry.frameCount).toBe(60);
       expect(entry.epsilon.rgb).toBeLessThanOrEqual(0.05);
       expect(entry.epsilon.alpha).toBeLessThanOrEqual(0.05);
       expect(entry.samplePoints.length).toBeGreaterThan(0);

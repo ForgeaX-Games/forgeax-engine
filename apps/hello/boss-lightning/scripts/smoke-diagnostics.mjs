@@ -1,5 +1,20 @@
 export const READINESS_FRAME_LIMIT = 60;
 
+/** Normalize raw GPU channel order without touching padded row bytes. */
+export function normalizeReadbackRgba(pixels, width, height, bytesPerRow, format) {
+  if (format === 'rgba8unorm' || format === 'rgba8unorm-srgb') return pixels;
+  if (format !== 'bgra8unorm' && format !== 'bgra8unorm-srgb') {
+    throw new Error(`Unsupported Dawn evidence format: ${format}`);
+  }
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = y * bytesPerRow + x * 4;
+      [pixels[offset], pixels[offset + 2]] = [pixels[offset + 2], pixels[offset]];
+    }
+  }
+  return pixels;
+}
+
 export function isRecoverableWarmupError(error) {
   return (
     error.code === 'render-feature-preparation-failed' &&

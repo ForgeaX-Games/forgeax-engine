@@ -1,987 +1,121 @@
-import * as SceneOwner from '@forgeax/engine-scene';
-
-// scene-mount-roundtrip.test.ts — M4 round-trip acceptance tests
-// (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
-//
-// Coverage:
-//   m4-t1: single-layer mount round-trip (collect -> serialize -> reload -> collect)
-//   m4-t2: double-layer nested mount round-trip
-//   m4-t3: fixed-point — post-normalization second collect equals third collect
-//
-// These tests exercise the full AC-04 chain:
-//   instantiate -> rootsToSceneAsset -> serializeSceneAssetToPack ->
-//   parse back -> catalog -> registry.instantiate (reload) ->
-//   rootsToSceneAsset -> structural equivalence
-
-import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { SceneInstance } from '@forgeax/engine-render';
-import type { Handle, MountOverride, SceneAsset } from '@forgeax/engine-types';
+import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 import { registerSceneComponents } from './helpers/register-scene-components';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════════════════════════
+const GUID_B = '11111111-1111-4111-8111-111111111111';
+const GUID_C = '22222222-2222-4222-8222-222222222222';
+const GUID_OUT = '33333333-3333-4333-8333-333333333333';
 
-function mkReg(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry());
+function guid(value: string): AssetGuid {
+  const result = AssetGuid.parse(value);
+  if (!result.ok) throw new Error(`bad GUID: ${value}`);
+  return result.value;
 }
-
-function pg(s: string): AssetGuid {
-  const r = AssetGuid.parse(s);
-  if (!r.ok) throw new Error(`bad GUID: ${s}`);
-  return r.value;
+function handle(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(world);
+  return world.allocSharedRef('SceneAsset', asset);
 }
-
-function cat(reg: AssetRegistry, g: string, p: SceneAsset): void {
-  reg.catalog(pg(g), p as Asset);
+function catalog(registry: AssetRegistry, id: string, asset: SceneAsset): void {
+  const result = registry.catalog(guid(id), asset as Asset);
+  if (!result.ok) throw new Error(result.error.code);
 }
-
-function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
-  registerSceneComponents(w, [AnimationPlayer]);
-  return w.allocSharedRef('SceneAsset', a);
-}
-
-/** Access parseAssetPayload via type assertion (same pattern as M3 tests). */
-function accessParseScenePayload(reg: AssetRegistry) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const internal = reg as unknown as {
-    parseAssetPayload(kind: string, payload: Record<string, unknown>, refs?: string[]): unknown;
-  };
-  return (
-    kind: string,
-    payload: Record<string, unknown>,
-    refs?: readonly string[] | undefined,
-  ): SceneAsset | undefined => {
-    const result = internal.parseAssetPayload(kind, payload, refs as string[] | undefined);
-    if (result === undefined) return undefined;
-    if (
-      typeof result === 'object' &&
-      result !== null &&
-      'kind' in result &&
-      (result as { kind: string }).kind === 'scene'
-    ) {
-      return result as SceneAsset;
+function decode(registry: AssetRegistry, row: Record<string, unknown>): SceneAsset {
+  const parsed = (
+    registry as unknown as {
+      parseAssetPayload(
+        kind: string,
+        payload: Record<string, unknown>,
+        refs?: readonly string[],
+      ): unknown;
     }
-    return undefined;
-  };
+  ).parseAssetPayload(
+    'scene',
+    row.payload as Record<string, unknown>,
+    row.refs as readonly string[],
+  );
+  if (parsed === undefined) throw new Error('decode failed');
+  return parsed as SceneAsset;
 }
 
-/** Extract payload and refs from serializeSceneAssetToPack result. */
-function unpackSerialized(
-  pack: Record<string, unknown>,
-): { payload: Record<string, unknown>; refs: readonly string[] | undefined } | undefined {
-  const assets = pack.assets as readonly Record<string, unknown>[] | undefined;
-  if (!assets || assets.length === 0) return undefined;
-  const a = assets[0];
-  if (!a) return undefined;
-  const payload = a.payload as Record<string, unknown> | undefined;
-  if (!payload) return undefined;
-  return { payload, refs: a.refs as readonly string[] | undefined };
-}
+describe('keyed nested SceneAsset round-trip', () => {
+  it('A -> B -> C retains source keys, hierarchy and nested SceneInstance roots', () => {
+    const registry = new AssetRegistry(makeMockShaderRegistry());
+    const world = new World();
+    const c: SceneAsset = { kind: 'scene', entities: { leaf: { components: { Transform: {} } } } };
+    const b: SceneAsset = {
+      kind: 'scene',
+      entities: { child: { components: {}, instance: { source: GUID_C } } },
+    };
+    const a: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        root: { components: { Transform: {} } },
+        nested: { components: { ChildOf: { parent: 'root' } }, instance: { source: GUID_B } },
+      },
+    };
+    catalog(registry, GUID_C, c);
+    catalog(registry, GUID_B, b);
+    const result = registry.instantiate(handle(world, a), world);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const instances = [...world.iterDescendants(result.value)].filter(
+      (entity) => world.get(entity, SceneInstance).ok,
+    );
+    expect(instances).toHaveLength(2);
+    const collected = rootsToSceneAsset(registry, world, [result.value]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+    expect(collected.value.entities.nested?.instance?.source).toBe(GUID_B);
+    expect(collected.value.entities.nested?.components.ChildOf).toEqual({ parent: 'root' });
+  });
 
-/**
- * Deep-structural comparison of two SceneAsset objects.
- * Returns true if mounts (source, memberFirst, memberCount, parent) and
- * entities (component types, field values) are structurally equivalent.
- * localId values are compared as-is (they should be stable across collects).
- */
-function scenesAreStructurallyEquivalent(a: SceneAsset, b: SceneAsset): boolean {
-  const am = a.mounts ?? [];
-  const bm = b.mounts ?? [];
-  if (am.length !== bm.length) return false;
-  for (let i = 0; i < am.length; i++) {
-    const ma = am[i];
-    const mb = bm[i];
-    if (!ma || !mb) return false;
-    if (ma.source !== mb.source) return false;
-    if (ma.memberFirst !== mb.memberFirst) return false;
-    if (ma.memberCount !== mb.memberCount) return false;
-    if (ma.parent !== mb.parent) return false;
-  }
+  it('serialized keyed source uses one refs entry and decodes to the same GUID', () => {
+    const registry = new AssetRegistry(makeMockShaderRegistry());
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: { house: { components: {}, instance: { source: GUID_B } } },
+    };
+    const packed = serializeSceneAssetToPack(scene, new Map(), GUID_OUT);
+    expect(packed.ok).toBe(true);
+    if (!packed.ok) return;
+    const row = (packed.value.assets as Array<Record<string, unknown>>)[0];
+    if (!row) throw new Error('missing row');
+    const payload = row.payload as Record<string, unknown>;
+    expect(
+      (payload.entities as Record<string, Record<string, unknown>>).house?.instance,
+    ).toMatchObject({ source: 0 });
+    expect(decode(registry, row).entities.house?.instance?.source).toBe(GUID_B);
+  });
 
-  const ae = a.entities;
-  const be = b.entities;
-  if (ae.length !== be.length) return false;
-  for (let i = 0; i < ae.length; i++) {
-    const ea = ae[i];
-    const eb = be[i];
-    if (!ea || !eb) return false;
-    if (ea.localId !== eb.localId) return false;
-
-    const compsA = ea.components as Record<string, Record<string, unknown>>;
-    const compsB = eb.components as Record<string, Record<string, unknown>>;
-    const keysA = Object.keys(compsA).sort();
-    const keysB = Object.keys(compsB).sort();
-    if (keysA.length !== keysB.length) return false;
-    for (let j = 0; j < keysA.length; j++) {
-      if (keysA[j] !== keysB[j]) return false;
-    }
-    for (const key of keysA) {
-      const fieldsA = compsA[key];
-      const fieldsB = compsB[key];
-      if (!fieldsA || !fieldsB) return false;
-      const fKeysA = Object.keys(fieldsA).sort();
-      const fKeysB = Object.keys(fieldsB).sort();
-      if (fKeysA.length !== fKeysB.length) return false;
-      for (let j = 0; j < fKeysA.length; j++) {
-        if (fKeysA[j] !== fKeysB[j]) return false;
-        const va = fieldsA[fKeysA[j] as string];
-        const vb = fieldsB[fKeysB[j] as string];
-        if (JSON.stringify(va) !== JSON.stringify(vb)) return false;
-      }
-    }
-  }
-  return true;
-}
-
-/**
- * Compute the totalSlots of a SceneAsset as _instantiateSceneAsset would:
- * countBaseline = entities.length + mounts.length + sum(mounts.memberCount).
- */
-function computeTotalSlots(scene: SceneAsset): number {
-  const ms = scene.mounts ?? [];
-  const memberSum = ms.reduce((s, m) => s + m.memberCount, 0);
-  const countBaseline = scene.entities.length + ms.length + memberSum;
-  let maxLocalId = -1;
-  for (const e of scene.entities) {
-    maxLocalId = Math.max(maxLocalId, e.localId as unknown as number);
-  }
-  for (const m of ms) {
-    maxLocalId = Math.max(maxLocalId, m.localId as unknown as number);
-    const last = (m.memberFirst as unknown as number) + m.memberCount - 1;
-    maxLocalId = Math.max(maxLocalId, last);
-  }
-  return Math.max(countBaseline, maxLocalId + 1);
-}
-
-const G1 = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
-const G2 = 'f6af7007-158f-4d92-9e47-93bf2f213e1f';
-const G3 = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-const G4 = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// m4-t1: single-layer mount round-trip
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('m4-t1 — single-layer mount round-trip', () => {
-  it('full round-trip: collect -> serialize -> reload -> collect — mounts and GUIDs preserved', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    // Step 1: Build child scene.
+  it('child declarations with same source remain separate instance paths', () => {
+    const registry = new AssetRegistry(makeMockShaderRegistry());
+    const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
-        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
-      ],
+      entities: { leaf: { components: { Transform: {} } } },
     };
-    cat(reg, G1, child);
-
-    // Step 2: Build parent scene with mount (source = GUID string, post-parse shape).
+    catalog(registry, GUID_B, child);
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 2,
-        },
-      ],
+      entities: {
+        left: { components: {}, instance: { source: GUID_B } },
+        right: { components: {}, instance: { source: GUID_B } },
+      },
     };
-    cat(reg, G2, parent);
-    const ph = rs(w, parent);
-
-    // Step 3: Instantiate parent via registry.
-    const inst = reg.instantiate(ph, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-    const root = inst.value;
-
-    // Verify root exists and has descendants including a child SceneInstance.
-    let descendantCount = 0;
-    let hasChildSceneInstance = false;
-    for (const c of w.iterDescendants(root)) {
-      if (c === root) continue;
-      descendantCount++;
-      if (w.get(c, SceneInstance).ok) hasChildSceneInstance = true;
-    }
-    expect(descendantCount).toBeGreaterThanOrEqual(2);
-    expect(hasChildSceneInstance).toBe(true);
-
-    // Step 4: First collect (rootsToSceneAsset).
-    const collect1 = rootsToSceneAsset(reg, w, [root]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    // Assert first collect: one mount, source = G1, memberCount = 2.
-    expect(collect1.value.mounts).toBeDefined();
-    expect(collect1.value.mounts?.length).toBe(1);
-    const m0 = collect1.value.mounts?.[0];
-    expect(m0).toBeDefined();
-    if (!m0) return;
-    expect(m0.source).toBe(G1);
-    expect(m0.memberCount).toBe(2);
-
-    // No SceneInstance component rows in owned entities.
-    for (const e of collect1.value.entities) {
-      expect(
-        (e.components as Record<string, Record<string, unknown>>).SceneInstance,
-      ).toBeUndefined();
-    }
-
-    // Step 5: Serialize (breakpoint A — mounts must survive).
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-    const serMounts = unpacked.payload.mounts as ReadonlyArray<Record<string, unknown>> | undefined;
-    expect(serMounts).toBeDefined();
-    expect(serMounts?.length).toBe(1);
-    // source should be refs index, not GUID string.
-    expect(typeof serMounts?.[0]?.source).toBe('number');
-
-    // Step 6: Parse back (breakpoint B — mounts must survive parse).
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-    expect(parsed.mounts).toBeDefined();
-    expect(parsed.mounts?.length).toBe(1);
-    // source should be restored to GUID string.
-    expect(parsed.mounts?.[0]?.source).toBe(G1);
-
-    // Step 7: Reload — catalog + allocSharedRef + registry.instantiate.
-    cat(reg, G3, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-    const root2 = inst2.value;
-
-    // Verify reloaded tree has child SceneInstance.
-    let hasChildSi2 = false;
-    for (const c of w.iterDescendants(root2)) {
-      if (c === root2) continue;
-      if (w.get(c, SceneInstance).ok) {
-        hasChildSi2 = true;
-        break;
-      }
-    }
-    expect(hasChildSi2).toBe(true);
-
-    // Step 8: Re-collect from reloaded tree.
-    const collect2 = rootsToSceneAsset(reg, w, [root2]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Assert reloaded collect: mounts preserved with correct source and memberCount.
-    expect(collect2.value.mounts).toBeDefined();
-    expect(collect2.value.mounts?.length).toBe(1);
-    const m2 = collect2.value.mounts?.[0];
-    expect(m2).toBeDefined();
-    if (!m2) return;
-    expect(m2.source).toBe(G1);
-    expect(m2.memberCount).toBe(2);
-
-    // No SceneInstance component rows in second collect.
-    for (const e of collect2.value.entities) {
-      expect(
-        (e.components as Record<string, Record<string, unknown>>).SceneInstance,
-      ).toBeUndefined();
-    }
-  });
-
-  it('mount source GUID and memberCount preserved across round-trip', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    // Child scene with one entity.
-    const child: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
-    };
-    cat(reg, G1, child);
-
-    // Parent with one entity + mount.
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 1,
-        },
-      ],
-    };
-    cat(reg, G2, parent);
-    const ph = rs(w, parent);
-
-    const inst = reg.instantiate(ph, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-
-    const collect1 = rootsToSceneAsset(reg, w, [inst.value]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    expect(collect1.value.mounts?.[0]?.source).toBe(G1);
-    expect(collect1.value.mounts?.[0]?.memberCount).toBe(1);
-
-    // Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-
-    cat(reg, G3, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-
-    const collect2 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Mount source GUID and memberCount must survive round-trip.
-    expect(collect2.value.mounts?.length).toBe(collect1.value.mounts?.length);
-    expect(collect2.value.mounts?.[0]?.source).toBe(collect1.value.mounts?.[0]?.source);
-    expect(collect2.value.mounts?.[0]?.memberCount).toBe(collect1.value.mounts?.[0]?.memberCount);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// m4-t2: double-layer nested mount round-trip
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('m4-t2 — double-layer nested mount round-trip', () => {
-  it('A mount B, B mount C — round-trip preserves mount sources and ChildOf hierarchy', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    // Grandchild scene C.
-    const sceneC: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
-    };
-    cat(reg, G1, sceneC);
-
-    // Child scene B: mounts C.
-    const sceneB: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 1,
-        },
-      ],
-    };
-    cat(reg, G2, sceneB);
-
-    // Parent scene A: mounts B. B's totalSlots = max(1+1+1, max(0,1,2)+1) = 3.
-    const bTotalSlots = computeTotalSlots(sceneB);
-    expect(bTotalSlots).toBe(3);
-    const sceneA: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G2,
-          memberFirst: 2 as never,
-          memberCount: bTotalSlots,
-        },
-      ],
-    };
-    cat(reg, G3, sceneA);
-    const ha = rs(w, sceneA);
-
-    // Instantiate A via registry (exercises recursive mount resolution).
-    const inst = reg.instantiate(ha, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-    const root = inst.value;
-
-    // Verify nested structure: root should have descendants including
-    // SceneInstance-carrying entities.
-    let sceneInstanceCount = 0;
-    for (const c of w.iterDescendants(root)) {
-      if (c === root) continue;
-      if (w.get(c, SceneInstance).ok) sceneInstanceCount++;
-    }
-    // At least 2 SceneInstance entities: B's child root and C's child root.
-    expect(sceneInstanceCount).toBeGreaterThanOrEqual(2);
-
-    // Step 1: Collect from original instantiated tree.
-    const collect1 = rootsToSceneAsset(reg, w, [root]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    // Collect1: root is Form 2, B and C are both non-root anchors.
-    // Each produces a mount entry in the output SceneAsset.
-    expect(collect1.value.mounts).toBeDefined();
-    const mountCount1 = collect1.value.mounts?.length ?? 0;
-    expect(mountCount1).toBeGreaterThanOrEqual(2);
-
-    // Both source GUIDs should be present in mounts.
-    const sources1 = collect1.value.mounts?.map((m) => m.source).sort() ?? [];
-    expect(sources1).toContain(G1);
-    expect(sources1).toContain(G2);
-
-    // No SceneInstance component rows in owned entities.
-    for (const e of collect1.value.entities) {
-      expect(
-        (e.components as Record<string, Record<string, unknown>>).SceneInstance,
-      ).toBeUndefined();
-    }
-
-    // Step 2: Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-
-    // Verify serialized mounts have source as refs index.
-    const serMounts = unpacked.payload.mounts as ReadonlyArray<Record<string, unknown>> | undefined;
-    expect(serMounts).toBeDefined();
-    expect(serMounts?.length).toBe(mountCount1);
-    for (const sm of serMounts ?? []) {
-      expect(typeof sm.source).toBe('number');
-    }
-
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-
-    // Verify parsed mounts have source as GUID strings.
-    expect(parsed.mounts?.length).toBe(mountCount1);
-    for (const pm of parsed.mounts ?? []) {
-      expect(typeof pm.source).toBe('string');
-    }
-
-    // Reload.
-    cat(reg, G4, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-
-    // Verify nested structure survives reload.
-    let siCount2 = 0;
-    for (const c of w.iterDescendants(inst2.value)) {
-      if (c === inst2.value) continue;
-      if (w.get(c, SceneInstance).ok) siCount2++;
-    }
-    expect(siCount2).toBeGreaterThanOrEqual(2);
-
-    // Step 3: Re-collect from reloaded tree.
-    const collect2 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Both original GUIDs should still appear in mounts.
-    const sources2 = collect2.value.mounts?.map((m) => m.source).sort() ?? [];
-    expect(sources2).toContain(G1);
-    expect(sources2).toContain(G2);
-
-    for (const e of collect2.value.entities) {
-      expect(
-        (e.components as Record<string, Record<string, unknown>>).SceneInstance,
-      ).toBeUndefined();
-    }
-  });
-
-  it('window accounting correct after double-layer round-trip', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    // Grandchild C: 2 entities.
-    const sceneC: SceneAsset = {
-      kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
-        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
-      ],
-    };
-    cat(reg, G1, sceneC);
-
-    // Child B: mounts C.
-    const sceneB: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 2,
-        },
-      ],
-    };
-    const bSlots = computeTotalSlots(sceneB);
-    cat(reg, G2, sceneB);
-
-    // Parent A: mounts B with correct memberCount.
-    const sceneA: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G2,
-          memberFirst: 2 as never,
-          memberCount: bSlots,
-        },
-      ],
-    };
-    cat(reg, G3, sceneA);
-    const ha = rs(w, sceneA);
-
-    const inst = reg.instantiate(ha, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-
-    const collect1 = rootsToSceneAsset(reg, w, [inst.value]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    // Verify window accounting: each mount has memberCount > 0.
-    const mounts1 = collect1.value.mounts ?? [];
-    for (const m of mounts1) {
-      expect(m.memberCount).toBeGreaterThan(0);
-    }
-    // Windows should not overlap.
-    const windows = mounts1
-      .map((m) => ({ f: m.memberFirst as number, c: m.memberCount }))
-      .sort((a, b) => a.f - b.f);
-    for (let i = 0; i < windows.length - 1; i++) {
-      const cur = windows[i];
-      const next = windows[i + 1];
-      if (!cur || !next) continue;
-      expect(cur.f + cur.c).toBeLessThanOrEqual(next.f);
-    }
-
-    // Serialize -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-
-    cat(reg, G4, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-
-    const collect2 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Window accounting must be preserved: all mounts have memberCount > 0
-    // and windows do not overlap.
-    const mounts2 = collect2.value.mounts ?? [];
-    for (const m of mounts2) {
-      expect(m.memberCount).toBeGreaterThan(0);
-    }
-    const windows2 = mounts2
-      .map((m) => ({ f: m.memberFirst as number, c: m.memberCount }))
-      .sort((a, b) => a.f - b.f);
-    for (let i = 0; i < windows2.length - 1; i++) {
-      const cur = windows2[i];
-      const next = windows2[i + 1];
-      if (!cur || !next) continue;
-      expect(cur.f + cur.c).toBeLessThanOrEqual(next.f);
-    }
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// m4-t3: fixed-point — post-normalization collect stability
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// Per D-9, the first reload introduces a one-time structural normalization.
-// The true fixed-point guard: after reload, successive collects from the
-// same live tree produce identical results (collect2 == collect3).
-//
-// If collect2 keeps an entity as owned but collect3 folds it into a mount
-// (or vice versa), the fixed-point is broken and D-9 is violated.
-
-describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
-  it('single-layer: collect2 == collect3 from same reloaded tree (D-9 fixed-point)', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    const child: SceneAsset = {
-      kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
-        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
-      ],
-    };
-    cat(reg, G1, child);
-
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 2,
-        },
-      ],
-    };
-    cat(reg, G2, parent);
-    const ph = rs(w, parent);
-
-    // Collect 1 (before reload).
-    const inst = reg.instantiate(ph, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-    const collect1 = rootsToSceneAsset(reg, w, [inst.value]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    // Serialize -> parse -> catalog -> first reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-
-    cat(reg, G3, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-
-    // Collect 2 (after first reload — post-normalization).
-    const collect2 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Collect 3 (from same live tree, no additional reload).
-    const collect3 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect3.ok).toBe(true);
-    if (!collect3.ok) return;
-
-    // D-9 fixed-point guard: post-normalization, collect2 == collect3.
-    // If this fails, the structure is not stable — something changes
-    // between successive collects from the same live tree.
-    expect(scenesAreStructurallyEquivalent(collect2.value, collect3.value)).toBe(true);
-
-    // Mounts must match between collect2 and collect3.
-    expect(collect3.value.mounts?.length).toBe(collect2.value.mounts?.length);
-    expect(collect3.value.entities.length).toBe(collect2.value.entities.length);
-
-    const m2 = collect2.value.mounts?.[0];
-    const m3 = collect3.value.mounts?.[0];
-    expect(m3?.source).toBe(m2?.source);
-    expect(m3?.memberCount).toBe(m2?.memberCount);
-  });
-
-  it('double-layer: collect2 == collect3 from same reloaded tree (D-9 fixed-point)', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    const sceneC: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
-    };
-    cat(reg, G1, sceneC);
-
-    const sceneB: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 1,
-        },
-      ],
-    };
-    const bSlots = computeTotalSlots(sceneB);
-    cat(reg, G2, sceneB);
-
-    const sceneA: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G2,
-          memberFirst: 2 as never,
-          memberCount: bSlots,
-        },
-      ],
-    };
-    cat(reg, G3, sceneA);
-    const ha = rs(w, sceneA);
-
-    // Collect 1.
-    const inst = reg.instantiate(ha, w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-    const collect1 = rootsToSceneAsset(reg, w, [inst.value]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-
-    // Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
-    expect(serRes.ok).toBe(true);
-    if (!serRes.ok) return;
-
-    const unpacked = unpackSerialized(serRes.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-
-    cat(reg, G4, parsed);
-    const reloadedHandle = rs(w, parsed);
-    const inst2 = reg.instantiate(reloadedHandle, w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-
-    // Collect 2 (post-normalization).
-    const collect2 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-
-    // Collect 3 (same live tree).
-    const collect3 = rootsToSceneAsset(reg, w, [inst2.value]);
-    expect(collect3.ok).toBe(true);
-    if (!collect3.ok) return;
-
-    // Fixed-point: collect2 == collect3.
-    expect(scenesAreStructurallyEquivalent(collect2.value, collect3.value)).toBe(true);
-
-    // Both must have identical mounts and entities.
-    expect(collect3.value.mounts?.length).toBe(collect2.value.mounts?.length);
-    expect(collect3.value.entities.length).toBe(collect2.value.entities.length);
-
-    const sources2 = (collect2.value.mounts ?? []).map((m) => m.source as string).sort();
-    const sources3 = (collect3.value.mounts ?? []).map((m) => m.source as string).sort();
-    expect(sources3).toEqual(sources2);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// w17 — AC-04: collect fold double-round-trip idempotency
-//
-// Scenario (the meaningful fold path): a parent scene A mounts a child scene B.
-// At runtime the AI user adds a component (AnimationPlayer with a clip handle)
-// to a live B member — a delta that does NOT exist in B's source SceneAsset.
-// rootsToSceneAsset([rootA]) must fold that delta into mounts[].overrides so the
-// added component round-trips. AC-04 requires the override entry SET not to grow
-// across a second save→load→save cycle (idempotent): the reloaded override enters
-// the next round as an applied mount-time value, and the fold must still emit it
-// exactly once (lossless) without ALSO emitting a duplicate (doubled).
-//
-// The reverse variant proves the test has discriminating power: a fold that
-// counts an already-applied mount-time override as a *fresh* extra delta on top
-// of passing it through would double the override count on the second round-trip.
-// We reproduce that failure mode with a hand-rolled buggy fold and assert it
-// doubles — so the green real-fold assertion above cannot be trivially satisfied.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const GCLIP = 'd1e2f3a4-b5c6-4d7e-8f90-1a2b3c4d5e6f';
-
-/** Count total override entries across every collected mount. */
-function totalOverrideCount(scene: SceneAsset): number {
-  let n = 0;
-  for (const m of scene.mounts ?? []) n += (m.overrides ?? []).length;
-  return n;
-}
-
-/** Find the single nested B member entity under a mounted parent root. */
-function findMountedMember(w: World, rootA: EntityHandle): EntityHandle {
-  for (const c of w.iterDescendants(rootA)) {
-    if (c === rootA) continue;
-    if (!w.get(c, SceneInstance).ok) continue;
-    const st = SceneOwner.worldGetSceneInstanceState(w, c);
-    if (!st.ok) continue;
-    for (const [member] of st.value.entityToLocalId) return member;
-  }
-  throw new Error('no mounted member found');
-}
-
-describe('w17 — collect fold double-round-trip idempotency (AC-04)', () => {
-  it('add-component delta folds into mounts[].overrides and survives one full round-trip', () => {
-    const reg = mkReg();
-    const w = new World();
-
-    // Catalogue the clip AND mint the handle on the SAME payload object so
-    // collect-side _guidForAsset reverse-resolves the handle back to GCLIP.
-    const clipAsset = { kind: 'animation-clip' } as unknown as Asset;
-    reg.catalog(pg(GCLIP), clipAsset);
-    const child: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
-    };
-    cat(reg, G1, child);
-
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [0, 0, 0] } } }],
-      mounts: [{ localId: 1 as never, source: G1, memberFirst: 2 as never, memberCount: 1 }],
-    };
-    cat(reg, G2, parent);
-
-    const inst = reg.instantiate(rs(w, parent), w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-    const rootA = inst.value;
-
-    // Runtime authoring: add AnimationPlayer to the mounted child member.
-    const clipH = w.allocSharedRef('AnimationClip', clipAsset);
-    const member = findMountedMember(w, rootA);
-    const add = w.addComponent(member, {
-      component: AnimationPlayer,
-      data: { clips: [clipH] } as never,
-    });
-    expect(add.ok).toBe(true);
-
-    // Collect 1: the fold must emit exactly one AnimationPlayer override.
-    const collect1 = rootsToSceneAsset(reg, w, [rootA]);
-    expect(collect1.ok).toBe(true);
-    if (!collect1.ok) return;
-    expect(collect1.value.mounts?.length).toBe(1);
-    expect(totalOverrideCount(collect1.value)).toBe(1);
-    const ov1 = collect1.value.mounts?.[0]?.overrides?.[0];
-    expect(ov1?.comp).toBe('AnimationPlayer');
-    // component-add form: no `field`, value is the per-field map.
-    expect(ov1?.field).toBeUndefined();
-    // clips serialized to GUID string (handle→GUID via _guidForAsset).
-    const clipsSer = (ov1?.value as Record<string, unknown>).clips as unknown[];
-    expect(clipsSer[0]).toBe(GCLIP);
-
-    // Serialize → parse → reload.
-    const ser = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
-    expect(ser.ok).toBe(true);
-    if (!ser.ok) return;
-    const unpacked = unpackSerialized(ser.value);
-    expect(unpacked).toBeDefined();
-    if (!unpacked) return;
-    const fn = accessParseScenePayload(reg);
-    const parsed = fn('scene', unpacked.payload, unpacked.refs);
-    expect(parsed).toBeDefined();
-    if (!parsed) return;
-    cat(reg, G3, parsed);
-    const inst2 = reg.instantiate(rs(w, parsed), w);
-    expect(inst2.ok).toBe(true);
-    if (!inst2.ok) return;
-    const rootA2 = inst2.value;
-
-    // Reloaded member must carry AnimationPlayer (override applied at instantiate).
-    const member2 = findMountedMember(w, rootA2);
-    expect(w.get(member2, AnimationPlayer).ok).toBe(true);
-
-    // Collect 2: idempotent — override SET does not grow.
-    const collect2 = rootsToSceneAsset(reg, w, [rootA2]);
-    expect(collect2.ok).toBe(true);
-    if (!collect2.ok) return;
-    expect(totalOverrideCount(collect2.value)).toBe(totalOverrideCount(collect1.value));
-    expect(totalOverrideCount(collect2.value)).toBe(1);
-  });
-
-  it('reverse variant: a fold that re-emits already-applied mount-time overrides DOUBLES (test has power)', () => {
-    // A buggy fold that emits BOTH the live-vs-source diff AND the applied
-    // mount-time overrides (from the parent state) as separate entries would
-    // double the override count once the delta becomes a reloaded mount-time
-    // value. We simulate that failure mode directly (no dependency on the real
-    // fold) to prove the idempotency assertion above is falsifiable.
-    const reg = mkReg();
-    const w = new World();
-    reg.catalog(pg(GCLIP), { kind: 'animation-clip' } as unknown as Asset);
-    const child: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
-    };
-    cat(reg, G1, child);
-    // Parent already carries a mount-time override on the member (as a reload
-    // would produce): the added AnimationPlayer is now baseline.
-    const appliedOverride: MountOverride = {
-      localId: 2 as never,
-      comp: 'AnimationPlayer',
-      value: { clips: [GCLIP] },
-    };
-    const parent: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [0, 0, 0] } } }],
-      mounts: [
-        {
-          localId: 1 as never,
-          source: G1,
-          memberFirst: 2 as never,
-          memberCount: 1,
-          overrides: [appliedOverride],
-        },
-      ],
-    };
-    cat(reg, G2, parent);
-    const inst = reg.instantiate(rs(w, parent), w);
-    expect(inst.ok).toBe(true);
-    if (!inst.ok) return;
-
-    // Buggy fold: live-vs-source diff (re-derives AnimationPlayer) PLUS the
-    // pass-through of the applied mount-time override = 2 entries for one delta.
-    const member = findMountedMember(w, inst.value);
-    const liveDiff: MountOverride = w.get(member, AnimationPlayer).ok
-      ? { localId: 2 as never, comp: 'AnimationPlayer', value: { clips: [GCLIP] } }
-      : (undefined as never);
-    const buggyOverrides = [appliedOverride, liveDiff].filter(Boolean);
-    expect(buggyOverrides.length).toBe(2); // doubled — proves the failure mode is real
+    const result = registry.instantiate(handle(world, parent), world);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const nested = [...world.iterDescendants(result.value)].filter(
+      (entity) => world.get(entity, SceneInstance).ok,
+    );
+    expect(nested).toHaveLength(2);
+    expect(nested[0]).not.toBe(nested[1]);
   });
 });

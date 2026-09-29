@@ -1,3 +1,4 @@
+import type { RuntimeErrorCode } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
   ObservationUnavailableDetail,
@@ -14,6 +15,14 @@ import type {
 } from '../index';
 
 const expectedCodes = [
+  'camera-view-invalid',
+  'projected-decal-invalid',
+  'planar-reflection-invalid',
+  'render-publication-invalid',
+  'auto-exposure-invalid-parameter',
+  'auto-exposure-capability-unavailable',
+  'auto-exposure-stale-generation',
+  'auto-exposure-stage-failed',
   'lifecycle-construction-failed',
   'world-lease-invalid',
   'frame-input-invalid',
@@ -29,11 +38,22 @@ const expectedCodes = [
   'frame-receipt-stale',
   'renderer-contract-failed',
   'observation-unavailable',
+  'scene-data-unavailable',
+  'taa-unavailable',
+  'dynamic-resolution-invalid-parameter',
+  'dynamic-resolution-requires-taa',
+  'dynamic-resolution-timing-unavailable',
+  'barrel-distortion-invalid-parameter',
+  'lens-effects-invalid-parameter',
+  'outline-invalid-parameter',
+  'motion-blur-invalid-params',
+
   'shadow-invalid-config',
   'equirect-projection-failed',
-  'hdrp-light-budget-exceeded',
-  'hdrp-index-list-overflow',
-  'hdrp-deferred-caps-insufficient',
+  'standard-light-budget-exceeded',
+  'standard-cluster-index-overflow',
+  'standard-cluster-transport-unavailable',
+  'standard-profile-invalid',
   'point-shadow-atlas-uninitialized',
   'point-shadow-atlas-bounds-violation',
   'video-upload-unsupported',
@@ -42,6 +62,7 @@ const expectedCodes = [
   'skin-palette-overflow',
   'skin-material-mismatch',
   'material-skin-attr-missing',
+  'transmission-capability-missing',
   'render-feature-registration-conflict',
   'render-feature-stage-failed',
   'render-feature-capability-missing',
@@ -49,12 +70,36 @@ const expectedCodes = [
   'render-feature-preparation-failed',
   'render-feature-prepared-state-mismatch',
   'render-feature-draw-recording-failed',
+  'environment-source-conflict',
+  'fog-cardinality',
+  'sun-cardinality',
+  'taa-caps-insufficient',
+  'environment-generation-failed',
+  'atmosphere-invalid-parameter',
+  'owner-stage-failed',
   'points-lines-invalid-style',
   'points-lines-topology-mismatch',
   'points-lines-style-unsupported',
   'points-lines-material-unsupported',
   'points-lines-budget-exceeded',
   'points-lines-prepare-failed',
+  'light-resource-unavailable',
+  'render-target-descriptor-invalid',
+  'render-target-capability-missing',
+  'render-target-state-invalid',
+  'render-target-operation-failed',
+  'reflection-probe-budget-exceeded',
+  'render-intent-invalid',
+  'volume-owner-conflict',
+  'volume-density-shape-mismatch',
+  'volume-invalid-bounds',
+  'volume-invalid-parameters',
+  'projector-binding-failed',
+  'cloud-layer-invalid-parameter',
+  'cloud-layer-owner-conflict',
+  'cloud-layer-cache-invalid',
+  'cloud-layer-capability-missing',
+  'cloud-layer-resource-failed',
 ] as const satisfies readonly RenderErrorCode[];
 type ExpectedCodeUnion = (typeof expectedCodes)[number];
 
@@ -88,6 +133,13 @@ describe('RenderError code owner', () => {
     // @ts-expect-error unknown codes cannot be assigned to the public alias either.
     const unknownCode: PublicRenderErrorCode = 'render-error-code-not-real';
     void unknownCode;
+  });
+
+  it('keeps retired HDRP error namespaces out of every public code union', () => {
+    type RetiredRenderCode = Extract<RenderErrorCode, `hdrp-${string}`>;
+    type RetiredRuntimeCode = Extract<RuntimeErrorCode, `hdrp-${string}`>;
+    expectTypeOf<RetiredRenderCode>().toEqualTypeOf<never>();
+    expectTypeOf<RetiredRuntimeCode>().toEqualTypeOf<never>();
   });
 
   it('preserves correlated detail and value declarations', () => {

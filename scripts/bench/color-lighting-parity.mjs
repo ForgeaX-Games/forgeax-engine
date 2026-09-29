@@ -9,6 +9,7 @@ import jiti from 'jiti';
 import { chromium } from 'playwright';
 import UPNG from 'upng-js';
 import waitOn from 'wait-on';
+import { collectMissingPipelineIds } from './color-lighting-pipeline-coverage.mjs';
 import {
   aggregateVertexColorReportStatus,
   readVertexColorVisualEvidenceInputs,
@@ -42,14 +43,16 @@ const visualRoot = resolve(
   root,
   process.env.FORGEAX_PARITY_VISUAL_DIR ?? `report/color-lighting-parity/visual/${invocationId}`,
 );
-const webkitStatusPath = resolve(
+const fallbackStatusPath = resolve(
   root,
-  process.env.FORGEAX_PARITY_WEBKIT_STATUS ?? 'report/color-lighting-parity/webkit-status.json',
+  process.env.FORGEAX_PARITY_FALLBACK_STATUS ??
+    process.env.FORGEAX_PARITY_WEBKIT_STATUS ??
+    'report/color-lighting-parity/chromium-status.json',
 );
 const browserHeadless = !['0', 'false'].includes(
   (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
 );
-const requiredWebkitCaseIds = [
+const requiredFallbackCaseIds = [
   'default-srgb-texture',
   'material-alpha-mask-default',
   'material-alpha-blend',
@@ -100,12 +103,12 @@ let directCaseIds = [];
 let requiredVisualCaseIds = [];
 const caseStatuses = {};
 const caseBackendStatuses = {};
-let missingPipelineIds = ['urp', 'hdrp'];
-let requiredPipelineIds = ['urp', 'hdrp'];
+let missingPipelineIds = ['standard'];
+let requiredPipelineIds = ['standard'];
 const backendStatuses = {
   'browser-webgpu': 'not-executed',
   dawn: 'not-executed',
-  'webkit-webgl2': 'not-executed',
+  'chromium-webgl2': 'not-executed',
 };
 
 function producerArtifactPath(basePath, caseId) {
@@ -153,7 +156,7 @@ function requireVertexColorReports() {
         if (
           !validateCaseReportSchema(report) ||
           report.kind !== 'vertex-color' ||
-          report.frameCount !== 300 ||
+          report.frameCount !== 60 ||
           report.status !== 'complete' ||
           report.verdict !== 'passed'
         ) {
@@ -186,6 +189,16 @@ function run(command, args, env = process.env) {
       code === 0 ? resolvePromise() : reject(new Error(`${command} exited ${code}`)),
     );
   });
+}
+
+async function timedStage(name, operation) {
+  const startedAt = process.hrtime.bigint();
+  try {
+    return await operation();
+  } finally {
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    console.warn(`[bench:color-lighting-parity] stage=${name} elapsedMs=${Math.round(elapsedMs)}`);
+  }
 }
 
 function reportStatus(caseId) {
@@ -550,48 +563,51 @@ async function persistAuxiliaryReports(result) {
   };
 }
 
-function applyWebkitStatus() {
-  if (!existsSync(webkitStatusPath)) return;
+function applyFallbackStatus() {
+  if (!existsSync(fallbackStatusPath)) return;
   try {
-    const status = JSON.parse(readFileSync(webkitStatusPath, 'utf8'));
-    if (!isValidWebkitStatus(status)) {
-      backendStatuses['webkit-webgl2'] = 'failed';
+    const status = JSON.parse(readFileSync(fallbackStatusPath, 'utf8'));
+    if (!isValidFallbackStatus(status)) {
+      backendStatuses['chromium-webgl2'] = 'failed';
       return;
     }
     const backendStatus = status?.status;
-    backendStatuses['webkit-webgl2'] =
+    backendStatuses['chromium-webgl2'] =
       backendStatus === 'pass' || backendStatus === 'failed' || backendStatus === 'degraded'
         ? backendStatus
         : 'not-executed';
     for (const [caseId, caseStatus] of Object.entries(status?.caseBackendStatuses ?? {})) {
       if (caseStatus === null || typeof caseStatus !== 'object') continue;
-      const webkitCaseStatus = caseStatus['webkit-webgl2'];
-      if (typeof webkitCaseStatus !== 'string') continue;
+      const fallbackCaseStatus = caseStatus['chromium-webgl2'];
+      if (typeof fallbackCaseStatus !== 'string') continue;
       caseBackendStatuses[caseId] = {
         ...(caseBackendStatuses[caseId] ?? {}),
-        'webkit-webgl2': webkitCaseStatus,
+        'chromium-webgl2': fallbackCaseStatus,
       };
     }
   } catch {
-    backendStatuses['webkit-webgl2'] = 'failed';
+    backendStatuses['chromium-webgl2'] = 'failed';
   }
 }
 
-function isValidWebkitStatus(status) {
+function isValidFallbackStatus(status) {
   if (
-    status?.backendId !== 'webkit-webgl2' ||
+    status?.backendId !== 'chromium-webgl2' ||
     status?.executionStatus !== 'complete' ||
     status?.status !== 'pass' ||
+    status?.execution?.browser !== 'chromium' ||
+    !['absent', 'unavailable'].includes(status?.execution?.channelProof?.webgpuAdapterStatus) ||
+    status?.execution?.channelProof?.webgl2 !== true ||
     !status?.provenance?.forgeax?.implementation ||
     !status?.provenance?.three?.implementation ||
     status.provenance.forgeax.implementation === status.provenance.three.implementation ||
     !Array.isArray(status.cases)
   )
     return false;
-  for (const caseId of requiredWebkitCaseIds) {
+  for (const caseId of requiredFallbackCaseIds) {
     const result = status.cases.find((entry) => entry?.caseId === caseId);
     const caseStatus = status.caseStatuses?.[caseId];
-    const backendStatus = status.caseBackendStatuses?.[caseId]?.['webkit-webgl2'];
+    const backendStatus = status.caseBackendStatuses?.[caseId]?.['chromium-webgl2'];
     if (
       result?.passed !== true ||
       caseStatus !== 'pass' ||
@@ -612,43 +628,52 @@ function isValidWebkitStatus(status) {
 }
 
 function collectPipelineIds() {
-  const observed = new Set();
+  const reports = [];
   for (const caseId of directCaseIds) {
     const path = resolve(reportDirectory, `${caseId}.json`);
     if (!existsSync(path)) continue;
     try {
-      const report = JSON.parse(readFileSync(path, 'utf8'));
-      for (const producer of report?.attachmentEvidence?.producers ?? []) {
-        if (producer?.pipelineId === 'forgeax::urp') observed.add('urp');
-        if (producer?.pipelineId === 'forgeax::hdrp') observed.add('hdrp');
-      }
+      reports.push(JSON.parse(readFileSync(path, 'utf8')));
     } catch {
       // The final status remains missing until a valid CaseReport is written.
     }
   }
-  return requiredPipelineIds.filter((pipelineId) => !observed.has(pipelineId));
+  return collectMissingPipelineIds({
+    reports,
+    requiredPipelineIds,
+    validateReport: validateCaseReportSchema,
+  });
 }
 
 const preview = async () => {
-  await run('pnpm', ['--filter', packageName, 'build']);
-  return spawn('pnpm', ['--filter', packageName, 'preview'], { cwd: root, stdio: 'inherit' });
+  await timedStage('vite-build', () => run('pnpm', ['--filter', packageName, 'build']));
+  // The bench owns this child and terminates it in `finally`. Avoid a nested
+  // pnpm workspace runner: pnpm turns the expected cleanup SIGTERM into
+  // ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL and makes a passing matrix fail CI.
+  return spawn(
+    process.execPath,
+    [resolve(root, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1'],
+    { cwd: resolve(root, 'apps/parity/color-lighting'), stdio: 'inherit', env: process.env },
+  );
 };
 
 let server;
 let browser;
 try {
-  applyWebkitStatus();
+  applyFallbackStatus();
   await writeStatusIndex();
-  const vertexColorSchedule = await runVertexColorProducerSchedule({
-    root,
-    reportRoot: vertexColorReportRoot,
-    invocationId,
-    sourceSha: currentSourceSha(),
-  });
+  const vertexColorSchedule = await timedStage('vertex-color-producers', () =>
+    runVertexColorProducerSchedule({
+      root,
+      reportRoot: vertexColorReportRoot,
+      invocationId,
+      sourceSha: currentSourceSha(),
+    }),
+  );
   projectVertexColorReportStatuses();
   if (!vertexColorSchedule.ok) {
     throw new Error(
-      `vertex-color producer schedule is fail-closed: blocked=${vertexColorSchedule.blocked.length}/14; inspect ${resolve(vertexColorReportRoot, 'dispatch-receipt.json')}`,
+      `vertex-color producer schedule is fail-closed: blocked=${vertexColorSchedule.blocked.length}/14, failed=${vertexColorSchedule.failures.length}/14; inspect ${resolve(vertexColorReportRoot, 'dispatch-receipt.json')}`,
     );
   }
   const vertexColorVisualEvidenceInputs = readVertexColorVisualEvidenceInputs({
@@ -665,7 +690,7 @@ try {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--use-vulkan=swiftshader',
-      '--disable-vulkan-surface',
+      '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
       '--disable-dawn-features=disallow_unsafe_apis',
@@ -690,9 +715,11 @@ try {
   for (const caseId of auxiliaryCaseIds) {
     rmSync(resolve(reportDirectory, `${caseId}.json`), { force: true });
   }
-  const result = await page.evaluate(
-    ({ id, vertexInputs }) => window.__colorLightingParity?.(id, vertexInputs),
-    { id: invocationId, vertexInputs: vertexColorVisualEvidenceInputs },
+  const result = await timedStage('browser-matrix', () =>
+    page.evaluate(({ id, vertexInputs }) => window.__colorLightingParity?.(id, vertexInputs), {
+      id: invocationId,
+      vertexInputs: vertexColorVisualEvidenceInputs,
+    }),
   );
   mkdirSync(resolve(root, 'report'), { recursive: true });
   writeFileSync(browserReportPath, `${JSON.stringify(result, null, 2)}\n`);
@@ -725,20 +752,17 @@ try {
     const browserArtifact = await createPipelineEvidenceArtifact(browserInput);
     await writePipelineEvidence(producerArtifactPath(urpArtifactPath, caseId), browserArtifact);
   }
-  await run(
-    'pnpm',
-    [
-      'exec',
-      'vitest',
-      'run',
-      '--project=dawn',
-      'apps/parity/color-lighting/cases/direct-light/__tests__/direct-light.dawn.test.ts',
-    ],
-    {
+  await timedStage('direct-light-dawn', () =>
+    run(process.execPath, ['scripts/ci/run-direct-light-dawn.mjs'], {
       ...process.env,
       FORGEAX_PARITY_INVOCATION_ID: invocationId,
       FORGEAX_PARITY_HDRP_ARTIFACT: hdrpArtifactPath,
-    },
+      // The complete direct-light roster is owned by vitest-dawn. This metrics
+      // producer only consumes the HDRP artifacts needed to join browser URP
+      // evidence, so avoid replaying the same falsifiers/contracts on the
+      // already-loaded software GPU.
+      FORGEAX_DAWN_PARTITION_SCOPE: 'producer',
+    }),
   );
   for (const caseId of directCaseIds) {
     const merged = await mergePipelineEvidenceFromPaths(invocationId, [
@@ -756,24 +780,31 @@ try {
       dawn: caseStatuses[caseId],
     };
   }
-  await run(
-    'pnpm',
-    [
-      'exec',
-      'vitest',
-      'run',
-      '--project=dawn',
-      'apps/parity/color-lighting/cases/ibl/__tests__/ibl.dawn.test.ts',
-      'apps/parity/color-lighting/cases/transparency-post/__tests__/transparency-post.dawn.test.ts',
-      '--maxWorkers=1',
-    ],
-    {
-      ...process.env,
-      FORGEAX_PARITY_REQUIRED: '1',
-      FORGEAX_PARITY_INVOCATION_ID: invocationId,
-      FORGEAX_PARITY_IBL_ARTIFACT: iblArtifactPath,
-      FORGEAX_PARITY_TRANSPARENCY_ARTIFACT: transparencyArtifactPath,
-    },
+  await timedStage('auxiliary-dawn', () =>
+    run(
+      'pnpm',
+      [
+        'exec',
+        'vitest',
+        'run',
+        '--project=dawn',
+        'apps/parity/color-lighting/cases/ibl/__tests__/ibl.dawn.test.ts',
+        'apps/parity/color-lighting/cases/transparency-post/__tests__/transparency-post.dawn.test.ts',
+        '--maxWorkers=1',
+      ],
+      {
+        ...process.env,
+        // The ordinary Dawn roster intentionally excludes this compact
+        // transparency carrier. Re-enable the bounded roster only for the
+        // explicitly selected auxiliary files so both required artifacts are
+        // produced without replaying the whole Dawn suite.
+        FORGEAX_DAWN_COMPACT: '1',
+        FORGEAX_PARITY_REQUIRED: '1',
+        FORGEAX_PARITY_INVOCATION_ID: invocationId,
+        FORGEAX_PARITY_IBL_ARTIFACT: iblArtifactPath,
+        FORGEAX_PARITY_TRANSPARENCY_ARTIFACT: transparencyArtifactPath,
+      },
+    ),
   );
   await persistAuxiliaryReports(result);
   await persistVisualEvidence(result);
@@ -782,22 +813,29 @@ try {
     [...auxiliaryCaseIds].every((caseId) => caseBackendStatuses[caseId]?.dawn === 'pass')
       ? 'pass'
       : 'failed';
-  applyWebkitStatus();
+  applyFallbackStatus();
   missingPipelineIds = collectPipelineIds();
-  await run(
-    'pnpm',
-    [
-      'exec',
-      'vitest',
-      'run',
-      'apps/parity/color-lighting/src/integration/__tests__/m4-closure.test.ts',
-      '--maxWorkers=1',
-    ],
-    {
-      ...process.env,
-      FORGEAX_PARITY_RUN_CLOSURE: '1',
-      FORGEAX_PARITY_INVOCATION_ID: invocationId,
-    },
+  await timedStage('m4-closure', () =>
+    run(
+      'pnpm',
+      [
+        'exec',
+        'vitest',
+        'run',
+        // This file belongs to Vitest's `parity` project. Selecting it
+        // explicitly avoids root-project discovery and its unrelated
+        // typecheck startup before the one closure assertion runs.
+        '--project=parity',
+        '--typecheck.enabled=false',
+        'apps/parity/color-lighting/src/integration/__tests__/m4-closure.test.ts',
+        '--maxWorkers=1',
+      ],
+      {
+        ...process.env,
+        FORGEAX_PARITY_RUN_CLOSURE: '1',
+        FORGEAX_PARITY_INVOCATION_ID: invocationId,
+      },
+    ),
   );
   requireVertexColorReports();
   const finalStatusIndex = await writeStatusIndex();

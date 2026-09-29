@@ -6,6 +6,8 @@ import {
 
 export interface ProductionDeclaration {
   readonly sourceKey: string;
+  /** Absolute source path captured by the inventory generation. */
+  readonly sourcePath?: string;
   readonly guids: readonly string[];
   readonly format?: 'meta.json' | 'pack.json' | 'pack.ts';
 }
@@ -183,6 +185,7 @@ export function createProductionSession<TState = undefined>(
       intent === 'materialize'
         ? generation === acceptedGeneration
         : generation === currentGeneration;
+    let stage: 'scan' | 'produce' | 'commit' = 'scan';
     try {
       const declarations =
         selectedDeclarations ??
@@ -192,6 +195,7 @@ export function createProductionSession<TState = undefined>(
           signal,
           state,
         }));
+      stage = 'produce';
       for (const declaration of declarations) {
         await options.produce({
           generation: input.generation,
@@ -205,6 +209,7 @@ export function createProductionSession<TState = undefined>(
         await discard(publication);
         return { status: 'stale', generation: input.generation };
       }
+      stage = 'commit';
       await options.publish(publication);
       if (closed || signal.aborted || !isCurrent(input.generation)) {
         await discard(publication);
@@ -226,11 +231,11 @@ export function createProductionSession<TState = undefined>(
         return { status: 'stale', generation: input.generation };
       }
       let failure = createPluginPackFailure({
-        code: 'produce-failed',
+        code: `${stage}-failed`,
         expected: 'the production task completes with a validated product',
         hint: 'inspect the source, repair the producer, rebuild, verify, and retry',
         detail: {
-          stage: 'produce',
+          stage,
           ...(input.sourceKeys[0] === undefined ? {} : { subject: input.sourceKeys[0] }),
         },
         cause: error,
@@ -272,8 +277,12 @@ export function createProductionSession<TState = undefined>(
 
   const materialize = (guid: string): Promise<ProductionRunResult> =>
     (async (): Promise<ProductionRunResult> => {
-      const startedResult = await start();
-      if (startedResult.status !== 'accepted') return startedResult;
+      // Startup is a one-shot attempt; a later accepted rebuild owns readiness.
+      if (acceptedGeneration === undefined) {
+        const startedResult = await start();
+        if (acceptedGeneration === undefined) return startedResult;
+      }
+      const generation = acceptedGeneration;
       const guidLower = guid.toLowerCase();
       const declaration = acceptedDeclarations?.find((candidate) =>
         candidate.guids.some((candidateGuid) => candidateGuid.toLowerCase() === guidLower),
@@ -281,7 +290,7 @@ export function createProductionSession<TState = undefined>(
       if (declaration === undefined) {
         return {
           status: 'failed',
-          generation: startedResult.generation,
+          generation,
           error: createPluginPackFailure({
             code: 'route-failed',
             expected: `the accepted inventory to declare ${guid}`,
@@ -292,7 +301,7 @@ export function createProductionSession<TState = undefined>(
       }
       return schedule(
         {
-          generation: acceptedGeneration ?? startedResult.generation,
+          generation,
           sourceKeys: [declaration.sourceKey],
         },
         [declaration],

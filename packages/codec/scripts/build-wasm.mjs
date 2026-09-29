@@ -224,6 +224,10 @@ const ENCODER_DEFS = [
 const TRANSCODER_LINK = [
   '--bind',
   '-O3',
+  // Mini-game runtimes can disable Function/eval. Emit Embind invokers at
+  // build time so the runtime transcoder can initialize without them.
+  '-s', 'DYNAMIC_EXECUTION=0',
+  '-s', 'EMBIND_AOT=1',
   '-s', 'ALLOW_MEMORY_GROWTH=1',
   '-s', 'MALLOC=emmalloc',
   '-s', 'MODULARIZE=1',

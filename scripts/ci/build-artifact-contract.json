@@ -5,7 +5,7 @@
   "artifactClasses": {
     "engine-dist": {
       "description": "Package dist outputs (engine runtime, types, ECS, math, all packages)",
-      "fileClasses": ["packages/*/dist"],
+      "fileClasses": ["packages/*/dist", "packages/preview/assets/canonical-kit"],
       "producer": "core-build",
       "transferArtifact": "core-build"
     },
@@ -40,20 +40,35 @@
       "transferArtifact": "shared-app-inputs"
     },
     "app-dist-0": {
-      "description": "App shader manifests produced by app-shard-0; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "description": "App-owned shader manifest deltas plus roster-declared minimal Pack closures produced by app-shard-0; the heavy Sponza smoke closure is intentionally omitted from transfer and built by the owning smoke-fleet-0 model-loading consumer; shared engine rows are restored by the consumer and payload membership is proven by its artifact inventory.",
+      "fileClasses": [
+        "apps/**/dist/shaders/manifest.json",
+        "apps/**/dist/pack-index.json",
+        "apps/**/dist/assets/*-body.bin",
+        "apps/**/dist/assets/*.pack*.json"
+      ],
       "producer": "app-shard-0",
       "transferArtifact": "app-dist-0"
     },
     "app-dist-1": {
-      "description": "App shader manifests produced by app-shard-1; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "description": "App-owned shader manifest deltas plus roster-declared minimal Pack closures produced by app-shard-1; shared engine rows are restored by the consumer and payload membership is proven by its artifact inventory.",
+      "fileClasses": [
+        "apps/**/dist/shaders/manifest.json",
+        "apps/**/dist/pack-index.json",
+        "apps/**/dist/assets/*-body.bin",
+        "apps/**/dist/assets/*.pack*.json"
+      ],
       "producer": "app-shard-1",
       "transferArtifact": "app-dist-1"
     },
     "app-dist-2": {
-      "description": "App shader manifests produced by app-shard-2; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "description": "App-owned shader manifest deltas plus roster-declared minimal Pack closures produced by app-shard-2; shared engine rows are restored by the consumer and payload membership is proven by its artifact inventory.",
+      "fileClasses": [
+        "apps/**/dist/shaders/manifest.json",
+        "apps/**/dist/pack-index.json",
+        "apps/**/dist/assets/*-body.bin",
+        "apps/**/dist/assets/*.pack*.json"
+      ],
       "producer": "app-shard-2",
       "transferArtifact": "app-dist-2"
     }
@@ -114,8 +129,8 @@
       "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "coverage-pnpm": {
-      "description": "Vitest coverage and typecheck gate with perf-budget evidence",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "description": "Vitest coverage gate with ci-core typecheck provenance and perf-budget evidence",
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "coverage-perf": {
       "description": "Uninstrumented ECS and render performance ratio gates",
@@ -123,24 +138,32 @@
     },
     "vitest-browser": {
       "description": "Browser-based vitest tests (chromium WebGPU)",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
+    },
+    "directional-csm-browser": {
+      "description": "Directional CSM browser WebGPU producer",
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "shared-inputs-browser": {
       "description": "Preview asset catalog and Vite shader HMR browser probe",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "multithread-browser-benchmark": {
       "description": "Web TypeScript multithread capability, smoke, and production benchmark",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ]
+      "sourceAppRoots": ["apps/hello/multithreaded-execution"],
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "smoke-fleet": {
-      "description": "Dawn-node headless smoke tests (~50 demos), including app pack carriers",
+      "description": "Dawn-node headless smoke tests (~50 demos), including app pack carriers and the consumer-built Sponza smoke app",
+      "sourceAppRoots": [
+        "apps/hello",
+        "apps/learn-render",
+        "apps/shadertoy",
+        "apps/collectathon",
+        "apps/hello-multi-uv",
+        "apps/perf/10k-cubes-lights",
+        "apps/perf/shadow-stress"
+      ],
       "requiredArtifactClasses": [
         "engine-dist",
         "wasm-runtime",
@@ -151,23 +174,21 @@
       ]
     },
     "bevy-smoke-fleet": {
-      "description": "Bevy Dawn-node build and smoke pairs, including app pack carriers",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2",
-        "shared-engine-shaders"
-      ]
+      "description": "Bevy Dawn-node build and smoke pairs; each pair builds its own app",
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "vitest-dawn": {
       "description": "Dawn-native vitest tests",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "shared-asset-pack",
+        "shared-engine-shaders"
+      ]
     },
     "webkit-fallback": {
-      "description": "WebKit verify gate",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "description": "Chromium WebGL2 fallback verify gate (protected context compatibility key)",
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "deferred-membership-corpus": {
       "description": "Deferred membership matrix producers and exact CPU-only join",
@@ -175,23 +196,28 @@
     },
     "portability-bun": {
       "description": "Bun channel portability gate (6 aligned base gates)",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "metrics-validate": {
       "description": "Metrics validation (FPS, bench, bundle-size)",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "metrics-validate-browser": {
       "description": "Browser and color metrics producer",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "metrics-validate-runtime": {
       "description": "Runtime and FPS metrics producer",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": ["engine-dist", "wasm-runtime", "shared-engine-shaders"]
     },
     "collectathon-boot-e2e": {
       "description": "Collectathon game bootstrap e2e test",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"]
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "wasm-fbx",
+        "shared-engine-shaders"
+      ]
     },
     "publish-fbx-wasm-release": {
       "description": "Publish the FBX WASM payload from core-build on a main push",
@@ -227,26 +253,32 @@
     },
     {
       "jobIdentity": "primary-pnpm",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
       "consumer": "primary-pnpm"
     },
     {
       "jobIdentity": "vitest-browser-shard",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
       "consumer": "vitest-browser"
     },
     {
+      "jobIdentity": "directional-csm-browser",
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
+      "consumer": "directional-csm-browser"
+    },
+    {
       "jobIdentity": "shared-inputs-browser",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["post-merge-gate", "shared-app-inputs"],
       "consumer": "shared-inputs-browser"
     },
     {
       "jobIdentity": "multithread-browser-benchmark",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
       "consumer": "multithread-browser-benchmark"
     },
     {
@@ -257,32 +289,32 @@
     },
     {
       "jobIdentity": "bevy-smoke-fleet",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
       "consumer": "bevy-smoke-fleet"
     },
     {
-      "jobIdentity": "coverage-pnpm",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "jobIdentity": "coverage-pnpm-shard",
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
       "consumer": "coverage-pnpm"
     },
     {
       "jobIdentity": "coverage-perf",
-      "artifactProvider": "build-artifacts",
+      "artifactProvider": "core-build",
       "allowedNonArtifactPrerequisites": ["post-merge-gate"],
       "consumer": "coverage-perf"
     },
     {
       "jobIdentity": "vitest-dawn",
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "allowedNonArtifactPrerequisites": ["post-merge-gate", "shared-app-inputs"],
       "consumer": "vitest-dawn"
     },
     {
       "jobIdentity": "webkit-fallback",
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "allowedNonArtifactPrerequisites": ["post-merge-gate", "shared-app-inputs"],
       "consumer": "webkit-fallback"
     },
     {
@@ -294,13 +326,22 @@
     {
       "jobIdentity": "metrics-validate-browser",
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate", "webkit-fallback", "smoke-fleet"],
+      "allowedNonArtifactPrerequisites": [
+        "shared-app-inputs",
+        "post-merge-gate",
+        "webkit-fallback"
+      ],
       "consumer": "metrics-validate-browser"
     },
     {
       "jobIdentity": "metrics-validate-runtime",
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate", "smoke-fleet"],
+      "allowedNonArtifactPrerequisites": [
+        "shared-app-inputs",
+        "post-merge-gate",
+        "smoke-fleet",
+        "bevy-smoke-fleet"
+      ],
       "consumer": "metrics-validate-runtime"
     },
     {
@@ -310,7 +351,8 @@
         "post-merge-gate",
         "smoke-fleet",
         "metrics-validate-browser",
-        "metrics-validate-runtime"
+        "metrics-validate-runtime",
+        "shared-app-inputs"
       ],
       "consumer": "metrics-validate"
     },
@@ -319,6 +361,12 @@
       "artifactProvider": "build-artifacts",
       "allowedNonArtifactPrerequisites": ["post-merge-gate"],
       "consumer": "collectathon-boot-e2e"
+    },
+    {
+      "jobIdentity": "gpu-pass-timing-contract",
+      "artifactProvider": "core-build",
+      "allowedNonArtifactPrerequisites": ["shared-app-inputs", "post-merge-gate"],
+      "consumer": "primary-pnpm"
     },
     {
       "jobIdentity": "publish-fbx-wasm-release",
@@ -381,7 +429,24 @@
     },
     "payloadClasses": ["shared-asset-pack", "shared-engine-shaders"],
     "artifactOutput": "shared_artifact_id",
-    "readOnlyConsumers": ["primary-pnpm", "smoke-fleet", "bevy-smoke-fleet"]
+    "readOnlyConsumers": [
+      "primary-pnpm",
+      "multithread-browser-benchmark",
+      "coverage-pnpm",
+      "smoke-fleet",
+      "bevy-smoke-fleet",
+      "vitest-dawn",
+      "webkit-fallback",
+      "vitest-browser",
+      "directional-csm-browser",
+      "vitest-dawn",
+      "collectathon-boot-e2e",
+      "portability-bun",
+      "shared-inputs-browser",
+      "metrics-validate",
+      "metrics-validate-browser",
+      "metrics-validate-runtime"
+    ]
   },
   "requiredCIJobRoster": [
     "post-merge-gate",
@@ -402,6 +467,7 @@
     "metrics-validate-runtime",
     "metrics-validate",
     "collectathon-boot-e2e",
+    "gpu-pass-timing-contract",
     "publish-fbx-wasm-release",
     "publish-wgpu-wasm-release",
     "publish-basis-wasm-release",

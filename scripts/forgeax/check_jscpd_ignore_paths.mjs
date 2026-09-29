@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Dual-source SSOT check for .jscpd.json ignore paths (AC-14).
+// Dual-source SSOT check for config/jscpd.json ignore paths (AC-14).
 //
 // jscpd has two ignore vectors with DIFFERENT semantics:
 //   - `ignore` (native jscpd field): array of globs; jscpd silently drops unknown
@@ -14,14 +14,14 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const REPO_ROOT = (() => {
   const url = new URL('../../', import.meta.url);
   return url.pathname.replace(/\/$/, '');
 })();
 
-const CONFIG_PATH = join(REPO_ROOT, '.jscpd.json');
+const CONFIG_PATH = join(REPO_ROOT, 'config/jscpd.json');
 
 let errors = 0;
 function fail(msg) {
@@ -40,7 +40,7 @@ function readConfig() {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    fail(`invalid JSON in .jscpd.json: ${e.message}`);
+    fail(`invalid JSON in config/jscpd.json: ${e.message}`);
     return null;
   }
 }
@@ -48,18 +48,19 @@ function readConfig() {
 async function checkIgnore(cfg) {
   const ignore = cfg.ignore;
   if (!Array.isArray(ignore)) {
-    fail('.jscpd.json#ignore must be an array');
+    fail('config/jscpd.json#ignore must be an array');
     return;
   }
   for (const pattern of ignore) {
     if (typeof pattern !== 'string') {
-      fail(`.jscpd.json#ignore entry not a string: ${JSON.stringify(pattern)}`);
+      fail(`config/jscpd.json#ignore entry not a string: ${JSON.stringify(pattern)}`);
       continue;
     }
     let matchCount = 0;
     try {
       // node:fs/promises glob iterates matches; cap at 1 for early exit
-      for await (const _ of glob(pattern, { cwd: REPO_ROOT })) {
+      const cwd = pattern.startsWith('**/') ? REPO_ROOT : dirname(CONFIG_PATH);
+      for await (const _ of glob(pattern, { cwd })) {
         matchCount++;
         if (matchCount >= 1) break;
       }
@@ -72,7 +73,9 @@ async function checkIgnore(cfg) {
       // (especially for build-artifact globs like target/, dist/ that may not
       // exist in a fresh checkout). If a wrong glob slipped past sweep, the
       // jscpd run itself stays silent — this checker can't tighten beyond that.
-      process.stderr.write(`[WARN] .jscpd.json#ignore pattern matches 0 files: '${pattern}'\n`);
+      process.stderr.write(
+        `[WARN] config/jscpd.json#ignore pattern matches 0 files: '${pattern}'\n`,
+      );
     }
   }
 }
@@ -81,7 +84,7 @@ function checkFilePairIgnore(cfg) {
   const pairs = cfg.filePairIgnore;
   if (pairs == null) return; // optional
   if (!Array.isArray(pairs)) {
-    fail('.jscpd.json#filePairIgnore must be an array');
+    fail('config/jscpd.json#filePairIgnore must be an array');
     return;
   }
   for (let i = 0; i < pairs.length; i++) {
@@ -93,18 +96,18 @@ function checkFilePairIgnore(cfg) {
       paths = entry.files;
     } else {
       fail(
-        `.jscpd.json#filePairIgnore[${i}] must be [pathA, pathB] tuple or { files: [...] } object`,
+        `config/jscpd.json#filePairIgnore[${i}] must be [pathA, pathB] tuple or { files: [...] } object`,
       );
       continue;
     }
     for (const p of paths) {
       if (typeof p !== 'string') {
-        fail(`.jscpd.json#filePairIgnore[${i}] non-string path: ${JSON.stringify(p)}`);
+        fail(`config/jscpd.json#filePairIgnore[${i}] non-string path: ${JSON.stringify(p)}`);
         continue;
       }
       const abs = join(REPO_ROOT, p);
       if (!existsSync(abs)) {
-        fail(`.jscpd.json#filePairIgnore[${i}] path does not exist: '${p}'`);
+        fail(`config/jscpd.json#filePairIgnore[${i}] path does not exist: '${p}'`);
       }
     }
   }
@@ -121,7 +124,7 @@ async function main() {
     process.stderr.write(`[CHECK FAILED] ${errors} issue(s)\n`);
     process.exit(1);
   }
-  process.stdout.write('[OK] .jscpd.json ignore + filePairIgnore paths all valid\n');
+  process.stdout.write('[OK] config/jscpd.json ignore + filePairIgnore paths all valid\n');
 }
 
 main().catch((e) => {

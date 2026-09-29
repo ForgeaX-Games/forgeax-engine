@@ -1,4 +1,27 @@
-export type ToolRealm = 'build' | 'host' | 'engine';
+export type ToolRealm = 'build' | 'host' | 'engine' | 'frontend';
+
+/**
+ * Trusted identity of the plugin fiber that owns a callable contribution.
+ *
+ * This is deliberately data shaped: it may cross a Host transport and never
+ * contains a Context, Fiber, executor, or other live runtime handle.
+ */
+export interface ToolExecutionOwner {
+  readonly providerId: string;
+  readonly sourceId: string;
+  readonly generation: number;
+  readonly realm: ToolRealm;
+  readonly fiberId?: string | number;
+  readonly module?: string;
+}
+
+/** Identity attached by a Host connection, rather than supplied in payload. */
+export interface ToolCallerIdentity {
+  readonly connectionId: string;
+  readonly kind?: 'in-process' | 'websocket' | 'cli' | 'frontend' | 'unknown';
+  readonly sourceId?: string;
+  readonly sourceGeneration?: number;
+}
 
 export type ToolEvidenceKind = 'rhi-tape' | 'profile-capture' | 'png';
 
@@ -80,12 +103,20 @@ export type ToolSchemaResult<T> =
 
 export interface ToolDescriptor<TArgs = unknown, TResult = unknown> {
   readonly id: string;
+  /** Public command path. When omitted, the stable id is split on dots. */
+  readonly path?: readonly string[];
   readonly title: string;
   readonly summary: string;
   readonly realm: ToolRealm;
   readonly argsSchema: ToolSchema<TArgs>;
   readonly resultSchema: ToolSchema<TResult>;
   readonly evidence: readonly ToolEvidenceKind[];
+  /** Optional JSON-schema-shaped projection used by help and SDK callers. */
+  readonly inputSchema?: JsonValue;
+  readonly outputSchema?: JsonValue;
+  readonly capabilities?: readonly string[];
+  readonly errors?: readonly string[];
+  readonly example?: JsonValue;
   /** Domain preview descriptors bind a subject and snapshot without exposing live state. */
   readonly preview?: ToolPreviewContract;
 }
@@ -98,6 +129,10 @@ export interface ToolSnapshotInput {
 export interface ToolExecutionContext {
   readonly runId: string;
   readonly signal: AbortSignal;
+  /** Trusted owner assigned by the API capability, never client input. */
+  readonly owner?: ToolExecutionOwner;
+  /** Trusted caller attached by Host transport or an explicit local owner. */
+  readonly caller?: ToolCallerIdentity;
   readonly snapshot?: SnapshotRef;
   readonly emit: (event: ToolRunEvent) => void;
   readonly addCleanup: (cleanup: () => void | Promise<void>) => void;
@@ -138,7 +173,12 @@ export type ToolExecutorValue<TResult> =
       readonly artifacts?: readonly ArtifactRef[];
       readonly cleanup?: ToolCleanupReport;
     }
-  | { readonly ok: false; readonly error: ToolDomainFailure };
+  | {
+      readonly ok: false;
+      readonly error: ToolDomainFailure;
+      /** Evidence produced before a domain failure remains inspectable. */
+      readonly artifacts?: readonly ArtifactRef[];
+    };
 
 export type ToolExecutorResult<TResult> =
   | ToolExecutorValue<TResult>
@@ -154,6 +194,14 @@ export interface ToolRunOptions extends ToolSnapshotInput {
   readonly deadlineMs?: number;
   readonly evidence?: readonly ToolEvidenceKind[];
   readonly capabilityResolver?: ToolCapabilityResolver;
+  /** Explicit provider route used when one operation has multiple owners. */
+  readonly providerId?: string;
+  readonly sourceId?: string;
+  readonly generation?: number;
+  /** Internal owner context supplied by ToolApiRegistry. */
+  readonly owner?: ToolExecutionOwner;
+  /** Trusted caller context supplied by a Host or local execution owner. */
+  readonly caller?: ToolCallerIdentity;
 }
 
 export type ToolRunEvent =
@@ -181,6 +229,8 @@ export interface ToolRun<TResult> {
   readonly id: string;
   readonly events: AsyncIterable<ToolRunEvent>;
   readonly terminal: Promise<ToolTerminal<TResult>>;
+  /** Resolves only after the executor promise has actually returned or thrown. */
+  readonly executorExited: Promise<void>;
   readonly cancel: (reason?: string) => void;
   readonly disconnect: (transport?: string) => void;
   readonly providerExit: (provider?: string) => void;

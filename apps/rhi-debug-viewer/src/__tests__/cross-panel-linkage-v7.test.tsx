@@ -35,6 +35,7 @@ function model(): ViewerModel {
     commands: [],
     resources: [resource],
     resourceLifecycle: makeEmptyResourceLifecycle(),
+    unseededResources: [],
     works: [work],
     passes: [
       {
@@ -45,6 +46,7 @@ function model(): ViewerModel {
         workIndices: [],
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
+        colorAttachmentResolveViewHandleIds: [],
         depthStencilViewHandleId: null,
       },
       {
@@ -55,6 +57,7 @@ function model(): ViewerModel {
         workIndices: [0],
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
+        colorAttachmentResolveViewHandleIds: [],
         depthStencilViewHandleId: null,
       },
     ],

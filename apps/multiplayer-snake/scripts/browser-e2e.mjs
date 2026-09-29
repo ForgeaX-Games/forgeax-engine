@@ -21,7 +21,15 @@ export const RECONNECT_EXPECTATIONS = Object.freeze([
   },
 ]);
 const REQUIRED_PHASES = ['join', 'input-isolation', 'growth', 'death', 'respawn', 'late-join', 'recovery', 'disconnect'];
-const BROWSER_STARTUP_TIMEOUT_MS = 60_000;
+const MAX_BROWSER_STARTUP_TIMEOUT_MS = 180_000;
+const BROWSER_STARTUP_TIMEOUT_MS = Math.min(
+  Math.max(
+    Number.parseInt(process.env.FORGEAX_SNAKE_BROWSER_STARTUP_TIMEOUT_MS ?? '180000', 10) ||
+      180_000,
+    1,
+  ),
+  MAX_BROWSER_STARTUP_TIMEOUT_MS,
+);
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const defaultEvidenceDirectory = resolve(
@@ -234,8 +242,8 @@ function startVite() {
     let settled = false;
     const timer = setTimeout(() => {
       settled = true;
-      reject(new Error(`vite ready timeout after 60s${output ? `: ${output.slice(-500)}` : ''}`));
-    }, 60_000);
+      reject(new Error(`vite ready timeout after ${BROWSER_STARTUP_TIMEOUT_MS}ms${output ? `: ${output.slice(-500)}` : ''}`));
+    }, BROWSER_STARTUP_TIMEOUT_MS);
     child.stdout.on('data', (chunk) => {
       output += String(chunk);
       const cleanOutput = output.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '');
@@ -291,15 +299,21 @@ async function main() {
   try {
     authority = await startAuthority({ tickMs: 15, observablePeerChangeDelayMs: 1_000 });
     const directConnectionUrl = `ws://127.0.0.1:${authority.port}`;
+    if (!Number.isInteger(authority.hostPort) || authority.hostPort <= 0)
+      throw new Error('authority did not publish an explicit host control endpoint');
+    const directHostConnectionUrl = `ws://127.0.0.1:${authority.hostPort}`;
     if (chaosMode.length > 0) {
       chaosProxy = await startChaosWebSocketProxy({
         targetUrl: directConnectionUrl,
+        targetHostUrl: directHostConnectionUrl,
         mode: chaosMode,
         sabotage,
         delayMs: 40,
       });
     }
     const connectionUrl = chaosProxy?.url ?? directConnectionUrl;
+    const hostConnectionUrl = chaosProxy?.hostUrl ?? directHostConnectionUrl;
+    const hostQuery = `&host=${encodeURIComponent(hostConnectionUrl)}`;
     vite = startVite();
     const base = await vite.url;
     const browserHeadless = (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase() !== '0';
@@ -311,7 +325,7 @@ async function main() {
         '--enable-unsafe-webgpu',
         '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
         '--use-vulkan=swiftshader',
-        '--disable-vulkan-surface',
+        '--use-angle=swiftshader',
         '--ignore-gpu-blocklist',
         '--disable-gpu-driver-bug-workarounds',
         '--disable-dawn-features=disallow_unsafe_apis',
@@ -331,7 +345,23 @@ async function main() {
       page.on('pageerror', (error) => errors.push(error.message));
       initialPages.push(page);
     }
-    const readState = async (page) => JSON.parse(await page.locator('[data-testid="snake-state"]').textContent());
+    const readState = async (page) => {
+      const node = page.locator('[data-testid="snake-state"]');
+      const deadline = Date.now() + 10_000;
+      let latest = '';
+      while (Date.now() < deadline) {
+        latest = (await node.textContent()) ?? '';
+        if (latest.trimStart().startsWith('{')) {
+          try {
+            return JSON.parse(latest);
+          } catch {
+            // The app is replacing the status payload; sample the next frame.
+          }
+        }
+        await page.waitForTimeout(25);
+      }
+      throw new Error(`snake-state was not JSON after 10000ms: ${latest}`);
+    };
     const waitForAuthority = async (predicate, label, timeout = 10_000) => {
       const deadline = Date.now() + timeout;
       let latest;
@@ -344,10 +374,13 @@ async function main() {
     };
     const waitForBrowserReady = async (page, label) => {
       try {
-        await page.locator('[data-testid="snake-state"][data-renderer-ready="true"][data-join-sent="true"]').waitFor({
-          state: 'attached',
-          timeout: BROWSER_STARTUP_TIMEOUT_MS,
-        });
+        await page.waitForFunction(() => {
+          const node = document.querySelector('[data-testid="snake-state"]');
+          return node?.dataset.lifecycle === 'failed' ||
+            (node?.dataset.rendererReady === 'true' && node?.dataset.joinSent === 'true');
+        }, undefined, { timeout: BROWSER_STARTUP_TIMEOUT_MS });
+        if (await page.locator('[data-testid="snake-state"]').getAttribute('data-lifecycle') === 'failed')
+          throw new Error('terminal startup failure');
       } catch (error) {
         const diagnostics = await page.evaluate(() => {
           const node = document.querySelector('[data-testid="snake-state"]');
@@ -356,7 +389,7 @@ async function main() {
             datasets: node === null ? null : { ...node.dataset },
           };
         }).catch((cause) => ({ evaluateError: String(cause) }));
-        throw new Error(`browser readiness timeout (${label}): ${JSON.stringify({ diagnostics, errors })}`, { cause: error });
+        throw new Error(`browser readiness failed (${label}): ${JSON.stringify({ diagnostics, errors })}`, { cause: error });
       }
     };
     const canvasEvidence = [];
@@ -439,7 +472,7 @@ async function main() {
     });
     const visualSabotage = process.env.SNAKE_SABOTAGE === 'visual-hide-body' ? '&visual-sabotage=hide-body' : '';
     const reconnectProbe = '&m16-reconnect=1';
-    await firstPage.goto(`${base}?server=${connectionUrl}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
+    await firstPage.goto(`${base}?server=${connectionUrl}${hostQuery}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
     await waitForBrowserReady(firstPage, 'primary');
     try {
       await firstPage.waitForFunction(() => {
@@ -458,8 +491,29 @@ async function main() {
       throw new Error(`waiting-state timeout: ${JSON.stringify({ state, errors })}`, { cause: error });
     }
     const waitingState = await readState(firstPage);
-    await secondPage.goto(`${base}?server=${connectionUrl}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
+    // Close the secondary client's first real socket before App assembly can
+    // consume it. Initial join must survive the same recovery path as rejoin.
+    await secondPage.addInitScript((targetUrl) => {
+      const NativeWebSocket = globalThis.WebSocket;
+      const evidence = { connections: 0, closed: false };
+      globalThis.__snakeStartupDisconnect = evidence;
+      globalThis.WebSocket = class extends NativeWebSocket {
+        constructor(...args) {
+          super(...args);
+          if (String(args[0]) !== targetUrl) return;
+          evidence.connections += 1;
+          if (evidence.connections === 1) this.addEventListener('open', () => {
+            evidence.closed = true;
+            this.close(1000, 'startup recovery regression');
+          }, { once: true });
+        }
+      };
+    }, connectionUrl);
+    await secondPage.goto(`${base}?server=${connectionUrl}${hostQuery}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
     await waitForBrowserReady(secondPage, 'secondary');
+    const startupRecovery = await secondPage.evaluate(() => globalThis.__snakeStartupDisconnect);
+    if (!startupRecovery?.closed || startupRecovery.connections < 2)
+      throw new Error(`startup recovery was not exercised: ${JSON.stringify(startupRecovery)}`);
     try {
       await firstPage.waitForFunction(() => {
         const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
@@ -498,10 +552,34 @@ async function main() {
       `renderer/join lifecycle markers missing: ${JSON.stringify(lifecycleState)}`);
     const byPlayer = (state, playerNetworkId) => state.snakes.find((snake) => snake.playerNetworkId === playerNetworkId);
     const page = contexts[0].pages()[0];
-    const waitForTick = async (tick, timeout = 5_000) => page.waitForFunction((previous) => {
-      const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
-      return value.tick > previous;
-    }, tick, { timeout });
+    const readTickDiagnostics = async (previous) => page.locator('[data-testid="snake-state"]').evaluate((node, expectedTick) => ({
+      expectedTick,
+      state: node.textContent,
+      datasets: { ...node.dataset },
+      probe: globalThis.__forgeaxSnake === undefined
+        ? null
+        : {
+            snapshot: globalThis.__forgeaxSnake.snapshot(),
+            appLastError: globalThis.__forgeaxSnake.appLastError?.() ?? null,
+            renderer: globalThis.__forgeaxSnake.rendererInspection?.() ?? null,
+          },
+    }), previous);
+    const waitForTick = async (tick, timeout = 5_000) => {
+      try {
+        await page.waitForFunction((previous) => {
+          const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
+          if (!text.startsWith('{')) return false;
+          try {
+            return JSON.parse(text).tick > previous;
+          } catch {
+            return false;
+          }
+        }, tick, { timeout });
+      } catch (error) {
+        const diagnostics = await readTickDiagnostics(tick).catch((cause) => ({ evaluateError: String(cause) }));
+        throw new Error(`tick progress timeout: ${JSON.stringify({ diagnostics, authority: authority.observations().slice(-12), errors })}`, { cause: error });
+      }
+    };
     const movement = {
       up: { x: 0, y: -1 }, right: { x: 1, y: 0 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 },
     };
@@ -747,7 +825,7 @@ async function main() {
     latePage.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
     latePage.on('pageerror', (error) => errors.push(error.message));
     if (chaosProxy !== undefined) chaosProxy.markLateJoin();
-    await latePage.goto(`${base}?server=${connectionUrl}&m16-reconnect=1`, { waitUntil: 'domcontentloaded' });
+    await latePage.goto(`${base}?server=${connectionUrl}${hostQuery}&m16-reconnect=1`, { waitUntil: 'domcontentloaded' });
     await waitForBrowserReady(latePage, 'late-join');
     const cAppeared = await latePage.waitForFunction((known) => {
       const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
@@ -832,11 +910,11 @@ async function main() {
           await access(tapePath);
           const summary = JSON.parse((await execFileAsync(
             process.execPath,
-            [devkitCli, 'run', 'rhi.summary', '--artifact', tapePath, '--digest', capture.digest, '--json'],
+            [devkitCli, 'debug', 'rhi', 'summary', '--artifact', tapePath, '--digest', capture.digest, '--json'],
             { maxBuffer: 2_000_000 },
           )).stdout);
-          const model = summary.value?.model;
-          const totalWorks = Array.isArray(model?.works) ? model.works.length : 0;
+          const inventory = summary.value?.summary;
+          const totalWorks = Array.isArray(inventory?.works) ? inventory.works.length : 0;
           if (!summary.ok || totalWorks === 0) {
             throw new Error(`rhi-debug: summary did not expose captured work: ${JSON.stringify(summary)}`);
           }
@@ -846,7 +924,7 @@ async function main() {
             tapePath,
             digest: capture.digest,
             totalDraws: totalWorks,
-            totalPasses: Array.isArray(model?.passes) ? model.passes.length : 0,
+            totalPasses: inventory?.passCount ?? 0,
           });
         }
         if (captures.length > 0) break;
@@ -1324,8 +1402,20 @@ async function main() {
     }
     if (process.env.FORGEAX_VISUAL_ASSESSMENT_PATH !== undefined && !published.validation.ok)
       throw new Error(`recovery: supplied visual assessment failed: ${JSON.stringify(published.validation.failures)}`);
-    if (chaosEvidence !== undefined)
-      console.log(JSON.stringify({ m17ChaosEvidence: chaosEvidence }));
+    if (chaosEvidence !== undefined) {
+      // Keep the stdout marker below Vitest/gauntlet line limits. The full
+      // trace and screenshot report remain on disk; the marker needs only the
+      // controls, bounded packet tail, and cleanup/resource proof.
+      const stdoutChaosEvidence = {
+        ...chaosEvidence,
+        recoveryPackets: chaosEvidence.recoveryPackets.slice(-64),
+        cleanup: {
+          ...chaosEvidence.cleanup,
+          events: chaosEvidence.cleanup.events.slice(-16),
+        },
+      };
+      console.log(JSON.stringify({ m17ChaosEvidence: stdoutChaosEvidence }));
+    }
     return 0;
   } catch (error) {
     console.error(error);

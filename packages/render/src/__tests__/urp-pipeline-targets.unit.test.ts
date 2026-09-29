@@ -16,8 +16,16 @@ function targets(
 }
 
 describe('urp render feature targets', () => {
-  it('publishes the linear-LDR target used by native no-tonemap frames', () => {
+  it('keeps the storage-buffer no-tonemap no-FXAA path in a linear target', () => {
     expect(targets('none', 'none', true)?.[0]).toMatchObject({
+      kind: 'scene-color',
+      format: 'rgba16float',
+      sampleCount: 1,
+    });
+  });
+
+  it('publishes a float target for no-tonemap FXAA before the OETF boundary', () => {
+    expect(targets('none', 'fxaa', true)?.[0]).toMatchObject({
       kind: 'scene-color',
       format: 'rgba16float',
       sampleCount: 1,
@@ -32,10 +40,26 @@ describe('urp render feature targets', () => {
     });
   });
 
-  it('keeps the surface target for non-storage-buffer LDR frames', () => {
+  it('publishes a float target for non-storage-buffer LDR frames', () => {
     expect(targets('none', 'none', false)?.[0]).toMatchObject({
       kind: 'scene-color',
-      format: 'bgra8unorm-srgb',
+      format: 'rgba16float',
+      sampleCount: 1,
+    });
+  });
+
+  it('keeps a linear target when MSAA is unavailable on a storage-buffer lane', () => {
+    expect(
+      resolveStandardRenderFeatureTargets({
+        tonemap: 'none',
+        antialias: 'msaa',
+        colorAttachmentFormat: 'bgra8unorm-srgb',
+        storageBuffer: true,
+        multisample: false,
+      })[0],
+    ).toMatchObject({
+      kind: 'scene-color',
+      format: 'rgba16float',
       sampleCount: 1,
     });
   });

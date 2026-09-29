@@ -55,6 +55,8 @@ import type {
 import { RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { Bookkeeper } from './bookkeeping';
+import { probeR32FloatCapability } from './internal/r32float-capability';
+import { createRenderBundleEncoder } from './render-bundle';
 
 /** Monotonic device-id source so each RhiNullDevice owns a distinct id; the id
  *  threads into the Bookkeeper for cross-device handle-chain validation. */
@@ -87,6 +89,9 @@ export class RhiNullDevice implements RhiDevice {
   private readonly internalBookkeeper: Bookkeeper;
   private readonly nullQueue: RhiQueue;
   private readonly encoderFactory: CommandEncoderFactory;
+  private readonly deviceGeneration: number;
+  private readonly enabledFeatures: RhiFeatures;
+  private r32FloatProbe: ReturnType<typeof probeR32FloatCapability> | undefined;
 
   /** Per-frame total draw count across all pass encoders executed this frame
    *  (aggregated by the command encoder on finish, then reset). M3 unit tests
@@ -105,10 +110,21 @@ export class RhiNullDevice implements RhiDevice {
     return this.internalBookkeeper;
   }
 
-  constructor(queue: RhiQueue, encoderFactory: CommandEncoderFactory) {
+  constructor(
+    queue: RhiQueue,
+    encoderFactory: CommandEncoderFactory,
+    enabledFeatures: ReadonlySet<GPUFeatureName> = new Set(),
+  ) {
+    this.enabledFeatures = new Set(enabledFeatures) as RhiFeatures;
+    this.deviceGeneration = nextDeviceId;
     this.internalBookkeeper = new Bookkeeper(nextDeviceId++);
     this.nullQueue = queue;
     this.encoderFactory = encoderFactory;
+  }
+
+  probeTextureFormatCapability(): ReturnType<typeof probeR32FloatCapability> {
+    this.r32FloatProbe ??= probeR32FloatCapability(this.deviceGeneration);
+    return this.r32FloatProbe;
   }
 
   get caps(): RhiCaps {
@@ -138,7 +154,7 @@ export class RhiNullDevice implements RhiDevice {
   }
 
   get features(): RhiFeatures {
-    return EMPTY_FEATURES;
+    return this.enabledFeatures;
   }
 
   get limits(): RhiLimits {
@@ -221,6 +237,10 @@ export class RhiNullDevice implements RhiDevice {
     return ok(this.internalBookkeeper.register('QuerySet') as unknown as QuerySet);
   }
 
+  createRenderBundleEncoder(desc: import('@forgeax/engine-rhi').RenderBundleEncoderDescriptor) {
+    return ok(createRenderBundleEncoder(this.internalBookkeeper, desc));
+  }
+
   createCommandEncoder(
     _desc?: CommandEncoderDescriptor | undefined,
   ): Result<RhiCommandEncoder, RhiErrorType> {
@@ -242,11 +262,6 @@ export class RhiNullDevice implements RhiDevice {
     return Object.assign(handle, { getBindGroupLayout }) as unknown as PipelineHandle<Brand>;
   }
 }
-
-/** Empty enabled-feature set — headless backend enables nothing beyond the
- *  always-true caps profile (research Finding A1: features getter returns an
- *  empty ReadonlySet). */
-const EMPTY_FEATURES: RhiFeatures = new Set() as RhiFeatures;
 
 /** Empty numeric-limits map. The headless backend reports no concrete numeric
  *  limits; capability planning reads caps booleans instead. */

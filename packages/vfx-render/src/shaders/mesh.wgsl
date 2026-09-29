@@ -1,14 +1,27 @@
 #define_import_path forgeax::vfx-render.particles.mesh
-#import forgeax_view::common::{View, FogViewParams, FogRay, view}
-#import forgeax_view::fog::{apply_fog}
+#import forgeax_view::common::{View, view}
+#import forgeax_scene_temporal::{sceneViewZ}
+#import forgeax_material::standard_surface::{VsOut, StandardSurfaceFactors, evaluateStandardSurface, material}
+#import forgeax_material::standard_surface::{materialTextureFilteringWitness}
+
+#pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis CLUSTER_FORWARD_AVAILABLE
+#pragma variant_axis EXTENDED_LIGHTING_AVAILABLE
+#pragma variant_axis DIRECTIONAL_PCSS_AVAILABLE
+#pragma variant_axis PROJECTOR_AVAILABLE
+
+// Retain the full declared material ABI in reflection, including inactive inputs.
+fn materialInterfaceWitness() { materialTextureFilteringWitness(); }
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) color: vec4<f32>,
   @location(1) normal: vec3<f32>,
-  @location(2) emissive_intensity: vec4<f32>,
-  @location(3) surface: vec4<f32>,
-  @location(4) clip_position: vec3<f32>,
+  @location(2) @interpolate(flat) render_controls: vec2<f32>,
+  @location(4) world_position: vec3<f32>,
+  @location(5) uv: vec2<f32>,
+  @location(6) tangent: vec4<f32>,
+  @location(7) uv1: vec2<f32>,
 };
 
 struct VertexInput {
@@ -16,83 +29,69 @@ struct VertexInput {
   @location(1) geometry_normal: vec3<f32>,
   @location(2) geometry_uv: vec2<f32>,
   @location(3) geometry_tangent: vec4<f32>,
+  @location(14) geometry_color: vec4<f32>,
+  @location(15) geometry_uv1: vec2<f32>,
   @location(4) center: vec3<f32>,
   @location(5) right: vec3<f32>,
   @location(6) up: vec3<f32>,
   @location(7) forward: vec3<f32>,
   @location(8) particle_color: vec4<f32>,
-  @location(9) base_color: vec4<f32>,
-  @location(10) emissive_intensity: vec4<f32>,
-  @location(11) surface: vec4<f32>,
+  @location(9) render_controls: vec2<f32>,
 };
 
-fn fogWorldPoint(ndc: vec3<f32>) -> vec3<f32> {
-  let homogeneous = view.inverseViewProj * vec4<f32>(ndc, 1.0);
-  let divisor = select(1.0, homogeneous.w, abs(homogeneous.w) > 0.000001);
-  return homogeneous.xyz / divisor;
-}
-
-fn fogRayFromNdc(ndc: vec3<f32>) -> FogRay {
-  let worldPosition = fogWorldPoint(ndc);
-  let nearPosition = fogWorldPoint(vec3<f32>(ndc.xy, 0.0));
-  let farPosition = fogWorldPoint(vec3<f32>(ndc.xy, 1.0));
-  let perspective = view.temporalProjection.z < 0.5;
-  let perspectiveVector = worldPosition - view.cameraPos;
-  let orthographicVector = farPosition - nearPosition;
-  let direction = normalize(select(orthographicVector, perspectiveVector, perspective));
-  let origin = select(nearPosition, view.cameraPos, perspective);
-  let ray_distance = select(
-    max(dot(worldPosition - nearPosition, direction), 0.0),
-    length(perspectiveVector),
-    perspective,
-  );
-  return FogRay(origin, direction, ray_distance);
+fn safeNormalize(value: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+  let magnitude = length(value);
+  if (magnitude > 0.000001) { return value / magnitude; }
+  return fallback;
 }
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
-  let offset =
-    input.right * input.geometry_position.x +
-    input.up * input.geometry_position.y +
-    input.forward * input.geometry_position.z;
-  let clipPosition = input.center + offset;
-  output.position = vec4<f32>(clipPosition, 1.0);
-  output.clip_position = clipPosition;
-  output.color = input.particle_color * input.base_color;
-  output.normal = normalize(
-    input.right * input.geometry_normal.x +
-    input.up * input.geometry_normal.y +
-    input.forward * input.geometry_normal.z
-  );
-  output.emissive_intensity = input.emissive_intensity;
-  output.surface = input.surface;
+  output.world_position = input.center + input.right * input.geometry_position.x +
+    input.up * input.geometry_position.y + input.forward * input.geometry_position.z;
+  output.position = view.worldViewProj * vec4<f32>(output.world_position, 1.0);
+  output.color = input.geometry_color * input.particle_color;
+  let normalBasisX = cross(input.up, input.forward);
+  let normalBasisY = cross(input.forward, input.right);
+  let normalBasisZ = cross(input.right, input.up);
+  // Cofactors require determinant sign for reflected/non-uniform Scale3.
+  let handedness = select(-1.0, 1.0, dot(input.right, normalBasisX) >= 0.0);
+  output.normal = safeNormalize(handedness * (
+    normalBasisX * input.geometry_normal.x + normalBasisY * input.geometry_normal.y +
+    normalBasisZ * input.geometry_normal.z), vec3<f32>(0.0, 1.0, 0.0));
+  let tangent = input.right * input.geometry_tangent.x + input.up * input.geometry_tangent.y +
+    input.forward * input.geometry_tangent.z;
+  output.tangent = vec4<f32>(safeNormalize(tangent - output.normal * dot(output.normal, tangent),
+    vec3<f32>(1.0, 0.0, 0.0)), input.geometry_tangent.w * handedness);
+  output.uv = input.geometry_uv;
+  output.uv1 = input.geometry_uv1;
+  output.render_controls = input.render_controls;
   return output;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  let normal = normalize(input.normal);
-  let light_direction = normalize(vec3<f32>(0.35, 0.7, 0.55));
-  let view_direction = vec3<f32>(0.0, 0.0, 1.0);
-  let half_direction = normalize(light_direction + view_direction);
-  let diffuse = 0.2 + 0.8 * max(dot(normal, light_direction), 0.0);
-  let metallic = clamp(input.surface.x, 0.0, 1.0);
-  let roughness = clamp(input.surface.y, 0.04, 1.0);
-  let clearcoat = clamp(input.surface.z, 0.0, 1.0);
-  let clearcoat_roughness = clamp(input.surface.w, 0.04, 1.0);
-  let specular_power = mix(96.0, 4.0, roughness);
-  let coat_power = mix(192.0, 8.0, clearcoat_roughness);
-  let specular = pow(max(dot(normal, half_direction), 0.0), specular_power);
-  let coat = clearcoat * pow(max(dot(normal, half_direction), 0.0), coat_power);
-  let dielectric = vec3<f32>(0.04);
-  let specular_color = mix(dielectric, input.color.rgb, metallic);
-  let lit = input.color.rgb * diffuse * (1.0 - metallic * 0.55);
-  let emissive = input.emissive_intensity.rgb * input.emissive_intensity.a;
-  let fogged = apply_fog(
-    view.fog,
-    fogRayFromNdc(input.clip_position),
-    vec4<f32>(lit + specular_color * specular + vec3<f32>(coat) + emissive, input.color.a),
-  );
-  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  var surface: VsOut;
+  let clip = view.worldViewProj * vec4<f32>(input.world_position, 1.0);
+  surface.clip = clip;
+  surface.worldPos = input.world_position;
+  surface.worldNormal = input.normal;
+  surface.worldTangent = input.tangent;
+  surface.uv = input.uv;
+  surface.uvOne = input.uv1;
+  surface.uvTwo = input.uv;
+  surface.uvThree = input.uv;
+  surface.uvFour = input.uv;
+  surface.uvFive = input.uv;
+  surface.uvSix = input.uv;
+  surface.uvSeven = input.uv;
+  surface.ndc = vec4<f32>(clip.xyz / clip.w, 0.0);
+  surface.viewZ = sceneViewZ(clip, view.temporalProjection);
+  return evaluateStandardSurface(surface, StandardSurfaceFactors(
+    input.color * material.baseColor, material.metallic, material.roughness,
+    material.emissive, material.emissiveIntensity,
+    material.clearcoat, material.clearcoatRoughness,
+    input.render_controls.x != 0.0, input.render_controls.y != 0.0,
+  )).color;
 }

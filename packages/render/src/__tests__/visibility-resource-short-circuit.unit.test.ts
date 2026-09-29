@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MeshFilter } from '../components/mesh-filter';
 import { MeshRenderer } from '../components/mesh-renderer';
 import { Visibility, VisibilityStateValue } from '../components/visibility';
-import { extractFrames } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 
 afterEach(() => {
   vi.restoreAllMocks();

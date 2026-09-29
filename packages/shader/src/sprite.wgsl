@@ -2,8 +2,10 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #pragma variant_axis PER_INSTANCE_REGION
 
-#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture, packSceneTemporal}
-#import forgeax_view::fog::{apply_fog}
+#import forgeax_clipping::planes::{applyViewClipping}
+#import forgeax_view::common::{View, Mesh, meshMotionValid, InstanceData, view, meshes, instances, sampleMaterialTexture}
+#import forgeax_view::fog::{translucent_fog}
+#import forgeax_scene_temporal::{packSceneTemporalV1WithValidity}
 
 // @forgeax/engine-shader - sprite.wgsl (feat-20260520-2d-sprite-layer-mvp /
 // M-3 / w19). 2D sprite material — third variant of the MaterialAsset
@@ -130,7 +132,7 @@ struct VsIn {
 };
 
 struct VsOut {
-  @builtin(position) clip     : vec4<f32>,
+  @builtin(position) @invariant clip     : vec4<f32>,
   // Atlas-space UV: already folded through region origin + size by the
   // vertex stage so the fragment can sample the bound material texture at
   // `in.uv_atlas` without any host-side region
@@ -152,7 +154,7 @@ fn resolveSpriteVertex(in : VsIn, idx : u32, vertex_index : u32) -> SpriteVertex
   // pivotAndSize.zw scaled the local quad AND the world matrix also scaled
   // it, producing the scale^2 visual size debt that research F-4 flagged.
   // Post-w11 there is one and only one scale source: the entity's
-  // Transform.world. The mesh's built-in vertex.pos is NOT consumed (sprite
+  // GlobalTransform.world. The mesh's built-in vertex.pos is NOT consumed (sprite
   // geometry is fully re-derived from uv + pivot) so HANDLE_QUAD's mesh.pos
   // remains a placeholder driving vertex count (4) and topology only.
   //
@@ -270,22 +272,6 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
   return out;
 }
 
-fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
-  var origin = viewParams.cameraPos;
-  var direction = normalize(worldPos - origin);
-  var rayDistance = length(worldPos - origin);
-  if (viewParams.temporalProjection.z >= 0.5) {
-    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
-    let nearPoint = nearH.xyz / nearH.w;
-    let farPoint = farH.xyz / farH.w;
-    direction = normalize(farPoint - nearPoint);
-    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
-    rayDistance = max(dot(worldPos - origin, direction), 0.0);
-  }
-  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
-}
-
 // linear_to_srgb: per-channel IEC 61966-2-1 transfer function used by the
 // LDR fragment entry to encode linear premultiplied RGB into the bgra8unorm
 // swap-chain storage. The bgra8unorm target is not hardware-sRGB-encoded
@@ -298,13 +284,13 @@ fn linear_to_srgb(linear : f32) -> f32 {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  applyViewClipping(in.worldPos, false);
   let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
   // Premultiplied alpha: rgb pre-multiplied by alpha for srcFactor='one' /
   // dstFactor='one-minus-src-alpha' blend.
-  let fogged = applySceneFog(view, rgba.rgb, rgba.a, in.worldPos);
-  let premult = vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  let premult = vec4<f32>(translucent_fog(view, in.worldPos, rgba.rgb * rgba.a, rgba.a), rgba.a);
   // LDR target is bgra8unorm (blendable per WebGPU spec); hardware does not
   // sRGB-encode bgra8unorm, so apply the transfer function in the shader.
   // Only RGB channels are encoded; alpha is linear throughout the blend.
@@ -320,18 +306,19 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 // offscreen target; the tonemap fullscreen pass handles sRGB encoding.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
+  applyViewClipping(in.worldPos, false);
   let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
-  let fogged = applySceneFog(view, rgba.rgb, rgba.a, in.worldPos);
-  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+  return vec4<f32>(translucent_fog(view, in.worldPos, rgba.rgb * rgba.a, rgba.a), rgba.a);
 }
 
 struct TemporalVsOut {
-  @builtin(position) clip : vec4<f32>,
+  @location(3) clippingPositionWS : vec3<f32>,
+  @builtin(position) @invariant clip : vec4<f32>,
   @location(0) uvAtlas : vec2<f32>,
-  @location(1) @interpolate(linear) currentClip : vec4<f32>,
-  @location(2) @interpolate(linear) previousClip : vec4<f32>,
+  @location(1) @interpolate(perspective) currentClip : vec4<f32>,
+  @location(2) @interpolate(perspective) previousClip : vec4<f32>,
 };
 
 @vertex
@@ -345,8 +332,9 @@ fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_in
     instances[idx].previousLocalFromInstance * vec4<f32>(vertex.posLocal, 1.0);
 #endif
   var out : TemporalVsOut;
+  out.clippingPositionWS = currentWorld.xyz;
   out.currentClip = view.temporalCurrentViewProj * currentWorld;
-  out.clip = out.currentClip;
+  out.clip = view.worldViewProj * currentWorld;
   out.previousClip = view.temporalPreviousViewProj * previousWorld;
   out.uvAtlas = vertex.uvAtlas;
   return out;
@@ -354,12 +342,23 @@ fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_in
 
 @fragment
 fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+  applyViewClipping(in.clippingPositionWS, false);
   let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uvAtlas, material.baseColorTextureCoordinatesMetadata.zw);
   let alpha = clamp(texel.a * material.colorTint.a, 0.0, 1.0);
   if (alpha <= 0.0) {
     discard;
   }
-  return packSceneTemporal(in.currentClip, in.previousClip, 1.0);
+  var motionValid = true;
+#if STORAGE_BUFFER_AVAILABLE == true
+  motionValid = meshMotionValid(meshes[0].temporal.y);
+#endif
+  return packSceneTemporalV1WithValidity(
+    in.currentClip,
+    in.previousClip,
+    view.temporalProjection,
+    1.0,
+    motionValid,
+  );
 }
 // sprite is unlit; do NOT read the directional-light fields of the View
 // UBO -- same SSOT hard rule as the header comment above; R5 mitigation.

@@ -1,44 +1,115 @@
 # @forgeax/engine-plugin
 
-`@forgeax/engine-plugin` is the sole ForgeaX runtime entry to [DeepSeek Cordis](https://www.npmjs.com/package/@deepseek-ai/cordis). The main export remains a thin re-export of `@deepseek-ai/cordis@4.0.1`; the opt-in `@forgeax/engine-plugin/loader` subpath adds the exact-pinned DeepSeek Harness Entry/Loader control plane plus a browser-safe static Catalog boundary.
+The public `@forgeax/engine/plugin` entry re-exports **Cordis 4.0.4** and adds a thin asset mount boundary. Pack owns persistent plugin definitions; Cordis owns live Context, Plugin, Fiber, effect and provide semantics.
 
-> [!IMPORTANT]
-> Cordis owns when a capability exists, what it depends on, and how it is reverted. ECS, Renderer, Assets, and Host packages own the direct data structures that execute it. Entry and Fiber work never enters per-entity, per-draw, or per-particle loops.
-
-## The six concepts
-
-| Concept | Meaning |
+| Identity | Authority |
 |:--|:--|
-| Package | Local code and its pinned dependency version |
-| Plugin module | A default-exported native Cordis plugin |
-| Entry | One configured installation, identified by a stable `id` |
-| Catalog | A build-generated map from module name to literal import thunk |
-| Fiber | The live Cordis installation created for an Entry |
-| Contribution | A system, component registration, resource, listener, or domain feature owned by that Fiber |
+| Asset GUID | Pack namespace and output sourceKey |
+| Program | Portable logical module plus explicit export |
+| Installed instance | Native Fiber within one session and Context |
 
-The Catalog is not a package scanner. Devkit emits only modules already admitted by `forge.json.plugins[]`; production does not inspect `node_modules`, evaluate YAML, or construct arbitrary dynamic import strings.
+## Read, mount, start
+
+Author small behaviors as named exports in their owning `.pack.ts`; keep `default` for the Pack
+definition. Larger implementations can live in ordinary TypeScript modules referenced by that
+Pack. There is no required `plugin.ts` filename or independent file-based activation path.
+
+`build()` generates definitions and configuration; runtime `apply()` owns the reversible work.
+See the feature Packs in [game-3d](../../templates/game-3d/README.md#behavior-packs) for same-file,
+separate-module, and npm implementations with cross-Pack GUID references.
+
+`assets.loadByGuid<PluginAsset>()` reads a definition without evaluating its code or preloading its references. `mountPluginAsset(ctx, guid)` resolves a compiled implementation, clones configuration, establishes asset origin before installation, and returns the actual native Fiber in a Result. The host injects `assets.readPluginDefinition` and `pluginPrograms`; this package does not import the asset runtime.
 
 ```ts
-import { installCatalogLoader, projectPluginEntries } from '@forgeax/engine-plugin/loader';
+import { mountPluginAsset } from '@forgeax/engine/plugin';
+import type { Plugin } from '@forgeax/engine/plugin';
 
-const catalog = new Map([
-  ['./movement.ts', { realm: 'engine', load: () => import('./movement.ts') }],
-]);
-const entries = [{ id: 'movement', name: './movement.ts', realm: 'engine' }] as const;
-
-const { loader } = await installCatalogLoader(app.pluginContext, catalog, 'engine');
-await loader.root.update(projectPluginEntries(entries, 'engine'));
-await loader.await();
+const root: Plugin.Object<{ children: readonly string[] }> = {
+  inject: ['assets', 'pluginPrograms'],
+  async apply(ctx, config) {
+    for (const guid of config.children) {
+      const result = await mountPluginAsset(ctx, guid);
+      if (!result.ok) throw result.error;
+    }
+  },
+};
+export default root;
 ```
 
-`loader.update(id, { disabled: true })`, `loader.update(id, { config })`, and `loader.remove(id)` use native DeepSeek Harness Entry reconciliation. A failed config update rolls back to the last working Fiber and its contributions.
+> [!IMPORTANT]
+> Run `startPluginAsset` or `startNativePlugin` from the external host. It checks native descendants until active, failed, cancelled or timed out. Calling a descendant-wide barrier inside a parent apply can deadlock children that inject the parent's service. Native `Fiber.await()` alone can return while pending.
+
+`inspectPluginFiber` projects native state and missing services. Asset origin carries the source and session identity, not another installation state. Disposal remains native; domain owners must verify their contributions were released. Source/config updates rebuild the session in a fresh page or Worker. Compilation failure may retain the running session; startup failure after replacement does not restore game progress.
+
+Failed startup and explicit `disposePluginFiber(fiber, timeoutMs?)` share the
+same bounded observation of native disposal and `Fiber.await()`, returning
+`cleanup: completed | failed | timeout` with an optional cause. Cordis can log
+effect cleanup failures while resolving `dispose()`. The temporary logger
+exporter observes only the owned native tree and remains on its surviving parent
+Context; it is removed when observation ends. Explicit disposal requires an
+installed plugin Fiber and defaults to 5,000 ms. Keep the parent owner alive
+until the result returns.
+
+Failed or timed-out cleanup does not authorize an in-place retry. The caller
+retains that result until the execution environment is retired, even when the
+native Fiber disappears or pending work later settles. This observation does
+not audit arbitrary program side effects or later unobserved disposals.
+
+## Tools
+
+A plain Plugin uses `registerAssetTools(ctx)` for a generated pure-data contract or `registerTools(ctx, contributions, origin)` for an explicit host-owned contribution. Register the returned disposer in `ctx.effect`; it revokes admission and drains active calls. Contract discovery never installs a plugin or runs a Cooker. A provider's identity includes the session, Context, asset and native Fiber; an unqualified tool ID with multiple providers is ambiguous.
+
+`PluginPrograms.tools` contains serializable `ToolCommandContract` values by asset
+GUID. Delivered `executor` fields select entries in the existing `programs` map;
+export selection is already resolved. Registration validates all declarations and
+captures those entries before publishing a provider. Only a tool run calls its
+executor's loader. A missing declared entry is invalid delivery; a declaration
+without an executor retains `tool-capability-unavailable`. An explicit empty
+contract records that the producer found no tools for this asset and target.
+The map is required and its GUID membership is also the current target's
+installation qualification. Definitions without membership remain readable;
+sharing another asset's program key does not authorize installation. Revoking
+membership cancels a pending mount before native activation.
+
+Tool plugins declare `toolApi` in `inject`. `registerAssetTools` reads the
+installation's program projection itself, so callers need no additional
+`pluginPrograms` dependency. Its captured executors survive later publication
+updates or withdrawal until the owning Fiber is disposed.
+
+Program entries expose lazy `load()` and optional asynchronous `exportSource()`.
+Export returns the exact portable `PackProgram` without evaluating its implementation;
+it does not capture native Fibers or installed services. The asset publication owner
+freezes membership and tool contracts before awaiting these producer exports.
+
+Source contracts and program compilation live in [Pack](../pack/README.md) and [DevKit](../devkit/README.md). The reviewed migration design is [plugin-assets-design.md](docs/plugin-assets-design.md).
+
+## Loader migration
+
+The project no longer installs `cordis-plugin-loader`. Pack replaces its persistent
+Entry authoring layer; native Cordis still owns every live installation.
+
+| Previous responsibility | Current owner |
+|:--|:--|
+| Entry identity and configuration | PluginAsset GUID and Pack configuration |
+| Module resolution | Build-generated literal program imports |
+| Entry tree activation | Root GUID followed by native plugin composition |
+| Live installation and reversible work | Cordis Context, Fiber, inject, provide and effect |
+| Entry reconciliation and rollback | Source/configuration edits rebuild the session |
+
+Compilation failure can retain the running session. Once a replacement session starts,
+startup failure does not restore the previous World or game progress. External DSH hosts
+retain their own native Loader; federation does not replace that host's lifecycle.
+
+Project placement follows the physical execution boundary: `roots.host` for the resident Node
+backend, `roots.frontend` for browser UI, `roots.engine` for World behavior, and `roots.build`
+for isolated producers. Each root references the same PluginAsset definition contract.
 
 ## Native Cordis foundation
 
-The Loader does not replace direct Cordis composition. A host that already owns the plugin set can still create one World context and dispose an individual Fiber:
+A standalone host can create a World context and dispose an individual native Fiber:
 
 ```ts
-import { createWorldContext } from '@forgeax/engine-ecs';
+import { createWorldContext } from '@forgeax/engine/ecs';
 import optionalGameFeature from './optional-game-feature';
 import projectPlugin from './project-plugin';
 
@@ -53,14 +124,14 @@ await fiber.dispose();
 | `Plugin.inject` | Declares dependencies such as `world`, `renderer`, and `assets` |
 | `ctx.provide` | Publishes a domain service tracked by dependencies |
 | `ctx.effect` | Registers a system, resource, listener, or host object with its inverse |
-| `Fiber` | State, update, rollback, and disposal for one activation |
+| `Fiber` | State, update, and disposal for one activation |
 | `Context.isolate` | Separates same-named service scopes without another container |
 
 `EngineContextServices` is the only ForgeaX type extension point. Domain packages augment native `Context` with services such as `world`, `input`, `audio`, and `physics`; the augmentation adds no runtime layer.
 
 ## Engine built-in profiles
 
-Engine built-ins use the same native Plugin/Fiber contract as project entries.
+Engine built-ins use the same native Plugin/Fiber contract as project roots.
 App selects a small static profile for browser-main, Engine Worker, or
 assemble-form execution; profile arrays express product defaults while
 `inject/provide` remains the dependency authority. A test derives the bounded
@@ -77,12 +148,12 @@ publishing the replacement.
 
 A plugin owns reversible runtime contributions, not JavaScript module evaluation. Component and system tokens are vocabulary; installing them into one World creates lifecycle state.
 
-`defineComponent` and `defineSystem` still publish tokens to legacy process-wide discovery. Unloading removes the World-local lease, schedule membership, and owned data; it does not delete imported token objects or invalidate archetypes in another World.
+`defineComponent` and `defineSystem` publish tokens as vocabulary. Unloading removes the World-local lease, schedule membership, and owned data; it does not delete imported token objects or invalidate archetypes in another World.
 
 ```mermaid
 flowchart LR
     Module["Module evaluation"] --> Tokens["Component and system tokens"]
-    Entry["DSH Entry"] --> Fiber["Cordis Fiber"]
+    Asset["Pack plugin definition"] --> Fiber["Cordis Fiber"]
     Fiber --> Catalog["World ComponentCatalog lease"]
     Fiber --> Schedule["World schedule membership"]
     Fiber --> Resources["Resources and domain registrations"]
@@ -102,8 +173,8 @@ flowchart LR
 Register World vocabulary and its consumers in one generator effect. Yield each inverse immediately so partial activation and normal disposal share the same reverse order:
 
 ```ts
-import { defineComponent, defineSystem, Update } from '@forgeax/engine-ecs';
-import type { Plugin } from '@forgeax/engine-plugin';
+import { defineComponent, defineSystem, Update } from '@forgeax/engine/ecs';
+import type { Plugin } from '@forgeax/engine/plugin';
 
 const Position = defineComponent('Position', { x: 'f32' });
 const movement = defineSystem({
@@ -131,9 +202,6 @@ export default plugin;
 
 Disposal removes the system before releasing the component registration. The final component lease returns `component-in-use` while a live entity or registered system still references the token, preventing a half-unloaded World. The same token can be registered in two Worlds; each World owns an independent lease.
 
-> [!NOTE]
-> The legacy process-wide ECS discovery maps still exist for consumers not yet migrated to a target World. They are compatibility discovery only, not proof that a plugin is active. New plugin lifecycle code must use `world.components`; removing the legacy maps is a later migration after every name-based scene, restore, inspector, and external consumer has moved.
-
 ## Ownership rule
 
 Cleanup follows ownership, not access. A plugin removes an entity or component value only if it created or exclusively owns it. Shared game state needs an explicit owner; it must not be inferred from which systems happened to read it.
@@ -149,14 +217,12 @@ rebuilds the World instead of maintaining a second ownership graph for every ent
 
 A clean disposal leaves no active schedule entry, World lease, resource, listener, Host object, or
 plugin-owned ECS value from that Fiber. Imported component and system tokens may remain in the ESM realm
-and legacy discovery maps: they are inert vocabulary, not a live capability or unmanaged side effect.
+and token vocabulary: they are inert declarations, not a live capability or unmanaged side effect.
 
 ## Failure and performance boundaries
 
-Loader failures preserve their original Cordis/domain cause. App boundaries may project them into an App error, but there is no second generic plugin error state machine.
+Asset mounting and startup failures preserve their original Cordis/domain cause. App boundaries may project them into an App error, but there is no second generic plugin error state machine.
 
 `createApp()` reports activation failure as `app-plugin-activation-failed` and preserves the original value in `detail.cause`.
 
-After activation, systems remain direct schedule records, component tokens remain archetype/query identities, and services are cached references. `World.update()`, render extract/prepare/record, and audio/physics ticks do not query Loader, Entry, Context, or Fiber.
-
-The local dependency patch for `@deepseek-ai/cordis-plugin-loader@1.0.2` removes only its Node-internal module-loader probe and shared-process environment read. Catalog imports replace that boundary in ForgeaX browser realms; Entry, EntryTree, update, rollback, remove, `await`, and Fiber behavior remain upstream code. Delete the patch when upstream exposes a browser-safe resolver seam.
+After activation, systems remain direct schedule records, component tokens remain archetype/query identities, and services are cached references. `World.update()`, render extract/prepare/record, and audio/physics ticks do not query Context or Fiber.

@@ -1,3 +1,4 @@
+import { createMaterialShaderProgram, type MaterialShaderProgram } from './material/program.js';
 // @forgeax/engine-shader/ShaderRegistry — runtime shader registry, instance-per-engine shape.
 //
 // Shape rules (plan-strategy §S-10 / D-R10 / OQ-5 close + AC-03):
@@ -17,7 +18,7 @@
 //   `Result<ShaderModule, RhiError | ShaderError>` (AGENTS.md "RHI / Shader /
 //   error-model contract").
 
-import type { Result, RhiError, ShaderModule } from '@forgeax/engine-rhi';
+import { type Result, RhiError, type ShaderModule } from '@forgeax/engine-rhi';
 import type {
   ImmutableParamSchemaProjection,
   ManifestEntry,
@@ -34,6 +35,11 @@ import {
   type Result as ShaderResult,
   shaderNotFound,
 } from './errors.js';
+import { readShaderManifestPublication } from './manifest-publication.js';
+import {
+  isMaterialShaderArtifactReceipt,
+  type MaterialShaderArtifactReceipt,
+} from './material/artifact-types.js';
 import type { MaterialShaderManifestEntry } from './types.js';
 
 // ─── Device dependency-injection interface ──────────────────────────────────────
@@ -73,6 +79,20 @@ export interface ShaderRegistryDevice {
  */
 export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
 
+/** Stable build-time module ids for the shared closest-depth pyramid producer. */
+export const DEPTH_PYRAMID_SHADER_MODULES = Object.freeze({
+  seed: 'forgeax_depth_pyramid::seed',
+  reduce: 'forgeax_depth_pyramid::reduce',
+} as const);
+
+/** Stable build-time module ids for the M1 spatial SSR artifact set. */
+export const SSR_SHADER_MODULES = Object.freeze({
+  trace: 'forgeax_ssr::trace',
+  temporal: 'forgeax_ssr::temporal',
+} as const);
+
+export type SsrShaderModule = (typeof SSR_SHADER_MODULES)[keyof typeof SSR_SHADER_MODULES];
+
 /**
  * Material shader admission input accepted by
  * `installMaterialArtifact(identifier, entry)`. `findMaterialArtifact`
@@ -98,17 +118,20 @@ export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
 export interface MaterialShaderEntry {
   readonly source: string;
   readonly paramSchema: readonly ParamSchemaEntry[];
+  /** Producer-published ABI facts for this exact artifact variant. */
+  readonly receipt?: MaterialShaderArtifactReceipt | undefined;
 }
 
 /** Registry-owned runtime shape published after immutable schema admission. */
 export interface RegisteredMaterialShaderEntry extends MaterialShaderEntry {
   readonly paramSchemaProjection: ImmutableParamSchemaProjection;
+  readonly program: MaterialShaderProgram;
 }
 
 // ─── Public registry types ──────────────────────────────────────────────────────
 
 export interface ShaderRegistryOptions {
-  readonly device: ShaderRegistryDevice;
+  readonly device?: ShaderRegistryDevice;
   /**
    * URL the registry fetches `manifest.json` from. `undefined` puts the
    * registry into the **zero-entry** mode: `loadManifest()` resolves
@@ -120,6 +143,36 @@ export interface ShaderRegistryOptions {
    * compile in the same path (charter P3 + plan-strategy D-1 + D-2).
    */
   readonly manifestUrl: string | undefined;
+}
+
+type ShaderManifestDiagnostic = {
+  readonly name: string;
+  readonly startedAt: number;
+  readonly previousElapsedMs: number;
+  readonly url?: string;
+  readonly status?: number;
+  readonly responseUrl?: string;
+  readonly entryCount?: number;
+  readonly materialShaderCount?: number;
+  readonly error?: string;
+};
+
+function markShaderManifestStage(
+  name: string,
+  detail: Omit<ShaderManifestDiagnostic, 'name' | 'startedAt' | 'previousElapsedMs'> = {},
+): void {
+  if (typeof globalThis === 'undefined') return;
+  const host = globalThis as {
+    __forgeaxShaderManifest?: ShaderManifestDiagnostic;
+  };
+  const previous = host.__forgeaxShaderManifest;
+  const now = Date.now();
+  host.__forgeaxShaderManifest = {
+    name,
+    startedAt: now,
+    previousElapsedMs: previous === undefined ? 0 : now - previous.startedAt,
+    ...detail,
+  };
 }
 
 // ─── ShaderRegistry main class (instance-per-engine) ============================
@@ -143,7 +196,7 @@ export interface ShaderRegistryOptions {
  * §S-10).
  */
 export class ShaderRegistry {
-  readonly #device: ShaderRegistryDevice;
+  readonly #device: ShaderRegistryDevice | undefined;
   readonly #manifestUrl: string | undefined;
   // hash → ManifestEntry index (populated after loadManifest).
   readonly #entries = new Map<string, ManifestEntry>();
@@ -152,6 +205,7 @@ export class ShaderRegistry {
   // identifier → MaterialShaderEntry index (populated by
   // installMaterialArtifact; feat-20260523-shader-template-instance-split M5 / T05).
   readonly #materialShaders = new Map<string, RegisteredMaterialShaderEntry>();
+  readonly #materialPrograms = new Map<string, MaterialShaderProgram>();
   readonly #paramSchemaProjectionOwner = new ParamSchemaProjectionOwner();
   readonly #materialShaderManifestEntries: MaterialShaderManifestEntry[] = [];
   #manifestLoaded = false;
@@ -159,6 +213,17 @@ export class ShaderRegistry {
   constructor(opts: ShaderRegistryOptions) {
     this.#device = opts.device;
     this.#manifestUrl = opts.manifestUrl;
+  }
+
+  /** Retain validated CPU inputs for a replacement device with an empty GPU cache. */
+  forkForDevice(device: ShaderRegistryDevice): ShaderRegistry {
+    const candidate = new ShaderRegistry({ device, manifestUrl: this.#manifestUrl });
+    for (const [hash, entry] of this.#entries) candidate.#entries.set(hash, entry);
+    candidate.#materialShaderManifestEntries.push(...this.#materialShaderManifestEntries);
+    candidate.#manifestLoaded = this.#manifestLoaded;
+    for (const [source, program] of this.#materialPrograms)
+      candidate.#materialPrograms.set(source, program);
+    return candidate;
   }
 
   /**
@@ -194,10 +259,35 @@ export class ShaderRegistry {
     }
 
     let raw: string;
+    markShaderManifestStage('shader-manifest-fetch-start', { url: this.#manifestUrl });
     try {
       const response = await fetch(this.#manifestUrl);
+      markShaderManifestStage('shader-manifest-response', {
+        url: this.#manifestUrl,
+        status: response.status,
+        responseUrl: response.url,
+      });
+      if (!response.ok) {
+        markShaderManifestStage('shader-manifest-http-failed', {
+          url: this.#manifestUrl,
+          status: response.status,
+          responseUrl: response.url,
+          error: `HTTP ${response.status} ${response.statusText}`,
+        });
+        return err(
+          manifestMalformed({
+            message: `ShaderRegistry: manifest request returned HTTP ${response.status}`,
+            hint: 'verify the dev manifest middleware or production manifest asset is reachable',
+            reason: `${response.statusText || 'HTTP error'} at ${this.#manifestUrl}`,
+          }),
+        );
+      }
       raw = await response.text();
     } catch (e) {
+      markShaderManifestStage('shader-manifest-fetch-failed', {
+        url: this.#manifestUrl,
+        error: e instanceof Error ? e.message : String(e),
+      });
       return err(
         manifestMalformed({
           message: `ShaderRegistry: failed to fetch manifest at ${this.#manifestUrl}`,
@@ -211,10 +301,29 @@ export class ShaderRegistry {
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
+      markShaderManifestStage('shader-manifest-json-failed', {
+        url: this.#manifestUrl,
+        error: e instanceof Error ? e.message : String(e),
+      });
       return err(
         manifestMalformed({
           message: 'ShaderRegistry: manifest JSON parse failed',
           hint: 'manifest.json must be valid JSON; rebuild via @forgeax/engine-vite-plugin-shader generateBundle',
+          reason: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    }
+    try {
+      parsed = await readShaderManifestPublication(parsed);
+    } catch (e) {
+      markShaderManifestStage('shader-manifest-publication-failed', {
+        url: this.#manifestUrl,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return err(
+        manifestMalformed({
+          message: 'ShaderRegistry: shader source publication is invalid',
+          hint: 'rebuild the shader manifest with the matching Engine producer',
           reason: e instanceof Error ? e.message : String(e),
         }),
       );
@@ -261,6 +370,7 @@ export class ShaderRegistry {
     const parsedSlim = parsed as { materialShaders?: unknown };
     const validatedMaterialShaderEntries: MaterialShaderManifestEntry[] = [];
     if (Array.isArray(parsedSlim.materialShaders)) {
+      const materialShaderIdentifiers = new Set<string>();
       for (const ms of parsedSlim.materialShaders) {
         if (!isValidMaterialShaderManifestEntry(ms)) {
           return err(
@@ -270,6 +380,31 @@ export class ShaderRegistry {
               reason: `bad material shader entry: ${JSON.stringify(ms)}`,
             }),
           );
+        }
+        if (materialShaderIdentifiers.has(ms.identifier)) {
+          return err(
+            manifestMalformed({
+              message: 'ShaderRegistry: manifest contains duplicate material shader identifiers',
+              hint: 'materialShaders[] must contain one row per identifier',
+              reason: `duplicate material shader identifier: ${ms.identifier}`,
+            }),
+          );
+        }
+        materialShaderIdentifiers.add(ms.identifier);
+        const variantKeys = new Set<string>();
+        for (const variant of ms.variants) {
+          const canonicalKey = buildMaterialShaderVariantKey(variant.defines);
+          if (variant.definesKey !== canonicalKey || variantKeys.has(variant.definesKey)) {
+            return err(
+              manifestMalformed({
+                message:
+                  'ShaderRegistry: material shader variants contain a duplicate or non-canonical key',
+                hint: 'each variant definesKey must be the exact sorted key derived from defines',
+                reason: `invalid material shader variant key '${variant.definesKey}' for ${ms.identifier}`,
+              }),
+            );
+          }
+          variantKeys.add(variant.definesKey);
         }
         validatedMaterialShaderEntries.push(ms);
       }
@@ -282,6 +417,12 @@ export class ShaderRegistry {
     this.#materialShaderManifestEntries.length = 0;
     this.#materialShaderManifestEntries.push(...validatedMaterialShaderEntries);
     this.#manifestLoaded = true;
+    markShaderManifestStage('shader-manifest-validated', {
+      url: this.#manifestUrl,
+      status: 200,
+      entryCount: validatedEntries.length,
+      materialShaderCount: validatedMaterialShaderEntries.length,
+    });
     return ok(undefined);
   }
 
@@ -330,6 +471,15 @@ export class ShaderRegistry {
       );
     }
 
+    if (this.#device === undefined) {
+      return err(
+        new RhiError({
+          code: 'rhi-not-available',
+          expected: 'a device-bound ShaderRegistry to create GPU modules',
+          hint: 'use forkForDevice in the rendering realm; source realms only read shader metadata',
+        }),
+      );
+    }
     const result = this.#device.createShaderModule({ code: entry.wgsl, label: hash });
     if (!result.ok) {
       return result;
@@ -356,6 +506,16 @@ export class ShaderRegistry {
   //     materialShaderId` (M4 / T05).
   //   - `render-system-record`'s pipeline cache key (M4 / T06) — same
   //     identifier feeds the per-pipeline `(materialShaderId, stateHash)` key.
+
+  /** Publish source-derived facts once per composed program, independent of GPU lifetime. */
+  materialProgram(source: string): MaterialShaderProgram {
+    let program = this.#materialPrograms.get(source);
+    if (program === undefined) {
+      program = createMaterialShaderProgram(source);
+      this.#materialPrograms.set(source, program);
+    }
+    return program;
+  }
 
   /**
    * Register a material shader entry under a stable identifier.
@@ -388,6 +548,11 @@ export class ShaderRegistry {
         `ShaderRegistry: material shader identifier '${identifier}' already registered; same-name re-register is forbidden (AGENTS.md "explicit registration" + Inspector "fail-fast no overwrite" pattern). Use findMaterialArtifact to read back the existing entry.`,
       );
     }
+    if (entry.receipt !== undefined && !isMaterialShaderArtifactReceipt(entry.receipt)) {
+      throw new Error(
+        `ShaderRegistry: material shader '${identifier}' carries an invalid ABI receipt; re-publish the producer reflection facts before registration`,
+      );
+    }
     // bug-20260619: user shaders registered directly here bypass the build-time
     // superset gate (vite-plugin-shader's WGSL reflection). A schema that omits
     // a texture field the WGSL actually samples would let the extract stage's
@@ -414,8 +579,10 @@ export class ShaderRegistry {
       identifier,
       Object.freeze({
         source: entry.source,
+        program: this.materialProgram(entry.source),
         paramSchema: paramSchemaProjection.schema,
         paramSchemaProjection,
+        ...(entry.receipt === undefined ? {} : { receipt: entry.receipt }),
       }),
     );
   }
@@ -504,7 +671,10 @@ function isValidMaterialShaderManifestEntry(value: unknown): value is MaterialSh
   if (typeof v.paramSchema !== 'string') return false;
   if (!Array.isArray(v.variants)) return false;
   if (!v.variants.every(isValidMaterialShaderManifestVariant)) return false;
-  return v.uvSetCount === undefined || typeof v.uvSetCount === 'number';
+  return (
+    (v.receipt === undefined || isMaterialShaderArtifactReceipt(v.receipt)) &&
+    (v.uvSetCount === undefined || typeof v.uvSetCount === 'number')
+  );
 }
 
 function isValidMaterialShaderManifestVariant(value: unknown): boolean {
@@ -515,5 +685,15 @@ function isValidMaterialShaderManifestVariant(value: unknown): boolean {
   if (typeof v.defines !== 'object' || v.defines === null || Array.isArray(v.defines)) {
     return false;
   }
-  return Object.values(v.defines).every((define) => typeof define === 'boolean');
+  return (
+    Object.values(v.defines).every((define) => typeof define === 'boolean') &&
+    (v.receipt === undefined || isMaterialShaderArtifactReceipt(v.receipt))
+  );
+}
+
+function buildMaterialShaderVariantKey(defines: Record<string, boolean>): string {
+  const entries = Object.entries(defines).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return entries.every(([, value]) => value)
+    ? ''
+    : entries.map(([key, value]) => `${key}=${value}`).join('+');
 }

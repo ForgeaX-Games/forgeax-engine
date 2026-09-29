@@ -23,6 +23,13 @@ describe('execution frame ordering', () => {
     const ledger = new FrameCreditLedger('world');
     const frame = ledger.issue(1 / 60, sample);
     expect(ledger.issue(1 / 60, sample)).toBeUndefined();
+    expect(ledger.inspect()).toEqual({
+      submitted: 1,
+      completed: 0,
+      inFlight: 1,
+      highWater: 1,
+      throttledTicks: 1,
+    });
     trace.push('update', 'draw');
     ledger.complete({
       kind: 'frame-complete',
@@ -34,5 +41,12 @@ describe('execution frame ordering', () => {
     trace.push('complete');
     expect(trace).toEqual(['sample', 'update', 'draw', 'complete']);
     expect(samples).toBe(1);
+    expect(ledger.inspect()).toEqual({
+      submitted: 1,
+      completed: 1,
+      inFlight: 0,
+      highWater: 1,
+      throttledTicks: 1,
+    });
   });
 });

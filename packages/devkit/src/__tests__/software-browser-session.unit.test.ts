@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { createBackendHost } from '@forgeax/engine-host/backend';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const browserMocks = vi.hoisted(() => {
@@ -9,27 +10,30 @@ const browserMocks = vi.hoisted(() => {
   let openShadowRoots = 1;
   let engineFrameId = 1;
   let canvasRendered = true;
+  let adapterDevice = 'SwiftShader Device (LLVM)';
+  let adapterAvailable = true;
   const canvasScreenshot = vi.fn(async (options?: { readonly style?: string }) => {
     const overlayHidden = options?.style?.includes('visibility: hidden') === true;
     return Buffer.from(canvasRendered || !overlayHidden ? 'canvas-rendered' : 'canvas-black');
   });
   const page = {
     on: vi.fn(),
+    off: vi.fn(),
     goto: vi.fn(),
     waitForFunction: vi.fn(async (_predicate: unknown, value: unknown) => {
       if (typeof value === 'string') captureReady = value;
     }),
     waitForTimeout: vi.fn(),
     screenshot: vi.fn(async () => Buffer.from('compositor-png')),
-    locator: vi.fn(() => ({ first: () => ({ screenshot: canvasScreenshot }) })),
+    locator: vi.fn((_selector?: string) => ({ first: () => ({ screenshot: canvasScreenshot }) })),
     evaluate: vi.fn(async (callback: unknown) =>
       String(callback).includes('requestAdapter')
         ? {
             title: 'Persistent fixture',
             canvas: { width: 1280, height: 720 },
             domUi: { rootChildren, openShadowRoots, textWitness: rootChildren > 0 ? 'HUD' : '' },
-            adapter: { device: 'SwiftShader Device (LLVM)' },
-            adapterError: null,
+            adapter: adapterAvailable ? { device: adapterDevice } : null,
+            adapterError: adapterAvailable ? null : 'fixture adapter unavailable',
             engineFrameId,
             captureReady,
             userAgent: 'Chrome Beta fixture',
@@ -60,8 +64,11 @@ const browserMocks = vi.hoisted(() => {
       openShadowRoots = 1;
       engineFrameId = 1;
       canvasRendered = true;
+      adapterDevice = 'SwiftShader Device (LLVM)';
+      adapterAvailable = true;
       for (const mock of [
         page.on,
+        page.off,
         page.goto,
         page.waitForFunction,
         page.waitForTimeout,
@@ -87,6 +94,12 @@ const browserMocks = vi.hoisted(() => {
     setCanvasRendered(nextCanvasRendered: boolean) {
       canvasRendered = nextCanvasRendered;
     },
+    setAdapterDevice(value: string) {
+      adapterDevice = value;
+    },
+    setAdapterAvailable(value: boolean) {
+      adapterAvailable = value;
+    },
   };
 });
 
@@ -105,8 +118,9 @@ vi.mock('@forgeax/engine-image/parse-image', () => ({
   },
 }));
 
+import { createViteConfig } from '../host.js';
 import { createBrowserCapture, createSoftwareBrowser } from '../software-capture.js';
-import { execCommand } from '../tools/commands.js';
+import type { BrowserCarrierAdapter } from '../tools/display-carrier.js';
 
 afterEach(() => {
   browserMocks.reset();
@@ -115,6 +129,217 @@ afterEach(() => {
 });
 
 describe('software browser session', () => {
+  it.each([
+    { message: 'probe-script-failed', elapsedMs: 0 },
+    { message: 'Execution context was destroyed', elapsedMs: 120_001 },
+  ])('does not retry startup failure outside its navigation budget: $message', async ({
+    message,
+    elapsedMs,
+  }) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-probe-failure-'));
+    const executable = resolve(root, 'chrome');
+    const capture = createBrowserCapture(root);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const failure = new Error(message);
+    browserMocks.page.evaluate.mockImplementationOnce(async () => {
+      clock.mockReturnValue(1_000 + elapsedMs);
+      throw failure;
+    });
+    try {
+      await Promise.all([
+        writeFile(executable, ''),
+        writeFile(
+          resolve(root, 'forge.json'),
+          JSON.stringify({ id: 'probe', name: 'Probe', schemaVersion: '3.0.0', roots: {} }),
+        ),
+        writeFile(resolve(root, 'package.json'), JSON.stringify({ name: 'probe' })),
+      ]);
+      await expect(capture.open({ browser: executable, headless: true })).rejects.toBe(failure);
+      expect(browserMocks.page.evaluate).toHaveBeenCalledTimes(1);
+      expect(browserMocks.browser.close).toHaveBeenCalledTimes(1);
+    } finally {
+      await capture.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a structured backend failure when auto has no adapter in either lane', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-no-adapter-'));
+    const executable = resolve(root, 'chrome-beta');
+    await Promise.all([
+      writeFile(executable, ''),
+      writeFile(
+        resolve(root, 'forge.json'),
+        `${JSON.stringify({
+          id: 'no-adapter',
+          name: 'No Adapter',
+          schemaVersion: '3.0.0',
+          roots: {},
+        })}\n`,
+      ),
+      writeFile(resolve(root, 'package.json'), `${JSON.stringify({ name: 'no-adapter' })}\n`),
+    ]);
+    browserMocks.setAdapterAvailable(false);
+    const browser = createBrowserCapture(root);
+    try {
+      await expect(
+        browser.open({ backend: 'auto', browser: executable, launchProfile: 'release' }),
+      ).rejects.toMatchObject({
+        code: 'browser-capture-backend-unavailable',
+        detail: {
+          requested: 'auto',
+          actual: 'unknown',
+          launchProfile: 'release',
+          initialAdapterError: 'fixture adapter unavailable',
+          fallbackAdapterError: 'fixture adapter unavailable',
+        },
+      });
+      expect(browserMocks.launch).toHaveBeenCalledTimes(2);
+      expect(browserMocks.browser.close).toHaveBeenCalledTimes(2);
+    } finally {
+      await browser.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards the exact borrowed Host to its owned project server', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-capture-host-'));
+    const executable = resolve(root, 'chrome');
+    const backend = await createBackendHost();
+    const host = { backend, pairs: [] };
+    const capture = createBrowserCapture(root);
+    try {
+      await Promise.all([
+        writeFile(executable, ''),
+        writeFile(
+          resolve(root, 'forge.json'),
+          JSON.stringify({ id: 'bound', name: 'Bound', schemaVersion: '3.0.0', roots: {} }),
+        ),
+        writeFile(resolve(root, 'package.json'), JSON.stringify({ name: 'bound' })),
+      ]);
+      const session = await capture.open({ host, browser: executable, headless: false });
+      expect(createViteConfig).toHaveBeenLastCalledWith(
+        expect.anything(),
+        'serve',
+        '/',
+        expect.objectContaining({ host }),
+      );
+      await session.close();
+      const client = backend.transport.connect();
+      expect(client.connected).toBe(true);
+      client.close();
+    } finally {
+      await capture.close();
+      await backend.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps browser pointer-lock limitations observable without failing capture', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-pointer-lock-warning-'));
+    const executable = resolve(root, 'chrome');
+    await Promise.all([
+      writeFile(executable, ''),
+      writeFile(
+        resolve(root, 'forge.json'),
+        JSON.stringify({
+          id: 'pointer-lock-warning',
+          name: 'Pointer Lock Warning',
+          schemaVersion: '3.0.0',
+          roots: {},
+        }),
+      ),
+      writeFile(resolve(root, 'package.json'), JSON.stringify({ name: 'pointer-lock-warning' })),
+    ]);
+    const capture = createBrowserCapture(root);
+    try {
+      const session = await capture.open({
+        backend: 'auto',
+        browser: executable,
+        headless: true,
+      });
+      const consoleListener = browserMocks.page.on.mock.calls.find(
+        ([event]) => event === 'console',
+      )?.[1] as ((message: { type(): string; text(): string }) => void) | undefined;
+      expect(consoleListener).toBeDefined();
+      consoleListener?.({
+        type: () => 'error',
+        text: () =>
+          'AppError: [AppError app-pointer-lock-failed] path: w3c; cause: WrongDocumentError: The root document of this element is not valid for pointer lock.',
+      });
+      expect(session.report()).toMatchObject({
+        consoleErrors: [],
+        inputWarnings: [expect.stringContaining('app-pointer-lock-failed')],
+      });
+      await session.close();
+    } finally {
+      await capture.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it('opens a single-html candidate directly with the release launch profile', async () => {
+    browserMocks.setAdapterDevice('Hardware adapter');
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-single-html-browser-'));
+    const executable = resolve(root, 'chrome-beta');
+    const candidate = resolve(root, 'release', 'game-offline.html');
+    await mkdir(resolve(root, 'release'), { recursive: true });
+    await Promise.all([
+      writeFile(executable, ''),
+      writeFile(candidate, '<!doctype html><canvas></canvas>'),
+      writeFile(
+        resolve(root, 'forge.json'),
+        `${JSON.stringify({
+          id: 'single-html-browser-fixture',
+          name: 'Single HTML Browser Fixture',
+          schemaVersion: '3.0.0',
+          roots: {},
+        })}\n`,
+      ),
+      writeFile(
+        resolve(root, 'package.json'),
+        `${JSON.stringify({ name: 'single-html-browser-fixture' })}\n`,
+      ),
+      writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
+    ]);
+
+    const browser = createBrowserCapture(root);
+    const session = await browser.open({
+      target: { kind: 'single-html', path: candidate },
+      launchProfile: 'release',
+      backend: 'hardware',
+      browser: executable,
+    });
+    try {
+      expect(browserMocks.createServer).not.toHaveBeenCalled();
+      expect(browserMocks.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.not.arrayContaining(['--enable-unsafe-webgpu']),
+        }),
+      );
+      expect(browserMocks.page.goto).toHaveBeenCalledWith(
+        `file://${candidate}`,
+        expect.objectContaining({ waitUntil: 'domcontentloaded' }),
+      );
+      expect(session.report()).toMatchObject({
+        target: { kind: 'single-html', path: candidate },
+        launchProfile: 'release',
+      });
+    } finally {
+      await session.close();
+      await browser.close();
+    }
+  });
+
   it('keeps one page alive across ordered named checkpoint captures', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
     vi.stubEnv('DISPLAY', ':fixture');
@@ -127,15 +352,11 @@ describe('software browser session', () => {
         `${JSON.stringify({
           id: 'session-fixture',
           name: 'Session Fixture',
-          schemaVersion: '1.0.0',
-          entry: 'main.ts',
-          plugins: [],
+          schemaVersion: '3.0.0',
+          roots: {},
         })}\n`,
       ),
-      writeFile(
-        resolve(root, 'package.json'),
-        `${JSON.stringify({ name: 'session-fixture', forgeax: { assets: { roots: [] } } })}\n`,
-      ),
+      writeFile(resolve(root, 'package.json'), `${JSON.stringify({ name: 'session-fixture' })}\n`),
       writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
     ]);
 
@@ -143,10 +364,19 @@ describe('software browser session', () => {
     const session = await software.open({
       software: true,
       browser: executable,
+      headless: false,
       deterministic: true,
       requireUi: true,
       runId: 'ordered-checkpoints',
     });
+    expect(browserMocks.browser.newPage).toHaveBeenCalledWith(
+      expect.objectContaining({ viewport: null }),
+    );
+    expect(browserMocks.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.not.arrayContaining(['--force-device-scale-factor=1']),
+      }),
+    );
 
     const first = await session.capture('spawn');
     expect(browserMocks.browser.close).not.toHaveBeenCalled();
@@ -176,58 +406,29 @@ describe('software browser session', () => {
     });
 
     const generic = createBrowserCapture(root);
-    const hardwareSession = await generic.open({
-      backend: 'hardware',
+    await expect(
+      generic.open({ backend: 'hardware', browser: executable, requireUi: true }),
+    ).rejects.toMatchObject({ code: 'browser-capture-backend-unavailable' });
+    const autoSession = await generic.open({
+      backend: 'auto',
       browser: executable,
-      requireUi: true,
+      headless: true,
     });
     try {
-      await expect(hardwareSession.capture('ready')).rejects.toMatchObject({
-        code: 'browser-capture-runtime-failed',
-      });
-      expect(hardwareSession.report()).toMatchObject({
-        backendRequested: 'hardware',
+      expect(browserMocks.launch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ args: expect.arrayContaining(['--use-angle=swiftshader']) }),
+      );
+      expect(autoSession.report()).toMatchObject({
+        backendRequested: 'auto',
         backend: 'software',
-        captures: [{ ok: false, checkpoint: 'ready' }],
+        fallbackReason: 'The browser selected a software adapter.',
       });
+      expect(browserMocks.browser.newPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 }),
+      );
     } finally {
       await generic.close();
     }
-  });
-
-  it('adds the browser owner beside the existing operation client in exec', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-exec-browser-'));
-    await Promise.all([
-      writeFile(
-        resolve(root, 'forge.json'),
-        `${JSON.stringify({
-          id: 'exec-browser-fixture',
-          name: 'Exec Browser Fixture',
-          schemaVersion: '1.0.0',
-          entry: 'main.ts',
-          plugins: [],
-        })}\n`,
-      ),
-      writeFile(
-        resolve(root, 'package.json'),
-        `${JSON.stringify({ name: 'exec-browser-fixture', forgeax: { assets: { roots: [] } } })}\n`,
-      ),
-      writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
-      writeFile(
-        resolve(root, 'scenario.mjs'),
-        [
-          'export default async function scenario(forgeax) {',
-          '  return { browser: typeof forgeax.browser.open, operations: typeof forgeax.run };',
-          '}',
-          '',
-        ].join('\n'),
-      ),
-    ]);
-
-    await expect(execCommand({ root, program: 'scenario.mjs' })).resolves.toEqual({
-      ok: true,
-      value: { browser: 'function', operations: 'function' },
-    });
   });
 
   it('does not treat ShadowRoots outside the game UI root as mounted game UI', async () => {
@@ -243,14 +444,13 @@ describe('software browser session', () => {
         `${JSON.stringify({
           id: 'ui-witness-fixture',
           name: 'UI Witness Fixture',
-          schemaVersion: '1.0.0',
-          entry: 'main.ts',
-          plugins: [],
+          schemaVersion: '3.0.0',
+          roots: {},
         })}\n`,
       ),
       writeFile(
         resolve(root, 'package.json'),
-        `${JSON.stringify({ name: 'ui-witness-fixture', forgeax: { assets: { roots: [] } } })}\n`,
+        `${JSON.stringify({ name: 'ui-witness-fixture' })}\n`,
       ),
       writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
     ]);
@@ -281,7 +481,11 @@ describe('software browser session', () => {
 
   it('does not treat visible page UI as proof that the game canvas rendered', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-    vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(120_001);
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    browserMocks.page.waitForTimeout.mockImplementationOnce(async () => {
+      now = 120_001;
+    });
     vi.stubEnv('DISPLAY', ':fixture');
     browserMocks.setCanvasRendered(false);
     const root = await mkdtemp(resolve(tmpdir(), 'forgeax-software-canvas-witness-'));
@@ -293,14 +497,13 @@ describe('software browser session', () => {
         `${JSON.stringify({
           id: 'canvas-witness-fixture',
           name: 'Canvas Witness Fixture',
-          schemaVersion: '1.0.0',
-          entry: 'main.ts',
-          plugins: [],
+          schemaVersion: '3.0.0',
+          roots: {},
         })}\n`,
       ),
       writeFile(
         resolve(root, 'package.json'),
-        `${JSON.stringify({ name: 'canvas-witness-fixture', forgeax: { assets: { roots: [] } } })}\n`,
+        `${JSON.stringify({ name: 'canvas-witness-fixture' })}\n`,
       ),
       writeFile(resolve(root, 'main.ts'), 'export default {};\n'),
     ]);
@@ -322,12 +525,209 @@ describe('software browser session', () => {
           pixels: expect.objectContaining({ rendered: false }),
         }),
       ]);
+      const observed = await session.capture('ready', { purpose: 'observe' });
+      expect(observed).toMatchObject({ ok: true, pixels: { rendered: false } });
+      expect(session.report().captures.map((capture) => capture.ok)).toEqual([false, true]);
       expect(browserMocks.page.screenshot).toHaveBeenCalled();
       expect(browserMocks.canvasScreenshot).toHaveBeenCalledWith(
         expect.objectContaining({ style: expect.stringContaining('visibility: hidden') }),
       );
     } finally {
       await session.close();
+    }
+  });
+
+  it('attaches an exact borrowed carrier page and releases only that lease', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-borrowed-carrier-'));
+    await Promise.all([
+      writeFile(
+        resolve(root, 'forge.json'),
+        `${JSON.stringify({ id: 'borrowed-carrier-fixture', name: 'Borrowed carrier fixture', schemaVersion: '3.0.0', roots: {} })}\n`,
+      ),
+      writeFile(resolve(root, 'package.json'), '{"name":"borrowed-carrier-fixture"}\n'),
+    ]);
+    const target = {
+      leaseId: 'lease-1',
+      targetId: 'target-7',
+      kind: 'browser-page',
+      surfaceId: 'surface-7',
+      run: { serviceId: 'engine-service', runId: 'run-1' },
+      generation: 3,
+      width: 1280,
+      height: 720,
+      gpu: 'software' as const,
+    };
+    const close = vi.fn(async () => undefined);
+    const carrier = {
+      select: vi.fn(async (request: unknown) => {
+        expect(request).toMatchObject({
+          run: target.run,
+          generation: target.generation,
+          headless: false,
+          gpu: 'software',
+          width: target.width,
+          height: target.height,
+          url: 'http://127.0.0.1:43123/',
+        });
+        return { carrier: 'borrowed' as const, target, release: close };
+      }),
+      attach: vi.fn(async () => ({
+        page: browserMocks.page,
+        target,
+        execution: {
+          kind: 'page' as const,
+          ownerPage: browserMocks.page,
+          realm: browserMocks.page,
+        },
+        close,
+      })),
+    } as unknown as BrowserCarrierAdapter;
+    const browser = createBrowserCapture(root);
+    const session = await browser.open({
+      backend: 'software',
+      headless: false,
+      serverUrl: 'http://127.0.0.1:43123/',
+      carrier,
+      carrierRun: target.run,
+      carrierGeneration: target.generation,
+    });
+    try {
+      expect(carrier.select).toHaveBeenCalledTimes(1);
+      expect(carrier.attach).toHaveBeenCalledTimes(1);
+      expect(browserMocks.launch).not.toHaveBeenCalled();
+      expect(session.report()).toMatchObject({
+        carrier: 'borrowed',
+        carrierTarget: target,
+        browser: { executable: 'borrowed-carrier' },
+      });
+    } finally {
+      await session.close();
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(browserMocks.page.off).toHaveBeenCalledTimes(5);
+      await browser.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('navigates and captures an explicit carrier frame without touching the owner page', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':fixture');
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-borrowed-frame-'));
+    const executable = resolve(root, 'chrome');
+    await Promise.all([
+      writeFile(executable, ''),
+      writeFile(
+        resolve(root, 'forge.json'),
+        `${JSON.stringify({ id: 'borrowed-frame-fixture', name: 'Borrowed frame fixture', schemaVersion: '3.0.0', roots: {} })}\n`,
+      ),
+      writeFile(resolve(root, 'package.json'), '{"name":"borrowed-frame-fixture"}\n'),
+    ]);
+    const target = {
+      leaseId: 'lease-frame-1',
+      targetId: 'target-frame-7',
+      kind: 'view-iframe',
+      surfaceId: 'display-frame',
+      run: { serviceId: 'engine-service', runId: 'frame-run-1' },
+      generation: 4,
+      width: 320,
+      height: 240,
+      gpu: 'software' as const,
+    };
+    const frameCanvasScreenshot = vi.fn(async () => Buffer.from('canvas-rendered'));
+    const frameSurfaceScreenshot = vi.fn(async () => Buffer.from('compositor-png'));
+    const frame = {
+      goto: vi.fn(async () => undefined),
+      waitForFunction: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+      page: vi.fn(() => browserMocks.page),
+      locator: vi.fn((selector: string) =>
+        selector === 'canvas'
+          ? { first: () => ({ screenshot: frameCanvasScreenshot }) }
+          : { screenshot: frameSurfaceScreenshot },
+      ),
+      evaluate: vi.fn(async (callback: unknown) =>
+        String(callback).includes('requestAdapter')
+          ? {
+              title: 'Frame fixture',
+              canvas: { width: 320, height: 240 },
+              domUi: { rootChildren: 1, openShadowRoots: 1, textWitness: 'HUD' },
+              adapter: { device: 'SwiftShader Frame Device' },
+              adapterError: null,
+              engineFrameId: 4,
+              captureReady: 'true',
+              userAgent: 'Chrome Frame fixture',
+            }
+          : undefined,
+      ),
+    };
+    browserMocks.page.locator.mockImplementation(
+      (selector?: string) =>
+        (selector === '#display-frame'
+          ? {
+              count: vi.fn(async () => 1),
+              elementHandle: vi.fn(async () => ({
+                evaluate: vi.fn(async () => ({
+                  tagName: 'IFRAME',
+                  id: 'display-frame',
+                  leaseId: target.leaseId,
+                  generation: String(target.generation),
+                })),
+                contentFrame: vi.fn(async () => frame),
+                dispose: vi.fn(async () => undefined),
+              })),
+              screenshot: frameSurfaceScreenshot,
+            }
+          : { first: () => ({ screenshot: browserMocks.canvasScreenshot }) }) as never,
+    );
+    const close = vi.fn(async () => undefined);
+    const carrier = {
+      select: vi.fn(async () => ({ carrier: 'borrowed' as const, target, release: close })),
+      attach: vi.fn(async () => ({
+        page: browserMocks.page,
+        target,
+        execution: {
+          kind: 'frame' as const,
+          ownerPage: browserMocks.page,
+          realm: frame,
+          surfaceSelector: '#display-frame',
+        },
+        close,
+      })),
+    } as unknown as BrowserCarrierAdapter;
+    const browser = createBrowserCapture(root);
+    const session = await browser.open({
+      backend: 'software',
+      browser: executable,
+      headless: false,
+      deterministic: true,
+      width: target.width,
+      height: target.height,
+      serverUrl: 'http://127.0.0.1:43123/',
+      carrier,
+      carrierRun: target.run,
+      carrierGeneration: target.generation,
+    });
+    try {
+      expect(session.page).toBe(browserMocks.page);
+      expect(frame.goto).toHaveBeenCalledWith(
+        'http://127.0.0.1:43123/?forgeaxCapture=1',
+        expect.objectContaining({ waitUntil: 'domcontentloaded' }),
+      );
+      expect(browserMocks.page.goto).not.toHaveBeenCalled();
+      const capture = await session.capture('true');
+      expect(capture.ok).toBe(true);
+      expect(frameSurfaceScreenshot).toHaveBeenCalled();
+      expect(browserMocks.page.screenshot).not.toHaveBeenCalled();
+    } finally {
+      await session.close();
+      expect(close).toHaveBeenCalledTimes(1);
+      await browser.close();
+      await rm(root, { recursive: true, force: true });
+      browserMocks.page.locator.mockImplementation(
+        () => ({ first: () => ({ screenshot: browserMocks.canvasScreenshot }) }) as never,
+      );
     }
   });
 });

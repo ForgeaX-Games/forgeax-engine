@@ -16,8 +16,7 @@
 // Fail-fast semantics (charter P3): `register` throws on a malformed importer
 // (empty key or non-function `import`) at wire time, so a misconfigured host
 // surfaces immediately rather than at the first import run. `register` is
-// idempotent on a repeated key (last write wins, no throw) so re-wiring a
-// registry across build invocations is safe.
+// exclusive per key; its disposer releases only the registering owner.
 
 import type { Importer, ImporterCapabilities, ImportSubAsset } from '@forgeax/engine-types';
 
@@ -39,13 +38,13 @@ export class ImporterRegistry {
 
   /**
    * Register an importer for its `importer.key`. Fail-fast on a malformed
-   * importer (charter P3); idempotent on a repeated key (last write wins).
+   * importer; duplicate keys fail instead of replacing another owner.
    *
    * @param importer the `{ key, import }` object to register.
    * @throws TypeError when `importer.key` is empty or `importer.import` is not
    *   a function - a wire-time misconfiguration the host must fix.
    */
-  register(importer: Importer): void {
+  register(importer: Importer): () => void {
     if (typeof importer.key !== 'string' || importer.key.length === 0) {
       throw new TypeError(
         `ImporterRegistry.register: importer.key must be a non-empty string (got ${JSON.stringify(importer.key)})`,
@@ -56,7 +55,11 @@ export class ImporterRegistry {
         `ImporterRegistry.register: importer.import must be a function for key "${importer.key}"`,
       );
     }
+    if (this.importers.has(importer.key)) throw new TypeError(`duplicate importer ${importer.key}`);
     this.importers.set(importer.key, importer);
+    return () => {
+      if (this.importers.get(importer.key) === importer) this.importers.delete(importer.key);
+    };
   }
 
   /**
@@ -88,16 +91,16 @@ export class ImporterRegistry {
   }
 
   /** Ask the registered producer whether a declaration has a Catalog product. */
-  shouldPublishCatalog(input: {
+  async shouldPublishCatalog(input: {
     readonly importer: string;
     readonly importSettings: Readonly<Record<string, unknown>>;
     readonly subAssets: readonly ImportSubAsset[];
-  }): boolean {
+  }): Promise<boolean> {
     return (
-      this.get(input.importer)?.capabilities?.catalog?.publish?.({
+      (await this.get(input.importer)?.capabilities?.catalog?.publish?.({
         importSettings: input.importSettings,
         subAssets: input.subAssets,
-      }) ?? true
+      })) ?? true
     );
   }
 }

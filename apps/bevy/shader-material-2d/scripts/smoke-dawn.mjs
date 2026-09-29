@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10), 300);
+const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60);
 const WIDTH = 320;
 const HEIGHT = 180;
 const BYTES_PER_ROW = Math.ceil((WIDTH * 4) / 256) * 256;

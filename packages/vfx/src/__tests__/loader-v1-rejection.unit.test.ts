@@ -30,16 +30,16 @@ function input(
   };
 }
 
-const validPayload = {
+const invalidPayload = {
   kind: 'particle-effect',
   schemaVersion: 1,
   emitters: [{ id: 'spark', capacity: 32 }],
 };
 
-describe('vfxGpuEffectPackLoader v2 boundary', () => {
-  it('keeps legacy artifact keys outside the v2 asset-local program contract', async () => {
+describe('vfxGpuEffectPackLoader version boundary', () => {
+  it('rejects older payloads before reading an artifact', async () => {
     const result = await vfxGpuEffectPackLoader.load(
-      input(validPayload, {
+      input(invalidPayload, {
         'effect/program.json': {
           descriptor: { path: 'program.json', mediaType: 'application/json' },
           bytes: new TextEncoder().encode('{}'),
@@ -51,13 +51,13 @@ describe('vfxGpuEffectPackLoader v2 boundary', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatchObject({
-        code: 'vfx-asset-v2-invalid',
-        detail: { path: 'payload' },
+        code: 'vfx-asset-version-unsupported',
+        detail: { path: 'schemaVersion' },
       });
     }
   });
 
-  it('rejects a summary-only v2 payload before reading a program artifact', async () => {
+  it('rejects a summary-only older payload before reading a program artifact', async () => {
     const result = await vfxGpuEffectPackLoader.load(
       input({
         kind: 'particle-effect',
@@ -69,12 +69,12 @@ describe('vfxGpuEffectPackLoader v2 boundary', () => {
     );
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.detail.path).toBe('payload');
+    if (!result.ok) expect(result.error.detail.path).toBe('schemaVersion');
   });
 
   it('rejects a v1 package-global artifact shape', async () => {
     const result = await vfxGpuEffectPackLoader.load(
-      input(validPayload, {
+      input(invalidPayload, {
         'effect/program.json': {
           descriptor: { path: 'program.json', mediaType: 'application/json' },
           bytes: new TextEncoder().encode('{}'),
@@ -85,21 +85,53 @@ describe('vfxGpuEffectPackLoader v2 boundary', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe('vfx-asset-v2-invalid');
-      expect(result.error.detail.path).toBe('payload');
+      expect(result.error.code).toBe('vfx-asset-version-unsupported');
+      expect(result.error.detail.path).toBe('schemaVersion');
     }
   });
 
   it('rejects raw source fallback when the cooked program is absent', async () => {
     const result = await vfxGpuEffectPackLoader.load(
-      input({ ...validPayload, source: { emitters: [] }, sourcePath: 'effect.vfx.json' }),
+      input({ ...invalidPayload, source: { emitters: [] }, sourcePath: 'effect.vfx.json' }),
       context(),
     );
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe('vfx-asset-v2-invalid');
-      expect(result.error.detail.path).toBe('payload');
+      expect(result.error.code).toBe('vfx-asset-version-unsupported');
+      expect(result.error.detail.path).toBe('schemaVersion');
     }
   });
+});
+
+it('rejects the previous sorting uniform ABI with a re-cook hint', async () => {
+  const program = { format: 'forgeax-vfx-program-3', emitters: [] };
+  const result = await vfxGpuEffectPackLoader.load(
+    input(
+      {
+        kind: 'particle-effect',
+        schemaVersion: 3,
+        emitters: [],
+        programFingerprint: 'sha256:old',
+        program: { ...program, fingerprint: 'sha256:old' },
+      },
+      {
+        'particle-effect/program.json': {
+          descriptor: {
+            path: 'program.json',
+            mediaType: 'application/vnd.forgeax.vfx-program+json',
+          },
+          bytes: new TextEncoder().encode(JSON.stringify(program)),
+        },
+      },
+    ),
+    context(),
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok)
+    expect(result.error).toMatchObject({
+      code: 'vfx-asset-v3-invalid',
+      expected: 'a forgeax-vfx-program-4 managed GPU program',
+      hint: 'recook with the current VFX compiler ABI',
+    });
 });

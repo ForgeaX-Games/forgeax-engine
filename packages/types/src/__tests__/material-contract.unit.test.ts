@@ -66,8 +66,10 @@ describe('MaterialAsset contract', () => {
       parameters: [
         { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
         { name: 'normalTexture', type: 'texture', optional: true },
+        { name: 'normalScale', type: 'vec2', default: [1, 1] },
       ],
       values: {
+        normalScale: [0.7, 0.7],
         baseColor: [0.8, 0.2, 0.1, 1],
         normalTexture: {
           texture: guid,
@@ -76,7 +78,6 @@ describe('MaterialAsset contract', () => {
             set: 1,
             transform: { offset: [0, 0], scale: [2, 2], rotation: 0.25 },
           },
-          normalScale: 0.7,
         },
       },
     } satisfies MaterialAsset;
@@ -98,10 +99,11 @@ describe('MaterialAsset contract', () => {
     expectTypeOf(derived.values).toMatchTypeOf<MaterialAsset['values']>();
   });
 
-  it('requires complete pass replacement instead of a shader alias', () => {
+  it('rejects a root contract override on a parent-bearing child', () => {
     const derived = {
       kind: 'material',
       parent: guid,
+      // @ts-expect-error - parent-bearing children inherit the root pass contract.
       passes: [
         {
           name: 'forward',
@@ -113,7 +115,7 @@ describe('MaterialAsset contract', () => {
       ],
     } satisfies MaterialAsset;
 
-    expectTypeOf(derived.passes?.[0]?.program.module).toEqualTypeOf<string>();
+    void derived;
   });
 
   it('rejects legacy fields and unknown values', () => {
@@ -168,6 +170,30 @@ describe('MaterialAsset contract', () => {
     ).toThrow(/material compiler macro fields are not supported/);
   });
 
+  it('rejects forbidden fields on a parent-bearing child with structured detail', () => {
+    try {
+      assertMaterialAsset({
+        kind: 'material',
+        parent: 'root-guid' as never,
+        colorSpace: 'linear',
+        passes: [{ name: 'forward', program: standardProgram }],
+        parameters: [],
+        values: {},
+      });
+      throw new Error('expected parent child contract failure');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'material-child-contract-invalid',
+        detail: {
+          material: 'material',
+          parent: 'root-guid',
+          forbidden: ['colorSpace', 'passes', 'parameters'],
+          action: 'remove-forbidden-fields',
+        },
+      });
+    }
+  });
+
   it('keeps pure material booleans as runtime values', () => {
     const result = resolveMaterialAsset('runtime-bool', {
       'runtime-bool': {
@@ -180,4 +206,33 @@ describe('MaterialAsset contract', () => {
 
     expect(result).toMatchObject({ ok: true, value: { asset: { values: { clearcoat: false } } } });
   });
+});
+
+it('inherits the root MRT interface and rejects malformed output authoring', () => {
+  const outputs = [
+    { name: 'color', format: 'rgba16float' },
+    { name: 'id', format: 'r32uint' },
+  ] as const;
+  const parent: MaterialAsset = {
+    kind: 'material',
+    passes: [{ name: 'Forward', program: standardProgram, outputs }],
+  };
+  const resolved = resolveMaterialAsset('child', {
+    parent,
+    child: { kind: 'material', parent: 'parent' as unknown as AssetGuid },
+  });
+  expect(resolved.ok).toBe(true);
+  if (resolved.ok) expect(resolved.value.asset.passes?.[0]?.outputs).toEqual(outputs);
+  for (const invalid of [
+    [],
+    [{ name: 'id', format: 'depth32float' }],
+    [{ name: 'id', format: 'r32uint', writeMask: 16 }],
+  ]) {
+    expect(() =>
+      assertMaterialAsset({
+        kind: 'material',
+        passes: [{ name: 'Forward', program: standardProgram, outputs: invalid }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'material-output-contract-invalid' }));
+  }
 });

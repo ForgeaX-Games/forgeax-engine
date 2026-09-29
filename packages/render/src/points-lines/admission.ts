@@ -11,7 +11,6 @@ import {
   PointsLinesBudgetExceededError as BudgetError,
   PointsLinesInvalidStyleError as InvalidStyleError,
   PointsLinesMaterialUnsupportedError as MaterialError,
-  PointsLinesStyleUnsupportedError as StyleError,
   PointsLinesTopologyMismatchError as TopologyError,
 } from '../errors/render';
 
@@ -22,6 +21,9 @@ export interface PointsStyleInput {
 
 export interface LinesStyleInput {
   readonly widthPx?: number;
+  readonly dashSize?: number;
+  readonly gapSize?: number;
+  readonly dashOffset?: number;
 }
 
 export interface PointsLinesAdmissionLimits {
@@ -44,6 +46,9 @@ export interface PointsLinesAdmission {
   readonly shape?: PointShape;
   readonly sizePx?: number;
   readonly widthPx?: number;
+  readonly dashSize?: number;
+  readonly gapSize?: number;
+  readonly dashOffset?: number;
   readonly pointCount: number;
   readonly segmentCount: number;
   readonly submeshes: readonly number[];
@@ -78,7 +83,7 @@ function topologyMismatch(
 function checkStyle(
   input: PointsLinesAdmissionInput,
 ): Result<
-  { component: 'Points' | 'Lines'; shape?: PointShape; sizePx?: number; widthPx?: number },
+  Omit<PointsLinesAdmission, 'pointCount' | 'segmentCount' | 'submeshes'>,
   PointsLinesAdmissionError
 > {
   const hasPoints = input.points !== undefined;
@@ -113,7 +118,21 @@ function checkStyle(
   if (!Number.isFinite(widthPx) || widthPx <= 0) {
     return invalidStyle(input, 'Lines', 'widthPx', widthPx, 'finite widthPx > 0');
   }
-  return ok({ component: 'Lines', widthPx });
+  const dashSize = input.lines?.dashSize ?? 1;
+  const gapSize = input.lines?.gapSize ?? 0;
+  const dashOffset = input.lines?.dashOffset ?? 0;
+  for (const [field, value, valid, expected] of [
+    ['dashSize', dashSize, dashSize > 0, 'finite dashSize > 0'],
+    ['gapSize', gapSize, gapSize >= 0, 'finite gapSize >= 0'],
+    ['dashOffset', dashOffset, true, 'finite dashOffset'],
+  ] as const) {
+    if (!Number.isFinite(value) || !valid)
+      return invalidStyle(input, 'Lines', field, value, expected);
+  }
+  if (!Number.isFinite(Math.fround(dashSize + gapSize))) {
+    return invalidStyle(input, 'Lines', 'dashSize', dashSize, 'dashSize + gapSize fits f32');
+  }
+  return ok({ component: 'Lines', widthPx, dashSize, gapSize, dashOffset });
 }
 
 function checkTopology(
@@ -135,25 +154,24 @@ function checkTopology(
     if (elementCount === 0) continue;
     sawNonEmpty = true;
 
-    if (component === 'Lines' && submesh.topology === 'line-strip') {
-      return err(
-        new StyleError({
-          lane: 'admission',
-          field: 'topology',
-          member: 'line-strip',
-          supported: ['line-list'],
-        }),
-      );
-    }
-    if (submesh.topology !== expected) {
+    const strip = component === 'Lines' && submesh.topology === 'line-strip';
+    if (submesh.topology !== expected && !strip) {
       return topologyMismatch(input, submeshIndex, expected, submesh.topology);
     }
-    if (component === 'Lines' && elementCount % 2 !== 0) {
+    if (strip && elementCount < 2) {
+      return topologyMismatch(
+        input,
+        submeshIndex,
+        'line-strip with at least two vertices',
+        'short strip',
+      );
+    }
+    if (component === 'Lines' && !strip && elementCount % 2 !== 0) {
       return topologyMismatch(input, submeshIndex, 'line-list pairs', 'line-list odd tail');
     }
     acceptedSubmeshes.push(submeshIndex);
     if (component === 'Points') pointCount += elementCount;
-    else segmentCount += elementCount / 2;
+    else segmentCount += strip ? elementCount - 1 : elementCount / 2;
   }
 
   if (!sawNonEmpty) return topologyMismatch(input, 0, expected, 'empty-range');
@@ -161,13 +179,17 @@ function checkTopology(
 }
 
 function checkMaterial(input: PointsLinesAdmissionInput): Result<void, PointsLinesAdmissionError> {
-  const passes = input.material.passes ?? [];
+  // Points and lines never cast: extraction drops their ShadowCaster work, so the
+  // Unlit factory's shadow-caster pass is not part of the admitted material shape.
+  const passes = (input.material.passes ?? []).filter(
+    (candidate) =>
+      candidate.name !== 'shadow-caster' &&
+      (candidate.renderState?.tags as Record<string, unknown> | undefined)?.LightMode !==
+        'ShadowCaster',
+  );
   const unlitModules = new Set(['forgeax_material::unlit', 'forgeax::default-unlit']);
   if (passes.length !== 1 || passes[0] === undefined) {
-    const pass =
-      passes.find(
-        (candidate) => candidate.name === 'deferred' || candidate.name === 'shadow-caster',
-      ) ?? passes[0];
+    const pass = passes.find((candidate) => candidate.name === 'deferred') ?? passes[0];
     return err(
       new MaterialError({
         entity: input.entity,
@@ -179,12 +201,7 @@ function checkMaterial(input: PointsLinesAdmissionInput): Result<void, PointsLin
     );
   }
   const pass = passes[0];
-  const lightMode = (pass.renderState?.tags as Record<string, unknown> | undefined)?.LightMode;
-  if (
-    !unlitModules.has(pass.program.module) ||
-    pass.name !== 'forward' ||
-    lightMode === 'ShadowCaster'
-  ) {
+  if (!unlitModules.has(pass.program.module) || pass.name !== 'forward') {
     return err(
       new MaterialError({
         entity: input.entity,
@@ -192,6 +209,18 @@ function checkMaterial(input: PointsLinesAdmissionInput): Result<void, PointsLin
         pass: pass.name,
         module: pass.program.module,
         reason: 'points-lines admission requires an engine-owned unlit forward pass',
+      }),
+    );
+  }
+  if (input.material.parameters?.some((parameter) => parameter.name === 'clippingControl')) {
+    return err(
+      new MaterialError({
+        entity: input.entity,
+        material: input.materialId ?? '<anonymous>',
+        pass: pass.name,
+        module: pass.program.module,
+        reason:
+          'expanded Points/Lines support camera ClippingPlanes; local material clipping requires triangle geometry',
       }),
     );
   }

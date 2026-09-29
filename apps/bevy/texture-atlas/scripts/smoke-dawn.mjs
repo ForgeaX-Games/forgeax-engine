@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const frames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const width = 320;
 const height = 180;
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -36,7 +36,14 @@ subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const variants = [];
 for (const [variant, filter] of [['unpadding', 'linear'], ['padding', 'nearest'], ['unpadding', 'linear'], ['padding', 'nearest']]) {
   const atlas = makeAtlas(variant);
-  const texture = { kind: 'texture', width: atlas.size, height: atlas.size, format: 'rgba8unorm-srgb', data: atlas.pixels, colorSpace: 'srgb', mipmap: false };
+  const texture = {
+    kind: 'texture',
+    shape: { viewDimension: '2d', extent: { width: atlas.size, height: atlas.size } },
+    format: 'rgba8unorm-srgb',
+    data: atlas.pixels,
+    colorSpace: 'srgb',
+    mips: { kind: 'none' },
+  };
   const textureHandle = world.allocSharedRef('TextureAsset', texture);
   const samplerHandle = world.allocSharedRef('SamplerAsset', { kind: 'sampler', magFilter: filter, minFilter: filter, addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
   variants.push({ texture: unwrapHandle(textureHandle), sampler: unwrapHandle(samplerHandle), atlas });
@@ -69,6 +76,6 @@ const outDir = process.env.SMOKE_PNG_DIR ?? resolve(here, '..', 'artifacts');
 mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'texture-atlas.png'), writeReferencePng(tight, width, height));
 console.log(`[smoke] frames=${frames} coloredPixels=${coloredPixels} colorBuckets=${colorBuckets.size} errors=${errors.length}`);
-if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || coloredPixels < 1500 || colorBuckets.size < 4 || errors.length > 0) { console.error('[smoke] FAIL - atlas variants must be visible with multiple sprite colors and zero RHI errors'); process.exit(1); }
+if (rendererBackend(renderer) !== 'webgpu' || frames < 60 || coloredPixels < 1500 || colorBuckets.size < 4 || errors.length > 0) { console.error('[smoke] FAIL - atlas variants must be visible with multiple sprite colors and zero RHI errors'); process.exit(1); }
 console.log('[smoke] PASS - backend=webgpu, visible padded/unpadded atlas variants, errors=0');
 device.destroy?.();

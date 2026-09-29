@@ -9,6 +9,6 @@ export default defineProject({
       tsconfig: './tsconfig.json',
     },
     include: ['src/**/__tests__/**/*.test.ts', 'src/**/__tests__/**/*.test-d.ts'],
-    exclude: ['**/dist/**', '**/node_modules/**'],
+    exclude: ['**/dist/**', '**/node_modules/**', '**/*.dawn.test.ts'],
   },
 });

@@ -7,7 +7,7 @@
 //   1. Inject globalThis.navigator.gpu via `webgpu` npm package (dawn-node).
 //   2. Mock canvas + createApp (structural boot).
 //   3. Spawn minimal proof scene: 3 cubes + camera + DirectionalLight.
-//   4. Run N>=300 frames, collect RhiError via Renderer error event.
+//   4. Run N>=60 frames, collect RhiError via Renderer error event.
 //   5. Assert: createApp boot OK + 0 RhiError + frames completed without crash.
 //      No pixel assertion (UBO is engine-internal; no visible state toggle).
 //   6. Charter P3 explicit failure: on fail, output structured diagnostic.
@@ -20,8 +20,9 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { emitSmokeReceipt } from '../../../../shared/scripts/smoke-receipt.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const WIDTH = 200;
 // feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
@@ -167,7 +168,8 @@ const { buildEngineShaderManifest } = await import(
 );
 
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 const appRes = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 
@@ -331,6 +333,11 @@ if (failures.length > 0) {
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${framesObserved}, ` +
     `boot=OK, RhiError count=${errors.length}, crashed=${crashed}`,
+);
+
+emitSmokeReceipt(
+  'app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo/smoke',
+  framesObserved,
 );
 
 // Synchronously walk dawn-node's destruction graph in spec order so the

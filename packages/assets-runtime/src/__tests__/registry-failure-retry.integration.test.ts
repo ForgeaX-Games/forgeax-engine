@@ -5,6 +5,18 @@ const ROOT = '11111111-1111-4111-8111-111111111111';
 const REF = '22222222-2222-4222-8222-222222222222';
 
 describe('registry failure cleanup and retry', () => {
+  it('re-admits a repaired IES payload under the authored GUID generation', () => {
+    const registry = new AssetRegistry({} as never);
+    const guid = '33333333-3333-4333-8333-333333333333';
+    const first = { kind: 'ies-profile' as const, data: new Uint8Array(256 * 128 * 2) };
+    const repaired = { kind: 'ies-profile' as const, data: new Uint8Array(256 * 128 * 2).fill(1) };
+    registry.catalog(registry.parseGuid(guid), first);
+    registry.invalidate(guid);
+    registry.catalog(registry.parseGuid(guid), repaired);
+    expect(registry.generations.get(guid)).toBe(1);
+    expect(registry.lookup(guid)).toBe(repaired);
+  });
+
   it('purges a failed ref closure before retrying the repaired package', async () => {
     const registry = new AssetRegistry({} as never);
     registry.loaders.register({

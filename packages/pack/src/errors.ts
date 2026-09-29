@@ -8,7 +8,7 @@
 // (requirements §6.2 AC-07; plan-strategy §D-5).
 
 import type { PackErrorCode, PackErrorDetail } from '@forgeax/engine-types';
-import type { ScriptablePackError } from './scriptable-pack.js';
+import type { PackAuthoringError } from './pack-authoring.js';
 
 /**
  * Structured error for the engine-pack disk scanner fail-fast chain.
@@ -31,14 +31,14 @@ export class PackError extends Error {
   readonly expected: string;
   readonly hint: string;
   readonly detail: PackErrorDetail;
-  override readonly cause?: ScriptablePackError;
+  override readonly cause?: PackAuthoringError;
 
   constructor(args: {
     code: PackErrorCode;
     expected: string;
     hint: string;
     detail: PackErrorDetail;
-    cause?: ScriptablePackError;
+    cause?: PackAuthoringError;
   }) {
     super(`[PackError ${args.code}] expected: ${args.expected}; hint: ${args.hint}`);
     this.name = 'PackError';

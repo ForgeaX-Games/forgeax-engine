@@ -1,33 +1,32 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import type { Asset, AssetGuid, Result } from '@forgeax/engine-types';
+import type { AssetGuid, Result } from '@forgeax/engine-types';
 import { AssetError, err, ImportError, ok } from '@forgeax/engine-types';
-import ts from 'typescript';
 import {
   type ProducerSemanticIdentityInput,
   producerRelativeDdcKey,
 } from './evidence/source-inventory.js';
-import { AssetGuid as AssetGuidCodec, isValidPackSourceKey, PackageId } from './guid.js';
-import { definePack, type NativePackDefinition } from './native-pack.js';
 import {
-  type AssetReader,
-  isRecord,
-  isScriptablePackAssetKind,
-  projectScriptablePackMeta,
-  type ScriptablePackAssetKind,
-  type ScriptablePackAuthoringMutation,
-  type ScriptablePackAuthoringPort,
-  type ScriptablePackDefinition,
-  type ScriptablePackError,
-  type ScriptablePackReadError,
-  type ScriptablePackSourceClosureEntry,
-  validateScriptablePackDefinition,
-} from './scriptable-pack.js';
+  type AnyScriptablePackDefinition,
+  type PackAuthoringError,
+  type PackBuildContextWithoutParameters,
+  type PackBuildResult,
+  validatePackDefinition,
+} from './pack-authoring.js';
+import type { AssetReader, ScriptablePackSourceClosureEntry } from './scriptable-pack.js';
+import {
+  createScriptablePackSourceSnapshot,
+  type ScriptablePackSourceSnapshot,
+} from './scriptable-pack-source-snapshot.js';
+
+export {
+  createScriptablePackSourceSnapshot,
+  type ScriptablePackSourceSnapshot,
+} from './scriptable-pack-source-snapshot.js';
 
 const IMPORT_META_RESOLVE_FLAG = '--experimental-import-meta-resolve';
 
@@ -43,8 +42,17 @@ function scriptablePackWorkerExecArgv(): string[] {
 }
 
 export interface ScriptablePackModuleExecutor {
-  load(sourcePath: string): Promise<unknown>;
+  load(sourcePath: string, sources?: Readonly<Record<string, string>>): Promise<unknown>;
   dispose?(reason: 'complete' | 'timeout' | 'failure'): void | Promise<void>;
+}
+
+interface SerializedScriptablePackBuildContext {
+  readonly packageId: readonly number[];
+  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+interface WorkerBackedScriptablePackExecutor {
+  readonly supportsPackParameters: true;
 }
 
 export interface ScriptablePackModuleExecutorPool {
@@ -80,70 +88,14 @@ export async function readOptionalBuildCache<T>(cache: OptionalBuildCache<T>): P
   return { value: await cache.coldCook(), fromCache: false };
 }
 
-export interface LoadScriptablePackOptions {
-  /** Maximum time allowed for module initialization in the isolated worker. */
-  readonly timeoutMs?: number;
-  /** Maximum time allowed for one definition.build(reader) in the isolated worker. */
-  readonly buildTimeoutMs?: number;
-  readonly executor?: ScriptablePackModuleExecutor;
-  /** Release the isolated loader after identity projection when build will not be called. */
-  readonly metadataOnly?: boolean;
-}
-
-async function resolveRelativeImport(
-  sourcePath: string,
-  specifier: string,
-): Promise<string | undefined> {
-  if (!specifier.startsWith('.')) return undefined;
-  const raw = resolve(dirname(sourcePath), specifier);
-  const candidates =
-    extname(raw).length > 0
-      ? [raw]
-      : [
-          raw,
-          `${raw}.ts`,
-          `${raw}.tsx`,
-          `${raw}.mts`,
-          `${raw}.js`,
-          `${raw}.mjs`,
-          `${raw}.json`,
-          resolve(raw, 'index.ts'),
-        ];
-  for (const candidate of candidates) {
-    try {
-      if ((await stat(candidate)).isFile()) return candidate;
-    } catch {
-      // Continue through deterministic extension candidates.
-    }
-  }
-  return undefined;
-}
-
-/** Capture one immutable ScriptablePack module closure for inventory and production. */
+/** A standalone inventory has a fresh snapshot; build owners may share one explicitly. */
 export async function inventoryScriptablePackSource(
   sourcePath: string,
   initialSourceText?: string,
+  resolveImport?: (sourcePath: string, specifier: string) => Promise<string | undefined>,
+  snapshot = createScriptablePackSourceSnapshot(),
 ): Promise<readonly ScriptablePackSourceClosureEntry[]> {
-  const root = await realpath(sourcePath);
-  const pending = [root];
-  const seen = new Set<string>();
-  const entries: ScriptablePackSourceClosureEntry[] = [];
-  while (pending.length > 0) {
-    const path = pending.pop();
-    if (path === undefined || seen.has(path)) continue;
-    seen.add(path);
-    const bytes =
-      path === root && initialSourceText !== undefined
-        ? new TextEncoder().encode(initialSourceText)
-        : await readFile(path);
-    entries.push({ path, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` });
-    const source = new TextDecoder().decode(bytes);
-    for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
-      const resolved = await resolveRelativeImport(path, imported.fileName);
-      if (resolved !== undefined) pending.push(await realpath(resolved));
-    }
-  }
-  return entries.sort((left, right) => left.path.localeCompare(right.path));
+  return snapshot.inventory(sourcePath, initialSourceText, resolveImport);
 }
 
 interface StructuredFailure {
@@ -218,7 +170,10 @@ function hydrateFailure(value: unknown): unknown {
   return value;
 }
 
-class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
+class WorkerScriptablePackExecutor
+  implements ScriptablePackModuleExecutor, WorkerBackedScriptablePackExecutor
+{
+  readonly supportsPackParameters = true as const;
   private worker: Worker | undefined;
   private compileRoot: string | undefined;
   private nextBuildId = 0;
@@ -232,12 +187,12 @@ class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
       }
     | undefined;
 
-  async load(sourcePath: string): Promise<unknown> {
+  async load(sourcePath: string, sources?: Readonly<Record<string, string>>): Promise<unknown> {
     const workerUrl = scriptablePackWorkerUrl();
     const compileRoot = await mkdtemp(resolve(tmpdir(), 'forgeax-scriptable-pack-'));
     this.compileRoot = compileRoot;
     const worker = new Worker(workerUrl, {
-      workerData: { sourcePath: resolve(sourcePath), compileRoot },
+      workerData: { sourcePath: resolve(sourcePath), compileRoot, sources },
       execArgv: scriptablePackWorkerExecArgv(),
       resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 64 },
     });
@@ -260,7 +215,10 @@ class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
                 ? undefined
                 : {
                     ...(value.definition as Record<string, unknown>),
-                    build: (reader: AssetReader) => this.runBuild(reader),
+                    build: (
+                      readByGuid: AssetReader['readByGuid'],
+                      context?: SerializedScriptablePackBuildContext,
+                    ) => this.runBuild({ readByGuid }, context),
                   },
           });
         } else if (value.kind === 'load-threw') {
@@ -269,9 +227,17 @@ class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
         }
       };
       worker.on('message', onMessage);
-      worker.once('error', rejectLoad);
+      const fail = (error: Error): void => {
+        rejectLoad(error);
+        const active = this.build;
+        this.build = undefined;
+        active?.reject(error);
+        void this.dispose('failure');
+      };
+      worker.once('error', fail);
       worker.once('exit', (code) => {
-        if (code !== 0) rejectLoad(new Error(`ScriptablePack worker exited with code ${code}`));
+        if (this.disposal !== undefined) return;
+        fail(new Error(`ScriptablePack worker exited with code ${code}`));
       });
     });
   }
@@ -294,7 +260,10 @@ class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
     return this.disposal;
   }
 
-  private runBuild(reader: AssetReader): Promise<unknown> {
+  private runBuild(
+    reader: AssetReader,
+    context?: SerializedScriptablePackBuildContext,
+  ): Promise<unknown> {
     const worker = this.worker;
     if (worker === undefined) return Promise.reject(new Error('ScriptablePack worker is closed'));
     if (this.build !== undefined)
@@ -302,7 +271,7 @@ class WorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
     const id = this.nextBuildId++;
     return new Promise((resolveBuild, rejectBuild) => {
       this.build = { id, reader, resolve: resolveBuild, reject: rejectBuild };
-      worker.postMessage({ kind: 'build', buildId: id });
+      worker.postMessage({ kind: 'build', buildId: id, context });
     });
   }
 
@@ -344,7 +313,10 @@ function scriptablePackWorkerUrl(): URL {
     : new URL('../dist/scriptable-pack-worker.mjs', import.meta.url);
 }
 
-class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecutor {
+class ReusableWorkerScriptablePackExecutor
+  implements ScriptablePackModuleExecutor, WorkerBackedScriptablePackExecutor
+{
+  readonly supportsPackParameters = true as const;
   private readonly worker: Worker;
   private readonly compileRootReady = mkdtemp(resolve(tmpdir(), 'forgeax-scriptable-pack-pool-'));
   private compileRoot: string | undefined;
@@ -390,7 +362,7 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
       void this.dispose('failure');
     });
     this.worker.on('exit', (code) => {
-      if (code === 0 || this.disposal !== undefined) return;
+      if (this.disposal !== undefined) return;
       this.failed = true;
       this.rejectActive(new Error(`ScriptablePack worker exited with code ${code}`));
       void this.dispose('failure');
@@ -401,7 +373,7 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
     this.worker.unref();
   }
 
-  async load(sourcePath: string): Promise<unknown> {
+  async load(sourcePath: string, sources?: Readonly<Record<string, string>>): Promise<unknown> {
     const activeDisposal = this.disposal;
     if (activeDisposal !== undefined) {
       await activeDisposal;
@@ -434,6 +406,7 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
           loadId,
           sourcePath: resolve(sourcePath),
           compileRoot,
+          sources,
         });
       } catch (error) {
         this.pendingLoad = undefined;
@@ -479,7 +452,10 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
     building?.reject(error);
   }
 
-  private runBuild(reader: AssetReader): Promise<unknown> {
+  private runBuild(
+    reader: AssetReader,
+    context?: SerializedScriptablePackBuildContext,
+  ): Promise<unknown> {
     if (this.released || this.disposal !== undefined) {
       return Promise.reject(new Error('ScriptablePack executor is not leased'));
     }
@@ -490,7 +466,7 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
     return new Promise((resolveBuild, rejectBuild) => {
       this.build = { id, reader, resolve: resolveBuild, reject: rejectBuild };
       try {
-        this.worker.postMessage({ kind: 'build', buildId: id });
+        this.worker.postMessage({ kind: 'build', buildId: id, context });
       } catch (error) {
         this.build = undefined;
         rejectBuild(error);
@@ -511,7 +487,10 @@ class ReusableWorkerScriptablePackExecutor implements ScriptablePackModuleExecut
             ? undefined
             : {
                 ...(value.definition as Record<string, unknown>),
-                build: (reader: AssetReader) => this.runBuild(reader),
+                build: (
+                  readByGuid: AssetReader['readByGuid'],
+                  context?: SerializedScriptablePackBuildContext,
+                ) => this.runBuild({ readByGuid }, context),
               },
       });
       return;
@@ -633,17 +612,25 @@ export function createScriptablePackModuleExecutorPool(
   return new DefaultScriptablePackModuleExecutorPool(options);
 }
 
-function loadFailure(
+export interface LoadScriptablePackOptions {
+  readonly timeoutMs?: number;
+  readonly buildTimeoutMs?: number;
+  readonly executor?: ScriptablePackModuleExecutor;
+  readonly metadataOnly?: boolean;
+  readonly sourceSnapshot?: ScriptablePackSourceSnapshot;
+}
+
+function scriptablePackLoadFailure(
   sourcePath: string,
   reason: 'module-load' | 'timeout',
   phase: 'module-load' | 'build',
   diagnostic: string,
   timeoutMs?: number,
-): Result<never, ScriptablePackError> {
-  return err({
-    code: 'pack-source-load-failed',
-    expected: 'a trusted synchronous module with a valid default ScriptablePack export',
-    hint: 'repair the module load or initialization failure, then inspect Meta again',
+): PackAuthoringError {
+  return {
+    code: 'pack-parameter-invalid',
+    expected: 'a trusted Pack v2 authoring module with a valid default export',
+    hint: 'repair the source module or its build timeout, then inspect the Pack again',
     detail: {
       sourcePath,
       reason,
@@ -651,165 +638,98 @@ function loadFailure(
       diagnostic,
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-  });
-}
-
-function buildTimeoutFailure(sourcePath: string, timeoutMs: number): ScriptablePackReadError {
-  return {
-    code: 'pack-source-load-failed',
-    expected: 'a ScriptablePack build to settle within the configured build timeout',
-    hint: 'repair the authored build, then retry through a fresh ScriptablePack generation',
-    detail: {
-      sourcePath,
-      reason: 'timeout',
-      phase: 'build',
-      timeoutMs,
-      diagnostic: `ScriptablePack build exceeded ${timeoutMs}ms`,
-    },
   };
 }
 
-/** Discover v2 outputs once, inside the normal bounded worker, before catalog projection.
- * Only the consumer declaration is normalized; no replacement source or sidecar is written.
- * Reads need a generation-aware discovery reader, so reject them rather than cache stale data.
- */
-async function discoverNativePack(
-  value: Record<string, unknown>,
-  sourcePath: string,
-  timeoutMs: number,
-): Promise<Result<Readonly<ScriptablePackDefinition>, ScriptablePackError>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  try {
-    const native = definePack(value as unknown as NativePackDefinition);
-    let attemptedRead = false;
-    const result: unknown = await Promise.race([
-      native.build({
-        packageId: native.packageId,
-        readByGuid: async () => {
-          attemptedRead = true;
-          throw new Error(
-            'pack-source-discovery-read-unsupported: native output discovery cannot read another asset generation',
-          );
-        },
-      }),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          reject(new Error(`Native Pack output discovery exceeded ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-    if (attemptedRead)
-      throw new Error(
-        'pack-source-discovery-read-unsupported: native output discovery requested an external asset',
-      );
-    if (!isRecord(result) || result.ok !== true || !isRecord(result.value))
-      throw new Error(
-        `pack-source-output-invalid: native build must return ok(outputMap); ${isRecord(result) ? JSON.stringify(result.error) : 'invalid result'}`,
-      );
-    const assets: Record<string, { guid: AssetGuid; kind: ScriptablePackAssetKind }> = {};
-    for (const [key, asset] of Object.entries(result.value)) {
-      if (
-        !isValidPackSourceKey(key) ||
-        !isRecord(asset) ||
-        typeof asset.kind !== 'string' ||
-        !isScriptablePackAssetKind(asset.kind)
-      )
-        throw new Error(
-          `pack-source-output-invalid: invalid source key or asset kind at ${JSON.stringify(key)}`,
-        );
-      assets[key] = { guid: AssetGuidCodec.derive(native.packageId, key), kind: asset.kind };
-    }
-    const packageGuid = AssetGuidCodec.parse(PackageId.format(native.packageId));
-    if (!packageGuid.ok) throw new Error('pack-package-id-invalid');
-    const output = structuredClone(result.value) as Readonly<Record<string, Asset>>;
-    return validateScriptablePackDefinition(
-      {
-        schemaVersion: '1.0.0',
-        authoringVersion: '2.0.0',
-        packageId: packageGuid.value,
-        name: native.name,
-        sceneComponents: native.sceneComponents,
-        assets,
-        externalAssets: {},
-        build: async () => ok(structuredClone(output)),
-      },
-      sourcePath,
-    );
-  } catch (cause) {
-    return loadFailure(
-      sourcePath,
-      timedOut ? 'timeout' : 'module-load',
-      'build',
-      cause instanceof Error ? cause.message : String(cause),
-      timedOut ? timeoutMs : undefined,
-    );
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
+/** Load a ScriptablePack source contract in an isolated module executor. */
 export async function loadScriptablePack(
   sourcePath: string,
   options: LoadScriptablePackOptions = {},
-): Promise<Result<Readonly<ScriptablePackDefinition>, ScriptablePackError>> {
-  const timeoutMs = options.timeoutMs ?? 5_000;
-  const buildTimeoutMs = options.buildTimeoutMs ?? 5_000;
+): Promise<Result<Readonly<AnyScriptablePackDefinition>, PackAuthoringError>> {
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  // Keep authored builds bounded, but give legitimate procedural packs the
+  // same cold-start budget already used for module initialization. The old
+  // five-second default rejected large production packs before they could
+  // publish a result.
+  const buildTimeoutMs = options.buildTimeoutMs ?? 15_000;
   const executor = options.executor ?? new WorkerScriptablePackExecutor();
   let disposeReason: 'complete' | 'timeout' | 'failure' | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeoutSignal = Symbol('scriptable-pack-module-timeout');
     const loaded = await Promise.race([
-      executor.load(sourcePath),
+      (async () => {
+        const sources = await options.sourceSnapshot?.moduleSources(sourcePath);
+        return executor.load(sourcePath, sources);
+      })(),
       new Promise<typeof timeoutSignal>((resolve) => {
         timeout = setTimeout(() => resolve(timeoutSignal), timeoutMs);
       }),
     ]);
     if (loaded === timeoutSignal) {
       disposeReason = 'timeout';
-      return loadFailure(
-        sourcePath,
-        'timeout',
-        'module-load',
-        `ScriptablePack module initialization exceeded ${timeoutMs}ms`,
-        timeoutMs,
+      return err(
+        scriptablePackLoadFailure(
+          sourcePath,
+          'timeout',
+          'module-load',
+          `Pack module initialization exceeded ${timeoutMs}ms`,
+          timeoutMs,
+        ),
       );
     }
     const moduleValue =
       loaded !== null && typeof loaded === 'object' && 'default' in loaded
         ? (loaded as { readonly default: unknown }).default
         : undefined;
-    if (isRecord(moduleValue) && moduleValue.schemaVersion === '2.0.0') {
-      const discovered = await discoverNativePack(moduleValue, sourcePath, buildTimeoutMs);
-      disposeReason = discovered.ok ? 'complete' : 'failure';
-      return discovered;
-    }
-    const validated = validateScriptablePackDefinition(moduleValue, sourcePath);
+    const validated = validatePackDefinition(moduleValue, sourcePath);
     if (!validated.ok) {
       disposeReason = 'failure';
       return validated;
     }
     if (options.metadataOnly === true) {
       disposeReason = 'complete';
-      return validated;
+      return ok(validated.value);
     }
     const definition = validated.value;
-    type BuildOutcome = Awaited<ReturnType<ScriptablePackDefinition['build']>>;
+    const build = definition.build as unknown as (
+      first: unknown,
+      context?: SerializedScriptablePackBuildContext,
+    ) => PackBuildResult;
     return ok({
       ...definition,
-      build: async (reader: AssetReader): Promise<BuildOutcome> => {
+      build: async (
+        context: PackBuildContextWithoutParameters,
+      ): Promise<Awaited<PackBuildResult>> => {
         let buildTimedOut = false;
         let buildTimeout: ReturnType<typeof setTimeout> | undefined;
-        const timeoutResult = err(buildTimeoutFailure(sourcePath, buildTimeoutMs));
+        const timeoutResult = err(
+          scriptablePackLoadFailure(
+            sourcePath,
+            'timeout',
+            'build',
+            `ScriptablePack build exceeded ${buildTimeoutMs}ms`,
+            buildTimeoutMs,
+          ),
+        );
         try {
+          const invocation =
+            'supportsPackParameters' in executor &&
+            (executor as Partial<WorkerBackedScriptablePackExecutor>).supportsPackParameters ===
+              true
+              ? build(context.readByGuid, {
+                  packageId: [...context.packageId],
+                  ...('values' in context && context.values !== undefined
+                    ? { values: context.values as Readonly<Record<string, unknown>> }
+                    : {}),
+                })
+              : definition.build(context as never);
           const built = await Promise.race([
-            Promise.resolve(definition.build(reader)),
-            new Promise<BuildOutcome>((resolve) => {
+            Promise.resolve(invocation),
+            new Promise<Awaited<PackBuildResult>>((resolve) => {
               buildTimeout = setTimeout(() => {
                 buildTimedOut = true;
-                resolve(timeoutResult as BuildOutcome);
+                resolve(timeoutResult as Awaited<PackBuildResult>);
               }, buildTimeoutMs);
             }),
           ]);
@@ -826,658 +746,19 @@ export async function loadScriptablePack(
           if (buildTimeout !== undefined) clearTimeout(buildTimeout);
         }
       },
-    });
+    } as AnyScriptablePackDefinition);
   } catch (error) {
-    const diagnostic = error instanceof Error ? error.message : String(error);
     disposeReason = 'failure';
-    return loadFailure(sourcePath, 'module-load', 'module-load', diagnostic);
+    return err(
+      scriptablePackLoadFailure(
+        sourcePath,
+        'module-load',
+        'module-load',
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     if (disposeReason !== undefined) await executor.dispose?.(disposeReason);
   }
-}
-
-const CANONICAL_SCAFFOLD_MARKER = '// @forgeax-scriptable-pack canonical-v1';
-const CANONICAL_MANIFEST_NAME = 'canonicalManifest';
-const CANONICAL_MUTABLE_KINDS = new Set<ScriptablePackAssetKind>(['scene', 'mesh', 'material']);
-
-interface CanonicalOutput {
-  readonly guid: string;
-  readonly kind: ScriptablePackAssetKind;
-  readonly name?: string;
-}
-
-interface CanonicalManifest {
-  readonly schemaVersion: '1.0.0';
-  readonly packageId: string;
-  readonly name?: string;
-  readonly assets: Readonly<Record<string, CanonicalOutput>>;
-  readonly externalAssets: Readonly<Record<string, string>>;
-}
-
-export interface FileSystemScriptablePackAuthoringOptions {
-  /** All source and target paths are confined to this game root. */
-  readonly gameRoot: string;
-  readonly incomingRefs?: (sourcePath: string, sourceKey?: string) => Promise<readonly string[]>;
-  readonly rebuild?: (
-    sourcePath: string,
-    mode: 'rebuild' | 'cold-cook',
-  ) => Promise<Result<void, ScriptablePackError>>;
-}
-
-function authoringError(
-  code:
-    | 'pack-source-path-invalid'
-    | 'pack-source-revision-conflict'
-    | 'pack-source-mutation-unsupported'
-    | 'pack-source-reference-conflict'
-    | 'pack-source-write-failed',
-  input: {
-    readonly expected: string;
-    readonly actual?: string;
-    readonly hint: string;
-    readonly retryable: boolean;
-    readonly recoveryActions: readonly string[];
-    readonly requestId?: string;
-    readonly sourcePath?: string;
-    readonly sourceKey?: string;
-    readonly incomingRefs?: readonly string[];
-  },
-): ScriptablePackError {
-  return {
-    code,
-    expected: input.expected,
-    ...(input.actual === undefined ? {} : { actual: input.actual }),
-    hint: input.hint,
-    retryable: input.retryable,
-    recoveryActions: input.recoveryActions,
-    detail: {
-      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-      ...(input.sourcePath === undefined ? {} : { sourcePath: input.sourcePath }),
-      ...(input.sourceKey === undefined ? {} : { sourceKey: input.sourceKey }),
-      ...(input.incomingRefs === undefined ? {} : { incomingRefs: input.incomingRefs }),
-    },
-  };
-}
-
-function confinedSourcePath(
-  gameRoot: string,
-  sourcePath: string,
-): Result<{ readonly absolute: string; readonly relative: string }, ScriptablePackError> {
-  const root = resolve(gameRoot);
-  const absolute = resolve(root, sourcePath);
-  const rel = relative(root, absolute);
-  if (
-    rel.length === 0 ||
-    rel === '..' ||
-    rel.startsWith(`..${sep}`) ||
-    isAbsolute(sourcePath) ||
-    !rel.endsWith('.pack.ts')
-  ) {
-    return err(
-      authoringError('pack-source-path-invalid', {
-        expected: 'a game-root-relative *.pack.ts path confined to the selected game',
-        actual: sourcePath,
-        hint: 'choose a relative ScriptablePack source path inside the selected game root',
-        retryable: false,
-        recoveryActions: ['choose-game-relative-source-path'],
-        sourcePath,
-      }),
-    );
-  }
-  return ok({ absolute, relative: rel.split(sep).join('/') });
-}
-
-function revisionOf(source: string): string {
-  return createHash('sha256').update(source).digest('hex');
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  if (
-    ts.isAsExpression(expression) ||
-    ts.isSatisfiesExpression(expression) ||
-    ts.isParenthesizedExpression(expression)
-  ) {
-    return unwrapExpression(expression.expression);
-  }
-  return expression;
-}
-
-function literalValue(expression: ts.Expression): unknown {
-  const value = unwrapExpression(expression);
-  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) return value.text;
-  if (value.kind === ts.SyntaxKind.TrueKeyword) return true;
-  if (value.kind === ts.SyntaxKind.FalseKeyword) return false;
-  if (value.kind === ts.SyntaxKind.NullKeyword) return null;
-  if (ts.isNumericLiteral(value)) return Number(value.text);
-  if (ts.isArrayLiteralExpression(value)) return value.elements.map(literalValue);
-  if (ts.isObjectLiteralExpression(value)) {
-    const result: Record<string, unknown> = {};
-    for (const property of value.properties) {
-      if (!ts.isPropertyAssignment(property))
-        throw new TypeError('manifest properties must be data');
-      const name = property.name;
-      const key =
-        ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)
-          ? name.text
-          : undefined;
-      if (key === undefined) throw new TypeError('manifest property names must be static');
-      result[key] = literalValue(property.initializer);
-    }
-    return result;
-  }
-  throw new TypeError('manifest values must be literal data');
-}
-
-function parseCanonicalManifest(source: string, sourcePath: string): CanonicalManifest | undefined {
-  if (!source.startsWith(`${CANONICAL_SCAFFOLD_MARKER}\n`)) return undefined;
-  const file = ts.createSourceFile(
-    sourcePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  for (const statement of file.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (
-        ts.isIdentifier(declaration.name) &&
-        declaration.name.text === CANONICAL_MANIFEST_NAME &&
-        declaration.initializer !== undefined
-      ) {
-        const value = literalValue(declaration.initializer);
-        if (value === null || typeof value !== 'object') return undefined;
-        return value as CanonicalManifest;
-      }
-    }
-  }
-  return undefined;
-}
-
-function guidExpression(value: string): string {
-  return `parseGuid(${JSON.stringify(value)})`;
-}
-
-/** Render the one source shape that the file authoring port may mutate structurally. */
-export function renderCanonicalScriptablePack(manifest: CanonicalManifest): string {
-  const data = JSON.stringify(manifest, null, 2);
-  return `${CANONICAL_SCAFFOLD_MARKER}
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
-import type { ScriptablePackDefinition } from '@forgeax/engine-pack/source';
-import type { Asset, AssetGuid as AssetGuidType } from '@forgeax/engine-types';
-import { ok } from '@forgeax/engine-types';
-
-const ${CANONICAL_MANIFEST_NAME} = ${data} as const;
-
-function parseGuid(value: string): AssetGuidType {
-  const parsed = AssetGuid.parse(value);
-  if (!parsed.ok) throw parsed.error;
-  return parsed.value;
-}
-
-function createOutput(kind: string): Asset {
-  switch (kind) {
-    case 'scene':
-      return { kind: 'scene', entities: [], mounts: [] };
-    case 'material':
-      return { kind: 'material', values: {} };
-    case 'mesh': {
-      const vertices = new Float32Array([
-        0, 0.7, 0, 0, 0, 1, 0.5, 1, 0, 0, 0, 1,
-        -0.7, -0.6, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1,
-        0.7, -0.6, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
-      ]);
-      return {
-        kind: 'mesh',
-        vertices,
-        indices: new Uint16Array([0, 1, 2]),
-        attributes: { ...buildMeshAttributeMapForUvSets(1), position: vertices },
-        aabb: new Float32Array([-0.7, -0.6, 0, 0.7, 0.7, 0]),
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 }],
-        materialSlots: [{ slotName: 'Default' }],
-      };
-    }
-    default:
-      throw new Error(\`canonical ScriptablePack output kind is not mutable: \${kind}\`);
-  }
-}
-
-const assets = Object.fromEntries(
-  Object.entries(${CANONICAL_MANIFEST_NAME}.assets).map(([sourceKey, asset]) => [
-    sourceKey,
-    { ...asset, guid: parseGuid(asset.guid) },
-  ]),
-);
-const externalAssets = Object.fromEntries(
-  Object.entries(${CANONICAL_MANIFEST_NAME}.externalAssets).map(([alias, guid]) => [alias, parseGuid(guid)]),
-);
-
-export default {
-  schemaVersion: '1.0.0',
-  packageId: ${guidExpression(manifest.packageId)},
-  ${manifest.name === undefined ? '' : `name: ${JSON.stringify(manifest.name)},\n  `}assets,
-  externalAssets,
-  build: () => ok(Object.fromEntries(Object.entries(assets).map(([sourceKey, asset]) => [sourceKey, createOutput(asset.kind)])) as Record<string, Asset>),
-} satisfies ScriptablePackDefinition;
-`;
-}
-
-function definitionFromCanonical(
-  manifest: CanonicalManifest,
-): Result<ScriptablePackDefinition, ScriptablePackError> {
-  const packageId = AssetGuidCodec.parse(manifest.packageId);
-  if (!packageId.ok) return invalidCanonicalGuid('$.packageId', manifest.packageId);
-  const assets: Record<string, { guid: AssetGuid; kind: ScriptablePackAssetKind; name?: string }> =
-    {};
-  for (const [sourceKey, output] of Object.entries(manifest.assets)) {
-    const guid = AssetGuidCodec.parse(output.guid);
-    if (!guid.ok)
-      return invalidCanonicalGuid(`$.assets[${JSON.stringify(sourceKey)}].guid`, output.guid);
-    assets[sourceKey] = {
-      guid: guid.value,
-      kind: output.kind,
-      ...(output.name === undefined ? {} : { name: output.name }),
-    };
-  }
-  const externalAssets: Record<string, AssetGuid> = {};
-  for (const [alias, value] of Object.entries(manifest.externalAssets)) {
-    const guid = AssetGuidCodec.parse(value);
-    if (!guid.ok) return invalidCanonicalGuid(`$.externalAssets[${JSON.stringify(alias)}]`, value);
-    externalAssets[alias] = guid.value;
-  }
-  return validateScriptablePackDefinition({
-    schemaVersion: '1.0.0',
-    packageId: packageId.value,
-    ...(manifest.name === undefined ? {} : { name: manifest.name }),
-    assets,
-    externalAssets,
-    build: () => ok({} as Record<string, never>),
-  });
-}
-
-function invalidCanonicalGuid(
-  propertyPath: string,
-  actual: string,
-): Result<never, ScriptablePackError> {
-  return err({
-    code: 'pack-source-definition-invalid',
-    expected: 'a canonical UUID string',
-    hint: 'repair the canonical scaffold manifest GUID and inspect Meta again',
-    detail: { propertyPath, actual },
-  });
-}
-
-function invalidCanonicalSource(
-  sourcePath: string,
-  error: unknown,
-): Result<never, ScriptablePackError> {
-  return err({
-    code: 'pack-source-definition-invalid',
-    expected: 'a literal canonical-v1 manifest with the required package/assets/external fields',
-    hint: 'repair the canonical scaffold or open it as custom source without structured mutation',
-    detail: {
-      sourcePath,
-      propertyPath: '$.canonicalManifest',
-      actual: error instanceof Error ? error.message : String(error),
-    },
-  });
-}
-
-async function atomicWrite(path: string, source: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await writeFile(temporary, source, { encoding: 'utf8', flag: 'wx' });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  return [...left].sort().join('\0') === [...right].sort().join('\0');
-}
-
-/** Node filesystem adapter for the public ScriptablePack authoring gateway. */
-export function createFileSystemScriptablePackAuthoringPort(
-  options: FileSystemScriptablePackAuthoringOptions,
-): ScriptablePackAuthoringPort {
-  const resolvePath = (sourcePath: string) => confinedSourcePath(options.gameRoot, sourcePath);
-
-  async function readSource(sourcePath: string) {
-    const path = resolvePath(sourcePath);
-    if (!path.ok) return path;
-    try {
-      const source = await readFile(path.value.absolute, 'utf8');
-      return ok({ ...path.value, source, revision: revisionOf(source) });
-    } catch (error) {
-      return err(
-        authoringError('pack-source-write-failed', {
-          expected: 'a readable ScriptablePack source file',
-          actual: error instanceof Error ? error.message : String(error),
-          hint: 'restore the source file or create it through the ScriptablePack gateway',
-          retryable: true,
-          recoveryActions: ['inspect-source-path', 'retry'],
-          sourcePath,
-        }),
-      );
-    }
-  }
-
-  async function inspect(sourcePath: string) {
-    const read = await readSource(sourcePath);
-    if (!read.ok) return read;
-    let canonical: CanonicalManifest | undefined;
-    try {
-      canonical = parseCanonicalManifest(read.value.source, read.value.relative);
-    } catch (error) {
-      return invalidCanonicalSource(read.value.relative, error);
-    }
-    const loaded =
-      canonical === undefined
-        ? await loadScriptablePack(read.value.absolute, { metadataOnly: true })
-        : definitionFromCanonical(canonical);
-    if (!loaded.ok) return loaded;
-    return ok({
-      revision: read.value.revision,
-      meta: projectScriptablePackMeta(loaded.value, read.value.relative),
-    });
-  }
-
-  async function preflight(sourcePath: string) {
-    const read = await readSource(sourcePath);
-    if (!read.ok) return read;
-    const inspected = await inspect(sourcePath);
-    if (!inspected.ok) return inspected;
-    let canonical: CanonicalManifest | undefined;
-    try {
-      canonical = parseCanonicalManifest(read.value.source, read.value.relative);
-    } catch (error) {
-      return invalidCanonicalSource(read.value.relative, error);
-    }
-    const incomingRefs = (await options.incomingRefs?.(read.value.relative)) ?? [];
-    return ok({
-      revision: inspected.value.revision,
-      meta: inspected.value.meta,
-      capabilities:
-        canonical === undefined
-          ? ({
-              inspect: true,
-              rebuild: true,
-              coldCook: true,
-              reason: 'structured mutation is available only for canonical-v1 scaffolds',
-            } as const)
-          : ({
-              inspect: true,
-              rebuild: true,
-              coldCook: true,
-              addOutput: true,
-              addExternalAsset: true,
-              renameDisplay: true,
-              removeOutput: true,
-              clone: true,
-            } as const),
-      incomingRefs,
-    });
-  }
-
-  async function mutate(operation: ScriptablePackAuthoringMutation) {
-    const targetPath =
-      operation.kind === 'clone-scriptable-pack' ? operation.targetPath : operation.sourcePath;
-    const target = resolvePath(targetPath);
-    if (!target.ok) return target;
-
-    let manifest: CanonicalManifest;
-    let currentRevision: string | undefined;
-    if (operation.kind === 'create-scriptable-pack') {
-      if (!CANONICAL_MUTABLE_KINDS.has(operation.initialOutput.kind)) {
-        return err(
-          authoringError('pack-source-mutation-unsupported', {
-            expected: 'a canonical scene, mesh, or material initial output',
-            actual: operation.initialOutput.kind,
-            hint: 'create one of the canonical output kinds, then hand-author advanced outputs',
-            retryable: false,
-            recoveryActions: ['choose-supported-output-kind'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-          }),
-        );
-      }
-      try {
-        await stat(target.value.absolute);
-        return err(
-          authoringError('pack-source-revision-conflict', {
-            expected: 'an unused target source path',
-            actual: 'source already exists',
-            hint: 'inspect the existing source or choose a new path',
-            retryable: false,
-            recoveryActions: ['asset.preflight', 'choose-new-source-path'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-          }),
-        );
-      } catch {
-        // Missing is the required create precondition.
-      }
-      manifest = {
-        schemaVersion: '1.0.0',
-        packageId: AssetGuidCodec.format(operation.packageId),
-        ...(operation.name === undefined ? {} : { name: operation.name }),
-        assets: {
-          [operation.initialOutput.sourceKey]: {
-            guid: AssetGuidCodec.format(operation.initialOutput.guid),
-            kind: operation.initialOutput.kind,
-            ...(operation.initialOutput.name === undefined
-              ? {}
-              : { name: operation.initialOutput.name }),
-          },
-        },
-        externalAssets: {},
-      };
-    } else {
-      const read = await readSource(operation.sourcePath);
-      if (!read.ok) return read;
-      currentRevision = read.value.revision;
-      if (
-        operation.expectedRevision !== undefined &&
-        operation.expectedRevision !== currentRevision
-      ) {
-        return err(
-          authoringError('pack-source-revision-conflict', {
-            expected: operation.expectedRevision,
-            actual: currentRevision,
-            hint: 'inspect the current source revision, reconcile the edit, then retry with a new requestId',
-            retryable: true,
-            recoveryActions: ['asset.preflight', 'mint-request-id'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-          }),
-        );
-      }
-      let parsed: CanonicalManifest | undefined;
-      try {
-        parsed = parseCanonicalManifest(read.value.source, read.value.relative);
-      } catch (error) {
-        return invalidCanonicalSource(read.value.relative, error);
-      }
-      if (parsed === undefined) {
-        return err(
-          authoringError('pack-source-mutation-unsupported', {
-            expected: 'a canonical-v1 scaffold for structured source mutation',
-            actual: 'custom ScriptablePack source',
-            hint: 'clone into a canonical scaffold or edit custom source with a code editor',
-            retryable: false,
-            recoveryActions: ['clone-scriptable-pack', 'open-code-editor'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-          }),
-        );
-      }
-      manifest = parsed;
-    }
-
-    if (operation.kind === 'clone-scriptable-pack') {
-      try {
-        await stat(target.value.absolute);
-        return err(
-          authoringError('pack-source-revision-conflict', {
-            expected: 'an unused clone target source path',
-            actual: 'source already exists',
-            hint: 'inspect the existing target or choose a new path',
-            retryable: false,
-            recoveryActions: ['asset.preflight', 'choose-new-source-path'],
-            requestId: operation.requestId,
-            sourcePath: target.value.relative,
-          }),
-        );
-      } catch {
-        // Missing is the required clone precondition.
-      }
-    }
-
-    if (operation.kind === 'add-output') {
-      if (!CANONICAL_MUTABLE_KINDS.has(operation.assetKind)) {
-        return err(
-          authoringError('pack-source-mutation-unsupported', {
-            expected: 'a canonical scene, mesh, or material output',
-            actual: operation.assetKind,
-            hint: 'hand-author advanced output kinds in the source module',
-            retryable: false,
-            recoveryActions: ['open-code-editor'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-            sourceKey: operation.sourceKey,
-          }),
-        );
-      }
-      manifest = {
-        ...manifest,
-        assets: {
-          ...manifest.assets,
-          [operation.sourceKey]: {
-            guid: AssetGuidCodec.format(operation.guid),
-            kind: operation.assetKind,
-            ...(operation.name === undefined ? {} : { name: operation.name }),
-          },
-        },
-      };
-    } else if (operation.kind === 'add-external-asset') {
-      manifest = {
-        ...manifest,
-        externalAssets: {
-          ...manifest.externalAssets,
-          [operation.alias]: AssetGuidCodec.format(operation.guid),
-        },
-      };
-    } else if (operation.kind === 'rename-display') {
-      if (operation.target.kind === 'package') manifest = { ...manifest, name: operation.name };
-      else {
-        const output = manifest.assets[operation.target.sourceKey];
-        if (output === undefined)
-          return err(
-            authoringError('pack-source-mutation-unsupported', {
-              expected: 'an existing sourceKey',
-              actual: operation.target.sourceKey,
-              hint: 'inspect Meta and choose a current output',
-              retryable: true,
-              recoveryActions: ['asset.preflight'],
-              requestId: operation.requestId,
-              sourcePath: operation.sourcePath,
-              sourceKey: operation.target.sourceKey,
-            }),
-          );
-        manifest = {
-          ...manifest,
-          assets: {
-            ...manifest.assets,
-            [operation.target.sourceKey]: { ...output, name: operation.name },
-          },
-        };
-      }
-    } else if (operation.kind === 'remove-output') {
-      const incomingRefs =
-        (await options.incomingRefs?.(operation.sourcePath, operation.sourceKey)) ?? [];
-      if (
-        incomingRefs.length > 0 &&
-        !sameStrings(incomingRefs, operation.confirmIncomingRefs ?? [])
-      ) {
-        return err(
-          authoringError('pack-source-reference-conflict', {
-            expected: 'explicit acknowledgement of every current incoming reference',
-            actual: `${incomingRefs.length} incoming references`,
-            hint: 'inspect dependents, then confirm the exact incoming reference identities or cancel',
-            retryable: true,
-            recoveryActions: ['inspect-incoming-refs', 'confirm-remove-output'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-            sourceKey: operation.sourceKey,
-            incomingRefs,
-          }),
-        );
-      }
-      const { [operation.sourceKey]: removed, ...assets } = manifest.assets;
-      if (removed === undefined || Object.keys(assets).length === 0) {
-        return err(
-          authoringError('pack-source-mutation-unsupported', {
-            expected: 'an existing output while retaining at least one package output',
-            actual: operation.sourceKey,
-            hint: 'keep one output or remove the entire source file through an explicit file operation',
-            retryable: false,
-            recoveryActions: ['asset.preflight'],
-            requestId: operation.requestId,
-            sourcePath: operation.sourcePath,
-            sourceKey: operation.sourceKey,
-          }),
-        );
-      }
-      manifest = { ...manifest, assets };
-    } else if (operation.kind === 'clone-scriptable-pack') {
-      manifest = {
-        ...manifest,
-        packageId: AssetGuidCodec.format(operation.packageId),
-        assets: Object.fromEntries(
-          Object.entries(manifest.assets).map(([sourceKey, output]) => [
-            sourceKey,
-            {
-              ...output,
-              guid: AssetGuidCodec.format(operation.outputGuids[sourceKey] as AssetGuid),
-            },
-          ]),
-        ),
-      };
-    }
-
-    const source = renderCanonicalScriptablePack(manifest);
-    try {
-      await atomicWrite(target.value.absolute, source);
-      return ok({ sourcePath: target.value.relative, revision: revisionOf(source) });
-    } catch (error) {
-      return err(
-        authoringError('pack-source-write-failed', {
-          expected: 'an atomic source-file replacement',
-          actual: error instanceof Error ? error.message : String(error),
-          hint: 'repair filesystem permissions or disk capacity, then retry with a new requestId',
-          retryable: true,
-          recoveryActions: ['inspect-filesystem', 'mint-request-id'],
-          requestId: operation.requestId,
-          sourcePath: target.value.relative,
-        }),
-      );
-    }
-  }
-
-  return {
-    preflight,
-    mutate,
-    inspect,
-    async rebuild(sourcePath, mode) {
-      const path = resolvePath(sourcePath);
-      if (!path.ok) return path;
-      const rebuilt = (await options.rebuild?.(path.value.relative, mode)) ?? ok(undefined);
-      return rebuilt.ok ? inspect(path.value.relative) : rebuilt;
-    },
-  };
 }

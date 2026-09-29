@@ -88,25 +88,34 @@ describe('normalized GUID collision collection', () => {
 
   it('reports a ScriptablePack output colliding with a JSON sidecar', async () => {
     const root = await makeRoot('scriptable-meta');
-    await writeFile(join(root, 'image.png'), Buffer.from('fixture'));
+    const packageId = '018e7a4d-1234-7abc-8def-000000000002';
     await writeFile(
-      join(root, 'image.png.meta.json'),
-      JSON.stringify(meta(COLLIDING_GUID, 'image.png')),
+      join(root, 'direct.pack.json'),
+      JSON.stringify({
+        schemaVersion: '3.0.0',
+        packageId,
+        assets: { mesh: { kind: 'mesh', payload: {} } },
+      }),
     );
     await writeFile(
       join(root, 'generated.pack.ts'),
       `
-const guid = (value: string) => new Uint8Array(value.replaceAll('-', '').match(/../g)!.map((byte: string) => Number.parseInt(byte, 16)));
 export default {
-  schemaVersion: '1.0.0',
-  packageId: guid('018e7a4d-1234-7abc-8def-000000000002'),
-  assets: { mesh: { guid: guid('${COLLIDING_GUID}'), kind: 'mesh' } },
-  externalAssets: {},
+  schemaVersion: '2.0.0',
+  packageId: new Uint8Array([1, 142, 122, 77, 18, 52, 122, 188, 141, 239, 0, 0, 0, 0, 0, 2]),
   build: () => ({ ok: true, value: { mesh: { kind: 'mesh' } } }),
 };
 `,
     );
 
-    await expectGuidCollision([root], ['image.png.meta.json', 'generated.pack.ts']);
+    const result = await scan([root]);
+    expect(result.ok).toBe(false);
+    if (result.ok || result.error.code !== 'pack-guid-collision') return;
+    const detail = result.error.detail;
+    if (!('guid' in detail) || !('paths' in detail)) return;
+    expect(detail.guid).toBe(packageId);
+    expect(detail.paths).toHaveLength(2);
+    expect(detail.paths.some((path) => path.endsWith('direct.pack.json'))).toBe(true);
+    expect(detail.paths.some((path) => path.endsWith('generated.pack.ts'))).toBe(true);
   });
 });

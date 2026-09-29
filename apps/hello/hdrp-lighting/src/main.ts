@@ -3,7 +3,8 @@ import { Update } from '@forgeax/engine-ecs';
 // (feat-20260608-cluster-lighting / M7 / w25).
 //
 // This demo selects the Standard clustered-lighting lane at host assembly.
-// The same closed Standard profile can be falsified with the direct lane.
+// `renderPath` only chooses the forward/deferred graph variant; both variants
+// consume the same unified Cluster light transport.
 //
 // Scene (charter F1 progressive disclosure):
 //   - 1 ground cube (large, dark gray) acting as the "lit floor".
@@ -14,10 +15,9 @@ import { Update } from '@forgeax/engine-ecs';
 //     the cluster bins repopulate every frame (proves the binner runs
 //     once per frame, not just once at install).
 //
-// FALSIFY mode (AC-21 falsifiability discipline):
-//   ?falsify=force-direct -- assemble the same scene on the direct lane.
-//   The smoke verdict detects the lane change while retaining the real GPU
-//   256-light path. Local-only manual run; not in CI.
+// Optional mode:
+//   ?falsify=force-forward -- select the forward graph variant. This remains
+//   the same clustered Standard lighting path.
 //
 // Charter mapping:
 //   - P1 progressive disclosure: createApp -> Standard profile -> spawn 256
@@ -77,7 +77,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       standardProfile: {
         ...DEFAULT_STANDARD_PROFILE,
-        lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+        renderPath: FALSIFY === 'force-forward' ? 'forward' : 'deferred',
         lightCount: 256,
       },
     },
@@ -131,6 +131,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // jitter, but determinism keeps the readback stable on dawn-node).
   const rng = mulberry32(0x484452_50);
   const pointEntities: Array<ReturnType<typeof world.spawn>> = [];
+  const pointHomePositions: Array<readonly [number, number, number]> = [];
   for (let i = 0; i < POINT_LIGHT_COUNT; i++) {
     const x = (rng() - 0.5) * 5.5;
     const z = (rng() - 0.5) * 5.5;
@@ -143,9 +144,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // floor's +Y face a healthy NdotL, so the 256 lights actually paint
     // the scene.
     const y = 1.5 + rng() * 2.0;
+    const homePosition: [number, number, number] = [x, y, z];
+    pointHomePositions.push(homePosition);
     pointEntities.push(
       world.spawn(
-        { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1]} },
+        { component: Transform, data: { pos: homePosition, quat: [0, 0, 0, 1]} },
         {
           component: PointLight,
           data: {
@@ -242,13 +245,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         const radius = 0.5;
         const dx = Math.cos(angle) * radius;
         const dz = Math.sin(angle) * radius;
-        // Read the source seed and shift by the orbit delta -- we know the
-        // initial (x, z) was rng-derived in the same loop, so we recompute
-        // a stable "home" from the entity index.
-        const seedX = ((i * 0.123) % 1 - 0.5) * 5.5;
-        const seedZ = ((i * 0.789) % 1 - 0.5) * 5.5;
+        // Keep each light's authored position as the orbit center. Reusing
+        // the actual seed preserves the original height and horizontal
+        // distribution; deriving a second position from the entity index
+        // would move the lights into a different scene every frame.
+        const home = pointHomePositions[i];
+        if (!home) continue;
         world.set(e, Transform, {
-          pos: [seedX + dx, 0.6, seedZ + dz],});
+          pos: [home[0] + dx, home[1], home[2] + dz],
+        });
       }
     },
   });
@@ -260,7 +265,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn(
-    `[standard-lighting] running. Standard ${FALSIFY === 'force-direct' ? 'direct' : 'clustered'} lane. 256 punctual lights orbiting.`,
+    `[standard-lighting] running. Standard clustered lane (${FALSIFY === 'force-forward' ? 'forward' : 'deferred'} graph). 256 punctual lights orbiting.`,
   );
 }
 

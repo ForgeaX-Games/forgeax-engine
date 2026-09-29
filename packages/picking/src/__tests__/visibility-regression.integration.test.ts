@@ -10,7 +10,7 @@ import {
 } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { extractFrames } from '../../../render/src/render-system-extract';
+import { extractFrames } from '../../../render/src/render-system-extract-tail';
 import { pick } from '../pick';
 
 const VIEWPORT = 600;

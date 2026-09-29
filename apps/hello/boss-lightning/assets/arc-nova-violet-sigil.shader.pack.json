@@ -14,7 +14,7 @@
           {
             "name": "particle-billboard",
             "program": {
-              "module": "boss_lightning_vfx::arc_nova_violet_sigil",
+              "module": "hello_boss_lightning::arc_nova_violet_sigil",
               "vertexEntry": "vs_main",
               "fragmentEntry": "fs_main"
             },

@@ -1,5 +1,4 @@
-import type { DdcEntry, StagedDdcEntry } from './entry-store.js';
-import { DdcEntryStore } from './entry-store.js';
+import { type DdcEntry, DdcEntryStore, DdcStoreError, type StagedDdcEntry } from './entry-store.js';
 import type {
   DdcCommitResult,
   DdcHead,
@@ -151,7 +150,15 @@ export class DdcGenerationSession {
   ): Promise<DdcCommitResult> {
     const registered = this.assertCandidate(candidate);
     try {
-      await this.entries.publish(candidate.staged);
+      const published = await this.entries.publish(candidate.staged);
+      if (published.result === 'conflict') {
+        throw new DdcStoreError({
+          code: 'ddc-entry-conflict',
+          detail: `immutable DDC entry ${published.key} conflicts with the staged candidate`,
+          expected: 'the existing DDC entry to have the same validated output',
+          actual: { key: published.key },
+        });
+      }
       const result = await this.lifecycle.commit(registered.lease, validatedKey);
       if (result.restoreFence !== undefined)
         this.restoreFences.set(registered, result.restoreFence);

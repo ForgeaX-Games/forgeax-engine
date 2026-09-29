@@ -1,15 +1,14 @@
 #define_import_path forgeax_view::tonemap
 
-// @forgeax/engine-shader - Three r184 tone mapping output module.
+// @forgeax/engine-shader - Three r184 Output Transform module.
 //
 // The public modes and formulas are the Three.js r184 oracle. The numeric
 // values are the binding contract mirrored by TONEMAP_SHADER_MODE in tonemap.ts.
 // `reinhard-extended` remains Forgeax's existing luminance-domain curve; the
 // distinct `reinhard` mode is Three's per-channel Reinhard curve.
 
-#import forgeax_view::common::FullscreenOutput
-#import forgeax_view::common::fullscreen_triangle
-#import forgeax_view::common::linearToSrgbOetf
+#import forgeax_view::common::{FullscreenOutput, ditherUnorm8, fullscreen_triangle}
+#import forgeax_view::output_encoding::{encodeOutput}
 
 const TONEMAP_LUMINANCE_EPSILON : f32 = 1e-5;
 
@@ -17,7 +16,7 @@ struct TonemapParams {
   exposure   : f32,
   whitePoint : f32,
   mode       : u32,
-  pad1       : f32,
+  ditherEnabled : f32,
 };
 
 @group(1) @binding(0) var hdr  : texture_2d<f32>;
@@ -37,7 +36,7 @@ fn tonemapReinhardExtended(color : vec3<f32>) -> vec3<f32> {
   return color * scale;
 }
 
-fn tonemapLinear(color : vec3<f32>) -> vec3<f32> {
+fn toneMapLinearLdr(color : vec3<f32>) -> vec3<f32> {
   return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
@@ -151,27 +150,50 @@ fn tonemapNeutral(color : vec3<f32>) -> vec3<f32> {
   return mix(compressed, vec3<f32>(new_peak), g);
 }
 
-@fragment
-fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
-  // linearHdrColorDomain: hdr is sampled before the only HDR-to-LDR stage.
-  // linearLdrColorDomain: the output pass emits the display-target domain.
-  let source = textureSample(hdr, samp, in.uv);
-  let sample : vec3<f32> = source.rgb;
+fn mapTonemap(sample : vec3<f32>) -> vec3<f32> {
   let exposed : vec3<f32> = sample * params.exposure;
   var mapped : vec3<f32>;
   switch (params.mode) {
     case 1u: { mapped = tonemapReinhardExtended(exposed); }
-    case 2u: { mapped = tonemapLinear(exposed); }
+    case 2u: { mapped = toneMapLinearLdr(exposed); }
     case 3u: { mapped = tonemapCineon(exposed); }
     case 4u: { mapped = tonemapAcesFilmic(exposed); }
     case 5u: { mapped = tonemapAgx(exposed); }
     case 6u: { mapped = tonemapNeutral(exposed); }
     case 7u: { mapped = tonemapReinhard(exposed); }
-    // Mode 0 is the linear-LDR output pass used when tone mapping is disabled.
-    // It targets the raw canvas format and mirrors Three r184's output OETF.
-    default: { mapped = linearToSrgbOetf(exposed); }
+    // Mode 0 uses the explicit linear HDR to linear LDR identity/clamp.
+    default: { mapped = toneMapLinearLdr(sample); }
   }
-  // The mode-0 output pass is display-encoded; other modes retain their
-  // existing tonemap output contract.
-  return vec4<f32>(mapped, source.a);
+  return mapped;
+}
+
+fn encodeFinal(linearColor : vec3<f32>, alpha : f32, position : vec4<f32>) -> vec4<f32> {
+  let encoded = encodeOutput(linearColor, alpha);
+  let outputRgb = select(
+    encoded.rgb,
+    ditherUnorm8(encoded.rgb, position.xy),
+    params.ditherEnabled > 0.5,
+  );
+  return vec4<f32>(outputRgb, encoded.a);
+}
+
+@fragment
+fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
+  // Combined path: tone mapping and the one output encoding happen together.
+  let source = textureSample(hdr, samp, in.uv);
+  return encodeFinal(mapTonemap(source.rgb), source.a, in.position);
+}
+
+@fragment
+fn fs_tone_only(in : FullscreenOutput) -> @location(0) vec4<f32> {
+  // LUT-enabled path stops at linear LDR so the LUT never samples encoded data.
+  let source = textureSample(hdr, samp, in.uv);
+  return vec4<f32>(mapTonemap(source.rgb), source.a);
+}
+
+@fragment
+fn fs_encode_only(in : FullscreenOutput) -> @location(0) vec4<f32> {
+  // The final writer consumes linear LDR after LUT and optional FXAA.
+  let source = textureSample(hdr, samp, in.uv);
+  return encodeFinal(source.rgb, source.a, in.position);
 }

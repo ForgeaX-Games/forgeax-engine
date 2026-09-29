@@ -6,7 +6,7 @@ import type {
 
 export interface DawnAuxiliaryObservation {
   readonly caseId: string;
-  readonly pipelineId: 'forgeax::standard' | 'forgeax::urp' | 'forgeax::hdrp';
+  readonly pipelineId: 'forgeax::standard';
   readonly backendId: string;
   readonly frameId: number;
   readonly bytes: readonly number[];

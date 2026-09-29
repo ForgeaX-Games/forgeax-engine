@@ -1,5 +1,6 @@
 import type { AssetGuid } from './guid.js';
 import { AssetGuid as AssetGuidNS } from './guid.js';
+import { uuidV5 } from './uuid-v5.js';
 
 /**
  * ForgeaX engine namespace UUID for UUIDv5 derivation.
@@ -12,80 +13,43 @@ export const FORGEAX_NAMESPACE: AssetGuid = _nsResult.value;
 
 /**
  * Derive a stable UUIDv5 AssetGuid from a name within the ForgeaX namespace.
- * Uses SHA-1 via Node.js `node:crypto` or Web Crypto API (RFC 4122 §4.3).
- * Deterministic: same name always produces the same bytes.
+ * Synchronous SHA-1 keeps builtin imports usable in default IIFE Workers.
+ * Names retain their exact UTF-8 bytes and are not Pack source keys.
  */
-export async function deriveBuiltin(name: string): Promise<AssetGuid> {
-  const nsBytes = FORGEAX_NAMESPACE;
-  const nameBytes = new TextEncoder().encode(name);
-
-  // Concatenate namespace bytes + name bytes for SHA-1 digest
-  const concat = new Uint8Array(16 + nameBytes.length);
-  concat.set(nsBytes, 0);
-  concat.set(nameBytes, 16);
-
-  let hashBytes: Uint8Array;
-
-  if (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle !== undefined) {
-    // Browser / Web Crypto path
-    const buffer = await globalThis.crypto.subtle.digest('SHA-1', concat);
-    hashBytes = new Uint8Array(buffer);
-  } else {
-    // Node.js path
-    const { createHash } = await import('node:crypto');
-    const hash = createHash('sha1');
-    hash.update(concat);
-    hashBytes = hash.digest();
-  }
-
-  // RFC 4122 §4.3: assemble UUIDv5 from first 16 bytes of SHA-1 digest
-  const uuidBytes = new Uint8Array(16);
-  uuidBytes.set(hashBytes.subarray(0, 16));
-
-  // Set version bits: byte 6, high nibble = 0x5 (version 5)
-  // biome-ignore lint/style/noNonNullAssertion: uuidBytes is 16 bytes
-  uuidBytes[6] = (uuidBytes[6]! & 0x0f) | 0x50;
-  // Set variant bits: byte 8, high 2 bits = 0b10
-  // biome-ignore lint/style/noNonNullAssertion: uuidBytes is 16 bytes
-  uuidBytes[8] = (uuidBytes[8]! & 0x3f) | 0x80;
-
-  return uuidBytes as AssetGuid;
+export function deriveBuiltin(name: string): AssetGuid {
+  return uuidV5(FORGEAX_NAMESPACE, name) as AssetGuid;
 }
 
-function formatSync(bytes: Uint8Array): string {
-  return AssetGuidNS.format(bytes as AssetGuid);
-}
-
-async function deriveSync(name: string): Promise<string> {
-  return formatSync(await deriveBuiltin(name));
+function deriveString(name: string): string {
+  return AssetGuidNS.format(deriveBuiltin(name));
 }
 
 /**
- * Pre-computed compile-time constant for the HANDLE_CUBE builtin GUID.
+ * Stable module constant for the HANDLE_CUBE builtin GUID.
  * Derived from: deriveBuiltin('HANDLE_CUBE') under FORGEAX_NAMESPACE.
  */
-export const BUILTIN_HANDLE_CUBE = await deriveSync('HANDLE_CUBE');
+export const BUILTIN_HANDLE_CUBE = deriveString('HANDLE_CUBE');
 
 /**
- * Pre-computed compile-time constant for the HANDLE_TRIANGLE builtin GUID.
+ * Stable module constant for the HANDLE_TRIANGLE builtin GUID.
  * Derived from: deriveBuiltin('HANDLE_TRIANGLE') under FORGEAX_NAMESPACE.
  */
-export const BUILTIN_HANDLE_TRIANGLE = await deriveSync('HANDLE_TRIANGLE');
+export const BUILTIN_HANDLE_TRIANGLE = deriveString('HANDLE_TRIANGLE');
 
 /**
- * Pre-computed compile-time constant for the HANDLE_QUAD builtin GUID.
+ * Stable module constant for the HANDLE_QUAD builtin GUID.
  * Derived from: deriveBuiltin('HANDLE_QUAD') under FORGEAX_NAMESPACE.
  */
-export const BUILTIN_HANDLE_QUAD = await deriveSync('HANDLE_QUAD');
+export const BUILTIN_HANDLE_QUAD = deriveString('HANDLE_QUAD');
 
-/** Pre-computed UUIDv5 for the Engine-owned sphere mesh descriptor. */
-export const BUILTIN_HANDLE_SPHERE = await deriveSync('HANDLE_SPHERE');
+/** Stable UUIDv5 for the Engine-owned sphere mesh descriptor. */
+export const BUILTIN_HANDLE_SPHERE = deriveString('HANDLE_SPHERE');
 
-/** Pre-computed UUIDv5 for the Engine-owned nine-slice quad descriptor. */
-export const BUILTIN_HANDLE_NINESLICE_QUAD = await deriveSync('HANDLE_NINESLICE_QUAD');
+/** Stable UUIDv5 for the Engine-owned nine-slice quad descriptor. */
+export const BUILTIN_HANDLE_NINESLICE_QUAD = deriveString('HANDLE_NINESLICE_QUAD');
 
-/** Pre-computed UUIDv5 for the Engine-owned cylinder mesh descriptor. */
-export const BUILTIN_HANDLE_CYLINDER = await deriveSync('HANDLE_CYLINDER');
+/** Stable UUIDv5 for the Engine-owned cylinder mesh descriptor. */
+export const BUILTIN_HANDLE_CYLINDER = deriveString('HANDLE_CYLINDER');
 
 export type BuiltinMeshGeometry =
   | 'procedural-cube'

@@ -54,7 +54,7 @@ function authoringMesh(topology) {
   };
 }
 
-const material = Materials.unlit([0.1, 0.9, 1, 1], { castShadow: false });
+const material = Materials.unlit([0.1, 0.9, 1, 1]);
 const pointMesh = authoringMesh('point-list');
 const lineMesh = authoringMesh('line-list');
 const pointAdmission = admitPointsLines({

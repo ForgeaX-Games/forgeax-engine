@@ -36,7 +36,7 @@ const tape = {
   bootstrap: [
     { handleId: 'encoder:1', kind: 'encoder', create: { kind: 'createCommandEncoder', cmdHandleId: 'encoder:1' }, initialData: [] },
     { handleId: 'texture:color', kind: 'texture', create: { kind: 'createTexture', handleId: 'texture:color', desc: { size: [2, 2, 1], format: 'rgba8unorm', usage: 19, dimension: '2d', mipLevelCount: 1, sampleCount: 1 } }, initialData: [{ hash: 'fixture-color', byteOffset: 0, byteLength: colorBytes.byteLength }] },
-    { handleId: 'buffer:known', kind: 'buffer', create: { kind: 'createBuffer', handleId: 'buffer:known', desc: { size: bufferBytes.byteLength, usage: 132 } }, initialData: [{ hash: 'fixture-buffer', byteOffset: 0, byteLength: bufferBytes.byteLength }] },
+    { handleId: 'buffer:known', kind: 'buffer', create: { kind: 'createBuffer', handleId: 'buffer:known', desc: { size: bufferBytes.byteLength, usage: 164 } }, initialData: [{ hash: 'fixture-buffer', byteOffset: 0, byteLength: bufferBytes.byteLength }] },
     { handleId: 'view:color', kind: 'texture-view', create: { kind: 'createTextureView', sourceHandleId: 'texture:color', resultHandleId: 'view:color', desc: {} }, initialData: [] },
   ],
   events: [
@@ -47,7 +47,7 @@ const tape = {
     { kind: 'createPipelineLayout', handleId: 'pipeline-layout:empty', bglHandleIds: ['layout:empty'] },
     { kind: 'createRenderPipeline', handleId: 'pipeline:fixture', desc: { vertex: { entryPoint: 'main', buffers: [] }, fragment: { entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] }, primitive: { topology: 'triangle-list' } }, layoutHandleId: 'pipeline-layout:empty', vertexShaderModuleHandleId: 'shader:vertex', fragmentShaderModuleHandleId: 'shader:fragment' },
     { kind: 'pushDebugGroup', cmdHandleId: 'encoder:1', groupLabel: 'main-pass' },
-    { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:1', desc: { colorAttachments: [] }, colorAttachmentViewHandleIds: ['view:color'] },
+    { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:1', desc: { colorAttachments: [{ loadOp: 'load', storeOp: 'store' }] }, colorAttachmentViewHandleIds: ['view:color'] },
     { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipeline:fixture' },
     { kind: 'passPushDebugGroup', passHandleId: 'pass:1', groupLabel: 'color-pass' },
     { kind: 'passInsertDebugMarker', passHandleId: 'pass:1', markerLabel: 'first draw' },
@@ -56,7 +56,7 @@ const tape = {
     { kind: 'passPopDebugGroup', passHandleId: 'pass:1' },
     { kind: 'endRenderPass', passHandleId: 'pass:1' },
     { kind: 'popDebugGroup', cmdHandleId: 'encoder:1' },
-    { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:2', desc: { colorAttachments: [] }, colorAttachmentViewHandleIds: ['view:color'] },
+    { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:2', desc: { colorAttachments: [{ loadOp: 'load', storeOp: 'store' }] }, colorAttachmentViewHandleIds: ['view:color'] },
     { kind: 'setPipeline', passHandleId: 'pass:2', pipelineHandleId: 'pipeline:fixture' },
     { kind: 'passInsertDebugMarker', passHandleId: 'pass:2', markerLabel: 'second pass' },
     { kind: 'draw', passHandleId: 'pass:2', vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0 },

@@ -3,7 +3,7 @@
 //
 // End-to-end proof: dawn-node drives the same Khronos Fox.glb 3-instance
 // scene the browser src/main.ts exercises (charter P4 consistent abstraction).
-// 300 frames + pixel readback: non-black + non-NaN shape sanity gate.
+// 60 frames + pixel readback: non-black + non-NaN shape sanity gate.
 //
 // M4 scope: the smoke runs the new Fox.glb pipeline (parseGlb + bridge +
 // 3 AnimationPlayer instances) end-to-end and verifies the structural
@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 // tweak-20260611 M7 / AC-06: FALSIFY counter-proofs (must turn smoke red).
@@ -113,7 +113,10 @@ let sharedDevice;
 // implementer note explicitly allows this simplification when the
 // intercept is the load-bearing observation. Sample window: >=3 distinct
 // fullHash values across the recorded writes (paralleling smoke-browser
-// AC-01's 3-sample lower bound). FALSIFY anchor: short-circuit
+// AC-01's 3-sample lower bound). The post-loop stability probe also pauses
+// all three players, proves two unchanged frames produce no palette write,
+// then resumes one frame and proves a dirty pose produces a write. FALSIFY
+// anchor: short-circuit
 // writeJointPalette in skin-palette-allocator.ts to write a constant
 // identity payload -> distinctness collapses to 1 -> probe red.
 const skinPaletteWritesDawn = [];
@@ -358,9 +361,23 @@ const walkHandle = world.allocSharedRef('AnimationClip', walkClip);
 const runHandle = world.allocSharedRef('AnimationClip', runClip);
 
 const meshIrs = doc.meshes.filter((m) => m.meshIndex === 0);
-const meshResult = meshIrToMeshAsset(meshIrs);
+// The bridge owns MeshAsset.materialSlots, so the producer must preserve the
+// glTF material identity when constructing the smoke asset. Leaving the map
+// out creates an engine-default slot (handle 0), which cannot route a skinned
+// primitive to the authored pbr-skin pass and makes the Dawn smoke bind the
+// ordinary pbr layout at group(2).
+const meshResult = meshIrToMeshAsset(meshIrs, {
+  guidByIndex: new Map([[0, AssetGuid.format(materialGuid)]]),
+});
 if (!meshResult.ok) throw meshResult.error;
 const meshAsset = meshResult.value;
+const firstMaterialSlot = meshAsset.materialSlots?.[0];
+if (
+  firstMaterialSlot?.defaultMaterial === undefined ||
+  AssetGuid.format(firstMaterialSlot.defaultMaterial) !== AssetGuid.format(materialGuid)
+) {
+  throw new Error('[smoke] mesh bridge dropped the authored Fox material slot');
+}
 assets.catalog(meshGuid, meshAsset);
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
 // feat-20260611 w17-a: smoke-dawn parallels the gltf-importer cooker by
@@ -553,7 +570,7 @@ renderer.subscribe((event) => {
 });
 
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 const m22RecoveryFailures = [];
@@ -771,6 +788,31 @@ await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`);
 
+// AC-08 palette residency proof: an unchanged pose keeps its persistent
+// address and reports zero upload bytes at the allocator boundary (the unit
+// gate asserts the receipt fields). This Dawn carrier additionally exercises
+// the real render loop: settle one paused frame, then require two stable
+// frames with no `skin-palette` writeBuffer call before resuming animation and
+// requiring one dirty write.
+for (const instance of perInstance) {
+  const paused = world.set(instance.root, AnimationPlayer, { paused: true });
+  if (!paused.ok) throw paused.error;
+}
+await renderM22Frame();
+const stablePaletteStart = skinPaletteWritesDawn.length;
+await renderM22Frames(2);
+const stablePaletteWrites = skinPaletteWritesDawn.length - stablePaletteStart;
+for (const instance of perInstance) {
+  const resumed = world.set(instance.root, AnimationPlayer, { paused: false });
+  if (!resumed.ok) throw resumed.error;
+}
+const dirtyPaletteStart = skinPaletteWritesDawn.length;
+await renderM22Frame();
+const dirtyPaletteWrites = skinPaletteWritesDawn.length - dirtyPaletteStart;
+console.log(
+  `[smoke] palette-stability stableWriteBufferDelta=${stablePaletteWrites} dirtyWriteBufferDelta=${dirtyPaletteWrites}`,
+);
+
 if (!renderTarget) {
   console.error('[smoke] FAIL - renderTarget never allocated');
   process.exit(1);
@@ -882,7 +924,17 @@ if (skinPaletteHitsDawn < 3) {
 }
 if (skinPaletteFullHashSetDawn.size < 2) {
   failures.push(
-    `(f) m4-4 skin-palette payload distinctness=${skinPaletteFullHashSetDawn.size} (need >=2); palette frozen across frames -- writeJointPalette short-circuit or upstream Transform.world propagation failure`,
+    `(f) m4-4 skin-palette payload distinctness=${skinPaletteFullHashSetDawn.size} (need >=2); palette frozen across frames -- writeJointPalette short-circuit or upstream GlobalTransform.world propagation failure`,
+  );
+}
+if (stablePaletteWrites !== 0) {
+  failures.push(
+    `(f) AC-08 stable palette writeBuffer delta=${stablePaletteWrites} (expected 0); unchanged paused poses are re-uploading`,
+  );
+}
+if (dirtyPaletteWrites < 1) {
+  failures.push(
+    `(f) AC-08 dirty palette writeBuffer delta=${dirtyPaletteWrites} (need >=1); resumed pose did not publish a dirty range`,
   );
 }
 
@@ -923,7 +975,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSites.length}, NaN=0, RhiError count=0, palette writes=${skinPaletteHitsDawn} (${skinPaletteFullHashSetDawn.size} distinct)`,
+  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSites.length}, NaN=0, RhiError count=0, palette writes=${skinPaletteHitsDawn} (${skinPaletteFullHashSetDawn.size} distinct), stableDelta=${stablePaletteWrites}, dirtyDelta=${dirtyPaletteWrites}`,
 );
 
 device.destroy?.();

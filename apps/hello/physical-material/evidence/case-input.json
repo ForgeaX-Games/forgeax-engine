@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "render": {
+    "width": 200,
+    "height": 150,
+    "clearColor": [0.02, 0.02, 0.05, 1],
+    "tonemap": "reinhard-extended",
+    "exposure": 1,
+    "whitePoint": 8
+  },
+  "camera": {
+    "position": [0, 0, 7],
+    "fovRadians": 0.7853981633974483,
+    "near": 0.1,
+    "far": 100,
+    "aspect": 1.3333333333333333,
+    "identity": "perspective-fov-45-at-origin"
+  },
+  "directLight": {
+    "direction": [-0.4, -0.8, -0.3],
+    "color": [1, 1, 1],
+    "intensity": 2
+  },
+  "ibl": {
+    "sourceGuid": "019e4a26-3c29-7420-af5d-20f2724a16b0",
+    "sourceRevision": "b84174ebac471401df41a2b8cad9ce06d1853b9cbadb1ed01e29b2a4963a2086",
+    "format": "rgba16float",
+    "colorSpace": "linear",
+    "width": 1600,
+    "height": 800,
+    "referenceRadiance": [0.21533203125, 0.14111328125, 0.07666015625],
+    "referenceRadianceSample": {
+      "source": "newport_loft.hdr",
+      "bodySha256": "391ac77feea42745a6ae6b12d4da46bed90e8af4721525f4def0882c10cd8084",
+      "direction": [0, 0, 1],
+      "uv": [0.75, 0.5],
+      "texel": [1200, 400]
+    }
+  },
+  "material": {
+    "baseColor": [0.62, 0.14, 0.04, 1],
+    "metallic": 0,
+    "roughness": 0.42,
+    "clearcoat": 1,
+    "clearcoatRoughness": 0.18,
+    "clearcoatNormalScale": 1
+  },
+  "geometry": {
+    "rigid": { "kind": "box", "size": [1.2, 1.2, 1.2] },
+    "skinned": {
+      "kind": "triangle",
+      "positions": [[-0.55, -0.55, 0], [0.55, -0.55, 0], [0, 0.55, 0]],
+      "uv": [[0, 0], [1, 0], [0.5, 1]],
+      "weights": [[0.75, 0.25], [0.35, 0.65], [0.6, 0.4]],
+      "jointIndices": [[0, 0], [0, 0], [0, 0]],
+      "pose": [
+        { "pos": [0.25, 0.1, 0], "quat": [0, 0, 0.258819, 0.965926], "scale": [1, 1.1, 1] },
+        { "pos": [0.48, -0.08, 0], "quat": [0, 0, -0.130526, 0.991445], "scale": [0.9, 1.2, 1] }
+      ]
+    },
+    "casePositions": {
+      "direct-rigid-factor-r": [-2.7, 0.9],
+      "direct-rigid-roughness-g": [-0.9, 0.9],
+      "direct-rigid-normal-rg": [0.9, 0.9],
+      "direct-rigid-coat-normal-isolation": [2.7, 0.9],
+      "direct-skinned-factor-r": [-2.7, -0.9],
+      "direct-skinned-roughness-g": [-0.9, -0.9],
+      "direct-skinned-normal-rg": [0.9, -0.9],
+      "direct-skinned-coat-normal-isolation": [2.7, -0.9]
+    },
+    "coveragePixels": {
+      "rigid": [1467, 1215, 1215, 1467],
+      "skinned": [415, 467, 452, 444]
+    }
+  },
+  "projection": { "roiLayout": "phase-local-4x2", "roiWidth": 50, "roiHeight": 75 }
+}

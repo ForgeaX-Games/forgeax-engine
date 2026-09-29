@@ -52,7 +52,16 @@ export function inspectMaterialSubject(input: {
       },
     );
   }
-  const first = passes[0];
+  const first =
+    passes.find((pass) => {
+      if (!isRecord(pass)) return false;
+      const tags =
+        isRecord(pass.renderState) && isRecord(pass.renderState.tags)
+          ? pass.renderState.tags
+          : undefined;
+      const mode = tags?.LightMode ?? pass.name;
+      return !/shadow|depth/i.test(String(mode));
+    }) ?? passes[0];
   if (!isRecord(first) || typeof first.name !== 'string' || !isRecord(first.program)) {
     return subjectFailure(
       'resource-preview-subject-invalid',

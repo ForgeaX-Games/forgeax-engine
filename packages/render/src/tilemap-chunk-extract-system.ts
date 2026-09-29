@@ -57,7 +57,7 @@ import {
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { decodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type box3, frustum, mat4 } from '@forgeax/engine-math';
-import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
+import { ChildOf, Children, GlobalTransform, Transform } from '@forgeax/engine-scene';
 import {
   type Handle,
   type MaterialAsset,
@@ -874,13 +874,13 @@ function bucketTileLayer(
  * cull paths use byte-identical planes (charter P4 consistent abstraction).
  */
 function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
-  const query = world.query({ with: [Camera, Transform] }).unwrap();
+  const query = world.query({ with: [Camera, Transform, GlobalTransform] }).unwrap();
   let result: frustum.Frustum | null = null;
   for (const row of query) {
     const camEntity = row.entity;
 
     const camRes = world.get(camEntity, Camera);
-    const trRes = world.get(camEntity, Transform);
+    const trRes = world.get(camEntity, GlobalTransform);
     if (!camRes.ok || !trRes.ok) continue;
 
     const cam = camRes.value;
@@ -891,18 +891,18 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
 
     const proj = mat4.create();
     if (cam.projection === CAMERA_PROJECTION_ORTHOGRAPHIC) {
-      mat4.orthographic(
-        proj as Parameters<typeof mat4.orthographic>[0],
+      mat4.orthographicReverseZ(
+        proj as Parameters<typeof mat4.orthographicReverseZ>[0],
         cam.left,
         cam.right,
-        cam.bottom,
         cam.top,
+        cam.bottom,
         near,
         far,
       );
     } else {
-      mat4.perspective(
-        proj as Parameters<typeof mat4.perspective>[0],
+      mat4.perspectiveReverseZ(
+        proj as Parameters<typeof mat4.perspectiveReverseZ>[0],
         cam.fov,
         cam.aspect,
         near,
@@ -1081,7 +1081,7 @@ function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], world: Worl
 /**
  * Walk every TileLayer ChildOf-ing a Tilemap, extract its non-zero cells
  * into derived render entities. A Renderer attaches this system to FrameEnd;
- * World's final publication then resolves newly-created Transform.world values before the
+ * World's final publication then resolves newly-created GlobalTransform.world values before the
  * read-only render walk begins.
  *
  * Two paths based on `TileLayer.sortScope`:

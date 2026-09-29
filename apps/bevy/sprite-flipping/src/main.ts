@@ -32,12 +32,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const spritePixels = makeSpritePixels();
   const texPod = {
     kind: 'texture' as const,
-    width: SPRITE_SIZE,
-    height: SPRITE_SIZE,
+    shape: { viewDimension: '2d' as const, extent: { width: SPRITE_SIZE, height: SPRITE_SIZE } },
     format: 'rgba8unorm-srgb' as const,
     data: spritePixels,
     colorSpace: 'srgb' as const,
-    mipmap: false,
+    mips: { kind: 'none' as const },
   };
   const texHandle = app.world.allocSharedRef('TextureAsset', texPod);
   const texId = unwrapHandle(texHandle);

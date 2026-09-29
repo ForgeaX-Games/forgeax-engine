@@ -12,7 +12,7 @@
 //                                   Before it, DebugDraw had line/aabb/sphere/frustum only, so
 //                                   drawing an entity's local frame meant hand-assembling
 //                                   arrowhead segments + local-axis endpoints + the RGB convention.
-//   - ShowAxes query               -> row iteration over tagged cubes, reading Transform.world
+//   - ShowAxes query               -> row iteration over tagged cubes, reading GlobalTransform.world
 //
 // drawAxesForEntities(world, debugDraw) is a pure function of (world, debugDraw) so the
 // headless smoke can call it and assert the exact gizmo vertices (axis endpoints match the
@@ -24,7 +24,7 @@ import {
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { Materials } from '@forgeax/engine-render';
@@ -96,11 +96,11 @@ export interface AxesDrawTarget {
  * emitted gizmo vertices.
  */
 export function drawAxesForEntities(world: World, debugDraw: AxesDrawTarget): void {
-  const query = world.query({ with: [Transform, ShowAxes] }).unwrap();
+  const query = world.query({ with: [Transform, GlobalTransform, ShowAxes] }).unwrap();
   const handles: EntityHandle[] = [];
   for (const row of query) handles.push(row.entity);
   for (const handle of handles) {
-    const t = world.get(handle, Transform);
+    const t = world.get(handle, GlobalTransform);
     if (!t.ok) continue;
     debugDraw.axes(t.value.world, AXIS_LENGTH);
   }

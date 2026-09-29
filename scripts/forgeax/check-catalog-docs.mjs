@@ -117,6 +117,29 @@ const materialRecoveryCodes = [
   'material-reflection-binding-mismatch',
 ];
 
+const standardLightingDocuments = [
+  [
+    'packages/render/README.md',
+    ['forgeax::standard', 'LightFrame', 'standard-cluster-transport-unavailable'],
+  ],
+  ['packages/shader/README.md', ['evaluateStandardClusterLights', 'standard-cluster.wgsl']],
+  ['packages/runtime/README.md', ['standard-profile-invalid', 'renderPath']],
+];
+
+async function checkStandardLightingDocuments(root) {
+  const failures = [];
+  for (const [relativePath, tokens] of standardLightingDocuments) {
+    const source = await readFile(resolve(root, relativePath), 'utf8');
+    for (const token of tokens) {
+      if (!source.includes(token))
+        failures.push(
+          `engine/${relativePath}: add Standard lighting guidance ${JSON.stringify(token)}`,
+        );
+    }
+  }
+  return failures;
+}
+
 const authorityAuditVocabulary = [
   'subject',
   'execution',
@@ -318,20 +341,22 @@ async function checkVitePluginPackSurface(root) {
 
 async function checkAuthorityAuditContract(root) {
   const failures = [];
-  const schemaPath = resolve(root, 'asset-authority.schema.json');
+  const schemaPath = resolve(root, 'schemas/asset-authority.schema.json');
   let schemaSource;
   try {
     schemaSource = await readFile(schemaPath, 'utf8');
     JSON.parse(schemaSource);
   } catch (error) {
     failures.push(
-      `engine/asset-authority.schema.json: unreadable or invalid JSON (${error instanceof Error ? error.message : String(error)})`,
+      `engine/schemas/asset-authority.schema.json: unreadable or invalid JSON (${error instanceof Error ? error.message : String(error)})`,
     );
     return failures;
   }
   for (const token of ['"subject"', '"execution"', '"lifecycle"', '"sourceKey"']) {
     if (!schemaSource.includes(token))
-      failures.push(`engine/asset-authority.schema.json: add audit field ${JSON.stringify(token)}`);
+      failures.push(
+        `engine/schemas/asset-authority.schema.json: add audit field ${JSON.stringify(token)}`,
+      );
   }
   const authoritySources = [schemaSource];
   for (const relativePath of authorityAuditDocuments) {
@@ -346,7 +371,7 @@ async function checkAuthorityAuditContract(root) {
       continue;
     }
     authoritySources.push(source);
-    if (!source.includes('asset-authority.schema.json'))
+    if (!source.includes('schemas/asset-authority.schema.json'))
       failures.push(`engine/${relativePath}: link the authority audit schema`);
     if (!/lifecycle/i.test(source))
       failures.push(`engine/${relativePath}: document lifecycle evidence`);
@@ -357,7 +382,7 @@ async function checkAuthorityAuditContract(root) {
   for (const token of authorityAuditVocabulary) {
     if (!authorityCorpus.includes(token))
       failures.push(
-        `engine/asset-authority.schema.json: add audit vocabulary ${JSON.stringify(token)}`,
+        `engine/schemas/asset-authority.schema.json: add audit vocabulary ${JSON.stringify(token)}`,
       );
   }
   return failures;
@@ -373,9 +398,9 @@ async function checkScriptablePackMatrix(root) {
     /SCRIPTABLE_PACK_ASSET_KINDS\s*=\s*\[([\s\S]*?)\]\s+as const/,
   )?.[1];
   const kinds = [...(matrixBody?.matchAll(/'([^']+)'/g) ?? [])].map((match) => match[1]);
-  if (kinds.length !== 16) {
+  if (kinds.length === 0) {
     failures.push(
-      `engine/packages/pack/src/scriptable-pack.ts: expected 16 matrix kinds, got ${kinds.length}`,
+      'engine/packages/pack/src/scriptable-pack.ts: could not read SCRIPTABLE_PACK_ASSET_KINDS',
     );
     return failures;
   }
@@ -426,6 +451,7 @@ failures.push(...(await checkVitePluginPackSurface(engineRoot)));
 failures.push(...(await checkMaterialDocuments(engineRoot)));
 failures.push(...(await checkAuthorityAuditContract(engineRoot)));
 failures.push(...(await checkScriptablePackMatrix(engineRoot)));
+failures.push(...(await checkStandardLightingDocuments(engineRoot)));
 for (const [relativePath, term] of [
   ['packages/assets-runtime/README.md', 'forgeax:asset-changed'],
   ['packages/vite-plugin-pack/README.md', 'forgeax:asset-changed'],

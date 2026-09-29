@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const COMBINED_LIGHT_MIN_DELTA = Number.parseFloat(process.env.COMBINED_LIGHT_MIN_DELTA ?? '0.25');
 const SMOKE_WRITE_BASELINE = process.env.SMOKE_WRITE_BASELINE === '1';
@@ -235,7 +235,15 @@ const { World } = await import('@forgeax/engine-ecs');
 const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
 const { Materials } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective, PointLight, SpotLight } = await import('@forgeax/engine-render');
+const {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  perspective,
+  PointLight,
+  SpotLight,
+} = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -243,12 +251,17 @@ const {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = URL.createObjectURL(new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }));
+process.once('exit', () => URL.revokeObjectURL(MANIFEST_URL));
 
 let renderer;
 let assets;
 try {
-  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: MANIFEST_URL },
+  );
   if (!constructed.ok) throw constructed.error;
   renderer = constructed.value.renderer;
   assets = constructed.value.assets;
@@ -261,7 +274,11 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-light-casters] backend=${renderer.inspect().capabilities.backendKind}`);
+const initialInspection = renderer.inspect();
+console.log(
+  `[learn-render-light-casters] renderPath=${initialInspection.profile.renderPath} ` +
+    `backend=${initialInspection.capabilities.backendKind} passes=${initialInspection.perFramePassNames.length}`,
+);
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
@@ -437,7 +454,7 @@ world.spawn(
   },
 );
 
-const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {

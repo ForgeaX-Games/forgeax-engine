@@ -3,7 +3,7 @@
 //
 // The single per-frame video upload path lives in the record stage
 // (`render-system-record.ts` `videoTextureView`): it reads the host-registered
-// VideoElementProvider (World Resource, D-1), uploads the current frame via
+// VideoSourceProvider (World Resource, D-1), uploads the current frame via
 // `DynamicTextureStore.uploadFrame` (copyExternalImageToTexture), and fires the
 // structured `VideoUploadUnsupportedError` on the engine error channel when a
 // VideoPlayer entity can reach NEITHER the general path (no host element) NOR

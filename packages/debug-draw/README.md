@@ -34,7 +34,7 @@ All shapes are **line-list** wireframe (never filled). No persistent storage -- 
 
 ## Package positioning
 
-`@forgeax/engine-debug-draw` keeps shape generation at the leaf layer alongside `@forgeax/engine-math`; its RenderFeature adapter consumes only the declarative render contract. Dependencies are `@forgeax/engine-render` + `@forgeax/engine-rhi` + `@forgeax/engine-math` + `@forgeax/engine-types`. It does **not** depend on `engine-ecs` / `engine-runtime` / `engine-render-graph` / `engine-shader`.
+`@forgeax/engine-debug-draw` keeps shape generation at the leaf layer alongside `@forgeax/engine-math`; its RenderFeature adapter consumes only the declarative render contract. The adapter takes the active view roster, declares one frame-owned primitive buffer, and emits view-scoped line draws with each view's projection and target. Dependencies are `@forgeax/engine-render` + `@forgeax/engine-rhi` + `@forgeax/engine-math` + `@forgeax/engine-types`. It does **not** depend on `engine-ecs` / `engine-runtime` / `engine-render-graph` / `engine-shader`.
 
 | Layer | Package | Depends on |
 |:--|:--|:--|
@@ -128,7 +128,10 @@ Releases GPU vertex buffer, uniform buffer, pipeline, and bind group. After `des
 | Mode | `depthWriteEnabled` | `depthCompare` | Visual effect |
 |:--|:--|:--|:--|
 | `'always'` (default) | `false` | `always` | Overlay always visible on top of scene geometry (editor-style gizmo) |
-| `'less-equal'` | `false` | `'less-equal'` | Overlay respects scene depth -- lines behind opaque objects are occluded |
+| `'less-equal'` | `false` | `'greater-equal'` (native Reverse-Z) | Overlay respects scene depth -- lines behind opaque objects are occluded |
+
+The mode names express distance: `less-equal` means nearer or equal. Camera
+matrices and depth attachments use the Engine Reverse-Z convention.
 
 A single `DebugDraw` instance compiles exactly **one** PSO at construction time (determined by the `depthMode` option). To mix both modes in the same frame, create two separate instances:
 
@@ -178,7 +181,7 @@ import { INITIAL_VERTEX_CAPACITY, MAX_VERTEX_CAPACITY, VERTEX_STRIDE_BYTES } fro
 
 ## Error codes
 
-`DebugDrawErrorCode` is a **closed union**. Exhaustive `switch (err.code)` needs no default fallback. Each error carries `.code` / `.expected` / `.hint` / `.detail` (per [AGENTS.md](../AGENTS.md) Error model).
+`DebugDrawErrorCode` is a **closed union**. Exhaustive `switch (err.code)` needs no default fallback. Each error carries `.code` / `.expected` / `.hint` / `.detail` (per [AGENTS.md](../../AGENTS.md) Error model).
 
 | `err.code` | When | `.hint` | `.detail` |
 |:--|:--|:--|:--|

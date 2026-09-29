@@ -14,6 +14,8 @@
 //     allowedNonArtifactPrerequisites
 // (f) Provenance section validation: producerRoster (exactly 4), namingTemplate,
 //     mergedClass, mergedWriter, mergedReader, payloadClasses
+// (g) App-shard checkout validation: every shard that owns a declared app
+//     artifact uses credentialed source checkout and verified asset preparation
 //
 // Usage:
 //   node scripts/ci/check-build-artifact-contract.mjs [contract.json]
@@ -194,6 +196,55 @@ function timingRequiredArtifactClasses(contract, entry) {
 function getIndent(line) {
   const match = line.match(/^(\s*)/);
   return match ? match[1].length : 0;
+}
+
+function validateAppShardCheckout(contract, jobs) {
+  const shardIds = ['app-shard-0', 'app-shard-1', 'app-shard-2'];
+  const expectedToken = '$' + '{{ secrets.GHA }}';
+  const artifactClasses = contract.artifactClasses ?? {};
+  const hasShardArtifactClasses = shardIds.every((shardId) =>
+    Object.hasOwn(artifactClasses, `app-dist-${shardId.at(-1)}`),
+  );
+
+  // Small workflow fixtures used by the schema tests do not declare the
+  // shard-specific artifact classes. Keep this workflow-only invariant scoped
+  // to the production contract that owns those payloads.
+  if (!hasShardArtifactClasses) return [];
+
+  const errors = [];
+  for (const shardId of shardIds) {
+    const steps = jobs[shardId]?.steps ?? [];
+    const checkout = steps.find((step) => step?.uses === 'actions/checkout@v5');
+    if (!checkout) {
+      errors.push({
+        code: 'ci-artifact-contract-app-shard-checkout',
+        actual: `job "${shardId}" has no actions/checkout@v5 step`,
+        expected: `actions/checkout@v5 with submodules: false and token: ${expectedToken}`,
+      });
+      continue;
+    }
+
+    const actual = {
+      submodules: checkout.with?.submodules ?? null,
+      token: checkout.with?.token ?? null,
+    };
+    const expected = { submodules: 'false', token: expectedToken };
+    const checkoutIndex = steps.indexOf(checkout);
+    const nodeIndex = steps.findIndex((step) => step.uses?.startsWith('actions/setup-node@'));
+    const prepareIndex = steps.findIndex(
+      (step) => step.run === 'node scripts/ci/prepare-assets-checkout.mjs',
+    );
+    const prepared = nodeIndex > checkoutIndex && prepareIndex > nodeIndex;
+    if (actual.submodules !== expected.submodules || actual.token !== expected.token || !prepared) {
+      errors.push({
+        code: 'ci-artifact-contract-app-shard-checkout',
+        actual: { job: shardId, ...actual, prepared },
+        expected: { job: shardId, uses: 'actions/checkout@v5', ...expected },
+        hint: 'Keep source checkout credentialed with submodules disabled; run prepare-assets-checkout.mjs after Node setup on every app shard.',
+      });
+    }
+  }
+  return errors;
 }
 
 // ============================================================================
@@ -1015,6 +1066,8 @@ function validateWorkflow(contract, workflowPath) {
   const jobs = workflowJobs;
   const jobNames = Object.keys(jobs);
 
+  errors.push(...validateAppShardCheckout(contract, jobs));
+
   // Collect upload-artifact and download-artifact steps
   const uploadedArtifactNames = new Set();
   const downloadedArtifactNames = new Map(); // jobName -> Set<artifactName>
@@ -1042,7 +1095,9 @@ function validateWorkflow(contract, workflowPath) {
           }
         }
         if (typeof step.run === 'string') {
-          for (const match of step.run.matchAll(/--artifact-ids\s+(?:"([^"]+)"|(\S+))/g)) {
+          for (const match of step.run.matchAll(
+            /--(?:artifact-ids|shared-artifact-id)\s+(?:"([^"]+)"|(\S+))/g,
+          )) {
             jobDownloads.add(match[1] ?? match[2]);
             downloadedArtifactNames.set(jobName, jobDownloads);
           }

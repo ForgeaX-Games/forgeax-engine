@@ -19,6 +19,8 @@ function mockEntry(opts: {
   renderableIndex: number;
   materialHandle: number;
   layer: number;
+  materialShaderId?: string;
+  paramSnapshot?: DispatchEntry['paramSnapshot'];
 }): DispatchEntry {
   return {
     entityIndex: opts.renderableIndex,
@@ -32,8 +34,8 @@ function mockEntry(opts: {
     defines: undefined,
     vertexEntry: undefined,
     fragmentEntry: undefined,
-    materialShaderId: undefined,
-    paramSnapshot: undefined,
+    materialShaderId: opts.materialShaderId,
+    paramSnapshot: opts.paramSnapshot,
   };
 }
 
@@ -60,11 +62,36 @@ describe('foldDispatchBuckets — AC-10 multi-material boundary (w2)', () => {
     // [M1, M1, M1, M2, M2] — 3 entries with materialHandle=11 followed by
     // 2 with materialHandle=22, all same layer=5 and same posZ=3.0.
     const entries: DispatchEntry[] = [
-      mockEntry({ renderableIndex: 0, materialHandle: 11, layer: 5 }),
-      mockEntry({ renderableIndex: 1, materialHandle: 11, layer: 5 }),
-      mockEntry({ renderableIndex: 2, materialHandle: 11, layer: 5 }),
-      mockEntry({ renderableIndex: 3, materialHandle: 22, layer: 5 }),
-      mockEntry({ renderableIndex: 4, materialHandle: 22, layer: 5 }),
+      mockEntry({
+        renderableIndex: 0,
+        materialHandle: 11,
+        layer: 5,
+        materialShaderId: 'forgeax::sprite',
+      }),
+      mockEntry({
+        renderableIndex: 1,
+        materialHandle: 11,
+        layer: 5,
+        materialShaderId: 'forgeax::sprite',
+      }),
+      mockEntry({
+        renderableIndex: 2,
+        materialHandle: 11,
+        layer: 5,
+        materialShaderId: 'forgeax::sprite',
+      }),
+      mockEntry({
+        renderableIndex: 3,
+        materialHandle: 22,
+        layer: 5,
+        materialShaderId: 'forgeax::sprite',
+      }),
+      mockEntry({
+        renderableIndex: 4,
+        materialHandle: 22,
+        layer: 5,
+        materialShaderId: 'forgeax::sprite',
+      }),
     ];
     const renderables: ReturnType<typeof mockRenderable>[] = [
       mockRenderable(3.0),
@@ -139,5 +166,49 @@ describe('foldDispatchBuckets — AC-10 multi-material boundary (w2)', () => {
     expect(b1.materialHandle).toBe(200);
     expect(b0.bucketSize).toBe(1);
     expect(b1.bucketSize).toBe(1);
+  });
+
+  it('same material with per-entity region snapshots -> one bucket per distinct snapshot', () => {
+    // A bucket draws with its head's material slot. Extraction gives sprites
+    // with SpriteRegionOverride their own paramSnapshot, so a shared material
+    // must not fold them into the head's atlas region.
+    const shared = { region: [0, 0, 1, 1] };
+    const red = { region: [0, 0, 0.5, 0.5] };
+    const green = { region: [0.5, 0, 0.5, 0.5] };
+    const snapshots = [shared, shared, red, green];
+    const entries = snapshots.map((paramSnapshot, renderableIndex) =>
+      mockEntry({
+        renderableIndex,
+        materialHandle: 11,
+        layer: 0,
+        materialShaderId: 'forgeax::sprite',
+        paramSnapshot,
+      }),
+    );
+    const renderables = snapshots.map(() => mockRenderable(0));
+
+    const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
+
+    expect(buckets.map((bucket) => bucket.bucketSize)).toEqual([2, 1, 1]);
+    expect(buckets.map((bucket) => bucket.entries[0]?.paramSnapshot)).toEqual([shared, red, green]);
+  });
+
+  it('equal region values in distinct snapshot objects still fold into one bucket', () => {
+    // Every SpriteRegionOverride owns its snapshot object; hello-sprite-atlas
+    // gives 10k sprites the same region and must still draw them in one call.
+    const entries = [0, 1, 2].map((renderableIndex) =>
+      mockEntry({
+        renderableIndex,
+        materialHandle: 11,
+        layer: 0,
+        materialShaderId: 'forgeax::sprite',
+        paramSnapshot: { region: [0, 0, 0.5, 0.5], tint: 1 },
+      }),
+    );
+    const renderables = entries.map(() => mockRenderable(0));
+
+    const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
+
+    expect(buckets.map((bucket) => bucket.bucketSize)).toEqual([3]);
   });
 });

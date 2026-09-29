@@ -1,9 +1,9 @@
-// apps/hello/shadow-opt-out - castShadow opt-out + cutout shadow demo
+// apps/hello/shadow-opt-out - ShadowParticipation opt-out + cutout shadow demo
 //
 // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat T-018
-// AC-17 three-cube castShadow demonstration:
+// AC-17 three-cube ShadowParticipation demonstration:
 //   A: Materials.standard({baseColor:red}) — casts shadow (default)
-//   B: Materials.standard({baseColor:green, castShadow:false}) — no shadow
+//   B: Materials.standard({baseColor:green}) + ShadowParticipation{cast:false} — no shadow
 //   C: custom alpha-test cutout shadow shader — checkerboard-cutout shadow
 //
 // Visual expectations (requirements §10.5):
@@ -15,7 +15,7 @@ import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer, ShadowParticipation } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -122,10 +122,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     { component: MeshRenderer, data: { materials: [matAHandle] } },
   );
 
-  // ── Cube B: green, castShadow: false ──────────────────────────────────
+  // ── Cube B: green, ShadowParticipation { cast: false } ──────────────────────────────────
   const matBHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
-    Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }),
+    Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1] }),
   );
   world.spawn(
     {
@@ -134,6 +134,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matBHandle] } },
+    { component: ShadowParticipation, data: { cast: false, receive: true } },
   );
 
   // ── Cube C: custom cutout shadow shader ───────────────────────────────
@@ -141,7 +142,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     kind: 'material',
     passes: [
       { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
-      { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
+      {
+        name: 'ShadowCaster',
+        program: { module: CUTOUT_SHADER_PATH, vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+        renderState: { tags: { LightMode: 'ShadowCaster' } },
+      },
     ],
     values: {
       baseColor: [0.1, 0.1, 0.9, 1],

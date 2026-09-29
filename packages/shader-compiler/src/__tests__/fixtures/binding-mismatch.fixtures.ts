@@ -31,6 +31,14 @@ function tex2dEntry(binding: number): BindGroupLayoutEntry {
   };
 }
 
+function textureEntry(binding: number, viewDimension: '2d-array' | '3d'): BindGroupLayoutEntry {
+  return {
+    binding,
+    visibility: FRAGMENT,
+    texture: { sampleType: 'float', viewDimension, multisampled: false },
+  };
+}
+
 function filteringSamplerEntry(binding: number): BindGroupLayoutEntry {
   return {
     binding,
@@ -50,6 +58,21 @@ export interface BindingMismatchFixture {
   readonly mismatchParam?: string;
 }
 
+export const DIMENSION_BINDING_FIXTURES: readonly BindingMismatchFixture[] = [
+  {
+    name: 'pos-2d-array-exact-match',
+    schema: [{ name: 'layers', type: 'texture2d_array' }],
+    actualBgls: [{ entries: [uboEntry(0), filteringSamplerEntry(1), textureEntry(2, '2d-array')] }],
+    verdict: 'ok',
+  },
+  {
+    name: 'pos-3d-exact-match',
+    schema: [{ name: 'volume', type: 'texture3d' }],
+    actualBgls: [{ entries: [uboEntry(0), filteringSamplerEntry(1), textureEntry(2, '3d')] }],
+    verdict: 'ok',
+  },
+];
+
 // ---- Positive: exact match (schema yields exactly the actual BGL) ------------
 
 const POS_EXACT_MATCH: BindingMismatchFixture = {
@@ -61,6 +84,7 @@ const POS_EXACT_MATCH: BindingMismatchFixture = {
   // Sampler-first per §D-4: derive yields [UBO@0, sampler@1, tex@2].
   actualBgls: [
     {
+      label: '@group(1)',
       entries: [uboEntry(0), filteringSamplerEntry(1), tex2dEntry(2)],
     },
   ],
@@ -77,6 +101,7 @@ const POS_EXTRA_BINDING_TOLERATED: BindingMismatchFixture = {
   schema: [{ name: 'tint', type: 'color' }],
   actualBgls: [
     {
+      label: '@group(1)',
       entries: [uboEntry(0), tex2dEntry(1)],
     },
   ],
@@ -92,12 +117,13 @@ const NEG_BINDING_MISNUMBERED: BindingMismatchFixture = {
   schema: [{ name: 'mainTex', type: 'texture2d' }],
   actualBgls: [
     {
+      label: '@group(1)',
       entries: [filteringSamplerEntry(2), tex2dEntry(3)],
     },
   ],
   verdict: 'mismatch',
-  // expected[0] is the derived uniform buffer at binding 0, which is missing.
-  mismatchBinding: 0,
+  // Missing bindings are legal; the sampler at texture binding 2 is not.
+  mismatchBinding: 2,
   mismatchParam: 'mainTex',
 };
 
@@ -113,10 +139,11 @@ const NEG_MISSING_BINDING: BindingMismatchFixture = {
   ],
   actualBgls: [
     {
+      label: '@group(1)',
       entries: [uboEntry(0)],
     },
   ],
-  verdict: 'mismatch',
+  verdict: 'ok',
   // First missing expected binding is @1 (the auto-paired sampler).
   mismatchBinding: 1,
   mismatchParam: 'mainTex_sampler',
@@ -132,6 +159,7 @@ const NEG_TYPE_MISMATCH: BindingMismatchFixture = {
   schema: [{ name: 'mainTex', type: 'texture2d' }],
   actualBgls: [
     {
+      label: '@group(1)',
       entries: [uboEntry(0), tex2dEntry(1)],
     },
   ],

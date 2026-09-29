@@ -1,274 +1,166 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import { Context, isToolPlugin, type ToolPlugin } from '@forgeax/engine-plugin';
+import { createHash } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
 import {
-  type GamePluginEntry,
-  installCatalogLoader,
-  type PluginCatalog,
-  type PluginRealm,
-  projectPluginEntries,
-} from '@forgeax/engine-plugin/loader';
-import { type GameProjectPluginEntry, GameProjectSchema } from '@forgeax/engine-project';
-import type {
-  ToolContribution,
-  ToolEvidenceKind,
-  ToolRunOptions,
-  ToolTerminal,
+  commandContribution,
+  isToolCommandContract,
+  type ToolApi,
+  type ToolCommandDeclaration,
+  type ToolContribution,
+  type ToolRealm,
+  type ToolRunOptions,
+  type ToolTerminal,
 } from '@forgeax/engine-tool-runtime';
-import { createServer, type ViteDevServer } from 'vite';
+import { createServer } from 'vite';
+import {
+  assertPluginSourceInputs,
+  capturePluginProgramInputs,
+  discoverPluginAssets,
+  type PluginSourceInventory,
+} from '../build/plugin-assets.js';
+import { readProjectFacts } from '../project.js';
 
 export interface ProjectToolBinding {
   readonly contribution: ToolContribution<unknown, unknown>;
-  readonly entry: GameProjectPluginEntry;
+  readonly assetGuid: string;
+  readonly sourceRevision: string;
+  readonly contractDigest: string;
   readonly moduleName: string;
-  readonly realm: PluginRealm;
-  readonly toolPlugin?: ToolPlugin;
-  readonly loadToolPlugin: () => Promise<ToolPlugin>;
+  readonly realm: ToolRealm;
+  readonly declaration: ToolCommandDeclaration;
+  readonly executor?: string;
 }
-
 export interface ProjectToolModuleLoader {
   readonly load: (name: string) => Promise<unknown>;
+  readonly resolve: (specifier: string, importer: string) => Promise<string | undefined>;
   readonly close: () => Promise<void>;
 }
-
 export interface ProjectToolDiscoveryOptions {
   readonly moduleLoader?: ProjectToolModuleLoader;
-  readonly loadModules?: boolean;
+  readonly inventory?: PluginSourceInventory;
 }
-
-interface ProjectPluginLeaf {
-  readonly entry: GameProjectPluginEntry;
-  readonly moduleName: string;
-  readonly realm: PluginRealm;
-}
-
-interface StaticToolDeclaration {
-  readonly id: string;
-  readonly title: string;
-  readonly summary: string;
-  readonly realm: PluginRealm;
-  readonly argsSchema?: string;
-  readonly resultSchema?: string;
-  readonly evidence?: readonly ToolEvidenceKind[];
-}
-
-function projectLeaves(
-  entries: readonly GameProjectPluginEntry[],
-  inheritedRealm: PluginRealm = 'engine',
-): ProjectPluginLeaf[] {
-  const leaves: ProjectPluginLeaf[] = [];
-  for (const entry of entries) {
-    const realm = entry.realm ?? inheritedRealm;
-    if (entry.disabled === true) continue;
-    if (entry.group === true) {
-      leaves.push(...projectLeaves(entry.config as readonly GameProjectPluginEntry[], realm));
-      continue;
-    }
-    if (!entry.name.startsWith('cordis:')) {
-      leaves.push({ entry, moduleName: entry.name, realm });
-    }
-  }
-  return leaves;
-}
-
-function exportedToolPlugin(module: unknown): ToolPlugin | undefined {
-  if (isToolPlugin(module)) return module;
-  if (typeof module !== 'object' || module === null) return undefined;
-  const value = Reflect.get(module, 'default');
-  return isToolPlugin(value) ? value : undefined;
-}
-
-function staticContributions(
-  entry: GameProjectPluginEntry,
-): readonly ToolContribution<unknown, unknown>[] {
-  if (entry.config === null || typeof entry.config !== 'object') return [];
-  const tools = Reflect.get(entry.config, 'tools');
-  if (!Array.isArray(tools)) return [];
-  return tools.flatMap((candidate: unknown) => {
-    if (candidate === null || typeof candidate !== 'object') return [];
-    const declaration = candidate as Partial<StaticToolDeclaration>;
-    if (
-      typeof declaration.id !== 'string' ||
-      typeof declaration.title !== 'string' ||
-      typeof declaration.summary !== 'string' ||
-      (declaration.realm !== 'build' &&
-        declaration.realm !== 'host' &&
-        declaration.realm !== 'engine')
-    )
-      return [];
-    const descriptor = {
-      id: declaration.id,
-      title: declaration.title,
-      summary: declaration.summary,
-      realm: declaration.realm,
-      argsSchema: {
-        parse: (value: unknown) => ({ ok: true as const, value }),
-        ...(declaration.argsSchema === undefined ? {} : { describe: declaration.argsSchema }),
-      },
-      resultSchema: {
-        parse: (value: unknown) => ({ ok: true as const, value }),
-        ...(declaration.resultSchema === undefined ? {} : { describe: declaration.resultSchema }),
-      },
-      evidence: declaration.evidence ?? [],
-    };
-    return [
-      {
-        descriptor,
-        execute: async () => ({
-          ok: false as const,
-          error: { code: 'tool-static-descriptor', detail: {} },
-        }),
-      },
-    ];
-  });
-}
-
-function hasStaticToolDeclarations(entry: GameProjectPluginEntry): boolean {
-  if (entry.config === null || typeof entry.config !== 'object') return false;
-  return Array.isArray(Reflect.get(entry.config, 'tools'));
-}
-
-async function createViteModuleLoader(root: string): Promise<ProjectToolModuleLoader> {
-  const server: ViteDevServer = await createServer({
+async function createModuleLoader(root: string): Promise<ProjectToolModuleLoader> {
+  const server = await createServer({
     root,
-    appType: 'custom',
     configFile: false,
+    appType: 'custom',
     logLevel: 'silent',
     server: { middlewareMode: true },
+    optimizeDeps: { noDiscovery: true, include: [] },
   });
   return {
-    load(name) {
-      const id = name.startsWith('.') ? `/@fs/${resolve(root, name)}` : name;
-      return server.ssrLoadModule(id);
-    },
+    load: (name) => server.ssrLoadModule(name),
+    resolve: async (specifier, importer) =>
+      (await server.environments.ssr?.pluginContainer.resolveId(specifier, importer))?.id,
     close: () => server.close(),
   };
 }
-
-async function readProjectEntries(root: string): Promise<readonly GameProjectPluginEntry[]> {
-  const raw = JSON.parse(await readFile(resolve(root, 'forge.json'), 'utf8')) as unknown;
-  const parsed = GameProjectSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new TypeError(`Invalid forge.json: ${parsed.error.message}`);
-  }
-  return parsed.data.plugins ?? [];
-}
-
+/** Source-only discovery installs no plugin, Cooker or executor. */
 export async function discoverProjectTools(
   rootInput: string,
   options: ProjectToolDiscoveryOptions = {},
 ): Promise<readonly ProjectToolBinding[]> {
   const root = resolve(rootInput);
-  const loadModules = options.loadModules ?? true;
-  const loader = loadModules
-    ? (options.moduleLoader ?? (await createViteModuleLoader(root)))
-    : undefined;
-  try {
-    const bindings: ProjectToolBinding[] = [];
-    const ids = new Map<string, string>();
-    for (const leaf of projectLeaves(await readProjectEntries(root))) {
-      if (leaf.realm !== 'build' && leaf.realm !== 'host' && leaf.realm !== 'engine') continue;
-      // Gameplay entries are part of the engine closure, not the tool catalog.  They
-      // are only evaluated when they explicitly publish static tool declarations;
-      // this keeps discovery from importing an unrelated gameplay module.
-      if (leaf.realm === 'engine' && !hasStaticToolDeclarations(leaf.entry)) continue;
-      const toolPlugin = loadModules
-        ? exportedToolPlugin(await (loader as ProjectToolModuleLoader).load(leaf.moduleName))
-        : undefined;
-      const contributions = toolPlugin?.tools ?? staticContributions(leaf.entry);
-      for (const contribution of contributions) {
-        if (contribution.descriptor.realm !== leaf.realm) {
-          throw new TypeError(
-            `Tool ${contribution.descriptor.id} declares ${contribution.descriptor.realm} but Entry ${leaf.entry.id} owns ${leaf.realm}`,
-          );
-        }
-        const existing = ids.get(contribution.descriptor.id);
-        if (existing !== undefined) {
-          throw new TypeError(
-            `Duplicate project tool id ${contribution.descriptor.id} from ${existing} and ${leaf.entry.id}`,
-          );
-        }
-        ids.set(contribution.descriptor.id, leaf.entry.id);
-        bindings.push({
-          contribution,
-          entry: leaf.entry,
-          moduleName: leaf.moduleName,
-          realm: leaf.realm,
-          ...(toolPlugin === undefined ? {} : { toolPlugin }),
-          loadToolPlugin: async () => {
-            if (toolPlugin !== undefined) return toolPlugin;
-            const selectedLoader = options.moduleLoader ?? (await createViteModuleLoader(root));
-            try {
-              const loaded = exportedToolPlugin(await selectedLoader.load(leaf.moduleName));
-              if (loaded === undefined)
-                throw new TypeError(`Entry ${leaf.entry.id} does not export a ToolPlugin`);
-              return loaded;
-            } finally {
-              await selectedLoader.close();
-            }
-          },
-        });
-      }
-    }
-    return bindings;
-  } finally {
-    if (loader !== undefined) await loader.close();
-  }
+  const facts = await readProjectFacts(root);
+  if (!facts.ok) throw facts.error;
+  const inventory = options.inventory ?? (await discoverPluginAssets(facts.value));
+  if (inventory.deferred.length)
+    throw {
+      code: 'plugin-tool-discovery-deferred',
+      expected: 'tool declarations discoverable without cooked reads',
+      hint: 'move tool contracts to source-only plugin definitions',
+      detail: { sources: inventory.deferred },
+    };
+  return readProjectToolContracts(root, inventory, options);
 }
 
-function activationFailure(cause: unknown): ToolTerminal<never> {
-  const message = cause instanceof Error ? cause.message : String(cause);
+/** Discover only the selected external Host Pack; the project does not own this source. */
+export async function discoverHostPackTools(
+  hostPack: string,
+): Promise<readonly ProjectToolBinding[]> {
+  const pack = resolve(hostPack);
+  const root = dirname(pack);
+  const inventory = await discoverPluginAssets({ root, assetRoots: [pack] });
+  if (inventory.deferred.length)
+    throw new Error(`Host Pack command discovery is deferred: ${pack}`);
+  return readProjectToolContracts(root, inventory, {});
+}
+
+/** Build projection of known declarations; deferred sources remain explicit to the caller. */
+export async function projectToolProjection(
+  root: string,
+  inventory: PluginSourceInventory,
+): Promise<{
+  readonly tools: readonly ProjectToolBinding[];
+  readonly deferredSources: readonly string[];
+}> {
   return {
-    outcome: 'failed',
-    failure: {
-      code: 'tool-domain-failed',
-      expected: 'the owning project plugin Fiber to become ready',
-      hint: 'Repair the project Entry, plugin dependencies, or plugin apply failure before retrying.',
-      detail: { code: 'tool-plugin-activation-failed', payload: message },
-    },
-    artifacts: [],
+    tools: await readProjectToolContracts(root, inventory, {}),
+    deferredSources: inventory.deferred,
   };
 }
 
+async function readProjectToolContracts(
+  root: string,
+  inventory: PluginSourceInventory,
+  options: ProjectToolDiscoveryOptions,
+): Promise<readonly ProjectToolBinding[]> {
+  const records = [...inventory.assets.values()].filter((record) => record.source.toolContract);
+  if (!records.length) return [];
+  await assertPluginSourceInputs(inventory, root);
+  let loader = options.moduleLoader;
+  try {
+    const result: ProjectToolBinding[] = [];
+    for (const record of records) {
+      const reference = record.source.toolContract;
+      if (!reference) continue;
+      let moduleName = record.sourcePath;
+      let contract: unknown = reference;
+      if ('specifier' in reference) {
+        moduleName = reference.specifier.startsWith('.')
+          ? resolve(dirname(record.sourcePath), reference.specifier)
+          : reference.specifier;
+        loader ??= await createModuleLoader(root);
+        await capturePluginProgramInputs(root, inventory.sourceInputs, moduleName, loader.resolve);
+        const module = await loader.load(moduleName);
+        contract =
+          module !== null && typeof module === 'object'
+            ? Reflect.get(module, reference.export ?? 'default')
+            : undefined;
+      }
+      if (!isToolCommandContract(contract))
+        throw new TypeError(`${moduleName}: invalid tool contract or duplicate command ID`);
+      const contractDigest = `sha256:${createHash('sha256').update(JSON.stringify(contract)).digest('hex')}`;
+      for (const declaration of contract.commands) {
+        const executor = declaration.executor?.startsWith('.')
+          ? resolve(dirname(moduleName), declaration.executor)
+          : declaration.executor;
+        if (executor !== undefined)
+          await capturePluginProgramInputs(root, inventory.sourceInputs, executor);
+        result.push({
+          contribution: commandContribution(declaration),
+          assetGuid: record.definition.guid,
+          sourceRevision:
+            record.definition.evidence.kind === 'source' ? record.definition.evidence.revision : '',
+          contractDigest,
+          moduleName,
+          realm: declaration.realm,
+          declaration,
+          ...(executor === undefined ? {} : { executor }),
+        });
+      }
+    }
+    await assertPluginSourceInputs(inventory, root);
+    return result;
+  } finally {
+    if (!options.moduleLoader) await loader?.close();
+  }
+}
+/** Execution can only use the actual installed provider; discovery never creates one. */
 export async function runProjectTool(
   binding: ProjectToolBinding,
   args: unknown,
   options: ToolRunOptions,
+  api: ToolApi,
 ): Promise<ToolTerminal<unknown>> {
-  const ctx = new Context();
-  try {
-    const toolPlugin = await binding.loadToolPlugin();
-    const contribution = toolPlugin.tools.find(
-      (candidate) => candidate.descriptor.id === binding.contribution.descriptor.id,
-    );
-    if (contribution === undefined)
-      return activationFailure(new Error('selected tool is absent from Entry'));
-    const catalog: PluginCatalog = new Map([
-      [
-        binding.moduleName,
-        {
-          realm: binding.realm,
-          load: async () => ({ default: toolPlugin }),
-        },
-      ],
-    ]);
-    const { loader } = await installCatalogLoader(ctx, catalog, binding.realm);
-    const entries = projectPluginEntries(
-      [binding.entry as GamePluginEntry],
-      binding.realm,
-      binding.realm,
-    );
-    await loader.root.update(entries);
-    await loader.await();
-    const { createToolRuntime } = await import('@forgeax/engine-tool-runtime');
-    const { createContextCapabilityResolver } = await import('@forgeax/engine-plugin');
-    return await createToolRuntime([contribution]).run(contribution, args, {
-      ...options,
-      capabilityResolver: createContextCapabilityResolver(ctx),
-    }).terminal;
-  } catch (cause) {
-    return activationFailure(cause);
-  } finally {
-    await ctx.fiber.dispose();
-  }
+  return api.run(binding.contribution.descriptor.id, args, options).terminal;
 }

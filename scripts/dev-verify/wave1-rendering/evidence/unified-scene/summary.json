@@ -1,0 +1,187 @@
+{
+  "baseline": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+  "productCommit": "05f597b2a9cb72cfbaeddb174cd5dc95ddcc6c2f",
+  "gateSource": "Pre-commit working tree, matched byte-for-byte against productCommit for every changed non-Markdown file in source-inputs.json.",
+  "benchmarkMethod": "Three alternating main/unified pairs for each probe, 8 warmup + 31 measured updates per run. Full extraction oracle outside timed region. Upload probe is RHI Null CPU work, not GPU timing or FPS.",
+  "benchmark": {
+    "main": {
+      "cpu": {
+        "sourceHead": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+        "trackedDirty": false,
+        "runs": 3,
+        "sampleFramesPerRun": 31,
+        "oracleChecksPerRun": 31,
+        "p50Ms": [4.404667000000018, 4.356749999999977, 4.197500000000048],
+        "p95Ms": [8.189707999999996, 7.721457999999984, 6.741917000000001],
+        "scenePerRun": {
+          "fullRebuilds": 40,
+          "projectionRecords": 517,
+          "deltaFrames": 0,
+          "noChangeFrames": 0,
+          "transformUpdates": 0
+        },
+        "sampleUploadBytes": [0, 0, 0],
+        "sampleUploadCalls": [0, 0, 0]
+      },
+      "uploads": {
+        "sourceHead": "46cb8923eef3852c89a86de4270a7a0bc3e49f33",
+        "trackedDirty": false,
+        "runs": 3,
+        "sampleFramesPerRun": 31,
+        "oracleChecksPerRun": 31,
+        "p50Ms": [6.11424999999997, 5.662040999999931, 7.071124999999995],
+        "p95Ms": [13.935125000000028, 11.594416000000024, 13.706834000000072],
+        "scenePerRun": {
+          "fullRebuilds": 40,
+          "projectionRecords": 517,
+          "deltaFrames": 0,
+          "noChangeFrames": 0,
+          "transformUpdates": 0
+        },
+        "sampleUploadBytes": [20824064, 20824064, 20824064],
+        "sampleUploadCalls": [155, 155, 155]
+      }
+    },
+    "unified": {
+      "cpu": {
+        "sourceHead": "05f597b2a9cb72cfbaeddb174cd5dc95ddcc6c2f",
+        "trackedDirty": false,
+        "runs": 3,
+        "sampleFramesPerRun": 31,
+        "oracleChecksPerRun": 31,
+        "p50Ms": [3.3288749999999823, 3.2167910000000006, 3.196791999999988],
+        "p95Ms": [7.086375000000032, 6.284708999999964, 6.17708300000001],
+        "scenePerRun": {
+          "fullRebuilds": 1,
+          "projectionRecords": 518,
+          "deltaFrames": 39,
+          "noChangeFrames": 0,
+          "transformUpdates": 10101
+        },
+        "sampleUploadBytes": [0, 0, 0],
+        "sampleUploadCalls": [0, 0, 0]
+      },
+      "uploads": {
+        "sourceHead": "05f597b2a9cb72cfbaeddb174cd5dc95ddcc6c2f",
+        "trackedDirty": false,
+        "runs": 3,
+        "sampleFramesPerRun": 31,
+        "oracleChecksPerRun": 31,
+        "p50Ms": [4.312583000000018, 3.9198750000000473, 4.14304199999998],
+        "p95Ms": [6.853334000000018, 5.74512500000003, 6.755458000000033],
+        "scenePerRun": {
+          "fullRebuilds": 1,
+          "projectionRecords": 518,
+          "deltaFrames": 39,
+          "noChangeFrames": 0,
+          "transformUpdates": 10101
+        },
+        "sampleUploadBytes": [4127200, 4127200, 4127200],
+        "sampleUploadCalls": [179, 179, 179]
+      }
+    }
+  },
+  "validation": {
+    "build": "pass; full fleet 211 rebuilt / 1 unchanged; frozen Engine rebuild passes",
+    "render": "408 files / 1745 tests pass",
+    "adjacent": "428 files / 3362 tests pass; 4 files / 20 tests skipped",
+    "sourceAndTestTypes": "pass",
+    "biome": "87 changed code/config files pass",
+    "codeFileLines": "pass; max 4096",
+    "browser": "exit 0; 26 groups / 145 files plus entity visibility; 267 tests passed",
+    "dawn": "full command exit 0",
+    "roster": {
+      "commands": 80,
+      "exitZero": 80,
+      "canonicalReceipts": 1,
+      "missingCanonicalReceipts": 79,
+      "strictAggregate": "blocked; same missing-receipt witness on baseline"
+    },
+    "supplemental": {
+      "passed": 11,
+      "total": 14,
+      "baselineMatchedFailures": [
+        "IBL irradiance meanAbsDelta=0.07083 > 0.05",
+        "IBL specular meanAbsDelta=0.08039 > 0.05",
+        "Physical Material: 8 missing-material-receipt errors, 300 failed direct frames, no FrameReceipt"
+      ]
+    }
+  },
+  "logs": [
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/adjacent-final.log",
+      "bytes": 780,
+      "sha256": "51ced717fdcf12dcb9fcd605b5d4b4922fabc25f8591708799bee206f1723b64"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/baseline-hello-triangle.log",
+      "bytes": 329,
+      "sha256": "d41997dd5357e6156380883771fc996a4a8ef05446a6128bb390fd43730c7df6"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/baseline-ibl-irradiance.log",
+      "bytes": 747,
+      "sha256": "27bffc1d178cc62257de4f2dbb6bea415e27c22c1b7133a667a761946749e04e"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/baseline-ibl-specular.log",
+      "bytes": 821,
+      "sha256": "1dcd6dd2c3040be0d0249b02ac24f78198de9d947fcfdb91336bb35425d7806a"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/baseline-physical-material.log",
+      "bytes": 479791,
+      "sha256": "8810e120d3bb2402942c2e370e2485a517a6d4ee99c6554c074e060ef6f19d6e"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/biome-final.log",
+      "bytes": 45,
+      "sha256": "60465321e1890eff2dd5a74ab656523229705e355143cc5b345382965825f11f"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/browser-final.log",
+      "bytes": 136652,
+      "sha256": "464ffffe29b0a6cdf3d307d49292c279ce3b86461f293a59db36561d352489ac"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/dawn-full.log",
+      "bytes": 182203,
+      "sha256": "fb7817081c8af9dc1b8fef5b59a6d48ac72253b12143ec1e58c0d72594932122"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/final-build.log",
+      "bytes": 1817559,
+      "sha256": "fac1065fc13049e2bdb08367c8a1bb29ab539330485a659ff72465737b89308d"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/frozen-engine-build.log",
+      "bytes": 131103,
+      "sha256": "b1e32cab2a3c05d43f864a0c94098830c793b85f997789746167483561b5cd11"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/lines-final.log",
+      "bytes": 84,
+      "sha256": "8cc64b49405a366a32b64746ceb5f17291397b3118557b73aacde6da1739809e"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/lod-green.log",
+      "bytes": 423,
+      "sha256": "2d5213b10223ea83eba0e353aa0e51d9c6ffc7779e6294ca6bc68e8ffade85de"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/render-final-scoped.log",
+      "bytes": 606,
+      "sha256": "2d04702a77222428dfa0cf0dbcf8d81eb7e884e44073dee16f868a73a89299f2"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/skin-final.log",
+      "bytes": 572,
+      "sha256": "416ef91640ee43f43417207ae37d3c3e7bc6e2dfe4f8cbb27b305f06e44053d5"
+    },
+    {
+      "path": "artifacts/wave1-rendering/unified-followup/gates/types-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

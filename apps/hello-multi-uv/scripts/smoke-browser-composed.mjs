@@ -3,10 +3,11 @@
 // material, texture, post-process, resize, and RHI selectors in one live scene.
 // The inheritance falsifier can isolate slot attribution, pipeline topology, or both.
 
+import { countResolveTargets } from '../../shared/scripts/rhi-debug-topology.mjs';
 import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 import { resolve, dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -22,6 +23,7 @@ const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-composed'),
 );
 const RHI_CAPTURE_SETTLE_MS = 1000;
+const RHI_CAPTURE_STABLE_FRAMES = 8;
 const resizeChurn = process.env.FORGEAX_M3_RESIZE_CHURN === '1';
 const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
 const useMsaa = process.env.FORGEAX_M3_MSAA === '1';
@@ -324,12 +326,22 @@ async function capture(page, label) {
   return { ...decoded, pngPath, state };
 }
 
-async function captureRhi(page, label) {
+async function captureRhiOnce(page, label) {
   // Resize-driven render-graph retirement may finish after the canvas-size
   // assertion and several animation frames. Let the async graph rebuild settle
   // before arming the recorder, so the tape describes one topology rather than
   // a resize transition carrying retired and replacement MSAA targets.
   await page.waitForTimeout(RHI_CAPTURE_SETTLE_MS);
+  const frameIdBeforeCapture = await page.evaluate(() =>
+    Number(document.documentElement.dataset.forgeaxFrameSubmitted ?? 0),
+  );
+  await page.waitForFunction(
+    ({ previousFrameId, stableFrames }) =>
+      Number(document.documentElement.dataset.forgeaxFrameSubmitted ?? 0) >=
+      previousFrameId + stableFrames,
+    { previousFrameId: frameIdBeforeCapture, stableFrames: RHI_CAPTURE_STABLE_FRAMES },
+    { timeout: 10_000 },
+  );
   const captured = await page.evaluate(async () => {
     if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
       throw new Error('window.__forgeax.captureFrame is unavailable');
@@ -364,8 +376,15 @@ async function captureRhi(page, label) {
   if (model.works.length === 0) throw new Error('decoded tape has no work entries');
   const workCount = model.works.length;
   const passCount = model.passes.length;
+  const depthOnlyPassCount = parsedTape.events.filter(
+    (event) =>
+      event.kind === 'beginRenderPass' &&
+      event.depthStencilViewHandleId !== undefined &&
+      (event.colorAttachmentViewHandleIds?.length ?? 0) === 0,
+  ).length;
   const inspectedWork = workCount - 1;
   copyFileSync(sourceTape, tape);
+  rmSync(dirname(sourceTape), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   const reportJson = { header: parsedTape.header, bootstrap: parsedTape.bootstrap, events: parsedTape.events };
   writeFileSync(report, `${JSON.stringify(reportJson, null, 2)}\n`);
   const summary = {
@@ -374,7 +393,7 @@ async function captureRhi(page, label) {
     bindingCount: parsedTape.events.filter((event) => event.kind === 'setBindGroup').length,
   };
   writeFileSync(resolve(rhiDir, `${label}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`);
-  const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
+  const { freshDevice, rhiWebgpu } = await bootstrapDawn(label, parsedTape);
   const replayResult = await openReplay(parsedTape, {
     device: freshDevice,
     createShaderModule: rhiWebgpu.createShaderModule,
@@ -433,8 +452,28 @@ async function captureRhi(page, label) {
     },
   };
   writeFileSync(resolve(rhiDir, `${label}.inspect.json`), `${JSON.stringify(inspect, null, 2)}\n`);
-  return { tape, report, draws: workCount, workCount, passCount, inspectedWork, inspect, dawnReadback };
+  return {
+    tape,
+    report,
+    draws: workCount,
+    workCount,
+    passCount,
+    depthOnlyPassCount,
+    inspectedWork,
+    inspect,
+    dawnReadback,
+  };
 }
+
+// Directional shadow resources are intentionally lazy. A material/world
+// rebind can invalidate that cache after a page has already submitted several
+// frames, so a valid capture may contain either the cache-hot spot pass or the
+// four directional cascades plus that spot pass. `captureRhiOnce` already
+// waits for a settled submitted-frame window; keep the raw topology instead of
+// retrying toward one incidental cache state. The semantic repeatability
+// projection removes only those optional cache passes while retaining the raw
+// report/tape artifacts for inspection.
+const captureRhi = captureRhiOnce;
 
 function countLiveTextures(report, matches) {
   const live = new Set();
@@ -600,9 +639,17 @@ async function runLiveMaterialScenario(baseUrl, page) {
     await waitForNonBlackCanvas(page, `${label} resized before rebind`);
     const before = await capture(page, `${label}-before`);
     const beforeEvidence = await page.evaluate(() => globalThis.__forgeaxMultiUvEvidence?.liveMaterial);
+    const frameIdBeforeRebind = await page.evaluate(() =>
+      Number(document.documentElement.dataset.forgeaxFrameSubmitted ?? 0),
+    );
     const mutation = await page.evaluate(() => globalThis.__forgeaxMultiUvEvidence?.applyLiveMaterialRebind());
     if (mutation?.ok !== true) throw new Error(`${label} live material rebind failed: ${JSON.stringify(mutation)}`);
     await page.waitForFunction(() => globalThis.__forgeaxMultiUvEvidence?.liveMaterial.applied === true, null, { timeout: 10_000 });
+    await page.waitForFunction(
+      (previousFrameId) => Number(document.documentElement.dataset.forgeaxFrameSubmitted ?? 0) > previousFrameId,
+      frameIdBeforeRebind,
+      { timeout: 10_000 },
+    );
     await waitForNonBlackCanvas(page, `${label} resized after rebind`);
     const after = await capture(page, `${label}-after`);
     const rhi = await captureRhi(page, `${label}-after`);
@@ -1172,7 +1219,7 @@ try {
     const reports = [rhi.report, falsifierRhi.report].map((path) => JSON.parse(readFileSync(path, 'utf8')));
     for (const [index, report] of reports.entries()) {
       const msaaTextureResourceCount = countLiveTextures(report, (desc) => desc?.sampleCount === 4);
-      const resolveTargetCount = report.events.filter((event) => event.kind === 'beginRenderPass' && event.colorAttachmentResolveTargetHandleIds?.some((handleId) => handleId !== undefined && handleId !== null)).length;
+      const resolveTargetCount = countResolveTargets(report);
       if (msaaTextureResourceCount < 2 || resolveTargetCount < 1) throw new Error(`MSAA topology missing for ${index === 0 ? 'normal' : 'falsifier'}: resources=${msaaTextureResourceCount} resolves=${resolveTargetCount}`);
     }
     if (rhi.dawnReadback.nonBlackPixelCount === 0 || falsifierRhi.dawnReadback.nonBlackPixelCount === 0) throw new Error('MSAA fresh-Dawn replay was black');

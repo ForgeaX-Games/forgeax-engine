@@ -9,7 +9,7 @@
 ~~~bash
 pnpm --filter @forgeax/hello-text dev      # Vite dev server
 pnpm --filter @forgeax/hello-text build    # production pack + shader build
-pnpm --filter @forgeax/hello-text smoke    # Dawn 300-frame pixel/structure smoke
+pnpm --filter @forgeax/hello-text smoke    # Dawn 60-frame pixel/structure smoke
 ~~~
 
 The browser page uses the same public createApp + Pack-v2 loading path as a
@@ -51,7 +51,7 @@ through the normal importer, GUID, catalog, and runtime loader chain.
 
 ## Evidence and falsifiers
 
-- scripts/smoke-dawn.mjs requires 300 frames, four GlyphText entities with
+- scripts/smoke-dawn.mjs requires 60 frames, four GlyphText entities with
   generated MeshFilter/MeshRenderer, zero app errors, and visible MSDF pixels.
 - FALSIFY=atlas-empty pnpm --filter @forgeax/hello-text smoke must report
   FALSIFY atlas-empty PASS - 0 text meshes baked, proving the smoke is
@@ -59,7 +59,7 @@ through the normal importer, GUID, catalog, and runtime loader chain.
 - Browser evidence should include a non-black canvas screenshot, zero page and
   console errors, and successful /pack-index.json plus font DDC requests.
 
-The four-scene gallery is a focused renderer/asset oracle. templates/game-default
+The four-scene gallery is a focused renderer/asset oracle. templates/game-3d
 uses the same public FontAsset/GlyphText contract only where text changes an
 existing gameplay owner (for example, the pooled hit-score label); it does not
 add a second static text scene.

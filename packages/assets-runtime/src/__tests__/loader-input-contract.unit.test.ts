@@ -36,7 +36,7 @@ describe('uniform Pack v2 loader input', () => {
       {
         guid: input.guid,
         kind: 'render-pipeline',
-        payload: { kind: 'render-pipeline', pipelineId: 'forgeax::urp' },
+        payload: { kind: 'render-pipeline', pipelineId: 'forgeax::standard' },
         refs: [],
         artifacts: {
           body: {
@@ -44,8 +44,61 @@ describe('uniform Pack v2 loader input', () => {
             bytes: new TextEncoder().encode(
               JSON.stringify({
                 kind: 'render-pipeline',
-                pipelineId: 'forgeax::urp',
+                pipelineId: 'forgeax::standard',
                 config: { passCount: 0 },
+              }),
+            ),
+          },
+        },
+      },
+      {} as never,
+    );
+    expect(result).toMatchObject({ ok: false });
+  });
+
+  it('round-trips the render-pipeline output dither switch', async () => {
+    const result = await renderPipelineLoader.loadPack?.(
+      {
+        guid: input.guid,
+        kind: 'render-pipeline',
+        payload: { kind: 'render-pipeline', pipelineId: 'forgeax::standard' },
+        refs: [],
+        artifacts: {
+          body: {
+            descriptor: { path: 'pipeline.json', mediaType: 'application/json' },
+            bytes: new TextEncoder().encode(
+              JSON.stringify({
+                kind: 'render-pipeline',
+                pipelineId: 'forgeax::standard',
+                config: { outputDither: false },
+              }),
+            ),
+          },
+        },
+      },
+      {} as never,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      value: { config: { outputDither: false } },
+    });
+  });
+
+  it('rejects a non-boolean render-pipeline output dither switch', async () => {
+    const result = await renderPipelineLoader.loadPack?.(
+      {
+        guid: input.guid,
+        kind: 'render-pipeline',
+        payload: { kind: 'render-pipeline', pipelineId: 'forgeax::standard' },
+        refs: [],
+        artifacts: {
+          body: {
+            descriptor: { path: 'pipeline.json', mediaType: 'application/json' },
+            bytes: new TextEncoder().encode(
+              JSON.stringify({
+                kind: 'render-pipeline',
+                pipelineId: 'forgeax::standard',
+                config: { outputDither: 1 },
               }),
             ),
           },

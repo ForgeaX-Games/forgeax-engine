@@ -65,6 +65,11 @@ http://localhost:5173/?server=ws://localhost:8787
 pnpm --filter @forgeax/multiplayer-snake e2e:browser
 ```
 
+浏览器证明在模拟 CI lane 上使用有界的 Vite/浏览器冷启动预算。
+`FORGEAX_SNAKE_BROWSER_STARTUP_TIMEOUT_MS` 可以按毫秒覆盖该等待时间，取值会限制在
+`1..180000`；默认值为 `180000`（三分钟）。这只是 runner 启动控制，不会改变 Snake
+协议、renderer 或 WebGPU 行为。
+
 运行真实 socket 进程证明，覆盖同一 session 重连和新 epoch resync：
 
 ```bash
@@ -364,7 +369,7 @@ profile 复制带有 `Networked` 的 entity 以及面向游戏的 component。`p
 
 ## 客户端：从 replica 到渲染
 
-[`src/client.ts`](src/client.ts) 负责组装 `createApp()`、安装网络插件、挂载 replica coordinator、等待 renderer ready、发送 `join` 并安装键盘输入。
+[`src/client.ts`](src/client.ts) 提供 frontend host 使用的 `snake:app` 与 `snake:client` 插件。宿主负责 App 和 Fiber 生命周期；这些插件挂载 replica coordinator、等待 renderer ready、发送 `join` 并安装键盘输入。
 
 之后，`snake-replica-derivation` 这个 `Update` system 会：
 

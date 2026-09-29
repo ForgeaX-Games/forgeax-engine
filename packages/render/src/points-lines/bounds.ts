@@ -10,7 +10,7 @@ export function expandPointsLinesBounds(
   style: PointsLinesStyle | undefined,
 ): Float32Array {
   if (bounds.length < 6 || style === undefined) return new Float32Array(bounds);
-  const marginPx = style.kind === 'points' ? style.sizePx * 0.5 : style.widthPx * 0.5;
+  const marginPx = style.kind === 'points' ? style.sizePx * 0.5 : style.widthPx * 2;
   if (!Number.isFinite(marginPx) || marginPx <= 0) return new Float32Array(bounds);
   return new Float32Array([
     (bounds[0] ?? 0) - marginPx,

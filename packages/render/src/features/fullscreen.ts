@@ -28,19 +28,27 @@ export function createFullscreenRenderFeature(
   const resourceName = `fullscreen.${options.identity.replace(/[^a-z0-9.-]/gi, '-').toLowerCase()}`;
   return Object.freeze({
     identity: options.identity,
+    requiredFullscreenPostProcesses: Object.freeze([
+      Object.freeze({ identity: options.identity, source: options.source }),
+    ]),
     extract: (_context: RenderFeatureExtractContext) => ok(undefined),
     plan: (_data: undefined, _context: RenderFeaturePlanContext) =>
       ok({
-        resources: [
+        work: [
           {
-            kind: 'fullscreen-program',
-            name: resourceName,
-            source: options.source,
-            ...(options.reads === undefined ? {} : { reads: options.reads }),
-            ...(options.params === undefined ? {} : { params: options.params }),
+            scope: 'frame',
+            resources: [
+              {
+                kind: 'fullscreen-program',
+                name: resourceName,
+                source: options.source,
+                ...(options.reads === undefined ? {} : { reads: options.reads }),
+                ...(options.params === undefined ? {} : { params: options.params }),
+              },
+            ],
+            passes: [],
           },
         ],
-        passes: [],
       } satisfies RenderFeaturePlan),
   });
 }

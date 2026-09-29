@@ -172,6 +172,7 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'managed-buffer-shrink-not-supported':
         case 'fixed-size-mismatch':
         case 'managed-array-invalid-value':
+        case 'array-range-out-of-bounds':
         case 'relationship-self-cycle':
         case 'relationship-detach-mismatch':
         case 'remove-essential-component':

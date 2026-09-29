@@ -20,7 +20,7 @@ function report(overrides = {}, backend = 'Vulkan') {
     schemaVersion: 2,
     verdict: 'ok',
     mode: 'packaged-tauri-smoke',
-    wgpuVersion: '30.0.0',
+    wgpuVersion: '30.0.1',
     tauriVersion: '2.11.5',
     rustVersion: 'rustc 1.93.0',
     executable: '/fixture/app',

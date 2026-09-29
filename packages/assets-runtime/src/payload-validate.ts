@@ -2,26 +2,30 @@
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
 
-import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import {
+  DEFAULT_VERTEX_ATTRIBUTE_MAP,
+  deriveVertexCount,
+  deriveVertexLayoutProjection,
+} from '@forgeax/engine-geometry';
 import type {
   Asset,
   AssetErrorDetail,
   TilesetAsset,
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, countExtraUvSets } from '@forgeax/engine-types';
+import { ASSET_ERROR_HINTS, AssetError } from '@forgeax/engine-types';
 
 /**
  * Register-stage fail-fast for `kind: 'mesh'` payloads whose vertices buffer
- * is not the canonical 12-floats-per-vertex layout.
+ * does not match the geometry-owned attribute projection.
  *
  * Validation spec (plan-strategy D-3):
  *   (a) asset.kind !== 'mesh' -> return null immediately
  *   (b) vertices.length === 0 && indices.length === 0 -> return null (empty mesh legal)
- *   (c) vertices.length % PROCEDURAL_FLOATS_PER_VERTEX !== 0 -> `AssetError` with
+ *   (c) vertices.byteLength % projection.arrayStride !== 0 -> `AssetError` with
  *       code='mesh-vertex-stride-mismatch', detail = { vertexCount: 0,
- *       floatsPerVertex: vertices.length / PROCEDURAL_FLOATS_PER_VERTEX } (non-integer)
- *   (d) otherwise compute vertexCount = vertices.length / PROCEDURAL_FLOATS_PER_VERTEX;
+ *       floatsPerVertex: vertices.length / projectedFloatsPerVertex } (non-integer)
+ *   (d) otherwise compute vertexCount from the same projection;
  *       scan indices for maxIndex;
  *       if maxIndex + 1 !== vertexCount -> same AssetError shape with
  *       detail = { vertexCount: maxIndex + 1, floatsPerVertex: vertices.length / (maxIndex + 1) }
@@ -177,34 +181,39 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
   // stride invariant below stays null-safe for vertex-only meshes (D-A4).
   if (asset.vertices.length === 0 && (asset.indices?.length ?? 0) === 0) return null;
 
-  // Skin-aware stride: when MeshAsset.attributes carries skinIndex + skinWeight,
-  // the bridge promotes the interleaved buffer to 18 floats/vertex (12 base +
-  // 4 uint16x4 packed via aliased Uint16 view at slots 12-13 + 4 float weights
-  // at slots 14-17).
-  // feat-20260629 multi-uv: extra UV sets (uv1..uv7) add 2 floats each to the
-  // interleaved stride, pushed after skin data (canonical order).
   const attrs = (asset as TypesMeshAsset).attributes;
+  const candidateProjection =
+    attrs !== undefined && Object.keys(attrs).length > 0
+      ? deriveVertexLayoutProjection(attrs)
+      : deriveVertexLayoutProjection(DEFAULT_VERTEX_ATTRIBUTE_MAP);
+  const projection =
+    candidateProjection.attributes.length > 0
+      ? candidateProjection
+      : deriveVertexLayoutProjection(DEFAULT_VERTEX_ATTRIBUTE_MAP);
+  const projectedFloatsPerVertex = projection.arrayStride / Float32Array.BYTES_PER_ELEMENT;
   const isSkinned =
-    attrs !== undefined && attrs.skinIndex !== undefined && attrs.skinWeight !== undefined;
-  const extraUvSets = countExtraUvSets(attrs);
-  const baseFloatsPerVertex = isSkinned ? 18 : PROCEDURAL_FLOATS_PER_VERTEX;
-  const floatsPerVertex = baseFloatsPerVertex + extraUvSets * 2;
+    projection.attributes.some((attribute) => attribute.key === 'skinIndex') &&
+    projection.attributes.some((attribute) => attribute.key === 'skinWeight');
+  const expectedStride =
+    isSkinned && projectedFloatsPerVertex === 18
+      ? '18 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4 + skinIndex u16x4 + skinWeight vec4)'
+      : projectedFloatsPerVertex === 12
+        ? '12 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)'
+        : `${projectedFloatsPerVertex} floats per vertex from the geometry-owned attribute projection`;
+  const vertexCount = deriveVertexCount(asset.vertices, projection);
 
-  if (asset.vertices.length % floatsPerVertex !== 0) {
+  if (vertexCount === undefined) {
     return new AssetError({
       code: 'mesh-vertex-stride-mismatch',
-      expected: isSkinned
-        ? '18 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4 + skinIndex u16x4 + skinWeight vec4)'
-        : `${PROCEDURAL_FLOATS_PER_VERTEX} floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)`,
-      hint: ASSET_ERROR_HINTS['mesh-vertex-stride-mismatch'],
+      expected: expectedStride,
+      hint: 'repack MeshAsset.vertices with the geometry-owned VertexLayoutProjection',
       detail: {
         vertexCount: 0,
-        floatsPerVertex: asset.vertices.length / floatsPerVertex,
+        floatsPerVertex: asset.vertices.length / projectedFloatsPerVertex,
       },
     });
   }
 
-  const vertexCount = asset.vertices.length / floatsPerVertex;
   // Vertex-only meshes (no indices) skip the maxIndex-vs-vertexCount invariant:
   // there is no index buffer to bound-check against the vertex array (D-A4).
   const indices = asset.indices;
@@ -218,10 +227,8 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
   if (maxIndex + 1 !== vertexCount) {
     return new AssetError({
       code: 'mesh-vertex-stride-mismatch',
-      expected: isSkinned
-        ? '18 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4 + skinIndex u16x4 + skinWeight vec4)'
-        : `${PROCEDURAL_FLOATS_PER_VERTEX} floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)`,
-      hint: ASSET_ERROR_HINTS['mesh-vertex-stride-mismatch'],
+      expected: expectedStride,
+      hint: 'repack MeshAsset.vertices with the geometry-owned VertexLayoutProjection',
       detail: {
         vertexCount: maxIndex + 1,
         floatsPerVertex: vertexCount > 0 ? asset.vertices.length / (maxIndex + 1) : 0,

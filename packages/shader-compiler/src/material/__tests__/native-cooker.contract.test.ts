@@ -1,207 +1,207 @@
-import type { AssetGuid, MaterialAsset, MaterialTextureValue } from '@forgeax/engine-types';
+import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
+import type { AssetGuid, MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createMaterialNativeCooker, materialCookPublication } from '../native-cooker.js';
+import { cookMaterialAsset } from '../cook.js';
+import {
+  createMaterialNativeCooker,
+  type MaterialCookRequest,
+  materialCookPublication,
+} from '../native-cooker.js';
+import { buildMaterialSourceCatalog } from '../source-catalog.js';
 
+const shader = `#define_import_path game::pbr
+#import forgeax_material::parameters::{material}
+@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(material.roughness); }
+`;
 const material: MaterialAsset = {
   kind: 'material',
-  parent: 'mat-parent' as unknown as AssetGuid,
   passes: [
     {
-      name: 'forward',
-      program: {
-        module: 'game::pbr',
-        vertexEntry: 'vs_main',
-        fragmentEntry: 'fs_main',
-        moduleSlots: { lighting: 'game::lighting' },
-      },
-      renderState: { blend: 'opaque' },
+      name: 'Forward',
+      program: { module: 'game::pbr', vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
     },
   ],
   parameters: [{ name: 'roughness', type: 'f32', default: 0.5 }],
-  values: {
-    roughness: 0.5,
-    baseColor: {
-      texture: 'tex-base' as unknown as AssetGuid,
-      sampler: 'sampler-linear' as unknown as AssetGuid,
-      coordinates: { set: 1, transform: { scale: [2, 2] } },
-    },
-  },
+  values: { roughness: 0.5 },
 };
-
-const request = {
-  guid: 'mat-child',
-  sourceClosure: ['materials/parent.material.json', 'materials/child.material.json'],
+const request: MaterialCookRequest = {
+  guid: 'mat-root',
+  sourceClosure: ['materials/root.material.json'],
   profile: 'webgpu/v1',
   compilerVersion: 'compiler/1',
   material,
+  moduleSources: { 'game::pbr': shader },
 };
+function fixture() {
+  let count = 0;
+  const cooker = createMaterialNativeCooker({
+    compile: async (input) => {
+      count += 1;
+      const sources = buildMaterialSourceCatalog({
+        engine: [],
+        project: Object.entries(input.moduleSources ?? { 'game::pbr': shader }).map(
+          ([moduleId, source]) => ({ moduleId, source, path: `${moduleId}.wgsl` }),
+        ),
+      }).unwrap();
+      return (
+        await cookMaterialAsset({
+          material: input.guid,
+          table: { ...input.table, [input.guid]: input.material },
+          sources,
+        })
+      ).unwrap();
+    },
+  });
+  return { cooker, count: () => count };
+}
+function publication(
+  product: Awaited<ReturnType<ReturnType<typeof createMaterialNativeCooker>['cook']>>,
+) {
+  const result = materialCookPublication(product);
+  if (result === undefined) throw new Error('Missing material publication');
+  return result;
+}
 
 describe('shader-compiler material native cooker', () => {
-  it('owns the complete product, record, artifact, and receipt contract', async () => {
-    const cooker = createMaterialNativeCooker({
-      compile: async () => new TextEncoder().encode('compiled material'),
-    });
-
+  it('publishes a complete validated program set and matching artifact descriptors', async () => {
+    const { cooker } = fixture();
     const product = await cooker.cook(request);
-    const publication = materialCookPublication(product);
-
-    expect(product.payload).toBe(material);
-    expect(product.refs).toEqual(['mat-parent', 'tex-base', 'sampler-linear', 'game::pbr']);
-    expect(product.receipt).toEqual({
-      guid: 'mat-child',
-      origin: 'authoredPack',
-      status: 'succeeded',
-      inputFingerprint: publication?.record.receipt.identity.cookIdentity,
-      outputDigest: product.digest,
+    const published = publication(product);
+    const record = validateCookedMaterialRecord(
+      JSON.parse(new TextDecoder().decode(published.recordBytes)),
+    ).unwrap();
+    expect(record.programs).toHaveLength(1);
+    for (const { artifact } of record.programs) {
+      expect(product.artifacts[artifact.path]).toEqual({
+        path: artifact.path,
+        mediaType: artifact.mediaType,
+        byteLength: artifact.bytes.byteLength,
+        integrity: { algorithm: 'sha256', digest: artifact.digest },
+      });
+      expect(new TextDecoder().decode(artifact.bytes)).toContain('fn fs_main');
+    }
+    expect(product.digest).toBe(record.receipt.identity.artifactDigest);
+    expect(published.catalog).toEqual({
+      guid: request.guid,
+      key: product.digest,
+      artifactDigest: product.digest,
     });
-    expect(product.artifacts['materials/mat-child/shader.wgsl']).toMatchObject({
-      path: 'materials/mat-child/shader.wgsl',
-      mediaType: 'text/wgsl',
-      byteLength: 'compiled material'.length,
-      integrity: { algorithm: 'sha256', digest: product.digest },
-    });
-    expect(publication).toMatchObject({
-      cache: 'cold',
-      catalog: {
-        guid: 'mat-child',
-        artifactPath: 'materials/mat-child/shader.wgsl',
-        artifactDigest: product.digest,
-      },
-      record: {
-        schemaVersion: 'material-cook/3',
-        guid: 'mat-child',
-        authored: material,
-        resolved: {
-          passes: material.passes,
-          parameters: material.parameters,
-          values: material.values,
-        },
-        refs: {
-          parent: ['mat-parent'],
-          textures: ['tex-base'],
-          samplers: ['sampler-linear'],
-          modules: ['game::pbr'],
-        },
-      },
-    });
-    expect(publication?.artifactBytes).toEqual(new TextEncoder().encode('compiled material'));
-    expect(JSON.parse(new TextDecoder().decode(publication?.recordBytes)).schemaVersion).toBe(
-      'material-cook/3',
-    );
-    expect(JSON.parse(new TextDecoder().decode(publication?.receiptBytes))).toMatchObject({
-      compilerVersion: 'compiler/1',
-      identity: {
-        cookIdentity: publication?.record.receipt.identity.cookIdentity,
-        artifactDigest: product.digest,
-      },
-      profile: 'webgpu/v1',
-      sourceClosure: [...request.sourceClosure].sort(),
-    });
+    expect(record.resolved.values).toEqual({ roughness: 0.5 });
+    expect(product.receipt.outputDigest).toBe(product.digest);
   });
 
-  it('reuses the finalized product for an identical specialization', async () => {
-    let compileCount = 0;
-    const cooker = createMaterialNativeCooker({
-      compile: async () => {
-        compileCount += 1;
-        return new TextEncoder().encode('compiled material');
-      },
-    });
-
-    const cold = await cooker.cook(request);
-    const warm = await cooker.cook(request);
-    const publication = materialCookPublication(warm);
-
-    expect(warm).toBe(cold);
-    expect(publication?.cache).toBe('hit');
-    expect(publication?.key).toBe(materialCookPublication(cold)?.key);
-    expect(compileCount).toBe(1);
-  });
-
-  it('keeps runtime values out of specialization while tracking pass changes', async () => {
-    let compileCount = 0;
-    const cooker = createMaterialNativeCooker({
-      compile: async () => {
-        compileCount += 1;
-        return new TextEncoder().encode(`compiled material ${compileCount}`);
-      },
-    });
-
-    const runtimeVariant = await cooker.cook({
+  it('reuses exact products and programs across values, defaults and render-state changes', async () => {
+    const { cooker, count } = fixture();
+    const first = await cooker.cook(request);
+    expect(await cooker.cook(request)).toBe(first);
+    const values = await cooker.cook({
       ...request,
-      material: { ...material, values: { ...material.values, roughness: 0.8 } },
+      material: { ...material, values: { roughness: 0.8 } },
     });
-    const passVariant = await cooker.cook({
+    const defaults = await cooker.cook({
+      ...request,
+      material: {
+        ...material,
+        parameters: [{ name: 'roughness', type: 'f32', default: 0.9 }],
+        values: {},
+      },
+    });
+    const state = await cooker.cook({
       ...request,
       material: {
         ...material,
         passes: [
           {
-            ...(material.passes?.[0] ?? { name: 'forward', program: { module: 'game::pbr' } }),
-            program: { module: 'game::other' },
+            name: 'Forward',
+            program: { module: 'game::pbr', vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+            renderState: { cullMode: 'none' },
           },
         ],
       },
     });
-
-    expect(materialCookPublication(runtimeVariant)?.key).toBe(
-      materialCookPublication(await cooker.cook(request))?.key,
+    expect(count()).toBe(1);
+    for (const product of [values, defaults, state])
+      expect(publication(product).record.programs).toEqual(publication(first).record.programs);
+    expect(publication(values).record.resolved.values.roughness).toBe(0.8);
+    expect(publication(defaults).record.resolved.parameters[0]?.default).toBe(0.9);
+    expect(publication(state).record.receipt.identity.pipelineIdentity).not.toBe(
+      publication(first).record.receipt.identity.pipelineIdentity,
     );
-    expect(materialCookPublication(passVariant)?.key).not.toBe(
-      materialCookPublication(runtimeVariant)?.key,
-    );
-    expect(compileCount).toBe(2);
   });
 
-  it('reuses the shader artifact across dependency and path mutations', async () => {
-    let compileCount = 0;
+  it('invalidates compilation on source changes and never trusts paths as content identity', async () => {
+    const { cooker, count } = fixture();
+    const first = await cooker.cook(request);
+    const moved = await cooker.cook({ ...request, sourceClosure: ['moved/material.json'] });
+    expect(publication(moved).record.programs).toEqual(publication(first).record.programs);
+    const changed = await cooker.cook({
+      ...request,
+      moduleSources: {
+        'game::pbr': shader.replace(
+          'vec4<f32>(material.roughness)',
+          'vec4<f32>(material.roughness * 2.0)',
+        ),
+      },
+    });
+    expect(publication(changed).record.programs).not.toEqual(publication(first).record.programs);
+    expect(count()).toBe(2);
+    const { moduleSources: _sources, ...withoutSnapshot } = request;
+    await cooker.cook(withoutSnapshot);
+    await cooker.cook(withoutSnapshot);
+    expect(count()).toBe(4);
+  });
+
+  it('refuses to publish a compiler result with an unpublished Pass', async () => {
+    const sources = buildMaterialSourceCatalog({
+      engine: [],
+      project: [{ source: shader, path: 'pbr.wgsl' }],
+    }).unwrap();
     const cooker = createMaterialNativeCooker({
-      compile: async () => {
-        compileCount += 1;
-        return new TextEncoder().encode(`compiled material ${compileCount}`);
+      compile: async (input) => {
+        const compiled = (
+          await cookMaterialAsset({
+            material: input.guid,
+            table: { [input.guid]: input.material },
+            sources,
+          })
+        ).unwrap();
+        return { ...compiled, passes: compiled.passes.slice(0, 1) };
       },
     });
-
-    const cold = await cooker.cook({
-      ...request,
-      moduleSources: { 'game::pbr': '#define_import_path game::pbr\nfn main() {}' },
-    });
-    const textureVariant = await cooker.cook({
-      ...request,
-      moduleSources: { 'game::pbr': '#define_import_path game::pbr\nfn main() {}' },
-      material: {
-        ...material,
-        values: {
-          ...material.values,
-          baseColor: {
-            ...(material.values?.baseColor as MaterialTextureValue),
-            texture: 'tex-other' as unknown as AssetGuid,
-            sampler: 'sampler-other' as unknown as AssetGuid,
-          },
+    await expect(
+      cooker.cook({
+        ...request,
+        material: {
+          ...material,
+          passes: [
+            { name: 'Forward', program: { module: 'game::pbr' } },
+            { name: 'Overlay', program: { module: 'game::pbr' } },
+          ],
         },
+      }),
+    ).rejects.toMatchObject({
+      code: 'material-cook-record-invalid',
+      detail: { field: 'programs.selections' },
+    });
+  });
+
+  it('resolves child values against the parent and preserves zero values while sharing programs', async () => {
+    const { cooker, count } = fixture();
+    const root = await cooker.cook(request);
+    const child = await cooker.cook({
+      ...request,
+      guid: 'child',
+      table: { 'mat-root': material },
+      material: {
+        kind: 'material',
+        parent: 'mat-root' as unknown as AssetGuid,
+        values: { roughness: 0 },
       },
     });
-    const pathMove = await cooker.cook({
-      ...request,
-      sourceClosure: ['moved/parent.material.json', 'moved/child.material.json'],
-      moduleSources: { 'game::pbr': '#define_import_path game::pbr\nfn main() {}' },
-    });
-    const sourceMutation = await cooker.cook({
-      ...request,
-      moduleSources: { 'game::pbr': '#define_import_path game::pbr\nfn changed() {}' },
-    });
-
-    expect(compileCount).toBe(2);
-    expect(materialCookPublication(textureVariant)?.key).toBe(materialCookPublication(cold)?.key);
-    expect(
-      materialCookPublication(textureVariant)?.record.receipt.identity.materialPublicationIdentity,
-    ).not.toBe(materialCookPublication(cold)?.record.receipt.identity.materialPublicationIdentity);
-    expect(materialCookPublication(pathMove)?.key).toBe(materialCookPublication(cold)?.key);
-    expect(materialCookPublication(pathMove)?.record.receipt.identity.cookIdentity).toBe(
-      materialCookPublication(cold)?.record.receipt.identity.cookIdentity,
-    );
-    expect(materialCookPublication(sourceMutation)?.key).not.toBe(
-      materialCookPublication(cold)?.key,
-    );
+    expect(publication(child).record.resolved.values.roughness).toBe(0);
+    expect(publication(child).record.refs.parent).toEqual(['mat-root']);
+    expect(publication(child).record.programs).toEqual(publication(root).record.programs);
+    expect(count()).toBe(1);
   });
 });

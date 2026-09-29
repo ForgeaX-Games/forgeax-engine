@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -90,23 +90,40 @@ export function inventoryMatches(directory, expected) {
 }
 
 export function packageId(name) {
-  return Buffer.from(name).toString('base64url');
+  // Keep cache basenames bounded even when a shared-output locator is a deep
+  // absolute path. The complete locator remains in the receipt for identity
+  // validation; this digest is only the filesystem-safe index.
+  return createHash('sha256').update(name).digest('hex');
+}
+
+function receiptKey(kind, name) {
+  return { kind, name };
 }
 
 export function cachePath(root, kind, name) {
-  return resolve(root, 'node_modules/.cache/forgeax-build', kind, `${packageId(name)}.json`);
+  return resolve(
+    root,
+    'node_modules/.cache/forgeax-build',
+    kind,
+    `${packageId(`${kind}\0${name}`)}.json`,
+  );
 }
 
 export function readReceipt(root, kind, name) {
   const path = cachePath(root, kind, name);
-  return existsSync(path) ? readJson(path) : null;
+  if (!existsSync(path)) return null;
+  const receipt = readJson(path);
+  return receipt?.cacheKey?.kind === kind && receipt?.cacheKey?.name === name ? receipt : null;
 }
 
 export function writeReceipt(root, kind, name, receipt) {
   const path = cachePath(root, kind, name);
   mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(receipt, null, 2)}\n`);
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(
+    temp,
+    `${JSON.stringify({ ...receipt, cacheKey: receiptKey(kind, name) }, null, 2)}\n`,
+  );
   try {
     renameSync(temp, path);
   } catch (error) {
@@ -117,7 +134,7 @@ export function writeReceipt(root, kind, name, receipt) {
 }
 
 export function rootToolchainFiles(root) {
-  return ['package.json', 'pnpm-lock.yaml', 'bun.lock', 'tsconfig.base.json', 'tsup.base.ts']
+  return ['package.json', 'pnpm-lock.yaml', 'bun.lock', 'tsconfig.base.json', 'config/tsup.base.ts']
     .map((path) => resolve(root, path))
     .filter(existsSync);
 }
@@ -169,6 +186,10 @@ export function workspaceDependencyNames(
   const names = new Set();
   for (const field of fields) {
     for (const name of Object.keys(manifest[field] ?? {})) {
+      // Optional peers are runtime-selected integrations, not build-order
+      // prerequisites. Excluding them keeps valid interface/backend cycles
+      // buildable while the package manifest still publishes the peer contract.
+      if (field === 'peerDependencies' && manifest.peerDependenciesMeta?.[name]?.optional) continue;
       if (knownNames.has(name)) names.add(name);
     }
   }

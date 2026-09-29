@@ -10,7 +10,7 @@
 //
 // RG-only tangent normal decode mirrors pbr.wgsl pre-split semantics
 // (charter P5 byte-equivalent extraction). The default 1x1 normal fallback
-// texture RG=(128,128) decodes to tangent (0,0,1) -- zero perturbation when
+// half-float texture RG=(0.5,0.5) decodes exactly to tangent (0,0,1) when
 // normalTexture is absent (host-side defaultNormalTextureView). RG encoding
 // also matches BC5 / RG normal maps and tolerates RGB normal maps (b is
 // dropped, z is recomputed -- equivalent for unit vectors).
@@ -29,12 +29,32 @@ fn decodeTangentSpaceNormalRg(rg: vec2<f32>) -> vec3<f32> {
   return vec3<f32>(xy, z);
 }
 
-// Scale the XY perturbation while reconstructing Z so normalScale=0 restores
-// the flat tangent normal and normalScale=1 preserves the sampled normal.
-fn scaleTangentSpaceNormal(tn: vec3<f32>, scale: f32) -> vec3<f32> {
-  let xy = tn.xy * scale;
-  let z = sqrt(saturate(1.0 - dot(xy, xy)));
-  return vec3<f32>(xy, z);
+// Three r184: decode first, scale the two tangent axes independently, then
+// normalize after basis conversion. In particular, strength must not change Z.
+fn scaleTangentSpaceNormal(tn: vec3<f32>, scale: vec2<f32>) -> vec3<f32> {
+  // A zero-strength map is flat even for a grazing encoded normal (Z = 0).
+  let scaled = vec3<f32>(tn.xy * scale, tn.z);
+  if (dot(scaled, scaled) < 1e-20) { return vec3<f32>(0.0, 0.0, 1.0); }
+  return scaled;
+}
+
+// Mikkelsen surface-gradient bump mapping, matching Three r184's normalized
+// position derivatives. The caller samples red-channel forward differences
+// using the height slot's own UVs, sampler, and physical texture extent.
+fn perturbBumpNormal(
+  positionWS: vec3<f32>, normalWS: vec3<f32>, heightGradient: vec2<f32>, faceDirection: f32,
+) -> vec3<f32> {
+  let dx = dpdx(positionWS);
+  let dy = dpdy(positionWS);
+  let sx = dx * inverseSqrt(max(dot(dx, dx), 1e-20));
+  let sy = dy * inverseSqrt(max(dot(dy, dy), 1e-20));
+  let r1 = cross(sy, normalWS);
+  let r2 = cross(normalWS, sx);
+  let determinant = dot(sx, r1) * faceDirection;
+  let gradient = sign(determinant) * (heightGradient.x * r1 + heightGradient.y * r2);
+  let perturbed = abs(determinant) * normalWS - gradient;
+  if (dot(perturbed, perturbed) < 1e-20) { return normalWS; }
+  return normalize(perturbed);
 }
 
 // Build the TBN basis from interpolated world-space normal + per-vertex

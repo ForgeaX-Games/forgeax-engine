@@ -42,12 +42,11 @@ function makeTexture(
 ): TextureAsset {
   return {
     kind: 'texture',
-    width,
-    height,
+    shape: { viewDimension: '2d', extent: { width, height } },
     format,
     data: new Uint8Array(width * height * 4),
     colorSpace,
-    mipmap,
+    mips: mipmap ? { kind: 'generate' } : { kind: 'none' },
   };
 }
 

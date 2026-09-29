@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const ARTIFACT_DIR = resolve(process.env.FORGEAX_GAMEPAD_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/gamepad'));
+const ARTIFACT_DIR = resolve(process.env.FORGEAX_GAMEPAD_DIR ?? resolve(ROOT, 'apps/game-capability-lab/.forgeax-debug/gamepad'));
 const PORT = Number.parseInt(process.env.FORGEAX_GAMEPAD_PORT ?? '5189', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 const server = spawn('pnpm', ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });

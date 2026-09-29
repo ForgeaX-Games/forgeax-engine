@@ -13,7 +13,7 @@
 //     consumer-side edge write — cross-frame false->true edge per keypress
 //     via write-true-then-write-false. Not replaced by tick system (D-4).
 //   - Listener sync via createAppFromCanvas auto-registered ECS addSystem
-//     (M7 w25 — after propagateTransforms, reads current-frame Transform.world).
+//     (M7 w25 — after propagateTransforms, reads current-frame GlobalTransform.world).
 //     Independent of tick system; no manual registration needed (D-7/D-8).
 //   - Overlay text readout (distance + L/R pan) as spatial audio
 //     verification anchor (charter F2 -- AC-11)
@@ -58,7 +58,7 @@ import {
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { type AudioClipAsset, type Handle } from '@forgeax/engine-types';
@@ -475,12 +475,12 @@ world
     }
   }
 
-  const listenerTf = world.get(listenerEntity, Transform);
+  const listenerTf = world.get(listenerEntity, GlobalTransform);
   const listenerWorld = listenerTf.ok ? listenerTf.value.world : undefined;
 
   // --- Overlay readout (AC-11) ---
   if (overlayEl) {
-    const emitterTf = world.get(emitterEntityId, Transform);
+    const emitterTf = world.get(emitterEntityId, GlobalTransform);
     const emitterWorld = emitterTf.ok ? emitterTf.value.world : undefined;
     if (listenerWorld !== undefined && emitterWorld !== undefined) {
       // World-space position = translation column (m[12], m[14] for x, z).

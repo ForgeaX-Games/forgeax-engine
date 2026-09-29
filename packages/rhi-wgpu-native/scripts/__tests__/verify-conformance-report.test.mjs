@@ -26,9 +26,9 @@ function fixture() {
     durationMs: 1,
     requestedProfiles: ['core'],
     environment: {
-      wgpuVersion: '30.0.0',
-      wgpuTag: 'v30.0.0',
-      wgpuTagCommit: '8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1',
+      wgpuVersion: '30.0.1',
+      wgpuTag: 'v30.0.1',
+      wgpuTagCommit: '40f4a34ebaf56f9a046231f54125ad046239d3f3',
       engineCommit: 'fixture',
       rustc: 'rustc fixture',
       os: 'macos',

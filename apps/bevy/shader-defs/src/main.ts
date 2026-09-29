@@ -41,8 +41,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const mesh = app.world.allocSharedRef('MeshAsset', geometry.value);
   const texture = app.world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
     kind: 'texture',
-    width: 2,
-    height: 2,
+    shape: {
+      viewDimension: '2d',
+      extent: { width: 2, height: 2 },
+    },
     format: 'rgba8unorm',
     data: new Uint8Array([
       255, 255, 255, 255,
@@ -51,7 +53,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       255, 255, 255, 255,
     ]),
     colorSpace: 'linear',
-    mipmap: false,
+    mips: { kind: 'none' },
   });
   const blue = makeMaterial(app.world, authoredMaterial, [0.05, 0.25, 1], texture);
   const red = makeMaterial(app.world, redAuthoredMaterial, [0.05, 1, 0.1], texture);
@@ -86,6 +88,9 @@ function makeMaterial(
   baseColor: readonly [number, number, number],
   texture: import('@forgeax/engine-types').Handle<'TextureAsset', 'shared'>,
 ): import('@forgeax/engine-types').Handle<'MaterialAsset', 'shared'> {
+  if (sourceMaterial.parent !== undefined) {
+    throw new Error('shader-defs material child cannot override the root pass');
+  }
   const [authoredPass] = sourceMaterial.passes ?? [];
   if (authoredPass === undefined) throw new Error('shader-defs material pack has no pass');
   const material = {

@@ -29,17 +29,19 @@ import {
   resolveViteCli,
   validateCanonicalAppBuilds,
 } from './lib/app-build-launcher.mjs';
-import { runnerResources, workspaceConcurrency } from './lib/runner-resources.mjs';
+import { appBuildConcurrency, runnerResources } from './lib/runner-resources.mjs';
 
 const root = resolve(process.env.FORGEAX_REPO_ROOT ?? '.');
 const sharedManifestArg = process.argv.indexOf('--shared-input-manifest');
 let sharedInputManifest =
   sharedManifestArg === -1 ? undefined : process.argv[sharedManifestArg + 1];
+const appShardShaderDelta = process.argv.includes('--app-shard-shader-delta');
 const requestedArgs = process.argv
   .slice(2)
   .filter(
     (argument, index, argv) =>
       argument !== '--shared-input-manifest' &&
+      argument !== '--app-shard-shader-delta' &&
       (index === 0 || argv[index - 1] !== '--shared-input-manifest'),
   );
 
@@ -74,9 +76,7 @@ if (!existsSync(sharedInputManifest)) {
 const sharedManifest = readJson(sharedInputManifest);
 const { cpus, memoryBytes } = runnerResources();
 const explicitConcurrency = process.env.FORGEAX_BUILD_CONCURRENCY;
-const maxConcurrent = Number(
-  explicitConcurrency ?? workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }),
-);
+const maxConcurrent = Number(explicitConcurrency ?? appBuildConcurrency({ cpus, memoryBytes }));
 const noCache = process.env.FORGEAX_BUILD_NO_TASK_CACHE === '1';
 const metricsRoot = process.env.FORGEAX_BUILD_SUMMARY_PATH
   ? resolve(process.env.FORGEAX_BUILD_SUMMARY_PATH, '..', 'app-facts')
@@ -149,6 +149,7 @@ function taskPlan(app, packageFingerprints, packagesByName) {
         sharedInputFingerprint: sharedManifest.inputFingerprint,
         sharedManifest: hashFiles(root, [sharedInputManifest]),
         mode: process.env.NODE_ENV ?? 'production',
+        shaderManifestMode: appShardShaderDelta ? 'app-shard-delta' : 'full',
       }),
     ),
   };
@@ -160,15 +161,19 @@ function writeHistory(app, facts) {
   writeFileSync(path, `${JSON.stringify(facts, null, 2)}\n`);
 }
 
-function processTreeRss(pid) {
-  if (process.platform === 'win32' || !Number.isInteger(pid)) return null;
+function processTable() {
+  if (process.platform === 'win32') return null;
   const result = spawnSync('ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8' });
   if (result.status !== 0) return null;
-  const rows = result.stdout
+  return result.stdout
     .trim()
     .split('\n')
     .map((line) => line.trim().split(/\s+/).map(Number))
     .filter((row) => row.length === 3 && row.every(Number.isFinite));
+}
+
+function processTreeRss(pid, rows) {
+  if (!Number.isInteger(pid) || rows === null) return null;
   const children = new Map();
   for (const [childPid, parentPid, rssKB] of rows) {
     const list = children.get(parentPid) ?? [];
@@ -189,10 +194,37 @@ function processTreeRss(pid) {
   return rssKB * 1024;
 }
 
-function runApp(app, className, appFactsDir, viteCliPath, baseEnv = process.env) {
+function createProcessSampler() {
+  const tracked = new Map();
+  const sample = () => {
+    const rows = processTable();
+    for (const record of tracked.values()) {
+      const rss = processTreeRss(record.pid, rows);
+      if (rss !== null) record.peakRssBytes = Math.max(record.peakRssBytes, rss);
+    }
+  };
+  const timer = setInterval(sample, 1_000);
+  timer.unref();
+  return {
+    track(pid) {
+      const record = { pid, peakRssBytes: 0 };
+      tracked.set(pid, record);
+      return record;
+    },
+    finish(record) {
+      sample();
+      tracked.delete(record.pid);
+      return record.peakRssBytes;
+    },
+    dispose() {
+      clearInterval(timer);
+    },
+  };
+}
+
+function runApp(app, className, appFactsDir, viteCliPath, sampler, baseEnv = process.env) {
   return new Promise((resolveRun) => {
     const startedAt = performance.now();
-    let peakRssBytes = 0;
     const prebuild = createPrebuildInvocation({ app, baseEnv });
     if (prebuild !== null) {
       const result = spawnSync(prebuild.command, prebuild.args, prebuild.options);
@@ -203,7 +235,7 @@ function runApp(app, className, appFactsDir, viteCliPath, baseEnv = process.env)
           signal: result.signal,
           className,
           durationMs: Number((performance.now() - startedAt).toFixed(1)),
-          peakRssBytes,
+          peakRssBytes: 0,
         });
         return;
       }
@@ -215,32 +247,24 @@ function runApp(app, className, appFactsDir, viteCliPath, baseEnv = process.env)
       baseEnv,
     });
     const child = spawn(invocation.command, invocation.args, invocation.options);
-    const sample = () => {
-      const rss = processTreeRss(child.pid);
-      if (rss !== null) peakRssBytes = Math.max(peakRssBytes, rss);
-    };
-    const timer = setInterval(sample, 250);
-    timer.unref();
+    const sample = sampler.track(child.pid);
     child.once('error', (error) => {
-      clearInterval(timer);
       resolveRun({
         ok: false,
         error,
         className,
         durationMs: performance.now() - startedAt,
-        peakRssBytes,
+        peakRssBytes: sampler.finish(sample),
       });
     });
     child.once('exit', (code, signal) => {
-      clearInterval(timer);
-      sample();
       resolveRun({
         ok: code === 0,
         code,
         signal,
         className,
         durationMs: Number((performance.now() - startedAt).toFixed(1)),
-        peakRssBytes,
+        peakRssBytes: sampler.finish(sample),
       });
     });
   });
@@ -320,8 +344,17 @@ async function main() {
   const appBuildEnv = {
     ...process.env,
     FORGEAX_SHARED_APP_INPUTS_MANIFEST: sharedInputManifest,
+    // App shards transfer a shared manifest plus app-local deltas. Avoid
+    // serializing and sizing the shared payload once per app in that path.
+    ...(appShardShaderDelta
+      ? {
+          FORGEAX_APP_SHARD_SHADER_DELTA: '1',
+          FORGEAX_VITE_REPORT_COMPRESSED_SIZE: '0',
+        }
+      : {}),
   };
   const running = new Map();
+  const sampler = createProcessSampler();
 
   while (pending.length > 0 || running.size > 0) {
     while (pending.length > 0 && running.size < maxConcurrent) {
@@ -331,9 +364,14 @@ async function main() {
           ? undefined
           : resolve(metricsRoot, packageId(task.app.manifest.name));
       if (factsDir !== undefined) mkdirSync(factsDir, { recursive: true });
-      const promise = runApp(task.app, task.className, factsDir, viteCliPath, appBuildEnv).then(
-        (run) => ({ task, run, factsDir }),
-      );
+      const promise = runApp(
+        task.app,
+        task.className,
+        factsDir,
+        viteCliPath,
+        sampler,
+        appBuildEnv,
+      ).then((run) => ({ task, run, factsDir }));
       running.set(task.app.manifest.name, promise);
       console.error(
         `[build-apps] build ${task.app.manifest.name} class=${task.className} memory=${task.memoryGB}GB`,
@@ -352,6 +390,7 @@ async function main() {
       const detail = run.error === undefined ? '' : `: ${run.error.message}`;
       console.error(`[build-apps] failed ${task.app.manifest.name} (${reason})${detail}`);
       process.exitCode = run.code ?? 1;
+      sampler.dispose();
       return;
     }
     const output = inventory(appOutputDirectory(task.app));
@@ -390,6 +429,7 @@ async function main() {
       ...pluginFacts,
     });
   }
+  sampler.dispose();
 
   const totals = results.reduce(
     (total, result) => ({

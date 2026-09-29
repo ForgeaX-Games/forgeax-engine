@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 
@@ -48,9 +49,10 @@ export function workspaceConcurrency({ cpus, memoryBytes, reserveGB, workerGB })
 }
 
 /**
- * Coverage and typecheck run together, so each Vitest worker carries more
- * memory than an ordinary test worker. Self-hosted heavy labels also do not
- * promise an exclusive machine; keep the derived budget conservative.
+ * Coverage and typecheck run together in a single Vitest process, so each
+ * worker carries more memory than an ordinary test worker. Self-hosted heavy
+ * labels also do not promise an exclusive machine; keep the derived budget
+ * conservative.
  */
 export function coverageVitestWorkers({ cpus, memoryBytes }) {
   return Math.min(6, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }));
@@ -58,10 +60,56 @@ export function coverageVitestWorkers({ cpus, memoryBytes }) {
 
 /**
  * Split coverage keeps Vitest itself at one worker and parallelizes isolated
- * child processes instead. Each child has a 4 GiB V8 heap cap, so budget one
- * extra GiB for native coverage/typecheck state and leave three GiB for the
- * runner. The cap prevents large hosts from creating an unbounded I/O burst.
+ * child processes instead. Each child has a 4 GiB V8 heap cap; leave three GiB
+ * for native coverage state and the runner. Source shader compilation and
+ * repository scans become timeout-bound when three instrumented children share
+ * one host, so keep the automatic ceiling at two even on larger runners.
  */
 export function coverageGroupConcurrency({ cpus, memoryBytes }) {
-  return Math.min(3, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 3, workerGB: 5 }));
+  return Math.min(2, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 3, workerGB: 4 }));
+}
+
+/** Vite app builds include native bundling allocations beyond the JS heap.
+ * Keep headroom for the runner and concurrent artifact compression.
+ */
+export function appBuildConcurrency({ cpus, memoryBytes }) {
+  const memoryBudget = Math.max(1, Math.floor((memoryBytes / 1024 ** 3 - 3) / 4));
+  return Math.max(1, Math.min(cpus - 1, memoryBudget, 4));
+}
+
+/**
+ * Evidence for a child that died by SIGKILL: the cgroup memory counters show
+ * whether the OOM killer fired, and the largest resident processes show which
+ * owners (including leftovers from earlier jobs) held the memory.
+ */
+export function readMemoryPressureDiagnostics() {
+  const candidates = {
+    current: ['/sys/fs/cgroup/memory.current', '/sys/fs/cgroup/memory/memory.usage_in_bytes'],
+    peak: ['/sys/fs/cgroup/memory.peak', '/sys/fs/cgroup/memory/memory.max_usage_in_bytes'],
+    events: ['/sys/fs/cgroup/memory.events', '/sys/fs/cgroup/memory/memory.oom_control'],
+  };
+  const diagnostics = {};
+  for (const [key, paths] of Object.entries(candidates)) {
+    for (const path of paths) {
+      try {
+        diagnostics[key] = readFileSync(path, 'utf8').trim();
+        break;
+      } catch {
+        // The runner may expose only one cgroup generation or no memory files.
+      }
+    }
+  }
+  if (process.platform === 'linux') {
+    const ps = spawnSync('ps', ['-eo', 'rss,pid,etimes,args', '--sort=-rss'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    if (ps.status === 0)
+      diagnostics.topRss = ps.stdout
+        .trim()
+        .split('\n')
+        .slice(0, 11)
+        .map((line) => line.slice(0, 200));
+  }
+  return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
 }

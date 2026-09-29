@@ -22,8 +22,10 @@ describe('M4 vertex-color shader contract', () => {
     expect(text).toMatch(
       /#ifdef\s+VERTEX_COLOR_AVAILABLE[\s\S]*?@location\(14\)\s+color\s*:\s*vec4<f32>/,
     );
-    if (file !== 'unlit.wgsl') {
-      expect(text).toMatch(/@location\(13\)\s+uv7\s*:\s*vec2<f32>/);
+    if (file === 'default-standard-pbr.wgsl') {
+      expect(text).toMatch(/@location\(12\)\s+uvPair3\s*:\s*vec4<f32>/);
+    } else if (file === 'default-standard-pbr-skin.wgsl') {
+      expect(text).toMatch(/@location\(12\)\s+uv6And7\s*:\s*vec4<f32>/);
     }
   });
 
@@ -38,15 +40,34 @@ describe('M4 vertex-color shader contract', () => {
 
   it.each(SOURCES)('%s applies vertex color to linear RGB and all alpha consumers', (file) => {
     const text = source(file);
-    expect(text).toMatch(/baseColor\.rgb\s*\*\s*(?:baseSample|texSample)\.rgb\s*\*\s*\w+\.rgb/);
-    expect(text).toMatch(/baseColor\.a\s*\*\s*(?:baseSample|texSample)\.a\s*\*\s*\w+\.a/);
+    if (file === 'unlit.wgsl') {
+      expect(text).toMatch(/baseColor\.rgb\s*\*\s*texSample\.rgb\s*\*\s*vertexColor\.rgb/);
+      expect(text).toMatch(/baseColor\.a\s*\*\s*texSample\.a\s*\*\s*vertexColor\.a/);
+    } else {
+      expect(text).toContain(
+        '#import forgeax_material::slot::surface::{evaluate_surface, evaluate_standard_surface}',
+      );
+      expect(text).toContain('materialVertexColor(in), frontFacing');
+    }
     expect(text).toMatch(/alphaCutoff/);
     expect(text).toMatch(/fs_temporal/);
   });
 
-  it('keeps the existing inter-stage uv7 location while reserving color at 14', () => {
+  it('canonical Standard surface applies vertex color to linear RGB and alpha', () => {
+    const text = readFileSync(new URL('../default_standard_surface.wgsl', import.meta.url), 'utf8');
+    expect(text).toMatch(/baseColor\.rgb\s*\*\s*baseSample\.rgb\s*\*\s*vertexColor\.rgb/);
+    expect(text).toMatch(/baseColor\.a\s*\*\s*baseSample\.a\s*\*\s*vertexColor\.a/);
+  });
+
+  it('preserves all eight UV sets in paired varyings while reserving color at 14', () => {
     const text = source('default-standard-pbr.wgsl');
-    expect(text).toMatch(/@location\(13\)\s+uv7\s*:\s*vec2<f32>/);
+    for (const [pair, location] of [2, 5, 8, 12].entries()) {
+      expect(text).toContain(`@location(${location}) uvPair${pair} : vec4<f32>`);
+      const first = pair === 0 ? 'uv' : `uv${pair * 2}`;
+      expect(text).toContain(`out.uvPair${pair} = vec4<f32>(in.${first}, in.uv${pair * 2 + 1})`);
+      expect(text).toContain(`in.uvPair${pair}.xy`);
+      expect(text).toContain(`in.uvPair${pair}.zw`);
+    }
     expect(text).toMatch(/@location\(14\)\s+color\s*:\s*vec4<f32>/);
   });
 });

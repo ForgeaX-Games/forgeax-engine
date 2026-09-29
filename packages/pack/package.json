@@ -5,10 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Disk schema, GUID tools, scanner, and fail-fast error chain for the forgeax engine asset package system. CLI surface is provided by @forgeax/engine-remote (forgeax-engine-remote asset).",
-  "bin": {
-    "forgeax-engine-remote-asset": "./dist/cli-asset.mjs"
-  },
+  "description": "Disk schema, GUID tools, scanner, and fail-fast error chain for the ForgeaX asset package system. The unified ForgeaX asset command owns the public producer entry.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -43,6 +40,10 @@
       "types": "./dist/scanner.d.ts",
       "import": "./dist/scanner.mjs"
     },
+    "./runtime-browser": {
+      "types": "./dist/program-browser.d.ts",
+      "import": "./dist/program-browser.mjs"
+    },
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.mjs"
@@ -67,11 +68,6 @@
     "./name": {
       "types": "./dist/deriveAssetName.d.ts",
       "import": "./dist/name.mjs"
-    },
-    "./config": {
-      "types": "./dist/config.d.ts",
-      "node": "./dist/config.mjs",
-      "default": null
     },
     "./resolve": {
       "types": "./dist/resolve-asset-source.d.ts",
@@ -146,9 +142,11 @@
   "dependencies": {
     "@forgeax/engine-types": "workspace:*",
     "@noble/hashes": "^2.2.0",
+    "acorn": "8.16.0",
     "fast-glob": "^3.3.3",
     "typescript": "^5.8.3",
     "upng-js": "^2.1.0",
-    "uuidv7": "^1.2.1"
+    "uuidv7": "^1.2.1",
+    "@forgeax/engine-tool-runtime": "workspace:*"
   }
 }

@@ -34,8 +34,13 @@ import {
   parse,
   type ShaderReflection,
   validate,
+  validateRenderEntries,
 } from '@forgeax/engine-naga';
-import type { BindGroupLayoutDescriptor, ManifestEntry } from '@forgeax/engine-types';
+import type {
+  BindGroupLayoutDescriptor,
+  ManifestEntry,
+  MaterialSurfaceModel,
+} from '@forgeax/engine-types';
 import { detectCycle } from './cycle-detect.js';
 import { scanDefineConflicts } from './define-scan.js';
 import { mapWasmError } from './error-mapper.js';
@@ -48,6 +53,12 @@ import {
   ShaderError,
   type ShaderError as ShaderErrorType,
 } from './errors.js';
+import {
+  composeSurfaceSource,
+  hoistWgslEnables,
+  isImportedWgslSymbol,
+} from './material/compose.js';
+import { buildMaterialSourceCatalog } from './material/source-catalog.js';
 import { parseReflection } from './reflection.js';
 import { canonicalizePortableWgsl } from './wgsl-compat.js';
 
@@ -55,6 +66,12 @@ import { canonicalizePortableWgsl } from './wgsl-compat.js';
 
 /** Options accepted by `compileShader`. */
 export interface CompileOptions {
+  /** Graphics stages selected by the consumer; checked against the Naga IR. */
+  readonly renderEntries?: {
+    readonly vertex: string;
+    readonly fragment?: string;
+    readonly colorFormats?: readonly GPUTextureFormat[];
+  };
   /**
    * Source module id (the id from the vite plugin transform hook; used for
    * error signal locating + as detail.fromModuleId on shader-import-not-found).
@@ -67,6 +84,17 @@ export interface CompileOptions {
    * can register it (AC-14). Omitted defaults to empty map.
    */
   readonly imports?: Record<string, string>;
+  /**
+   * Compiler-owned MaterialParameters module used when lowering a Surface
+   * slot. The material cooker/Vite producer supplies this from the root
+   * ParamSchema; omitting it keeps a raw Surface entry fail-closed instead of
+   * inventing an ABI.
+   */
+  readonly generatedParameters?: string;
+  /** Surface template contract used when compiling a material-slot entry. */
+  readonly surfaceModel?: MaterialSurfaceModel;
+  /** Explicit imported Surface module for a non-Standard template. */
+  readonly surfaceModule?: string;
   /**
    * `#ifdef` branch selector: `DEFINE_NAME -> boolean`. D-06: TS strictly
    * enforces boolean values; a numeric or string literal is a TS compile-time
@@ -117,6 +145,211 @@ const DEFINE_WITH_VALUE_RE = /^\s*#define\s+\w+\s+(\S.*)$/;
 const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/;
 const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)/;
 const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
+
+/**
+ * Project the boolean conditional surface that naga_oil resolves too late for
+ * imported modules. Known `#ifdef`/`#ifndef` branches and the engine's simple
+ * `#if NAME == true|false` expressions are folded; unknown `#if` expressions
+ * remain intact for naga_oil. The stack tracks every conditional kind so a
+ * nested numeric `#if` cannot steal an outer `#ifdef`'s `#else`.
+ */
+
+export function projectShaderConditionals(
+  source: string,
+  defines: Record<string, boolean> = {},
+): string {
+  if (Object.keys(defines).length === 0) return source;
+  type ConditionalFrame = {
+    disabled: boolean;
+    seenElse: boolean;
+    removed: boolean;
+    opaque: boolean;
+  };
+  const stack: ConditionalFrame[] = [];
+  const parentDisabled = (): boolean => stack.some((frame) => frame.disabled);
+  const lines = source.split(/\r?\n/);
+  const out: string[] = [];
+
+  const knownIfCondition = (line: string): boolean | undefined => {
+    const match = /^\s*#if\s+(\w+)\s*==\s*(true|false)\s*$/.exec(line);
+    if (match === null) return undefined;
+    const name = match[1];
+    const expected = match[2] === 'true';
+    const actual = name === undefined ? undefined : defines[name];
+    return actual === undefined ? undefined : actual === expected;
+  };
+
+  for (const line of lines) {
+    const ifdefMatch = /^\s*#ifdef\s+(\w+)/.exec(line);
+    const ifndefMatch = /^\s*#ifndef\s+(\w+)/.exec(line);
+    const knownCondition = knownIfCondition(line);
+    if (ifdefMatch !== null || ifndefMatch !== null || knownCondition !== undefined) {
+      const name = ifdefMatch?.[1] ?? ifndefMatch?.[1];
+      const condition =
+        knownCondition ??
+        (name === undefined
+          ? false
+          : ifdefMatch !== null
+            ? (defines[name] ?? false)
+            : !(defines[name] ?? false));
+      const disabled = parentDisabled() || !condition;
+      stack.push({ disabled, seenElse: false, removed: disabled, opaque: false });
+      if (!disabled) out.push(line);
+      continue;
+    }
+    if (/^\s*#if\s+/.test(line)) {
+      const disabled = parentDisabled();
+      stack.push({ disabled, seenElse: false, removed: disabled, opaque: true });
+      if (!disabled) out.push(line);
+      continue;
+    }
+    if (/^\s*#else\b/.test(line)) {
+      const top = stack[stack.length - 1];
+      if (top === undefined) {
+        out.push(line);
+        continue;
+      }
+      if (top.seenElse) continue;
+      top.seenElse = true;
+      if (top.opaque) {
+        if (!top.removed && !parentDisabled()) out.push(line);
+        continue;
+      }
+      const outerDisabled = stack.slice(0, -1).some((frame) => frame.disabled);
+      if (!outerDisabled) top.disabled = !top.disabled;
+      // A removed known branch has no matching directive in the projected
+      // source; its else-body is now the active body and must flow through.
+      if (!top.removed) out.push(line);
+      continue;
+    }
+    if (/^\s*#endif\b/.test(line)) {
+      const top = stack.pop();
+      if (top === undefined || !top.removed) out.push(line);
+      continue;
+    }
+    if (parentDisabled()) continue;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Specialize every module in one shader composition closure before naga_oil
+ * sees it. naga_oil receives one define map for an entry, but imported WGSL
+ * modules are parsed as independent source strings; leaving their conditional
+ * declarations intact can make the true and false branches collide after
+ * linking. Keeping this small preprocessor in the compiler makes the entry
+ * and every reachable import consume the same effective defines.
+ */
+function specializeConditionalDefines(
+  source: string,
+  defines: Readonly<Record<string, boolean>>,
+): string {
+  type ConditionalFrame = {
+    parentActive: boolean;
+    branchActive: boolean;
+    elseSeen: boolean;
+  };
+  const frames: ConditionalFrame[] = [];
+  const output: string[] = [];
+  const active = (): boolean => {
+    const frame = frames[frames.length - 1];
+    return frame === undefined ? true : frame.parentActive && frame.branchActive;
+  };
+  const condition = (name: string, negated = false): boolean => {
+    const value = defines[name] === true;
+    return negated ? !value : value;
+  };
+
+  for (const line of source.split(/\r?\n/)) {
+    const ifdef = /^\s*#ifdef\s+(\w+)/.exec(line);
+    const ifndef = /^\s*#ifndef\s+(\w+)/.exec(line);
+    const ifComparison = /^\s*#if\s+(\w+)\s*==\s*(true|false)\s*$/.exec(line);
+    const ifName = /^\s*#if\s*!?(\w+)\s*$/.exec(line);
+    if (ifdef !== null || ifndef !== null || ifComparison !== null || ifName !== null) {
+      const parentActive = active();
+      let branchActive = false;
+      if (ifdef !== null) branchActive = condition(ifdef[1] ?? '');
+      else if (ifndef !== null) branchActive = condition(ifndef[1] ?? '', true);
+      else if (ifComparison !== null) {
+        const expected = ifComparison[2] === 'true';
+        branchActive = condition(ifComparison[1] ?? '') === expected;
+      } else {
+        branchActive = condition(ifName?.[1] ?? '', line.includes('!'));
+      }
+      frames.push({ parentActive, branchActive, elseSeen: false });
+      continue;
+    }
+    if (/^\s*#else\b/.test(line)) {
+      const frame = frames[frames.length - 1];
+      if (frame !== undefined && !frame.elseSeen) {
+        frame.branchActive = !frame.branchActive;
+        frame.elseSeen = true;
+      }
+      continue;
+    }
+    if (/^\s*#endif\b/.test(line)) {
+      frames.pop();
+      continue;
+    }
+    if (active()) output.push(line);
+  }
+  // An inlined Surface and its template may import different symbols from
+  // the same module. naga_oil treats repeated symbol lists as replacements.
+  // Merge only active group imports after conditional projection; otherwise a
+  // disabled branch could accidentally make its symbols mandatory.
+  const groups = new Map<string, { index: number; symbols: Set<string> }>();
+  for (const [index, line] of output.entries()) {
+    const match = /^\s*#import\s+([A-Za-z0-9_:-]+)::\{([^}]+)\}\s*$/.exec(line);
+    if (match === null) continue;
+    const moduleId = match[1] ?? '';
+    const symbols = (match[2] ?? '')
+      .split(',')
+      .map((symbol) => symbol.trim())
+      .filter(Boolean);
+    const previous = groups.get(moduleId);
+    if (previous === undefined) groups.set(moduleId, { index, symbols: new Set(symbols) });
+    else {
+      for (const symbol of symbols) previous.symbols.add(symbol);
+      output[previous.index] = `#import ${moduleId}::{${[...previous.symbols].join(', ')}}`;
+      output[index] = '';
+    }
+  }
+  return output.join('\n');
+}
+
+function reachableImportIds(
+  source: string,
+  imports: Readonly<Record<string, string>>,
+): Set<string> {
+  const resolve = (raw: string): string | undefined => {
+    let candidate = raw.replace(/::$/, '').split('::{')[0] ?? raw;
+    while (candidate.length > 0) {
+      if (imports[candidate] !== undefined) return candidate;
+      const separator = candidate.lastIndexOf('::');
+      if (separator < 0) break;
+      candidate = candidate.slice(0, separator);
+    }
+    return undefined;
+  };
+  const reachable = new Set<string>();
+  const pending = [...source.matchAll(/^\s*#import\s+([A-Za-z0-9_:-]+)/gm)].map(
+    (match) => match[1] ?? '',
+  );
+  while (pending.length > 0) {
+    const raw = pending.shift();
+    if (raw === undefined) continue;
+    const moduleId = resolve(raw);
+    if (moduleId === undefined || reachable.has(moduleId)) continue;
+    reachable.add(moduleId);
+    const moduleSource = imports[moduleId];
+    if (moduleSource === undefined) continue;
+    for (const child of moduleSource.matchAll(/^\s*#import\s+([A-Za-z0-9_:-]+)/gm)) {
+      pending.push(child[1] ?? '');
+    }
+  }
+  return reachable;
+}
 function resolveOmittedVertexColorBranch(source: string, available: boolean): string {
   const lines = source.split(/\r?\n/);
   const resolveRange = (range: readonly string[]): string[] => {
@@ -168,6 +401,9 @@ async function locateSourceSyntaxError(
   for (const candidate of [source, ...Object.values(imports)]) {
     const parsed = await parse(stripComposerDirectives(candidate));
     if (!parsed.ok && parsed.error.lineNum !== undefined && parsed.error.linePos !== undefined) {
+      const line = candidate.split(/\r?\n/)[parsed.error.lineNum - 1] ?? '';
+      const symbol = /^[A-Za-z_][A-Za-z0-9_]*/.exec(line.slice(parsed.error.linePos - 1))?.[0];
+      if (symbol !== undefined && isImportedWgslSymbol(candidate, symbol)) continue;
       return parsed.error;
     }
   }
@@ -196,15 +432,89 @@ export async function compileShader(
   options: CompileOptions = {},
 ): Promise<Result<CompileResult, ShaderErrorType>> {
   const requestedVertexColor = options.defines?.VERTEX_COLOR_AVAILABLE === true;
-  const source = resolveOmittedVertexColorBranch(stripPragmas(rawSource), requestedVertexColor);
-  const imports = options.imports ?? {};
+  let entrySource = rawSource;
+  let entryImports: Readonly<Record<string, string>> = options.imports ?? {};
+  if (rawSource.includes('#pragma material_slot surface')) {
+    const templateModule = /^\s*#define_import_path\s+([A-Za-z0-9_.:-]+)/m.exec(rawSource)?.[1];
+    if (templateModule === undefined) {
+      return err(
+        compileFailed({
+          message: 'Surface material entry is missing #define_import_path',
+          hint: 'Declare one stable module identity before using material_slot surface.',
+        }),
+      );
+    }
+    const catalog = buildMaterialSourceCatalog({
+      engine: [
+        { path: options.id ?? templateModule, source: rawSource },
+        ...Object.entries(entryImports)
+          .filter(([path]) => path !== templateModule && path !== options.id)
+          .map(([path, source]) => ({ path, source })),
+      ],
+      project: [],
+    });
+    if (!catalog.ok) {
+      return err(
+        compileFailed({
+          message: catalog.error.message,
+          hint: catalog.error.hint,
+        }),
+      );
+    }
+    const lowered = composeSurfaceSource({
+      material: options.id ?? templateModule,
+      pass: 'Forward',
+      templateModule,
+      surfaceModule:
+        options.surfaceModule ??
+        (options.surfaceModel === 'single-layer-medium'
+          ? 'forgeax_material::default_single_layer_medium_surface'
+          : 'forgeax_material::default_standard_surface'),
+      ...(options.surfaceModel === undefined ? {} : { surfaceModel: options.surfaceModel }),
+      sources: catalog.value,
+      ...(options.generatedParameters === undefined
+        ? {}
+        : { generatedParameters: options.generatedParameters }),
+    });
+    if (!lowered.ok) {
+      return err(
+        compileFailed({
+          message: lowered.error.message,
+          hint: lowered.error.hint,
+        }),
+      );
+    }
+    entrySource = lowered.value.source;
+    entryImports = lowered.value.imports;
+  }
   const defines = { ...(options.defines ?? {}) };
+  const source = hoistWgslEnables(
+    specializeConditionalDefines(
+      resolveOmittedVertexColorBranch(stripPragmas(entrySource), requestedVertexColor),
+      defines,
+    ),
+  );
+  const imports = entryImports;
   delete defines.VERTEX_COLOR_AVAILABLE;
   if (requestedVertexColor) defines.VERTEX_COLOR_AVAILABLE = true;
+  const reachable = reachableImportIds(source, imports);
+  const specializedImports = Object.fromEntries(
+    Object.entries(imports).map(([moduleId, moduleSource]) => [
+      moduleId,
+      stripPragmas(
+        reachable.has(moduleId)
+          ? specializeConditionalDefines(moduleSource, defines)
+          : moduleSource,
+      ),
+    ]),
+  );
   const fromModuleId = options.id ?? `<anonymous-entry-${computeHash(source)}>`;
 
   // Stage 0a: non-boolean #define value pre-scan (D-05 OOS-1).
-  const nonBooleanErr = findNonBooleanDefine({ [fromModuleId]: source, ...imports });
+  const nonBooleanErr = findNonBooleanDefine({
+    [fromModuleId]: source,
+    ...specializedImports,
+  });
   if (nonBooleanErr !== null) {
     return err(
       compileFailed({
@@ -215,7 +525,10 @@ export async function compileShader(
   }
 
   // Stage 0b: #define conflict pre-scan (D-07).
-  const conflicts = scanDefineConflicts({ [fromModuleId]: source, ...imports });
+  const conflicts = scanDefineConflicts({
+    [fromModuleId]: source,
+    ...specializedImports,
+  });
   if (conflicts.length > 0) {
     const first = conflicts[0];
     if (first !== undefined) {
@@ -233,7 +546,7 @@ export async function compileShader(
   }
 
   // Stage 0c: cycle detection (D-04).
-  const graph = buildImportGraph(source, imports, fromModuleId);
+  const graph = buildImportGraph(source, specializedImports, fromModuleId);
   const cycle = detectCycle(graph);
   if (cycle !== null) {
     return err(
@@ -258,23 +571,27 @@ export async function compileShader(
   // target module source exists but lacks a `#define_import_path <moduleId>`
   // header, surface the same shader-import-not-found code (the module cannot
   // bind under its declared id).
-  const importResolveErr = checkImportsResolvable(source, imports, fromModuleId, defines);
+  const importResolveErr = checkImportsResolvable(
+    source,
+    specializedImports,
+    fromModuleId,
+    defines,
+  );
   if (importResolveErr !== null) return err(importResolveErr);
 
   // Stage 1: compose via naga_oil, then canonicalize portable WGSL. Errors from
   // the wasm boundary flow through mapWasmError as structured ShaderError data.
   let composed: string;
   try {
-    composed = canonicalizePortableWgsl(await composeShader(source, imports, defines));
+    composed = canonicalizePortableWgsl(await composeShader(source, specializedImports, defines));
   } catch (e) {
     const mapped = mapWasmError(e, { fromModuleId });
     if (mapped.code === 'shader-compile-failed' && mapped.lineNum === undefined) {
-      const located = await locateSourceSyntaxError(source, imports);
+      const located = await locateSourceSyntaxError(source, specializedImports);
       if (located !== undefined) return err(located);
     }
     return err(mapped);
   }
-
   // Collect deps: keys of options.imports that are referenced from the entry
   // (AC-13 AI-F2 breadcrumb). naga_oil drops unused imports during composition,
   // but the TS layer reports the declared set so the Vite plugin HMR graph
@@ -284,7 +601,7 @@ export async function compileShader(
   // Stage 2: parse composed WGSL.
   const parsedResult = await parse(composed);
   if (!parsedResult.ok) {
-    const located = await locateSourceSyntaxError(source, imports);
+    const located = await locateSourceSyntaxError(source, specializedImports);
     if (located !== undefined) return err(located);
     return err(parsedResult.error);
   }
@@ -293,6 +610,15 @@ export async function compileShader(
   const validatedResult = await validate(parsedResult.value);
   if (!validatedResult.ok) {
     return err(validatedResult.error);
+  }
+  if (options.renderEntries !== undefined) {
+    const entries = await validateRenderEntries(
+      validatedResult.value,
+      options.renderEntries.vertex,
+      options.renderEntries.fragment,
+      options.renderEntries.colorFormats,
+    );
+    if (!entries.ok) return entries;
   }
 
   // Stage 4: emit_reflection.
@@ -378,11 +704,11 @@ function findNonBooleanDefine(
 
 /**
  * Build a moduleId -> [importedModuleId...] adjacency map from the entry +
- * imports sources by regex-scanning `#import <path>` lines. The import path
- * is narrowed to its leading module prefix (the portion before the first
- * `::` or end-of-line), so `#import forgeax_pbr::brdf::{f_schlick}` is
- * recorded as a dep on `forgeax_pbr::brdf` — matching how options.imports
- * keys are declared by the caller.
+ * imports sources by regex-scanning `#import <path>` lines. Each import path
+ * resolves to its longest `::`-segment prefix that names a known module, so
+ * `#import lab::cyc_b::fb` binds to `lab::cyc_b` and `#import cyc_b::fb` to
+ * `cyc_b`. Paths that name no known module add no edge; the resolvability
+ * pre-check reports them.
  *
  * The entry appears under `fromModuleId`; each options.imports value is
  * scanned under its own moduleId so nested dependencies are traced.
@@ -392,33 +718,28 @@ function buildImportGraph(
   imports: Record<string, string>,
   fromModuleId: string,
 ): Record<string, string[]> {
+  const modules = new Set([fromModuleId, ...Object.keys(imports)]);
   const graph: Record<string, string[]> = {};
-  graph[fromModuleId] = extractImports(entry);
+  graph[fromModuleId] = extractImports(entry, modules);
   for (const [moduleId, source] of Object.entries(imports)) {
-    graph[moduleId] = extractImports(source);
+    graph[moduleId] = extractImports(source, modules);
   }
   return graph;
 }
 
-function extractImports(source: string): string[] {
+function extractImports(source: string, modules: ReadonlySet<string>): string[] {
   const deps: string[] = [];
   for (const line of source.split(/\r?\n/)) {
-    const match = IMPORT_DIRECTIVE_RE.exec(line);
-    if (!match) continue;
-    const full = match[1];
+    const full = IMPORT_DIRECTIVE_RE.exec(line)?.[1];
     if (full === undefined) continue;
-    const prefix = MODULE_ID_PREFIX_RE.exec(full)?.[1] ?? full;
-    // naga_oil #import paths of the form `mod_a::fn_b` bind against the
-    // options.imports key `mod_a`. Double-colon split: keep only the first
-    // segment as the dep target.
-    const first = prefix.split('::')[0] ?? prefix;
-    // But for multi-segment modules (e.g. `forgeax_pbr::brdf`), callers may
-    // key imports using the full segmented moduleId. Prefer the longest prefix
-    // that matches a key when available — callers provide the key set at
-    // compose time, not here, so both variants are emitted as candidate deps
-    // and the graph scanner tolerates missing adjacency entries.
-    deps.push(first);
-    if (prefix !== first) deps.push(prefix);
+    const segments = full.split('::').filter((segment) => segment.length > 0);
+    for (let length = segments.length; length > 0; length--) {
+      const candidate = segments.slice(0, length).join('::');
+      if (modules.has(candidate)) {
+        deps.push(candidate);
+        break;
+      }
+    }
   }
   return deps;
 }
@@ -607,7 +928,7 @@ function computeHash(source: string): string {
 
 export type { ParamSchemaEntry } from '@forgeax/engine-types';
 
-export { checkBindGroupOverflow, compareParamSchemaSuperset } from './compare-param-schema.js';
+export { checkBindGroupOverflow, compareMaterialBindings } from './compare-param-schema.js';
 export {
   compileFailed,
   err,
@@ -625,9 +946,17 @@ export {
 export {
   type ComposedMaterial,
   composeMaterial,
+  composeSurfaceSource,
+  digestMaterialSourceClosure,
   type MaterialComposeCompiler,
   type MaterialComposedSource,
   type MaterialComposeRequest,
+  type PreparedStandardSource,
+  prepareStandardSource,
+  type StandardSourcePreparationRequest,
+  type SurfaceComposition,
+  type SurfaceCompositionRequest,
+  type SurfaceCompositionStage,
 } from './material/compose.js';
 export {
   cookMaterialAsset,
@@ -638,6 +967,17 @@ export {
   type MaterialCookedPass,
   type MaterialCookRequest,
 } from './material/cook.js';
+export {
+  generateMaterialDynamicInputAccessor,
+  materialDynamicInputModuleId,
+} from './material/dynamic-input.js';
+export {
+  type LoweredStandardContract,
+  lowerStandardContract,
+  lowerStandardPhysicalBindings,
+  projectStandardParameterSchema,
+  standardMaterialDefines,
+} from './material/lower-standard-contract.js';
 export {
   type CookedMaterialRecord,
   collectMaterialCookRefs,
@@ -651,7 +991,8 @@ export {
   type MaterialNativeCookerOptions,
   materialCookPublication,
 } from './material/native-cooker.js';
-export { createMaterialPackCooker } from './material/pack-cooker.js';
+export { collectMaterialSources, createMaterialPackCooker } from './material/pack-cooker.js';
+export { parseMaterialParticleInputs } from './material/particle-inputs.js';
 export {
   characterizeMaterialWgslProfile,
   MATERIAL_WGSL_PROFILE,
@@ -667,6 +1008,11 @@ export {
   type MaterialStaticSelection,
   projectMaterial,
 } from './material/project.js';
+export {
+  type CookedRayMaterial,
+  cookRayMaterial,
+  type RayMaterialCookRequest,
+} from './material/ray-material.js';
 export { type ResolvedMaterial, resolveMaterialAsset } from './material/resolve.js';
 export {
   buildMaterialSourceCatalog,
@@ -682,6 +1028,17 @@ export {
   type MaterialSpecializationKeyInput,
   type MaterialSpecializationPassInput,
 } from './material/specialization-key.js';
+export {
+  SINGLE_LAYER_MEDIUM_SURFACE_ABI,
+  SINGLE_LAYER_MEDIUM_SURFACE_MODULE,
+  SURFACE_ABI,
+  SURFACE_EXPORT,
+  SURFACE_SLOT,
+  type SurfaceContract,
+  type SurfaceContractRequest,
+  validateSingleLayerMediumSurfaceSource,
+  validateSurfaceSource,
+} from './material/surface-contract.js';
 export {
   createMaterialVariantContext,
   lowerMaterialVariantContext,

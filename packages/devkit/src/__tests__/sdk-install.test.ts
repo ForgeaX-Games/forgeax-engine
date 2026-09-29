@@ -1,3 +1,4 @@
+// @perf-budget-skip: standalone npm-process and filesystem integration gate, not a hot path.
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -18,7 +19,8 @@ async function fixture() {
   const root = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-install-test-'));
   roots.push(root);
   const sdk = resolve(root, 'carrier');
-  const client = resolve(root, 'npm-client');
+  const client = resolve(root, process.platform === 'win32' ? 'npm-client.cmd' : 'npm-client');
+  const clientScript = resolve(root, 'npm-client-fixture.mjs');
   await mkdir(resolve(sdk, 'bin'), { recursive: true });
   await writeFile(
     resolve(sdk, 'sdk-manifest.json'),
@@ -26,19 +28,32 @@ async function fixture() {
   );
   await writeFile(resolve(sdk, 'bin', 'forgeax.mjs'), 'export {};\n');
   await writeFile(
-    client,
-    '#!/bin/sh\n' +
-      'prefix=""\n' +
-      'previous=""\n' +
-      'for value in "$@"; do\n' +
-      '  if [ "$previous" = "--prefix" ]; then prefix="$value"; fi\n' +
-      '  previous="$value"\n' +
-      'done\n' +
-      'target="$prefix/node_modules/@forgeax/engine-sdk/sdk"\n' +
-      'mkdir -p "$target"\n' +
-      'cp -R "$FORGEAX_TEST_SDK_CARRIER/." "$target/"\n',
+    clientScript,
+    `${[
+      "import { cp, mkdir, readdir } from 'node:fs/promises';",
+      "import { resolve } from 'node:path';",
+      'const args = process.argv.slice(2);',
+      "const prefixIndex = args.indexOf('--prefix');",
+      "if (prefixIndex < 0 || !args[prefixIndex + 1]) throw new Error('missing --prefix');",
+      "const target = resolve(args[prefixIndex + 1], 'node_modules', '@forgeax', 'engine-sdk', 'sdk');",
+      'await mkdir(target, { recursive: true });',
+      'const source = process.env.FORGEAX_TEST_SDK_CARRIER;',
+      "if (!source) throw new Error('missing FORGEAX_TEST_SDK_CARRIER');",
+      'for (const entry of await readdir(source)) {',
+      '  await cp(resolve(source, entry), resolve(target, entry), { recursive: true });',
+      '}',
+    ].join('\n')}\n`,
   );
-  await chmod(client, 0o755);
+  if (process.platform === 'win32') {
+    await writeFile(client, `@echo off\r\n"${process.execPath}" "${clientScript}" %*\r\n`);
+  } else {
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    await writeFile(
+      client,
+      `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(clientScript)} "$@"\n`,
+    );
+    await chmod(client, 0o755);
+  }
   process.env.FORGEAX_NPM_CLIENT = client;
   process.env.FORGEAX_TEST_SDK_CARRIER = sdk;
   return root;
@@ -57,7 +72,7 @@ describe('sdkInstallCommand', () => {
         root: target,
         sdkVersion: '1.2.3',
         source: '@forgeax/engine-sdk',
-        next: { cwd: target, argv: ['node', './bin/forgeax.mjs', 'init'] },
+        next: { cwd: target, argv: ['node', './bin/forgeax.mjs', 'project', 'init'] },
       },
     });
     expect(JSON.parse(await readFile(resolve(target, 'sdk-manifest.json'), 'utf8'))).toEqual({

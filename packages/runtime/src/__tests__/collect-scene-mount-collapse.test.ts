@@ -66,14 +66,16 @@ describe('m2-t1 — Form 2: root itself is SceneInstance', () => {
     const w = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     reg.catalog(pg(G1), child as Asset);
 
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
-      mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 1 }],
+      entities: {
+        'entity-0': { components: { Transform: { pos: [10, 0, 0] } } },
+        child: { components: {}, instance: { source: G1 } },
+      },
     };
     const ch = rs(w, child);
     const ph = rs(w, parent);
@@ -91,16 +93,15 @@ describe('m2-t1 — Form 2: root itself is SceneInstance', () => {
     // Root is SceneInstance → root's own entities are owned.
     // Child's member entities are excluded.
     const s = res.value;
-    expect(s.entities.length).toBeGreaterThanOrEqual(1); // parent's own entity
-    for (const e of s.entities) {
+    expect(Object.keys(s.entities).length).toBeGreaterThanOrEqual(1); // parent's own entity
+    for (const e of Object.values(s.entities)) {
       expect(
         (e.components as Record<string, Record<string, unknown>>).SceneInstance,
       ).toBeUndefined();
     }
     // Child anchor produces a mount.
-    expect(s.mounts).toBeDefined();
-    expect(s.mounts?.length).toBe(1);
-    expect(s.mounts?.[0]?.source).toBe(G1);
+    const childInstance = Object.values(s.entities).find((entity) => entity.instance);
+    expect(childInstance?.instance?.source).toBe(G1);
   });
 });
 
@@ -111,15 +112,19 @@ describe('m2-t2 — Form 1: deep anchor with ChildOf parent', () => {
     const w = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
-        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: { pos: [1, 0, 0] } } },
+        'entity-1': { components: { Transform: { pos: [2, 0, 0] } } },
+      },
     };
     reg.catalog(pg(G1), child as Asset);
     const ch = rs(w, child);
 
-    const outerRes = w.spawn({ component: ChildOf, data: { parent: 0 as EntityHandle } });
+    // Relationship sources now reject stale targets at the public boundary.
+    // Use a real, non-descended host for this fixture so the test still
+    // exercises a deep anchor without manufacturing an invalid public edge.
+    const outerHost = w.spawn().unwrap();
+    const outerRes = w.spawn({ component: ChildOf, data: { parent: outerHost } });
     expect(outerRes.ok).toBe(true);
     if (!outerRes.ok) return;
     const outerE = outerRes.value;
@@ -140,10 +145,9 @@ describe('m2-t2 — Form 1: deep anchor with ChildOf parent', () => {
 
     // Outer root is NOT SceneInstance → no mount for it.
     // Child anchor produces a mount; its member entities excluded from owned.
-    expect(res.value.mounts).toBeDefined();
-    expect(res.value.mounts?.length).toBe(1);
-    expect(res.value.mounts?.[0]?.source).toBe(G1);
-    for (const e of res.value.entities) {
+    const childInstance = Object.values(res.value.entities).find((entity) => entity.instance);
+    expect(childInstance?.instance?.source).toBe(G1);
+    for (const e of Object.values(res.value.entities)) {
       expect(
         (e.components as Record<string, Record<string, unknown>>).SceneInstance,
       ).toBeUndefined();
@@ -158,15 +162,17 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const w = new World();
     const ca: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     reg.catalog(pg(G1), ca as Asset);
     const ch = rs(w, ca);
 
     const pa: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 1 }],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: G1 } },
+      },
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
@@ -178,7 +184,7 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const res = rootsToSceneAsset(reg, w, [inst.value.root]);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.mounts?.[0]?.memberCount).toBe(1);
+    expect(Object.values(res.value.entities).filter((entity) => entity.instance)).toHaveLength(1);
   });
 
   it('sparse localId does not shrink window', () => {
@@ -186,18 +192,20 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const w = new World();
     const ca: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
-        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: { pos: [1, 0, 0] } } },
+        'entity-1': { components: { Transform: { pos: [2, 0, 0] } } },
+      },
     };
     reg.catalog(pg(G1), ca as Asset);
     const ch = rs(w, ca);
 
     const pa: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 2 }],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: G1 } },
+      },
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
@@ -216,7 +224,7 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const res = rootsToSceneAsset(reg, w, [inst.value.root]);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.mounts?.[0]?.memberCount).toBe(2); // totalSlots, not live count
+    expect(Object.values(res.value.entities).filter((entity) => entity.instance)).toHaveLength(1); // keyed instance survives sparse members
   });
 
   it('multiple child mounts have non-overlapping windows', () => {
@@ -224,14 +232,14 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const w = new World();
     const cA: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     const cB: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: 0 as never, components: { Transform: {} } },
-        { localId: 1 as never, components: { Transform: {} } },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        'entity-1': { components: { Transform: {} } },
+      },
     };
     reg.catalog(pg(G1), cA as Asset);
     reg.catalog(pg(G2), cB as Asset);
@@ -240,20 +248,19 @@ describe('m2-t3 — AC-03 window invariants', () => {
 
     const pa: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [
-        { localId: 1 as never, source: 0, memberFirst: 3 as never, memberCount: 1 },
-        { localId: 2 as never, source: 1, memberFirst: 4 as never, memberCount: 2 },
-      ],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        childA: { components: {}, instance: { source: G1 } },
+        childB: { components: {}, instance: { source: G2 } },
+      },
     };
     const ph = rs(w, pa);
-    SceneOwner.worldSetSceneAssetResolver(w, (sIdx, pH) =>
-      (pH as unknown as number) !== (ph as unknown as number)
-        ? err({ code: 'asset-not-found' })
-        : sIdx === 0
-          ? ok(hA)
-          : ok(hB),
-    );
+    SceneOwner.worldSetSceneAssetResolver(w, (sIdx, pH) => {
+      if ((pH as unknown as number) !== (ph as unknown as number))
+        return err({ code: 'asset-not-found' });
+      if (typeof sIdx === 'number') return ok(sIdx as unknown as Handle<'SceneAsset', 'shared'>);
+      return String(sIdx).toLowerCase() === G1 ? ok(hA) : ok(hB);
+    });
 
     const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
@@ -264,27 +271,18 @@ describe('m2-t3 — AC-03 window invariants', () => {
       if (!s.ok) continue;
       const c = resolveAssetHandle<SceneAsset>(w, s.value as unknown as Handle<string, 'shared'>);
       if (!c.ok) continue;
-      soi(reg, c.value as SceneAsset, c.value.entities.length === 1 ? G1 : G2);
+      soi(reg, c.value as SceneAsset, Object.keys(c.value.entities).length === 1 ? G1 : G2);
     }
 
     const res = rootsToSceneAsset(reg, w, [inst.value.root]);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const ms = res.value.mounts ?? [];
-    expect(ms.length).toBe(2);
-    const W = ms
-      .map((m) => ({ f: m.memberFirst as number, c: m.memberCount }))
-      .sort((a, b) => a.f - b.f);
-    for (let i = 0; i < W.length - 1; i++) {
-      const cur = W[i];
-      const next = W[i + 1];
-      if (!cur || !next) throw new Error('window index out of range');
-      expect(cur.f + cur.c).toBeLessThanOrEqual(next.f);
-    }
-    const owned = new Set(res.value.entities.map((e) => e.localId as unknown as number));
-    for (const w of W)
-      for (let lid = w.f; lid < w.f + w.c; lid++) expect(owned.has(lid)).toBe(false);
+    const instances = Object.values(res.value.entities).flatMap((entity) =>
+      entity.instance ? [entity.instance] : [],
+    );
+    expect(instances).toHaveLength(2);
+    expect(new Set(instances.map((instance) => instance.source))).toEqual(new Set([G1, G2]));
   });
 });
 
@@ -295,15 +293,17 @@ describe('m2-t4 — graft preservation', () => {
     const w = new World();
     const ca: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     reg.catalog(pg(G1), ca as Asset);
     const ch = rs(w, ca);
 
     const pa: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 1 }],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: G1 } },
+      },
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
@@ -333,7 +333,7 @@ describe('m2-t4 — graft preservation', () => {
 
     // Prop should survive as owned entity (not eaten by mount).
     let propFound = false;
-    for (const e of res.value.entities) {
+    for (const e of Object.values(res.value.entities)) {
       if ((e.components as Record<string, Record<string, unknown>>).ChildOf) {
         propFound = true;
         break;
@@ -347,15 +347,17 @@ describe('m2-t4 — graft preservation', () => {
     const w = new World();
     const ca: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: { 'entity-0': { components: { Transform: {} } } },
     };
     reg.catalog(pg(G1), ca as Asset);
     const ch = rs(w, ca);
 
     const pa: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
-      mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 1 }],
+      entities: {
+        'entity-0': { components: { Transform: {} } },
+        child: { components: {}, instance: { source: G1 } },
+      },
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
@@ -388,4 +390,54 @@ describe('m2-t4 — graft preservation', () => {
     const res = rootsToSceneAsset(reg, w, [root]);
     expect(res.ok).toBe(false); // fail-fast
   });
+});
+
+it('preserves graft references through nested keyed scene instances', () => {
+  const reg = mkReg();
+  const w = new World();
+  const leaf: SceneAsset = { kind: 'scene', entities: { leaf: { components: { Transform: {} } } } };
+  const child: SceneAsset = {
+    kind: 'scene',
+    entities: { nested: { components: {}, instance: { source: G2 } } },
+  };
+  const parent: SceneAsset = {
+    kind: 'scene',
+    entities: { child: { components: {}, instance: { source: G1 } } },
+  };
+  const lh = rs(w, leaf);
+  const ch = rs(w, child);
+  const ph = rs(w, parent);
+  SceneOwner.worldSetSceneAssetResolver(w, (_source, parentHandle) =>
+    parentHandle === ph ? ok(ch) : parentHandle === ch ? ok(lh) : err({ code: 'asset-not-found' }),
+  );
+  const inst = SceneOwner.worldInstantiateScene(w, ph).unwrap();
+  for (const entity of w.iterDescendants(inst.root)) {
+    const handle = SceneOwner.worldGetSceneAssetForInstance(w, entity);
+    if (!handle.ok) continue;
+    const asset = resolveAssetHandle<SceneAsset>(
+      w,
+      handle.value as unknown as Handle<string, 'shared'>,
+    );
+    if (asset.ok) soi(reg, asset.value, 'nested' in asset.value.entities ? G1 : G2);
+  }
+  const state = SceneOwner.worldGetSceneInstanceState(w, inst.root).unwrap();
+  const member = state.bindings.get(SceneOwner.sceneEntityAddressKey(['child', 'nested', 'leaf']));
+  expect(member).toBeDefined();
+  if (member === undefined) return;
+  w.spawn({ component: ChildOf, data: { parent: member } }).unwrap();
+  const collected = rootsToSceneAsset(reg, w, [inst.root]);
+  expect(collected.ok, JSON.stringify(collected)).toBe(true);
+  if (!collected.ok) return;
+  const carrier = Object.values(collected.value.entities).find((entity) => entity.instance);
+  expect(Array.isArray(carrier?.components.Transform?.pos)).toBe(true);
+  expect(Object.values(collected.value.entities).filter((entity) => entity.instance)).toHaveLength(
+    1,
+  );
+  expect(
+    Object.values(collected.value.entities).some(
+      (entity) =>
+        JSON.stringify(entity.components.ChildOf?.parent) ===
+        JSON.stringify(['child', 'nested', 'leaf']),
+    ),
+  ).toBe(true);
 });

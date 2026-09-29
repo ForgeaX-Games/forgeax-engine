@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createVfxEffectContract } from '../effect-contract.js';
 import { ParticleEffectInstance } from '../instance.js';
+import { VFX_PARTICLE_CORE_LAYOUT } from '../particle-layout.js';
 
 const reflection = {
-  version: 1,
+  version: 3,
   parameters: {
     name: 'VfxParameters',
     fields: [{ name: 'intensity', type: 'f32', offset: 0, size: 4, alignment: 4 }],
@@ -11,6 +12,8 @@ const reflection = {
     alignment: 16,
   },
   custom: { name: 'VfxCustom', fields: [], size: 0, alignment: 1 },
+  core: VFX_PARTICLE_CORE_LAYOUT,
+  customLayout: { name: 'VfxCustom', fields: [], size: 0, alignment: 1, stride: 0, lanes: 0 },
   fingerprint: 'sha256:public-runtime',
 } as const;
 

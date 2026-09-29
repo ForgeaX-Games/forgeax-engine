@@ -52,7 +52,7 @@ it is separated from the dielectric sample by a measured pixel distance greater 
 The browser smoke uses the producer's `__captureMaterials` hook through the shared RHI-debug capture
 path and compares the live WebGPU readback with a fresh-device replay; it is a local Chrome + WebGPU
 gate for the default lane. The `metal` and `dielectric` browser lanes use the structural capture
-mode and prove the 512-byte Standard PBR upload carries `metallic` at global byte offset 16 and
+mode and prove the schema-sized Standard PBR upload carries `metallic` at global byte offset 16 and
 that the Standard PBR pipeline is selected for a draw; the Dawn smoke remains the deterministic CI
 gate.
 

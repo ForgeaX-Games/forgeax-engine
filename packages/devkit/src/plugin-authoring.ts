@@ -1,176 +1,177 @@
-import { execFile } from 'node:child_process';
-import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import { promisify } from 'node:util';
-import { type GameProjectPluginEntry, GameProjectSchema } from '@forgeax/engine-project';
-import type { CommandResult, PluginInstallOptions, PluginUninstallOptions } from './types.js';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { AssetGuid, parsePackSourceJson } from '@forgeax/engine-pack/source';
+import { GameProjectSchema, PluginRealmSchema } from '@forgeax/engine-project';
+import { discoverPluginAssets } from './build/plugin-assets.js';
+import { commandError, readProjectFacts } from './project.js';
+import type {
+  CommandResult,
+  PluginCreateOptions,
+  PluginInspectOptions,
+  PluginRootOptions,
+} from './types.js';
 
-const execFileAsync = promisify(execFile);
-
-async function readManifest(root: string): Promise<CommandResult<{ raw: string; value: unknown }>> {
-  const path = resolve(root, 'forge.json');
+export async function pluginCreateCommand(
+  options: PluginCreateOptions,
+): Promise<CommandResult<unknown>> {
   try {
+    const facts = await readProjectFacts(options.root);
+    if (!facts.ok) return facts;
+    const path = resolve(facts.value.root, options.path);
+    const localPath = relative(facts.value.root, path);
+    const scriptable = path.endsWith('.pack.ts');
+    if (
+      (!scriptable && !path.endsWith('.pack.json')) ||
+      localPath === '..' ||
+      localPath.startsWith('../') ||
+      isAbsolute(localPath)
+    ) {
+      throw new TypeError('plugin source path must be a project-local .pack.ts or .pack.json file');
+    }
+    const inline = options.module === undefined;
+    if (inline && !scriptable)
+      throw new TypeError(
+        '.pack.json requires a module; use .pack.ts to create a same-file plugin',
+      );
+    if (inline && options.export === 'default')
+      throw new TypeError('the default export of .pack.ts is the Pack; use a named plugin export');
+    const packageId = options.packageId ?? randomUUID();
+    const sourceKey = options.sourceKey ?? 'plugin/main';
+    const payload = {
+      module: {
+        specifier: options.module ?? `./${basename(path)}`,
+        ...(inline
+          ? { export: options.export ?? 'plugin' }
+          : options.export === undefined
+            ? {}
+            : { export: options.export }),
+      },
+      ...(options.config === undefined ? {} : { config: options.config }),
+    };
+    const pack = {
+      schemaVersion: '3.0.0',
+      packageId,
+      assets: {
+        [sourceKey]: {
+          kind: 'plugin',
+          payload,
+        },
+      },
+    };
+    const parsed = parsePackSourceJson(pack);
+    if (!parsed.ok) throw parsed.error;
+    const guid = AssetGuid.format(AssetGuid.derive(parsed.value.packageId, sourceKey));
+    // JSON object keys must retain data semantics when emitted as TypeScript.
+    const outputs = JSON.stringify(
+      { [sourceKey]: { kind: 'plugin', ...payload } },
+      null,
+      2,
+    ).replace(/^(\s*)"__proto__":/gm, '$1["__proto__"]:');
+    const source = scriptable
+      ? `import { definePack, definePackageId } from '@forgeax/engine/pack/source';
+import { ok } from '@forgeax/engine/types';
+${
+  inline
+    ? `import type { Plugin } from '@forgeax/engine/plugin';
+
+const plugin: Plugin = {
+  apply(ctx) {
+    ctx.effect(() => {
+      // Install this behavior's systems, services, or listeners here.
+      return () => {
+        // Release the contributions owned by this installation.
+      };
+    });
+  },
+};
+export { plugin as ${JSON.stringify(options.export ?? 'plugin')} };
+
+`
+    : ''
+}export default definePack({
+  schemaVersion: '2.0.0',
+  packageId: definePackageId(${JSON.stringify(packageId)}),
+  build: () => ok(${outputs}),
+});
+`
+      : `${JSON.stringify(pack, null, 2)}\n`;
+    if (!options.dryRun) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, source, { flag: 'wx' });
+    }
+    return { ok: true, value: { path, guid, source, dryRun: options.dryRun === true } };
+  } catch (cause) {
+    return { ok: false, error: commandError(cause, 'plugin-asset-create-failed') };
+  }
+}
+
+export async function pluginInspectCommand(
+  options: PluginInspectOptions = {},
+): Promise<CommandResult<unknown>> {
+  try {
+    const facts = await readProjectFacts(options.root);
+    if (!facts.ok) return facts;
+    const inventory = await discoverPluginAssets(facts.value);
+    return {
+      ok: true,
+      value: {
+        roots: facts.value.roots,
+        deferred: inventory.deferred,
+        assets: [...inventory.assets.values()]
+          .filter((record) => !options.guid || record.definition.guid === options.guid)
+          .map((record) => ({
+            ...record.definition,
+            sourcePath: record.sourcePath,
+            sourceKey: record.sourceKey,
+            refs: record.refs,
+            lifecycle: 'definition',
+            execution: 'not-observed',
+          })),
+      },
+    };
+  } catch (cause) {
+    return { ok: false, error: commandError(cause, 'plugin-asset-inspect-failed') };
+  }
+}
+
+/** Replaces one root reference. Configuration remains in its owning Pack. */
+export async function pluginRootCommand(
+  options: PluginRootOptions,
+): Promise<CommandResult<unknown>> {
+  const root = resolve(options.root ?? process.cwd());
+  const path = resolve(root, 'forge.json');
+  const lock = `${path}.lock`;
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  let locked = false;
+  try {
+    if (!PluginRealmSchema.safeParse(options.realm).success)
+      throw new TypeError('invalid root realm');
     const raw = await readFile(path, 'utf8');
-    return { ok: true, value: { raw, value: JSON.parse(raw) as unknown } };
+    const manifest = GameProjectSchema.parse(JSON.parse(raw));
+    if (options.guid !== null) {
+      if (!AssetGuid.parse(options.guid).ok)
+        throw new TypeError('root requires a canonical GUID or null');
+      const facts = await readProjectFacts(root);
+      if (!facts.ok) return facts;
+      const inventory = await discoverPluginAssets(facts.value);
+      if (!inventory.assets.has(options.guid))
+        throw new TypeError(`plugin definition ${options.guid} not found`);
+      manifest.roots[options.realm] = options.guid;
+    } else delete manifest.roots[options.realm];
+    if (!options.dryRun) {
+      await mkdir(lock);
+      locked = true;
+      if ((await readFile(path, 'utf8')) !== raw)
+        throw new Error('project changed during root validation');
+      await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+      await rename(temporary, path);
+    }
+    return { ok: true, value: { manifest, dryRun: options.dryRun === true } };
   } catch (cause) {
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-manifest-unreadable',
-        expected: 'a readable forge.json',
-        hint: 'Repair the project manifest before changing plugin installation state.',
-        detail: { path, reason: cause instanceof Error ? cause.message : String(cause) },
-      },
-    };
-  }
-}
-
-async function writeManifest(root: string, value: unknown): Promise<void> {
-  const path = resolve(root, 'forge.json');
-  const temporary = resolve(root, `.forgeax-plugin-${process.pid}.tmp`);
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
-  try {
-    await rename(temporary, path);
-  } catch (cause) {
-    await unlink(temporary).catch(() => undefined);
-    throw cause;
-  }
-}
-
-function allEntries(entries: readonly GameProjectPluginEntry[]): GameProjectPluginEntry[] {
-  return entries.flatMap((entry) => [
-    entry,
-    ...(entry.group === true ? allEntries(entry.config as readonly GameProjectPluginEntry[]) : []),
-  ]);
-}
-
-function withoutEntry(
-  entries: readonly GameProjectPluginEntry[],
-  id: string,
-): GameProjectPluginEntry[] {
-  return entries.flatMap((entry) => {
-    if (entry.id === id) return [];
-    if (entry.group !== true) return [entry];
-    return [
-      {
-        ...entry,
-        config: withoutEntry(entry.config as readonly GameProjectPluginEntry[], id),
-      },
-    ];
-  });
-}
-
-async function mutateDependency(
-  root: string,
-  action: 'add' | 'remove',
-  dependency: string | undefined,
-): Promise<void> {
-  if (dependency === undefined) return;
-  await execFileAsync('pnpm', [action, dependency], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
-}
-
-export async function pluginInstallCommand(
-  options: PluginInstallOptions,
-): Promise<CommandResult<unknown>> {
-  const root = resolve(options.root ?? process.cwd());
-  const manifest = await readManifest(root);
-  if (!manifest.ok) return manifest;
-  const parsed = GameProjectSchema.safeParse(manifest.value.value);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-manifest-invalid',
-        expected: 'forge.json to satisfy GameProjectSchema',
-        hint: 'Repair the manifest before installing a plugin.',
-        detail: { issues: parsed.error.issues },
-      },
-    };
-  }
-  const entries = parsed.data.plugins ?? [];
-  if (allEntries(entries).some((entry) => entry.id === options.id)) {
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-entry-id-conflict',
-        expected: 'a project-unique plugin Entry id',
-        hint: 'Choose a stable id not already present in forge.json#plugins.',
-        detail: { id: options.id },
-      },
-    };
-  }
-  const next = {
-    ...parsed.data,
-    plugins: [
-      ...entries,
-      { id: options.id, name: options.module, realm: options.realm ?? 'engine' },
-    ],
-  };
-  if (options.dryRun === true) return { ok: true, value: { root, manifest: next } };
-  try {
-    await writeManifest(root, next);
-    await mutateDependency(root, 'add', options.dependency);
-    return { ok: true, value: { root, id: options.id, module: options.module } };
-  } catch (cause) {
-    await writeFile(resolve(root, 'forge.json'), manifest.value.raw);
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-install-failed',
-        expected: 'dependency and forge.json Entry mutations to commit together',
-        hint: 'Inspect the package-manager failure; the original forge.json was restored.',
-        detail: { reason: cause instanceof Error ? cause.message : String(cause) },
-      },
-    };
-  }
-}
-
-export async function pluginUninstallCommand(
-  options: PluginUninstallOptions,
-): Promise<CommandResult<unknown>> {
-  const root = resolve(options.root ?? process.cwd());
-  const manifest = await readManifest(root);
-  if (!manifest.ok) return manifest;
-  const parsed = GameProjectSchema.safeParse(manifest.value.value);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-manifest-invalid',
-        expected: 'forge.json to satisfy GameProjectSchema',
-        hint: 'Repair the manifest before uninstalling a plugin.',
-        detail: { issues: parsed.error.issues },
-      },
-    };
-  }
-  const entries = parsed.data.plugins ?? [];
-  if (!allEntries(entries).some((entry) => entry.id === options.id)) {
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-entry-missing',
-        expected: 'the plugin Entry id to exist',
-        hint: 'Inspect forge.json#plugins and pass an installed Entry id.',
-        detail: { id: options.id },
-      },
-    };
-  }
-  const next = { ...parsed.data, plugins: withoutEntry(entries, options.id) };
-  if (options.dryRun === true) return { ok: true, value: { root, manifest: next } };
-  try {
-    await writeManifest(root, next);
-    await mutateDependency(root, 'remove', options.dependency);
-    return { ok: true, value: { root, id: options.id } };
-  } catch (cause) {
-    await writeFile(resolve(root, 'forge.json'), manifest.value.raw);
-    return {
-      ok: false,
-      error: {
-        code: 'plugin-uninstall-failed',
-        expected: 'Entry and dependency removal to commit together',
-        hint: 'Inspect the package-manager failure; the original forge.json was restored.',
-        detail: { reason: cause instanceof Error ? cause.message : String(cause) },
-      },
-    };
+    return { ok: false, error: commandError(cause, 'plugin-root-update-failed') };
+  } finally {
+    await rm(temporary, { force: true });
+    if (locked) await rm(lock, { recursive: true });
   }
 }

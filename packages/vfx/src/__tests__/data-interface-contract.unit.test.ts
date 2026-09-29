@@ -42,7 +42,15 @@ describe('VFX Data Interface contract', () => {
     ],
     [
       'stale generation',
-      [provider({ token: 'vfx:camera', kind: 'camera', bindingType: 'uniform', generation: 2 })],
+      [
+        provider({
+          token: 'vfx:camera',
+          kind: 'camera',
+          bindingType: 'uniform',
+          generation: 2,
+          resource: { kind: 'buffer', value: {}, size: 16, usage: 'uniform' },
+        }),
+      ],
       'vfx-data-interface-stale',
     ],
   ])('%s is a structured failure', (_name, providers, code) => {
@@ -63,10 +71,41 @@ describe('VFX Data Interface contract', () => {
   it('returns generation-scoped readiness for a valid provider', () => {
     const result = resolveVfxDataInterfaces(
       [camera],
-      [provider({ token: 'vfx:camera', kind: 'camera', bindingType: 'uniform' })],
+      [
+        provider({
+          token: 'vfx:camera',
+          kind: 'camera',
+          bindingType: 'uniform',
+          resource: { kind: 'buffer', value: {}, size: 16, usage: 'uniform' },
+        }),
+      ],
       7,
     );
     expect(result).toMatchObject({ ok: true, value: { generation: 7, readiness: 'ready' } });
+  });
+
+  it('rejects an opaque resource whose kind cannot satisfy the reflected binding', () => {
+    const result = resolveVfxDataInterfaces(
+      [camera],
+      [
+        provider({
+          token: 'vfx:camera',
+          kind: 'camera',
+          bindingType: 'uniform',
+          resource: { kind: 'texture-view', value: {} },
+        }),
+      ],
+      7,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('vfx-data-interface-wrong-type');
+      expect(result.error.detail).toMatchObject({
+        token: 'vfx:camera',
+        expectedResourceKind: 'buffer',
+        actualResourceKind: 'texture-view',
+      });
+    }
   });
 
   it('keeps provider failures exhaustive without parsing messages', () => {

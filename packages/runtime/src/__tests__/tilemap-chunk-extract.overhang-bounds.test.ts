@@ -275,8 +275,8 @@ describe('tilemapChunkExtractSystem overhang bounds (D2)', () => {
       proj as Parameters<typeof mat4.orthographic>[0],
       -1000,
       1000,
-      -1000,
       1000,
+      -1000,
       0.1,
       100,
     );

@@ -13,8 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "smokeInvocation": "",
-    "_smokeInvocationReason": "OOS-10 / D-7: smoke gate subset is textures + camera only; 1.2 redirects to apps/hello/triangle which already owns the dawn-node smoke anchor (PD-4 SSOT).",
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-1-getting-started-2-hello-triangle smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -29,8 +28,8 @@
         "reason": "pixel-parity bench drives parity-forgeax vs parity-threejs; learn-render entry baseline is copied from apps/hello/triangle"
       },
       "gate": {
-        "enabled": false,
-        "reason": "smoke gate subset = 4.textures + 7.camera only (D-7); 1.2 hello-triangle visual is the LO 1.2 unlit-orange minimal mapping, no pixel-parity link to apps/hello/triangle (which uses PBR grey + DirectionalLight as the engine baseline)"
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/app-learn-render-1-getting-started-2-hello-triangle smoke"
       },
       "spike-report": {
         "enabled": false,
@@ -48,7 +47,7 @@
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "vite": "8.0.10",
+    "vite": "8.0.16",
     "@webgpu/types": "^0.1.71"
   }
 }

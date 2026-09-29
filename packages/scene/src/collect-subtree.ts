@@ -14,8 +14,8 @@ export function collectSubtree(
   if (visited.has(spawnRoot as number)) return visited;
   const queue: number[] = [spawnRoot as number];
   visited.add(spawnRoot as number);
-  while (queue.length > 0) {
-    const current = queue.shift() as number;
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor] as number;
     const children = world.get(current as EntityHandle, Children);
     if (!children.ok) continue;
     const entities = children.value.entities as ArrayLike<number>;

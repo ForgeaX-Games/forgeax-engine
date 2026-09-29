@@ -21,7 +21,7 @@ const feature = {
   plan(data: FrameData, context: RenderFeaturePlanContext) {
     const count: number = data.visibleCount;
     const frameNumber: number = context.frame.frameNumber;
-    const plan: RenderFeaturePlan = { resources: [], passes: [] };
+    const plan: RenderFeaturePlan = { work: [] };
     void count;
     void frameNumber;
     return ok(plan);

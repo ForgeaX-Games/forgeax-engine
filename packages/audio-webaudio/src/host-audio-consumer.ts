@@ -8,11 +8,8 @@ import {
 import { AudioError } from '@forgeax/engine-types';
 import { WebAudioEngine } from './web-audio-engine';
 
-interface ActiveSource {
-  readonly entityId: number;
-  readonly sourceKey: string;
-  readonly bytes?: Uint8Array;
-  readonly options: AudioPlayOptions;
+interface PendingPlay {
+  options: AudioPlayOptions;
 }
 
 export interface HostAudioConsumer {
@@ -43,97 +40,126 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 interface DecodeEntry {
-  readonly promise: Promise<AudioBuffer>;
+  readonly bytes: Uint8Array;
+  promise: Promise<AudioBuffer> | undefined;
+  decodedBytes: number;
 }
 
-export function createHostAudioConsumer(engine = new WebAudioEngine()): HostAudioConsumer {
+export interface HostAudioConsumerOptions {
+  /** Encoded bytes plus decoded float samples retained by this consumer. */
+  readonly maxCachedBytes?: number;
+  readonly maxCachedSources?: number;
+  readonly maxPendingPlays?: number;
+}
+
+export function createHostAudioConsumer(
+  engine = new WebAudioEngine(),
+  options: HostAudioConsumerOptions = {},
+): HostAudioConsumer {
+  const maxCachedBytes = options.maxCachedBytes ?? 64 * 1024 * 1024;
+  const maxCachedSources = options.maxCachedSources ?? 256;
+  const maxPendingPlays = options.maxPendingPlays ?? 1024;
+  for (const limit of [maxCachedBytes, maxCachedSources, maxPendingPlays]) {
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      throw new RangeError('audio cache limits must be positive safe integers');
+  }
   const sources = new Map<string, DecodeEntry>();
-  const sourceBytes = new Map<string, Uint8Array>();
-  const activeSources = new Map<number, ActiveSource>();
-  const entityEpoch = new Map<number, number>();
-  const bus = {
-    sfx: { volume: 1, muted: false },
-    music: { volume: 1, muted: false },
-  };
-  const cleanup: number[] = [];
-  let lastError: AudioError | null = null;
+  const cachedBytes = () =>
+    [...sources.values()].reduce(
+      (bytes, source) => bytes + source.bytes.byteLength + source.decodedBytes,
+      0,
+    );
+  const pendingPlays = new Map<number, PendingPlay>();
+  let lastError: { sourceKey: string; error: AudioError } | undefined;
   let disposed = false;
-  const nextEpoch = (entityId: number): number => {
-    const epoch = (entityEpoch.get(entityId) ?? 0) + 1;
-    entityEpoch.set(entityId, epoch);
-    return epoch;
-  };
   const consumer: HostAudioConsumer = {
     engine,
     consume(intent): void {
       if (disposed && intent.kind !== 'destroy') return;
       if (intent.kind === 'play') {
-        const epoch = nextEpoch(intent.entityId);
-        if (intent.bytes !== undefined) {
-          const incomingBytes = intent.bytes.slice();
-          const publishedBytes = sourceBytes.get(intent.sourceKey);
-          if (publishedBytes === undefined || !sameBytes(publishedBytes, incomingBytes)) {
-            sourceBytes.set(intent.sourceKey, incomingBytes);
-            sources.delete(intent.sourceKey);
+        const fail = (cause: unknown) => {
+          lastError = { sourceKey: intent.sourceKey, error: decodeError(intent.sourceKey, cause) };
+        };
+        let entry = sources.get(intent.sourceKey);
+        if (
+          intent.bytes !== undefined &&
+          (entry === undefined || !sameBytes(entry.bytes, intent.bytes))
+        ) {
+          const replacedBytes =
+            entry === undefined ? 0 : entry.bytes.byteLength + entry.decodedBytes;
+          if (
+            (entry === undefined && sources.size >= maxCachedSources) ||
+            cachedBytes() - replacedBytes + intent.bytes.byteLength > maxCachedBytes
+          ) {
+            pendingPlays.delete(intent.entityId);
+            fail(
+              'audio cache budget exceeded; reuse published clips or create a Host with a larger budget',
+            );
+            return;
           }
-        }
-        const bytes = sourceBytes.get(intent.sourceKey);
-        activeSources.set(intent.entityId, {
-          entityId: intent.entityId,
-          sourceKey: intent.sourceKey,
-          ...(bytes === undefined ? {} : { bytes: bytes.slice() }),
-          options: intent.options,
-        });
-        let decoded = sources.get(intent.sourceKey);
-        if (decoded === undefined && bytes !== undefined) {
-          const entry: DecodeEntry = {
-            promise: engine.decode(bytes),
-          };
-          decoded = entry;
+          entry = { bytes: intent.bytes.slice(), promise: undefined, decodedBytes: 0 };
           sources.set(intent.sourceKey, entry);
-          void entry.promise.then(
-            () => {
-              if (sources.get(intent.sourceKey) === entry && lastError?.code === 'decode-failed') {
-                lastError = null;
-              }
-            },
-            (cause) => {
-              if (sources.get(intent.sourceKey) !== entry) return;
-              sources.delete(intent.sourceKey);
-              lastError = decodeError(intent.sourceKey, cause);
-            },
-          );
         }
-        if (decoded === undefined) {
-          lastError = decodeError(intent.sourceKey, new Error('sourceKey was not published'));
+        if (!pendingPlays.has(intent.entityId) && pendingPlays.size >= maxPendingPlays) {
+          fail('maxPendingPlays reached; stop pending entities or increase the Host budget');
           return;
         }
-        const currentDecode = decoded;
-        void currentDecode.promise
+        const pending: PendingPlay = { options: { ...intent.options } };
+        pendingPlays.set(intent.entityId, pending);
+        if (entry === undefined) {
+          pendingPlays.delete(intent.entityId);
+          fail('sourceKey was not published');
+          return;
+        }
+        const current = entry;
+        if (current.promise === undefined) {
+          // Decode is owned by the source publication, never by one entity.
+          try {
+            current.promise = engine.decode(current.bytes).then((buffer) => {
+              if (sources.get(intent.sourceKey) !== current) return buffer;
+              const bytes = (buffer.length ?? 0) * (buffer.numberOfChannels ?? 0) * 4;
+              if (cachedBytes() + bytes > maxCachedBytes)
+                throw new Error('decoded audio exceeds maxCachedBytes');
+              current.decodedBytes = bytes;
+              if (lastError?.sourceKey === intent.sourceKey) lastError = undefined;
+              return buffer;
+            });
+          } catch (cause) {
+            pendingPlays.delete(intent.entityId);
+            fail(cause);
+            return;
+          }
+          void current.promise.catch((cause) => {
+            if (sources.get(intent.sourceKey) !== current) return;
+            current.promise = undefined;
+            fail(cause);
+          });
+        }
+        void current.promise
           .then((buffer) => {
             if (
               !disposed &&
-              sources.get(intent.sourceKey) === currentDecode &&
-              entityEpoch.get(intent.entityId) === epoch
+              sources.get(intent.sourceKey) === current &&
+              pendingPlays.get(intent.entityId) === pending
             ) {
-              engine.play(intent.entityId, buffer, intent.options);
+              engine.play(intent.entityId, buffer, pending.options);
             }
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => {
+            if (pendingPlays.get(intent.entityId) === pending) pendingPlays.delete(intent.entityId);
+          });
       } else if (intent.kind === 'stop') {
-        nextEpoch(intent.entityId);
-        if (activeSources.delete(intent.entityId)) {
-          cleanup.push(intent.entityId);
-          engine.stop(intent.entityId);
-        }
+        pendingPlays.delete(intent.entityId);
+        engine.stop(intent.entityId);
       } else if (intent.kind === 'set-volume') {
+        if (!Number.isFinite(intent.volume) || intent.volume < 0) return;
+        const pending = pendingPlays.get(intent.entityId);
+        if (pending !== undefined) pending.options = { ...pending.options, volume: intent.volume };
         engine.setVolume(intent.entityId, intent.volume);
       } else if (intent.kind === 'set-bus-volume') {
-        bus[intent.bus].volume = intent.volume;
-        bus[intent.bus].muted = false;
         engine.setBusVolume(intent.bus, intent.volume);
       } else if (intent.kind === 'set-bus-mute') {
-        bus[intent.bus].muted = intent.muted;
         engine.setBusMute(intent.bus, intent.muted);
       } else if (intent.kind === 'set-listener-pose') {
         engine.setListenerPose(intent.pose);
@@ -142,16 +168,15 @@ export function createHostAudioConsumer(engine = new WebAudioEngine()): HostAudi
       }
     },
     state(): AudioState {
-      return { ...engine.getState(), lastError };
+      const state = engine.getState();
+      return { ...state, lastError: state.lastError ?? lastError?.error ?? null };
     },
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      activeSources.clear();
-      entityEpoch.clear();
+      pendingPlays.clear();
       sources.clear();
-      sourceBytes.clear();
-      cleanup.length = 0;
+      lastError = undefined;
       engine.destroy();
     },
   };

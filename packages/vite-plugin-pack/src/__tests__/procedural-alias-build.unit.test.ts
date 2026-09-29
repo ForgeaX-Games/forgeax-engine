@@ -49,7 +49,7 @@ describe('unregistered source providers', () => {
         },
         plugins: [pluginPack({ roots: [assets] })],
       }),
-    ).rejects.toThrow(/source-package-guid-closure-mismatch/);
+    ).rejects.toThrow(/importer-not-registered:.*meta.importer "gltf"/);
   });
 
   it('lets the registered producer omit a buildless alias from the Catalog', async () => {

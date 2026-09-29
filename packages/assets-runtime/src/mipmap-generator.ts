@@ -45,7 +45,15 @@
 //   - `numMipLevels` is pure (no device argument); the WeakMap lookup only
 //     happens at pipeline-create time.
 
-import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
+import {
+  type CommandBuffer,
+  err,
+  ok,
+  type Result,
+  type RhiCommandEncoder,
+  RhiError,
+  type RhiRenderPassEncoder,
+} from '@forgeax/engine-rhi';
 
 /**
  * Subset of `RhiDevice` consumed by the mipmap utility (charter F2: only
@@ -295,33 +303,30 @@ export type MipmapBlitDevice = MipmapDevice & {
   };
 };
 
-function recordMipmapBlit<E>(
+function encodeMipmapBlit(
   device: MipmapBlitDevice,
+  encoder: RhiCommandEncoder,
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
   texture: any,
   levels: number,
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
   pipeline: any,
   cache: MipmapPipelineCache,
-): Result<void, E> {
-  const encoderRes = device.createCommandEncoder({ label: 'mipmap-encoder' });
-  if (!encoderRes.ok) return encoderRes;
-  const encoder = encoderRes.value;
-
+): Result<void, RhiError> {
   for (let i = 1; i < levels; i++) {
     const srcViewRes = device.createTextureView(texture, {
       baseMipLevel: i - 1,
       mipLevelCount: 1,
       dimension: '2d',
     });
-    if (!srcViewRes.ok) return srcViewRes;
+    if (!srcViewRes.ok) return srcViewRes as Result<void, RhiError>;
 
     const dstViewRes = device.createTextureView(texture, {
       baseMipLevel: i,
       mipLevelCount: 1,
       dimension: '2d',
     });
-    if (!dstViewRes.ok) return dstViewRes;
+    if (!dstViewRes.ok) return dstViewRes as Result<void, RhiError>;
 
     const bindGroupRes = device.createBindGroup({
       label: `mipmap-bg-${i}`,
@@ -331,7 +336,7 @@ function recordMipmapBlit<E>(
         { binding: 1, resource: { kind: 'textureView', value: srcViewRes.value } },
       ],
     });
-    if (!bindGroupRes.ok) return bindGroupRes;
+    if (!bindGroupRes.ok) return bindGroupRes as Result<void, RhiError>;
 
     const pass = encoder.beginRenderPass({
       label: `mipmap-pass-${i}`,
@@ -350,9 +355,97 @@ function recordMipmapBlit<E>(
     pass.end();
   }
 
-  const finishRes = encoder.finish();
-  if (!finishRes.ok) return finishRes;
-  return device.queue.submit([finishRes.value]);
+  return ok(undefined);
+}
+
+/**
+ * A caller-owned mip transaction. Preparation records render passes into one
+ * encoder but never finishes or submits it; the recovery owner decides when
+ * the setup command buffer crosses its candidate generation boundary.
+ */
+export interface MipmapEncoderWork {
+  readonly finish: () => Result<CommandBuffer | undefined, RhiError>;
+  /** Close unsubmitted encoder work when its candidate transaction aborts. */
+  readonly discard: () => void;
+}
+
+/**
+ * Prepare a prewarmed mip chain without creating a hidden submission.
+ * `finish()` is the explicit transaction boundary and is intentionally
+ * separate from `queue.submit()` so recovery can guard candidate ownership.
+ */
+export function prepareMipmaps(
+  device: MipmapBlitDevice,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
+  texture: any,
+  descriptor: {
+    readonly format: GPUTextureFormat;
+    readonly width: number;
+    readonly height: number;
+    readonly levels?: number;
+  },
+): Result<MipmapEncoderWork, RhiError> {
+  const levels = descriptor.levels ?? numMipLevels(descriptor);
+  if (levels <= 1) return ok({ finish: () => ok(undefined), discard: () => undefined });
+
+  const cache = deviceCache.get(device);
+  if (cache === undefined) {
+    return err(
+      new RhiError({
+        code: 'rhi-not-available',
+        expected: 'mipmap pipeline cache prewarmed for this device before prepareMipmaps',
+        hint: 'call prewarmMipmapPipeline(device, formats) before preparing recovery mip work',
+      }),
+    );
+  }
+  const pipeline = cache.pipelines.get(descriptor.format);
+  if (pipeline === undefined) {
+    return err(
+      new RhiError({
+        code: 'rhi-not-available',
+        expected: `mipmap pipeline for format ${descriptor.format} prewarmed`,
+        hint: `format ${descriptor.format} was not prewarmed; add it to the prewarmMipmapPipeline format list`,
+      }),
+    );
+  }
+  const encoderRes = device.createCommandEncoder({ label: 'mipmap-recovery-setup-encoder' });
+  if (!encoderRes.ok) return encoderRes as Result<MipmapEncoderWork, RhiError>;
+  const encoded = encodeMipmapBlit(device, encoderRes.value, texture, levels, pipeline, cache);
+  if (!encoded.ok) {
+    try {
+      encoderRes.value.finish();
+    } catch {
+      // The preparation error is authoritative; the encoder has no separate
+      // abort operation, so best-effort close is the only cleanup boundary.
+    }
+    return encoded;
+  }
+  let closed = false;
+  return ok({
+    finish: () => {
+      if (closed) {
+        return err(
+          new RhiError({
+            code: 'webgpu-runtime-error',
+            expected: 'mipmap recovery setup work is finished at most once',
+            hint: 'discard the candidate transaction after finish and do not reuse its encoder',
+          }),
+        );
+      }
+      closed = true;
+      return encoderRes.value.finish();
+    },
+    discard: () => {
+      if (closed) return;
+      closed = true;
+      try {
+        encoderRes.value.finish();
+      } catch {
+        // Candidate cleanup is idempotent and does not submit the discarded
+        // command buffer.
+      }
+    },
+  });
 }
 
 /**
@@ -392,11 +485,11 @@ export async function generateMipmaps(
     asyncCreateShaderModule,
   );
   if (!pipelineRes.ok) return pipelineRes;
-  const cache = deviceCache.get(device);
-  if (cache === undefined) {
-    return err({ code: 'webgpu-runtime-error', message: 'mipmap cache missing after create' });
-  }
-  return recordMipmapBlit<unknown>(device, texture, levels, pipelineRes.value, cache);
+  const prepared = prepareMipmaps(device, texture, descriptor);
+  if (!prepared.ok) return prepared;
+  const finished = prepared.value.finish();
+  if (!finished.ok) return finished;
+  return finished.value === undefined ? ok(undefined) : device.queue.submit([finished.value]);
 }
 
 /**
@@ -425,26 +518,51 @@ export function blitMipmapsSync(
   const levels = descriptor.levels ?? numMipLevels(descriptor);
   if (levels <= 1) return ok(undefined);
 
+  const prepared = prepareMipmaps(device, texture, descriptor);
+  if (!prepared.ok) return prepared;
+  const finished = prepared.value.finish();
+  if (!finished.ok) return finished;
+  return finished.value === undefined ? ok(undefined) : device.queue.submit([finished.value]);
+}
+
+/** Encode one prewarmed mip level into a caller-owned graph render pass. */
+export function encodeMipmapLevel(
+  device: MipmapBlitDevice,
+  pass: RhiRenderPassEncoder,
+  sourceView: unknown,
+  format: GPUTextureFormat,
+): Result<void, RhiError> {
   const cache = deviceCache.get(device);
   if (cache === undefined) {
     return err(
       new RhiError({
         code: 'rhi-not-available',
-        expected: 'mipmap pipeline cache prewarmed for this device before blitMipmapsSync',
-        hint: 'call prewarmMipmapPipeline(device, formats) at renderer.ready before the synchronous record-stage mipmap blit',
+        expected: 'mipmap pipeline cache prewarmed for the graph device before encoding',
+        hint: 'call prewarmMipmapPipeline(device, formats) at renderer.ready',
       }),
     );
   }
-  const pipeline = cache.pipelines.get(descriptor.format);
+  const pipeline = cache.pipelines.get(format);
   if (pipeline === undefined) {
     return err(
       new RhiError({
         code: 'rhi-not-available',
-        expected: `mipmap pipeline for format ${descriptor.format} prewarmed`,
-        hint: `format ${descriptor.format} was not prewarmed; add it to the prewarmMipmapPipeline format list at renderer.ready`,
+        expected: `mipmap pipeline for format ${format} prewarmed`,
+        hint: `format ${format} was not prewarmed; add it to the renderer prewarm list`,
       }),
     );
   }
-
-  return recordMipmapBlit<RhiError>(device, texture, levels, pipeline, cache);
+  const bindGroup = device.createBindGroup({
+    label: 'mipmap-graph-bind-group',
+    layout: cache.layout,
+    entries: [
+      { binding: 0, resource: { kind: 'sampler', value: cache.sampler } },
+      { binding: 1, resource: { kind: 'textureView', value: sourceView } },
+    ],
+  });
+  if (!bindGroup.ok) return bindGroup;
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup.value);
+  pass.draw(3, 1, 0, 0);
+  return ok(undefined);
 }

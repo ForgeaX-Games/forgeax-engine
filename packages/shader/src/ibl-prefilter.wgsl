@@ -11,7 +11,7 @@
 // @group(0) layout (dual uniform -- the (b3) compose test in the round-2
 // dawn suite exercises this ordering):
 //   binding(0) = CubemapFaceUniforms { viewProj }      (per-face)
-//   binding(1) = PrefilterUniforms   { roughness, faceSize, _pad0, _pad1 }
+//   binding(1) = PrefilterUniforms   { roughness, faceSize, sourceMipLevelCount, sourceIsCameraCube }
 // @group(1) = env cubemap + sampler. Same shape as ibl-irradiance, but
 //             physically isolated -- both bind @binding(0) to a texture_cube
 //             inside *their own* module without colliding because round-2
@@ -36,9 +36,11 @@ struct CubemapFaceUniforms {
 struct PrefilterUniforms {
   roughness: f32,
   faceSize: f32,
-  // Keep the uniform block 16-byte aligned on WebGL2 downlevel backends.
-  _pad0: f32,
-  _pad1: f32,
+  // Actual mip count of the source cube bound at group(1). The source cube is
+  // currently base-level-only; the value prevents sampling an unallocated mip.
+  sourceMipLevelCount: f32,
+  // Camera captures and image cubes have distinct per-face orientations.
+  sourceIsCameraCube: f32,
 };
 
 @group(0) @binding(0) var<uniform> faceUniforms: CubemapFaceUniforms;
@@ -48,6 +50,7 @@ struct PrefilterUniforms {
 @group(1) @binding(1) var envSamplerS: sampler;
 
 const PREFILTER_SAMPLE_COUNT: u32 = 1024u;
+const PREFILTER_MIP_LEVEL_COUNT: f32 = 5.0;
 
 @vertex
 fn cubemap_vs(in0: CubemapVsIn) -> CubemapVsOut {
@@ -78,20 +81,38 @@ fn prefilterEnv_fs(in0: CubemapVsOut) -> @location(0) vec4<f32> {
       let D0 = iblDGGX(max(dot(N, H), 0.0), roughness);
       let NdotH0 = max(dot(N, H), 0.0);
       let HdotV = max(dot(H, V), 0.0);
-      let pdf = D0 * NdotH0 / (4.0 * HdotV) + 0.0001;
+      // A grazing half-vector can make HdotV exactly zero. Keep the PDF
+      // finite so the mip calculation cannot feed NaN into textureSampleLevel.
+      let pdf = D0 * NdotH0 / max(4.0 * HdotV, 0.0001) + 0.0001;
 
       let resolution: f32 = 512.0;
       let saTexel = 4.0 * PI / (6.0 * resolution * resolution);
       let saSample = 1.0 / (f32(PREFILTER_SAMPLE_COUNT) * pdf + 0.0001);
 
-      let mipLevel = select(
+      let requestedMipLevel = min(select(
         0.5 * log2(saSample / saTexel),
         0.0,
         roughness == 0.0,
+      ), PREFILTER_MIP_LEVEL_COUNT - 1.0);
+      let mipLevel = clamp(
+        requestedMipLevel,
+        0.0,
+        max(prefUniforms.sourceMipLevelCount - 1.0, 0.0),
       );
 
+      // A CubeCamera uses ordinary view projections. Convert its per-face
+      // horizontal orientation once at the PMREM producer boundary, before
+      // publishing a canonical cube to material sampling.
+      var sourceDirection = L;
+      if (prefUniforms.sourceIsCameraCube > 0.5) {
+        if (abs(L.x) >= max(abs(L.y), abs(L.z))) {
+          sourceDirection.z = -sourceDirection.z;
+        } else {
+          sourceDirection.x = -sourceDirection.x;
+        }
+      }
       prefilteredColor += textureSampleLevel(
-        envCube, envSamplerS, L, mipLevel,
+        envCube, envSamplerS, sourceDirection, mipLevel,
       ).rgb * NdotL;
       totalWeight += NdotL;
     }

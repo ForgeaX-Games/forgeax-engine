@@ -193,17 +193,17 @@ async function handleCatalogDelta(
   commit: (blob: ReelGameBlob) => void,
   readLastKnownGood: () => ReelGameBlob | undefined,
 ): Promise<void> {
-  if (delta.authority === 'degraded') {
-    const diagnostic = delta.diagnostics?.[0];
+  const row = [...delta.added, ...delta.changed].find(
+    (entry) => entry.guid.toLowerCase() === REEL_GAME_LEVEL_1_GUID,
+  );
+  if (delta.authority === 'degraded' || row?.lifecycle === 'failed') {
+    const diagnostic = delta.diagnostics?.[0] ?? row?.diagnostics?.[0];
     const title = readLastKnownGood()?.title ?? 'none';
     const code = diagnostic?.code ?? 'catalog-degraded';
     setAssetStatus(`catalog rejected code=${code} retained title=${JSON.stringify(title)}`);
     console.warn(`[custom-importer] catalog rejected code=${code} retained title=${JSON.stringify(title)}`);
     return;
   }
-  const row = [...delta.added, ...delta.changed].find(
-    (entry) => entry.guid.toLowerCase() === REEL_GAME_LEVEL_1_GUID,
-  );
   if (row === undefined) return;
 
   const recovered = await assets.reconcileCatalog();

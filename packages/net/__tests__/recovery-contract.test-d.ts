@@ -1,3 +1,5 @@
+declare const snapshot: NetRecoverySnapshot;
+declare const outcome: NetRecoveryOutcome;
 import { expectTypeOf, test } from 'vitest';
 import type {
   NetEndpointConnector,
@@ -15,7 +17,6 @@ type ExpectedStateKind =
   | 'failed'
   | 'retired';
 
-declare const sessionId: SessionId;
 declare const state: NetSessionState;
 
 test('the public lifecycle is a closed, session-owned union', () => {
@@ -44,7 +45,6 @@ test('the public lifecycle is a closed, session-owned union', () => {
 });
 
 test('recovery snapshots expose bounded accounting and accepted identity', () => {
-  declare const snapshot: NetRecoverySnapshot;
   expectTypeOf(snapshot.sessionId).toEqualTypeOf<SessionId>();
   expectTypeOf(snapshot.state).toEqualTypeOf<NetSessionState>();
   expectTypeOf(snapshot.pendingPackets).toEqualTypeOf<number>();
@@ -59,7 +59,6 @@ test('connector is a realm-neutral async capability', () => {
 });
 
 test('recovery outcomes are closed and idempotent', () => {
-  declare const outcome: NetRecoveryOutcome;
   switch (outcome.kind) {
     case 'started':
     case 'already-recovering':

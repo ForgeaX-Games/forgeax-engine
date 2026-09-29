@@ -17,7 +17,7 @@ import { Update } from '@forgeax/engine-ecs';
 // on AND tsconfig-references all five (ecs/input/physics-rapier2d/
 // physics-rapier3d/runtime/state), so this is the only viable home.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
@@ -184,22 +184,31 @@ describe('builtin-systems.test.ts', () => {
   // bare string appears ONLY at its `export const ... = '...' as const`
   // definition site, nowhere else in source. dist/ skipped (O-1 dist-staleness).
   describe('w29 (AC-16): new resource keys are never used as bare strings', () => {
-    const SKIP_DIRS = new Set(['dist', 'node_modules', '.turbo', 'coverage', '.git']);
+    const SKIP_DIRS = new Set([
+      'dist',
+      'node_modules',
+      '.turbo',
+      'coverage',
+      '.git',
+      '__tests__',
+      'scripts',
+      'evidence',
+      'artifacts',
+    ]);
     const KEY_VALUES = [{ value: 'InputBackend', defFile: 'packages/input/src/frame-start-scan-system.ts' }] as const;
 
     function listSources(dir: string, out: string[]): void {
-      let entries: string[];
+      let entries: import('node:fs').Dirent[];
       try {
-        entries = readdirSync(dir);
+        entries = readdirSync(dir, { withFileTypes: true });
       } catch {
         return;
       }
-      for (const e of entries) {
-        if (SKIP_DIRS.has(e)) continue;
-        const p = join(dir, e);
-        const st = statSync(p);
-        if (st.isDirectory()) listSources(p, out);
-        else if (/\.(ts|mjs)$/.test(p) && !p.endsWith('.d.ts')) out.push(p);
+      for (const entry of entries) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) listSources(p, out);
+        else if (entry.isFile() && /\.(ts|mjs)$/.test(p) && !p.endsWith('.d.ts')) out.push(p);
       }
     }
 

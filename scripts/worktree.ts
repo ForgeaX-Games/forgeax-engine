@@ -212,9 +212,13 @@ function isGitCheckout(path: string): boolean {
   return Boolean(topLevel && head && resolve(topLevel) === resolve(path));
 }
 
-function submoduleReference(commonRoot: string): string | undefined {
+function isShallowGitCheckout(path: string): boolean {
+  return gitOutput(['rev-parse', '--is-shallow-repository'], path) === 'true';
+}
+
+export function submoduleReference(commonRoot: string): string | undefined {
   const assetsRoot = join(commonRoot, 'forgeax-engine-assets');
-  return isGitCheckout(assetsRoot) ? assetsRoot : undefined;
+  return isGitCheckout(assetsRoot) && !isShallowGitCheckout(assetsRoot) ? assetsRoot : undefined;
 }
 
 function initializeSubmodules(targetRoot: string, commonRoot: string, jobs: number): void {

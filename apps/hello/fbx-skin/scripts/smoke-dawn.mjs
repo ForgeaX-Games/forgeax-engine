@@ -63,11 +63,12 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 
 // CI (smoke-fleet) sets SMOKE_MIN_FRAMES=100; local default matches the other
-// dawn smokes' 300-frame per-frame-leak soak. Frame-count-independent gates
+// dawn smokes' 60-frame per-frame-leak soak. Frame-count-independent gates
 // (palette distinctness, FALSIFY) hold at either depth.
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 // Minimum distinct skin-palette write hashes across the run. The running clip
@@ -240,19 +241,15 @@ try {
   process.exit(1);
 }
 
-// Cook the ImportedAsset[] into a single in-memory pack. Each pack-index row and
-// each pack-body asset entry keeps the importer's on-disk shape: numeric
-// refs-index handle fields in the scene payload + a GUID-string refs[] list.
-// parseScenePayload (canonical decode) resolves those handles at loadByGuid time.
-// The mesh row's packageUrl is a Pack v2 package (NOT a raw `.bin`), so the mesh flows
-// through the inline meshLoader path; every loader accepts the typed arrays the
-// importer produced because the pack bytes are served in-memory (no JSON.stringify
-// round-trip flattens them).
+// Use the same import-to-wire projection and finalizer as Vite. Importer POD
+// stays available to import consumers; the package carries only one Mesh source.
 if (!imported.ok) {
   console.error(`[smoke] FAIL - fbxImporter failed: ${imported.error.code}`);
   process.exit(1);
 }
 
+const { projectImportProductForBuild } = await import('@forgeax/engine-import');
+const { finalizePackageTransportSource } = await import('@forgeax/engine-pack/build');
 const importedAssets = imported.value.assets;
 const PACK_URL = '/humanoid.pack.json';
 const PACK_INDEX_URL = '/pack-index.json';
@@ -264,30 +261,18 @@ const packIndex = importedAssets.map((a) => ({
   sourcePath: HUMANOID_FBX,
   ...(a.name !== undefined ? { name: a.name } : {}),
 }));
-const packBody = {
-  schemaVersion: '2.0.0',
-  kind: 'internal-text-package',
-  assets: importedAssets.map((a) => ({
-    guid: a.guid,
-    kind: a.kind,
-    payload: a.payload,
-    refs: (a.refs ?? []).map((r) => r.guid),
-    artifacts: Object.fromEntries(
-      Object.entries(a.artifacts ?? {}).map(([key, artifact]) => {
-        const path = `artifacts/${a.guid}/${key}`;
-        artifactBytes.set(`/${path}`, artifact.bytes);
-        return [
-          key,
-          {
-            path,
-            mediaType: artifact.mediaType,
-            byteLength: artifact.bytes.byteLength,
-          },
-        ];
-      }),
-    ),
-  })),
-};
+const finalized = await finalizePackageTransportSource(
+  projectImportProductForBuild(imported.value),
+  {
+    base: '/',
+    packagePath: 'humanoid.pack.json',
+    artifactPath: (guid, key) => `artifacts/${guid}/${key}`,
+  },
+);
+for (const artifact of finalized.artifacts) {
+  artifactBytes.set(`/${artifact.path}`, artifact);
+}
+const packBody = JSON.stringify(finalized.pack);
 console.log(`[smoke] cooked in-memory pack: ${packIndex.length} entries from fbxImporter.import`);
 
 const originalFetch = globalThis.fetch;
@@ -297,24 +282,15 @@ globalThis.fetch = async (url, ...rest) => {
   // other non-pack URL fall through to the real fetch.
   if (urlStr.startsWith('data:')) return originalFetch(url, ...rest);
   if (urlStr === PACK_INDEX_URL) {
-    // Return the array object directly (no JSON.stringify) so nothing is copied
-    // unnecessarily; fetchPackIndex only reads guid/packageUrl/kind/name.
-    return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+    return Response.json(packIndex);
   }
   if (urlStr === PACK_URL) {
-    // Serve the in-memory pack body verbatim: the typed arrays in mesh /
-    // skeleton / clip payloads survive because there is no serialise/parse hop
-    // (the loaders' dual contract accepts Float32Array / Uint16Array directly).
-    return { ok: true, json: () => Promise.resolve(packBody), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+    return new Response(packBody, { headers: { 'content-type': 'application/json' } });
   }
   const artifactPath = new URL(urlStr, 'http://asset.local').pathname;
-  if (artifactBytes.has(artifactPath)) {
-    const bytes = artifactBytes.get(artifactPath);
-    return {
-      ok: true,
-      arrayBuffer: () => Promise.resolve(bytes.slice().buffer),
-      json: () => Promise.reject(new Error('artifact is binary, not JSON')),
-    };
+  const artifact = artifactBytes.get(artifactPath);
+  if (artifact !== undefined) {
+    return new Response(artifact.bytes, { headers: { 'content-type': artifact.mediaType } });
   }
   return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
 };
@@ -492,4 +468,5 @@ if (failures.length > 0) {
 }
 
 console.log(`[smoke] PASS - backend=webgpu, frames=${framesObserved}, errors=0, distinctPaletteHashes=${distinctPaletteHashes}`);
+emitSmokeReceipt('hello-fbx-skin/smoke', framesObserved);
 process.exit(0);

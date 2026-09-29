@@ -11,7 +11,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!result.ok) return console.error('[bevy-sprite-slice] createApp failed:', result.error);
   const app = result.value;
   const pixels = makeSlicePixels();
-  const texture = { kind: 'texture' as const, width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb' as const, data: pixels, colorSpace: 'srgb' as const, mipmap: false };
+  const texture = {
+    kind: 'texture' as const,
+    shape: { viewDimension: '2d' as const, extent: { width: TEXTURE_SIZE, height: TEXTURE_SIZE } },
+    format: 'rgba8unorm-srgb' as const,
+    data: pixels,
+    colorSpace: 'srgb' as const,
+    mips: { kind: 'none' as const },
+  };
   const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
   buildSpriteSliceWorld(app.world, unwrapHandle(textureHandle));
   const started = app.start();

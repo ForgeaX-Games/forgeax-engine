@@ -9,11 +9,20 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { runnerResources, workspaceConcurrency } from './lib/runner-resources.mjs';
+import {
+  readMemoryPressureDiagnostics,
+  runnerResources,
+  workspaceConcurrency,
+} from './lib/runner-resources.mjs';
 
 const VALID_STATUS = new Set(['partial', 'implemented', 'shelved']);
 const STANDARD_SMOKE_COMMAND = 'node scripts/smoke-dawn.mjs';
 const SMOKE_PASS_MARKER = '[smoke] PASS';
+// Keep the build phase bounded on shared CI runners; native Dawn children are
+// serialized in a separate phase below, preserving the complete three-shard
+// roster and explicit concurrency flag without overlapping memory domains.
+const AUTO_SMOKE_MAX_CONCURRENCY = 2;
+const SMOKE_REAP_DELAY_MS = 50;
 const SMOKE_LIFECYCLE_MODULE = resolve(
   dirname(fileURLToPath(import.meta.url)),
   'bevy-smoke-lifecycle.mjs',
@@ -375,11 +384,20 @@ export function validateDemoApps(root, { includeNonDedicated = false } = {}) {
           'print [smoke] PASS after all evidence assertions pass',
         );
       }
-      if (smoke !== expectedSmoke || gate !== expectedSmoke) {
+      // Dedicated apps/bevy apps run in the Bevy fleet, which invokes the
+      // standard smoke. Other apps own their smoke membership elsewhere (Dawn
+      // roster, dedicated CI job), so any smoke* script of their own package
+      // is valid as long as smoke and gate name the same command.
+      const ownScript =
+        typeof smoke === 'string' ? smoke.match(/^pnpm --filter (\S+) (smoke\S*)$/) : null;
+      const valid = dedicated
+        ? smoke === expectedSmoke
+        : ownScript?.[1] === pkg.name && typeof pkg?.scripts?.[ownScript[2]] === 'string';
+      if (!valid || gate !== smoke) {
         fail(
           'bevy-demo-projection-stale',
           `${relative(root, pkgPath)} derives smoke metadata from package identity`,
-          `smoke=${JSON.stringify(smoke)} gate=${JSON.stringify(gate)} expected=${JSON.stringify(expectedSmoke)}`,
+          `smoke=${JSON.stringify(smoke)} gate=${JSON.stringify(gate)} expected=${JSON.stringify(dedicated ? expectedSmoke : `pnpm --filter ${pkg.name} <smoke script>`)}`,
         );
       }
     } else if (smoke !== undefined || gate !== undefined) {
@@ -457,16 +475,17 @@ function parseGroup(value, groups) {
   return group;
 }
 
+export function autoSmokeConcurrency({ cpus, memoryBytes }) {
+  return Math.min(
+    AUTO_SMOKE_MAX_CONCURRENCY,
+    workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 3 }),
+  );
+}
+
 function parseConcurrency(value) {
   if (value === 'auto') {
     const { cpus, memoryBytes, containerized } = runnerResources();
-    const concurrency = Math.min(
-      4,
-      // A Bevy build plus a Dawn smoke can peak above 2 GB. Keep the
-      // low-memory 4 CPU / 8 GB runner at two workers while retaining up to
-      // four workers on the larger Ubuntu runners.
-      workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 3 }),
-    );
+    const concurrency = autoSmokeConcurrency({ cpus, memoryBytes });
     process.stderr.write(
       `[bevy-smoke] auto concurrency=${concurrency} (${cpus} cpu, ${Math.ceil(memoryBytes / 1024 ** 3)}GB, ${containerized ? 'cgroup' : 'host'})\n`,
     );
@@ -499,11 +518,19 @@ export function runNodeSmoke(root, app) {
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, ['--import', SMOKE_LIFECYCLE_MODULE, script], {
       cwd: app.dir,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
     });
     let passObserved = false;
+    let successExitObserved = false;
+    let failureExitObserved = false;
+    let reapRequested = false;
     let outputTail = '';
     let forceExitTimer;
+    const requestReap = () => {
+      if (reapRequested || child.exitCode !== null || child.signalCode !== null) return;
+      reapRequested = true;
+      child.kill('SIGKILL');
+    };
     const forward = (chunk, stream) => {
       const text = chunk.toString();
       stream.write(text);
@@ -512,15 +539,32 @@ export function runNodeSmoke(root, app) {
       if (!passObserved && searchable.includes(SMOKE_PASS_MARKER)) {
         passObserved = true;
         // A native WebGPU child can keep Node alive after its evidence gate.
-        // Give stdout a brief flush window, then reap it at this process boundary.
-        forceExitTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+        // The lifecycle control pipe normally gives us an exact exit boundary;
+        // retain a short fallback for test modules that only print PASS.
+        if (failureExitObserved) return;
+        if (successExitObserved) {
+          requestReap();
+          return;
+        }
+        forceExitTimer = setTimeout(requestReap, SMOKE_REAP_DELAY_MS);
         forceExitTimer.unref();
       }
     };
     child.stdout.on('data', (chunk) => forward(chunk, process.stdout));
     child.stderr.on('data', (chunk) => forward(chunk, process.stderr));
+    child.stdio[3]?.on('data', (chunk) => {
+      for (const line of chunk.toString().split('\n')) {
+        if (line === '0') {
+          successExitObserved = true;
+          if (passObserved) requestReap();
+        } else if (line !== '' && Number.isInteger(Number(line))) {
+          failureExitObserved = true;
+          if (forceExitTimer) clearTimeout(forceExitTimer);
+        }
+      }
+    });
     child.once('error', (error) => resolveRun({ status: null, error }));
-    child.once('exit', (code, signal) => {
+    child.once('close', (code, signal) => {
       if (forceExitTimer) clearTimeout(forceExitTimer);
       const status = passObserved && signal === 'SIGKILL' ? 0 : code === 0 ? 1 : code;
       resolveRun({ status, signal });
@@ -528,7 +572,7 @@ export function runNodeSmoke(root, app) {
   });
 }
 
-async function runSmokePair(root, app) {
+async function buildApp(root, app) {
   const pkg = app.pkg;
   const args = ['--filter', pkg.name, 'build'];
   process.stdout.write(`[bevy-smoke] pnpm ${args.join(' ')}\n`);
@@ -542,7 +586,12 @@ async function runSmokePair(root, app) {
       `[bevy-smoke] ${pkg.name} build failed with ${result.error?.message ?? result.signal ?? result.status}`,
     );
   }
+}
+
+async function runSmokeApp(root, app) {
+  const pkg = app.pkg;
   const smokeArgs = ['--filter', pkg.name, 'smoke'];
+  let result;
   // Standard Dawn smokes are already direct Node entry points. Running them
   // outside pnpm avoids a package-manager lifecycle wrapper retaining native
   // Dawn descendants after the smoke has emitted its PASS evidence.
@@ -553,10 +602,40 @@ async function runSmokePair(root, app) {
     result = await runPnpm(root, smokeArgs);
   }
   if (result.status !== 0) {
+    const cgroupMemory = result.signal === 'SIGKILL' ? readMemoryPressureDiagnostics() : undefined;
+    const detail = cgroupMemory ? `; cgroup-memory=${JSON.stringify(cgroupMemory)}` : '';
     throw new Error(
-      `[bevy-smoke] ${pkg.name} smoke failed with ${result.error?.message ?? result.signal ?? result.status}`,
+      `[bevy-smoke] ${pkg.name} smoke failed with ${result.error?.message ?? result.signal ?? result.status}${detail}`,
     );
   }
+}
+
+/**
+ * Keep Vite builds bounded in parallel, then serialize native WebGPU smokes.
+ * Builds and Dawn children have different memory profiles; overlapping them
+ * lets two lavapipe devices push a 16 GB runner into the cgroup OOM killer.
+ */
+export async function runSmokeStages(root, apps, concurrency, runners = {}) {
+  const build = runners.build ?? buildApp;
+  const smoke = runners.smoke ?? runSmokeApp;
+  let next = 0;
+  let firstError;
+  async function buildWorker() {
+    while (firstError === undefined) {
+      const app = apps[next++];
+      if (app === undefined) return;
+      try {
+        await build(root, app);
+      } catch (error) {
+        firstError = error;
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, apps.length) }, () => buildWorker()),
+  );
+  if (firstError !== undefined) throw firstError;
+  for (const app of apps) await smoke(root, app);
 }
 
 async function commandSmokes(root, dryRun, concurrency, group, groups) {
@@ -570,21 +649,7 @@ async function commandSmokes(root, dryRun, concurrency, group, groups) {
       process.stdout.write(`[bevy-smoke] pnpm --filter ${pkg.name} smoke\n`);
     }
   } else {
-    let next = 0;
-    let firstError;
-    async function worker() {
-      while (firstError === undefined) {
-        const app = apps[next++];
-        if (app === undefined) return;
-        try {
-          await runSmokePair(root, app);
-        } catch (error) {
-          firstError = error;
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(concurrency, apps.length) }, () => worker()));
-    if (firstError !== undefined) throw firstError;
+    await runSmokeStages(root, apps, concurrency);
   }
   process.stdout.write(
     `[ok] ${apps.length}/${allApps.length} implemented Bevy demo smoke entries completed${dryRun ? ' (dry run)' : ''} with concurrency=${concurrency} group=${group}/${groups}\n`,

@@ -919,20 +919,20 @@ export function perspectiveReverseZ(
 /**
  * out = orthographic projection (**WebGPU [0, 1] NDC** short name, D-3). Returns out.
  *
- * @degrade near >= far or left >= right or bottom >= top → numerically undefined but does not throw.
+ * @degrade near >= far or left >= right or top <= bottom → numerically undefined but does not throw.
  *
  * @example
  * ```ts
- * mat4.orthographic(out, -10, 10, -10, 10, 0.1, 100);
- * // Guard: if (!(left < right && bottom < top && near < far)) handleInvalid();
+ * mat4.orthographic(out, -10, 10, 10, -10, 0.1, 100);
+ * // Guard: if (!(left < right && top > bottom && near < far)) handleInvalid();
  * ```
  */
 export function orthographic(
   out: Mat4,
   left: number,
   right: number,
-  bottom: number,
   top: number,
+  bottom: number,
   near: number,
   far: number,
 ): Mat4 {
@@ -963,8 +963,8 @@ export function orthographicNO(
   out: Mat4,
   left: number,
   right: number,
-  bottom: number,
   top: number,
+  bottom: number,
   near: number,
   far: number,
 ): Mat4 {
@@ -1004,8 +1004,8 @@ export function orthographicReverseZ(
   out: Mat4,
   left: number,
   right: number,
-  bottom: number,
   top: number,
+  bottom: number,
   near: number,
   far: number,
 ): Mat4 {

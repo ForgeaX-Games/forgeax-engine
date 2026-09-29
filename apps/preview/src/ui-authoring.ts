@@ -133,6 +133,14 @@ export function createUiAuthoringHost(
 
   let gateway = initialGateway ?? createFallbackGateway();
   let selectedGuid = preferredGuidFor(gateway);
+  // Keep the selected source identity while an authoring override is active.
+  // A session rebuild invalidates the registry entry before retrying the
+  // edited asset, so the registry may temporarily omit the row even though
+  // the authoring session still owns that source. Do not let that cache
+  // lifecycle turn a valid selected source into an unselectable one.
+  let selectedCatalogEntry = gateway
+    .listCatalog()
+    .find((entry) => entry.guid.toLowerCase() === selectedGuid.toLowerCase());
   let sourceOverride: SourceOverride | undefined;
   let session: UiPreviewSession | null = null;
   let lastAction: string | undefined;
@@ -149,6 +157,22 @@ export function createUiAuthoringHost(
       });
     });
   let stopGatewaySubscription = subscribeToGateway();
+
+  const discover = (): readonly UiAuthoringCatalogEntry[] => {
+    const entries = gateway.listCatalog();
+    const currentSelected = entries.find(
+      (entry) => entry.guid.toLowerCase() === selectedGuid.toLowerCase(),
+    );
+    if (currentSelected !== undefined) selectedCatalogEntry = currentSelected;
+    if (
+      sourceOverride === undefined ||
+      selectedCatalogEntry === undefined ||
+      currentSelected !== undefined
+    ) {
+      return entries;
+    }
+    return [...entries, selectedCatalogEntry];
+  };
 
   const sourcePath = (): string =>
     gateway.listCatalog().find((entry) => entry.guid.toLowerCase() === selectedGuid.toLowerCase())
@@ -208,11 +232,14 @@ export function createUiAuthoringHost(
       stopGatewaySubscription();
       gateway = nextGateway;
       selectedGuid = preferredGuidFor(gateway);
+      selectedCatalogEntry = gateway
+        .listCatalog()
+        .find((entry) => entry.guid.toLowerCase() === selectedGuid.toLowerCase());
       sourceOverride = undefined;
       lastRefreshError = undefined;
       stopGatewaySubscription = subscribeToGateway();
     },
-    discover: () => gateway.listCatalog(),
+    discover,
     validate,
     async repair(nextSource) {
       const checked = await validate(nextSource);

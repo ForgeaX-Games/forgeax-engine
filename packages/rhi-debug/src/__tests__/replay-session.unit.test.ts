@@ -1,5 +1,5 @@
 import { createShaderModule, rhi } from '@forgeax/engine-rhi-null';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Tape } from '../protocol/types';
 import type { ReplayBackend } from '../replay/session';
 import { openReplay } from '../replay/session';
@@ -45,6 +45,169 @@ async function makeBackend(): Promise<ReplayBackend> {
 }
 
 describe('ReplaySession', () => {
+  it('applies queue uploads through the selected command submission, without later work', async () => {
+    const base = makeWorkTape();
+    const upload = (offset: number, handleId = 'buffer:retained'): Tape['events'][number] => ({
+      kind: 'writeBuffer',
+      handleId,
+      bufferOffset: offset,
+      dataHash: 'payload',
+      size: 4,
+    });
+    const textureUpload: Tape['events'][number] = {
+      kind: 'writeTexture',
+      destination: { textureHandleId: 'texture:1' },
+      dataHash: 'payload',
+      dataLayout: {},
+      size: { width: 1, height: 1 },
+    };
+    const events: Tape['events'] = [
+      { kind: 'createBuffer', handleId: 'buffer:retained', desc: { size: 32, usage: 8 } },
+      {
+        kind: 'createTexture',
+        handleId: 'texture:1',
+        desc: { size: [1, 1], format: 'rgba8unorm', usage: 2 },
+      },
+      ...base.events.slice(0, 3),
+      upload(0),
+      { kind: 'dispatchWorkgroups', passHandleId: 'pass:1', x: 99, y: 1, z: 1 },
+      ...base.events.slice(3, 4),
+      upload(4),
+      ...base.events.slice(4, 5),
+      upload(8),
+      textureUpload,
+      { kind: 'createBuffer', handleId: 'buffer:later', desc: { size: 4, usage: 8 } },
+      upload(0, 'buffer:later'),
+      ...base.events.slice(5, 6),
+      upload(12),
+      textureUpload,
+    ];
+    const backend = await makeBackend();
+    const writes = vi.spyOn(backend.device.queue, 'writeBuffer');
+    const textureWrites = vi.spyOn(backend.device.queue, 'writeTexture');
+    const tape: Tape = {
+      ...base,
+      header: { ...base.header, eventCount: events.length, blobCount: 1 },
+      events,
+      blobs: [{ hash: 'payload', bytes: new Uint8Array([1, 2, 3, 4]), compression: 'none' }],
+    };
+    const replay = (await openReplay(tape, backend)).unwrap();
+    try {
+      (await replay.inspectWork(0, ['pipeline'])).unwrap();
+      expect(writes.mock.calls.map((call) => call[1])).toEqual([0, 4, 8]);
+      expect(textureWrites).toHaveBeenCalledTimes(1);
+    } finally {
+      writes.mockRestore();
+      textureWrites.mockRestore();
+      (await replay.dispose()).unwrap();
+    }
+  });
+
+  it.each([
+    'render',
+    'compute',
+  ] as const)('replays the recorded auto layout for a %s pipeline', async (kind) => {
+    const tape: Tape = {
+      ...makeWorkTape(),
+      bootstrap: [
+        {
+          handleId: 'shader:auto',
+          kind: 'shader-module',
+          initialData: [],
+          create: {
+            kind: 'createShaderModule',
+            handleId: 'shader:auto',
+            wgslCode:
+              kind === 'compute'
+                ? '@compute @workgroup_size(1) fn main() {}'
+                : '@vertex fn main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }',
+          },
+        },
+        {
+          handleId: 'pipeline:auto',
+          kind: 'pipeline',
+          initialData: [],
+          create:
+            kind === 'compute'
+              ? {
+                  kind: 'createComputePipeline',
+                  handleId: 'pipeline:auto',
+                  layoutHandleId: 'layout:auto',
+                  computeShaderModuleHandleId: 'shader:auto',
+                  desc: { compute: { entryPoint: 'main' } },
+                }
+              : {
+                  kind: 'createRenderPipeline',
+                  handleId: 'pipeline:auto',
+                  layoutHandleId: 'layout:auto',
+                  vertexShaderModuleHandleId: 'shader:auto',
+                  desc: { vertex: { entryPoint: 'main', buffers: [] } },
+                },
+        },
+      ],
+    };
+    const opened = await openReplay(tape, await makeBackend());
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    try {
+      const inspected = await opened.value.inspectWork(0);
+      expect(inspected.ok, JSON.stringify(inspected)).toBe(true);
+    } finally {
+      opened.value.dispose();
+    }
+  });
+
+  it('does not require unused recorded optional capabilities', async () => {
+    const result = await openReplay(
+      {
+        ...makeWorkTape(),
+        header: {
+          ...makeWorkTape().header,
+          rhiCaps: {
+            rgba16floatRenderable: true,
+            float32Filterable: true,
+            textureCompressionBc: true,
+            textureCompressionEtc2: true,
+            textureCompressionAstc: true,
+            storageBuffer: true,
+            timestampQuery: true,
+          },
+        },
+      },
+      await makeBackend(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('requires a recorded compression capability when the tape uses its format', async () => {
+    const result = await openReplay(
+      {
+        header: {
+          formatVersion: 7,
+          rhiCaps: { textureCompressionBc: true },
+          eventCount: 1,
+          blobCount: 0,
+        },
+        bootstrap: [],
+        events: [
+          {
+            kind: 'createTexture',
+            handleId: 'texture:compressed',
+            desc: {
+              size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+              format: 'bc1-rgba-unorm',
+              usage: 0x04,
+            },
+          },
+        ],
+        blobs: [],
+      },
+      await makeBackend(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('replay-capability-mismatch');
+  });
+
   it('replays a depth-only render pipeline without requiring a fragment shader', async () => {
     const tape: Tape = {
       header: { formatVersion: 7, rhiCaps: {}, eventCount: 7, blobCount: 0 },

@@ -1,8 +1,9 @@
 // feat-20260611 R2 / M8 / w29 (IS-14): record-stage skin BindGroup unit test.
 //
 // Why this file exists:
-//   M8 wires the record stage to bind a 2-binding `pbr-skin-mesh-array-bgl`
-//   (binding 0 mesh-array UBO + binding 1 palette UBO) at group(2) when
+//   M8 wires the record stage to bind a 3-binding `pbr-skin-mesh-array-bgl`
+//   (binding 0 mesh-array UBO + binding 1 current palette UBO + binding 2
+//   previous palette UBO) at group(2) when
 //   the per-entry skin discriminator (`entry.source.skin !== undefined`) is
 //   set. R1 of this loop discovered the prior 1-binding `pbr-mesh-bg`
 //   build path triggered every-frame BGL-mismatch device errors against
@@ -13,8 +14,8 @@
 //   fast in CI rather than at frame N.
 //
 // What this test asserts:
-//   (1) `buildPbrSkinLayouts` returns a 2-entry meshArrayBgl labeled
-//       `pbr-skin-mesh-array-bgl` with bindings 0 + 1 both
+//   (1) `buildPbrSkinLayouts` returns a 3-entry meshArrayBgl labeled
+//       `pbr-skin-mesh-array-bgl` with bindings 0 + 1 + 2 all
 //       `hasDynamicOffset: true`. This is the BGL the record stage
 //       must use to build a BG matching `pbr-skin-pl`.
 //   (2) The skin pipeline layout `pbr-skin-pl` references the SAME
@@ -23,7 +24,7 @@
 //       contract that R1 violated.
 //   (3) Regression guard: `buildPbrPipelineLayouts` (URP) returns a
 //       1-entry meshArrayBgl labeled `pbr-mesh-array-bgl`. M8 must
-//       NOT leak the 2-entry skin BGL into the URP path.
+//       NOT leak the 3-entry skin BGL into the URP path.
 //
 // What this test deliberately does NOT cover:
 //   - The actual `pass.setBindGroup(2, ...)` dispatch site is exercised
@@ -83,7 +84,7 @@ function makeMockDevice(): { device: PbrPipelineDevice; capture: MockDeviceCaptu
 }
 
 describe('feat-20260611 R2 / M8 / w29 — record-stage skin BindGroup BGL contract', () => {
-  it('(1) buildPbrSkinLayouts returns a 2-entry meshArrayBgl labeled pbr-skin-mesh-array-bgl with bindings 0 + 1 both hasDynamicOffset:true (storage path)', () => {
+  it('(1) buildPbrSkinLayouts returns a 3-entry meshArrayBgl labeled pbr-skin-mesh-array-bgl with bindings 0 + 1 + 2 all hasDynamicOffset:true (storage path)', () => {
     const { device, capture } = makeMockDevice();
     const pbr = buildPbrPipelineLayouts(device, { storageBuffer: true });
     const skin = buildPbrSkinLayouts(device, { storageBuffer: true }, pbr);
@@ -91,16 +92,19 @@ describe('feat-20260611 R2 / M8 / w29 — record-stage skin BindGroup BGL contra
     const skinDesc = capture.bglByHandle.get(skin.meshArrayBgl);
     expect(skinDesc).toBeDefined();
     expect(skinDesc?.label).toBe('pbr-skin-mesh-array-bgl');
-    expect(skinDesc?.entries).toHaveLength(2);
+    expect(skinDesc?.entries).toHaveLength(3);
     expect(skinDesc?.entries[0]?.binding).toBe(0);
     expect(skinDesc?.entries[0]?.buffer?.hasDynamicOffset).toBe(true);
     expect(skinDesc?.entries[0]?.buffer?.type).toBe('read-only-storage');
     expect(skinDesc?.entries[1]?.binding).toBe(1);
     expect(skinDesc?.entries[1]?.buffer?.hasDynamicOffset).toBe(true);
     expect(skinDesc?.entries[1]?.buffer?.type).toBe('read-only-storage');
+    expect(skinDesc?.entries[2]?.binding).toBe(2);
+    expect(skinDesc?.entries[2]?.buffer?.hasDynamicOffset).toBe(true);
+    expect(skinDesc?.entries[2]?.buffer?.type).toBe('read-only-storage');
   });
 
-  it('(1b) uniform fallback path: buildPbrSkinLayouts BGL bindings 0 + 1 both type=uniform', () => {
+  it('(1b) uniform fallback path: buildPbrSkinLayouts BGL bindings 0 + 1 + 2 all type=uniform', () => {
     const { device, capture } = makeMockDevice();
     const pbr = buildPbrPipelineLayouts(device, { storageBuffer: false });
     const skin = buildPbrSkinLayouts(device, { storageBuffer: false }, pbr);
@@ -108,6 +112,7 @@ describe('feat-20260611 R2 / M8 / w29 — record-stage skin BindGroup BGL contra
     const skinDesc = capture.bglByHandle.get(skin.meshArrayBgl);
     expect(skinDesc?.entries[0]?.buffer?.type).toBe('uniform');
     expect(skinDesc?.entries[1]?.buffer?.type).toBe('uniform');
+    expect(skinDesc?.entries[2]?.buffer?.type).toBe('uniform');
   });
 
   it('(2) pbr-skin-pl slot 2 === skin meshArrayBgl handle (NOT the standard pbr-mesh-array-bgl) — pins the BG vs PipelineLayout contract R1 violated', () => {
@@ -129,7 +134,7 @@ describe('feat-20260611 R2 / M8 / w29 — record-stage skin BindGroup BGL contra
     expect(skinPlDesc?.bindGroupLayouts[3]).toBe(pbr.instancesBgl);
   });
 
-  it('(3) regression guard: buildPbrPipelineLayouts (URP) returns 1-entry meshArrayBgl labeled pbr-mesh-array-bgl — M8 must NOT leak the 2-entry skin BGL into URP', () => {
+  it('(3) regression guard: buildPbrPipelineLayouts (URP) returns 1-entry meshArrayBgl labeled pbr-mesh-array-bgl — M8 must NOT leak the 3-entry skin BGL into URP', () => {
     const { device, capture } = makeMockDevice();
     const pbr = buildPbrPipelineLayouts(device, { storageBuffer: true });
 

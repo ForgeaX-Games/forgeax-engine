@@ -3,13 +3,13 @@
 > [!NOTE]
 > **对应 LO 原章节**：[LearnOpenGL §1.4 Textures](https://learnopengl.com/Getting-started/Textures)
 >
-> **对应引擎能力**：feat-20260515-learn-render-getting-started — `@forgeax/engine-image` 解码 + `forgeax-engine-console asset import` 产 sidecar + GUID 寻址的 `AssetRegistry.loadByGuid<TextureAsset>` 单入口；render-system `materialBindGroup` 自动消费 `MaterialAsset.baseColorTexture` 槽位（`packages/runtime/src/render-system-extract.ts` 内 switch `mat.shadingModel` 路由）。
+> **对应引擎能力**：feat-20260515-learn-render-getting-started — `@forgeax/engine-image` 解码 + `forgeax asset import` 产 sidecar + GUID 寻址的 `AssetRegistry.loadByGuid<TextureAsset>` 单入口；render-system `materialBindGroup` 自动消费 `MaterialAsset.baseColorTexture` 槽位（`packages/runtime/src/render-system-extract.ts` 内 switch `mat.shadingModel` 路由）。
 
 ## 这个示例展示什么
 
 LO §1.4 的核心论点是「把磁盘 JPG 解码 → 上传到 GPU → fragment shader 用 `texture(sampler2D, vTexCoord)` 采样」。forgeax 把同样的语义拆成 4 步 recipe，全部走 `AssetRegistry.loadByGuid` 单入口（charter P4 一致抽象 + AC-15 (c)）：
 
-1. **磁盘 GUID-寻址** — `assets/wood-container.jpg` 配套 `wood-container.meta.json` (`kind=external-asset-package`，`subAssets[0]={kind:'image', sourceIndex:0, guid:UUIDv7, importSettings:{colorSpace,mipmap,addressMode,filterMode}}`)；GUID 由 `forgeax-engine-console asset import` 一次性铸造，`reimport` byte-identical（AC-16）
+1. **磁盘 GUID-寻址** — `assets/wood-container.jpg` 配套 `wood-container.meta.json` (`kind=external-asset-package`，`subAssets[0]={kind:'image', sourceIndex:0, guid:UUIDv7, importSettings:{colorSpace,mipmap,addressMode,filterMode}}`)；GUID 由 `forgeax asset import` 一次性铸造，`reimport` byte-identical（AC-16）
 2. **Cube + Material 同型 sidecar** — `cube-mesh.stub.meta.json`（GUID 别名到引擎内置 `HANDLE_CUBE`）+ `material-wood.pack.json` (`kind=internal-text-package`，`UnlitMaterialAsset.baseColorTexture` 引用 wood GUID)
 3. **运行时 `loadByGuid<T>(guid)` 单入口** — 3 个 `await assets.loadByGuid<TextureAsset|MeshAsset|MaterialAsset>(guid)` 调用即拿到 `Handle<T>`；调用栈不暴露 `decodeImage` / `uploadTexture` 等低层入口（charter P5 producer/consumer split）
 4. **ECS 实体** — `world.spawn(Transform, MeshFilter{cube}, MeshRenderer{material})`；render-system 每帧 `world.query(MeshRenderer)` 迭代时对 `entry.material.baseColorTexture` 推断为 `Handle<TextureAsset> | undefined`，无需 `as` 兜底（AC-09 grep 锚点 `// ac-09:`）
@@ -21,7 +21,7 @@ LO §1.4 的核心论点是「把磁盘 JPG 解码 → 上传到 GPU → fragmen
 
 ```mermaid
 flowchart LR
-  Disk["assets/wood-container.jpg<br/>+ .meta.json"] --> Imp["forgeax-engine-console<br/>asset import"]
+  Disk["assets/wood-container.jpg<br/>+ .meta.json"] --> Imp["forgeax asset import"]
   Imp --> Sidecar["GUID 写入 sidecar<br/>(UUIDv7)"]
   Sidecar --> RT["loadByGuid<TextureAsset>"]
   RT --> Reg["AssetRegistry"]
@@ -83,13 +83,13 @@ if (matLookup.ok) {
 requestAnimationFrame(function tick() { renderer.draw(world); requestAnimationFrame(tick); });
 ```
 
-`assets/wood-container.jpg` 是磁盘 fixture，`wood-container.meta.json` 是 build-time 由 `forgeax-engine-console asset import` 一次性产出的 sidecar（含 `subAssets[].guid` UUIDv7 + `importSettings` 5 字段：`colorSpace`/`mipmap`/`addressMode`/`filterMode` + 可选 `format`）。`material-wood.pack.json` 是 `kind=internal-text-package` 自包含包，`assets[0].payload.baseColorTexture` 引用 wood 的 GUID。runtime 阶段 `loadByGuid` 不感知物理路径——它只认 GUID，pack-index 把 GUID 翻译成 URL。
+`assets/wood-container.jpg` 是磁盘 fixture，`wood-container.meta.json` 是 build-time 由 `forgeax asset import` 一次性产出的 sidecar（含 `subAssets[].guid` UUIDv7 + `importSettings` 5 字段：`colorSpace`/`mipmap`/`addressMode`/`filterMode` + 可选 `format`）。`material-wood.pack.json` 是 `kind=internal-text-package` 自包含包，`assets[0].payload.baseColorTexture` 引用 wood 的 GUID。runtime 阶段 `loadByGuid` 不感知物理路径——它只认 GUID，pack-index 把 GUID 翻译成 URL。
 
 ## 与 LO 原版的差异
 
 | 维度 | LO 原版（C++ / GLSL 330） | forgeax 这里（TS / WGSL） |
 |:--|:--|:--|
-| 解码 | `stb_image.h` 的 `stbi_load("container.jpg", &w, &h, &nrChannels, 0)`，单线程同步读 + 解码 | build-time `@forgeax/engine-image` 在 `forgeax-engine-console asset import` 流水线里调用解码 → 写 sidecar；runtime 完全隔离解码（charter P5 + research F-4） |
+| 解码 | `stb_image.h` 的 `stbi_load("container.jpg", &w, &h, &nrChannels, 0)`，单线程同步读 + 解码 | build-time `@forgeax/engine-image` 在 `forgeax asset import` 流水线里调用解码 → 写 sidecar；runtime 完全隔离解码（charter P5 + research F-4） |
 | GPU 上传 | `glGenTextures(1, &id) + glBindTexture(GL_TEXTURE_2D, id) + glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data)` 串行手写状态机 | `assets.loadByGuid<TextureAsset>(woodGuid)` 单入口 → 引擎内部 `uploadTexture` + 自动绑定到 `materialBindGroup` 槽位（`render-system-extract.ts` 的 switch `mat.shadingModel`） |
 | 采样器配置 | `glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)` + `GL_TEXTURE_MIN_FILTER, GL_LINEAR` 等四五行 GL 调用 | `importSettings: { colorSpace, mipmap, addressMode, filterMode }` 一次性写入 sidecar；reimport byte-identical（AC-16） |
 | 颜色空间 | `glTexImage2D(internalformat=GL_SRGB)` 手指定 + 教程末提示注意线性空间 | `TextureAsset.format: 'rgba8unorm-srgb' \| 'rgba8unorm'` + `colorSpace: 'srgb' \| 'linear'`；`linear + srgb` 组合在 dawn 测试里抛 `image-format-unsupported.detail.formatColorSpaceConflict`（AC-08） |
@@ -108,7 +108,7 @@ requestAnimationFrame(function tick() { renderer.draw(world); requestAnimationFr
 | `assets/cube-mesh.stub.meta.json` | ~15 | cube 别名 sidecar（GUID 映射到引擎内置 HANDLE_CUBE） |
 | `src/__tests__/textures.browser.test.ts` | ~150 | vitest browser e2e（AC-08 + AC-09 + AC-13 + AC-15 (c) + AC-17 (a) 三段断言） |
 | `src/__tests__/textures-srgb.dawn.test.ts` | ~110 | dawn-node sRGB / linear 一致性反例（AC-08 image-format-unsupported.detail.formatColorSpaceConflict） |
-| `scripts/smoke-dawn.mjs` | ~330 | dawn-node 端到端：解码 → 上传 → 300 帧 → 5-pixel grid readback + AC-25 wall-time 监控 |
+| `scripts/smoke-dawn.mjs` | ~330 | dawn-node 端到端：解码 → 上传 → 60 帧 → 5-pixel grid readback + AC-25 wall-time 监控 |
 
 ## HMR manual verification
 
@@ -130,7 +130,7 @@ pnpm --filter "@forgeax/app-learn-render-1-getting-started-4-textures" dev
 # the new asset state after the reload completes.
 ```
 
-Failure surface: the dev plugin does not block on schema errors; malformed sidecars are skipped with a `[forgeax-pack] scan error` console warn so iteration is uninterrupted. Schema-level enforcement runs out-of-band via `pnpm exec forgeax-engine-console asset verify <dir>` (8-step fail-fast scanner, charter P3 explicit failure on the verify path; the dev path optimises for iteration cadence).
+Failure surface: the dev plugin does not block on schema errors; malformed sidecars are skipped with a `[forgeax-pack] scan error` console warn so iteration is uninterrupted. Schema-level enforcement runs through `forgeax asset verify --root <project> --json` (8-step fail-fast scanner; the dev path optimises for iteration cadence).
 
 ## 运行
 
@@ -147,16 +147,16 @@ pnpm test:browser
 # vitest dawn e2e（sRGB / linear 一致性）
 pnpm test:dawn
 
-# dawn-node smoke (300 frames + pixel readback epsilon <= 0.05)
+# dawn-node smoke (60 frames + pixel readback epsilon <= 0.05)
 pnpm --filter "@forgeax/app-learn-render-1-getting-started-4-textures" smoke
 
 # 录制 golden PNG（forgeax-engine-assets 子模块）
 pnpm --filter "@forgeax/app-learn-render-1-getting-started-4-textures" exec node scripts/bench-screenshot.mjs
 
 # Build-time importer（产 sidecar；reimport byte-identical AC-16）
-pnpm exec forgeax-engine-console asset import \
+pnpm exec forgeax asset import \
   apps/learn-render/1.getting-started/4.textures/assets/wood-container.jpg
-pnpm exec forgeax-engine-console asset verify \
+pnpm exec forgeax asset verify \
   apps/learn-render/1.getting-started/4.textures/assets/
 ```
 

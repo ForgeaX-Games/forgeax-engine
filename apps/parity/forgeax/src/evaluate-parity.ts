@@ -243,7 +243,7 @@ export function expectedFor(arg: { readonly code: MetricErrorCode }): string {
     case 'metric-status-not-ok':
       return 'dispatcher reports status=ok';
     case 'metric-schema-malformed':
-      return 'forgeax-metrics.schema.json compiles as JSON Schema 2020-12';
+      return 'schemas/forgeax-metrics.schema.json compiles as JSON Schema 2020-12';
     case 'pixel-parity-threshold-exceeded':
       return 'diffPixelCount <= threshold';
     case 'pixel-parity-capture-failed':
@@ -260,7 +260,7 @@ export function hintFor(arg: { readonly code: MetricErrorCode }): string {
     case 'metric-status-not-ok':
       return 'inspect the offending report/<package>/<kind>.json for the value-vs-threshold delta';
     case 'metric-schema-malformed':
-      return 'check forgeax-metrics.schema.json for unbalanced braces or missing $defs node';
+      return 'check schemas/forgeax-metrics.schema.json for unbalanced braces or missing $defs node';
     case 'pixel-parity-threshold-exceeded':
       return 'inspect git diff for shader / material / camera regressions; if driver noise, explicitly bump apps/parity/*/package.json#forgeax.metrics.bench.pixelDiff.threshold in a PR commit (append-only audit)';
     case 'pixel-parity-capture-failed':

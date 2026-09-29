@@ -28,12 +28,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const pixels = makeSpritePixels();
   const texture = {
     kind: 'texture' as const,
-    width: SPRITE_SIZE,
-    height: SPRITE_SIZE,
+    shape: { viewDimension: '2d' as const, extent: { width: SPRITE_SIZE, height: SPRITE_SIZE } },
     format: 'rgba8unorm-srgb' as const,
     data: pixels,
     colorSpace: 'srgb' as const,
-    mipmap: false,
+    mips: { kind: 'none' as const },
   };
   const handle = app.world.allocSharedRef('TextureAsset', texture);
   buildSpriteWorld(app.world, unwrapHandle(handle));

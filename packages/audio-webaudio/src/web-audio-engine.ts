@@ -114,11 +114,11 @@ export class WebAudioEngine {
     master.connect(ctx.destination);
 
     const sfx = ctx.createGain();
-    sfx.gain.value = 1;
+    sfx.gain.value = this.busMuted.get('sfx') ? 0 : (this.busVolumes.get('sfx') ?? 1);
     sfx.connect(master);
 
     const music = ctx.createGain();
-    music.gain.value = 1;
+    music.gain.value = this.busMuted.get('music') ? 0 : (this.busVolumes.get('music') ?? 1);
     music.connect(master);
 
     this.ctx = ctx;
@@ -310,25 +310,18 @@ export class WebAudioEngine {
   }
 
   setBusVolume(busName: BusName, volume: number): void {
-    const gain = this.busGainFor(busName);
-    if (!gain) return;
-
-    if (!this.scheduleGainTransition(gain, volume)) return;
+    if (this.closed || !Number.isFinite(volume) || volume < 0) return;
     this.busVolumes.set(busName, volume);
-
-    // If we were muted, un-mute (setting volume is an explicit un-mute signal).
-    if (this.busMuted.get(busName)) {
-      this.busMuted.set(busName, false);
-    }
+    this.busMuted.set(busName, false);
+    const gain = this.busGainFor(busName);
+    if (gain) this.scheduleGainTransition(gain, volume);
   }
 
   setBusMute(busName: BusName, muted: boolean): void {
-    const gain = this.busGainFor(busName);
-    if (!gain) return;
-
-    const target = muted ? 0 : (this.busVolumes.get(busName) ?? 1);
-    if (!this.scheduleGainTransition(gain, target)) return;
+    if (this.closed) return;
     this.busMuted.set(busName, muted);
+    const gain = this.busGainFor(busName);
+    if (gain) this.scheduleGainTransition(gain, muted ? 0 : (this.busVolumes.get(busName) ?? 1));
   }
 
   getState(): AudioState {

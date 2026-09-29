@@ -124,9 +124,9 @@ describe('hdrp-ssao.wgsl structural compile test (M2 / w7)', () => {
     expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(3\)\s+var\s+\w+_sampler\s*:\s*sampler/);
   });
 
-  it('(g3) g-buffer normal texture binding is present (@binding(4) texture_2d<f32>)', () => {
+  it('(g3) g-buffer normal texture binding is present (@binding(4) texture_2d<u32>)', () => {
     const codeOnly = stripComments(ssaoSource);
-    expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(4\)\s+var\s+\w+\s*:\s*texture_2d<f32>/);
+    expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(4\)\s+var\s+\w+\s*:\s*texture_2d<u32>/);
   });
 
   it('(g4) hdrDepth texture binding is present (@binding(5) texture_depth_2d)', () => {
@@ -141,12 +141,7 @@ describe('hdrp-ssao.wgsl structural compile test (M2 / w7)', () => {
   });
 });
 
-// ── M8 / w36 + w37 ssao-blur input fix RED ──────────────────────────────────
-//
-// plan-strategy §D-D: fs_ssao_blur currently reads gbuffer_normal +
-// ssao_noise_sampler — that is a typo carried from copy-paste of fs_ssao_calc.
-// The blur should read the half-res ssaoRaw output of fs_ssao_calc through a
-// dedicated ssaoSampler. These assertions go RED until w37 fixes the WGSL.
+// The blur consumes AO and current-frame surface guidance.
 
 describe('hdrp-ssao.wgsl ssao-blur input fix (M8 / w36 + w37)', () => {
   it('(i1) ssaoRaw texture binding is declared (@binding for half-res calc output)', () => {
@@ -162,24 +157,24 @@ describe('hdrp-ssao.wgsl ssao-blur input fix (M8 / w36 + w37)', () => {
     expect(codeOnly).toMatch(/var\s+ssaoSampler\s*:\s*sampler/);
   });
 
-  it('(i3) fs_ssao_blur body reads ssaoRaw, NOT gbuffer_normal', () => {
+  it('(i3) fs_ssao_blur reads AO with depth and normal edge guidance', () => {
     const codeOnly = stripComments(ssaoSource);
     // Carve out the fs_ssao_blur function body.
     const blurMatch = /fn\s+fs_ssao_blur\b[\s\S]*?\n\}/.exec(codeOnly);
     expect(blurMatch).toBeTruthy();
     if (!blurMatch) return;
     const body = blurMatch[0];
-    expect(body).toMatch(/textureSample\s*\(\s*ssaoRaw\b/);
-    // The blur must not reference gbuffer_normal at all.
-    expect(body).not.toMatch(/\bgbuffer_normal\b/);
+    expect(body).toMatch(/textureSampleLevel\s*\(\s*ssaoRaw\b/);
+    // Normal discontinuities must reject taps from another surface.
+    expect(body).toMatch(/\bssaoNormal\b/);
   });
 
-  it('(i4) fs_ssao_blur body samples through ssaoSampler', () => {
+  it('(i4) fs_ssao_blur reads current depth without repeating edges', () => {
     const codeOnly = stripComments(ssaoSource);
     const blurMatch = /fn\s+fs_ssao_blur\b[\s\S]*?\n\}/.exec(codeOnly);
     expect(blurMatch).toBeTruthy();
     if (!blurMatch) return;
     const body = blurMatch[0];
-    expect(body).toMatch(/ssaoSampler\b/);
+    expect(body).toMatch(/ssao_depth_sampler\b/);
   });
 });

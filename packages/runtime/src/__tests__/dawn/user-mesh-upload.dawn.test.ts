@@ -8,7 +8,7 @@
 // height:1, depth:1})`) land in `AssetRegistry.assets` but never get a
 // matching `MeshGpuHandles` entry, so `pipelineState.meshes.get(handle)`
 // returns `undefined` during the record stage and emits 'asset-not-registered'
-// RhiError once per renderable per frame (~900x in a 300-frame smoke).
+// RhiError once per renderable per frame (~900x in a 60-frame smoke).
 //
 // Plan-strategy w22.5: AssetRegistry exposes `uploadMesh` /
 // `getMeshGpuHandles` that mirror the existing `uploadTexture` /
@@ -19,7 +19,7 @@
 //
 // This test is the binary judgment for AC-13 (5 smoke green) and the
 // engine-side fix that unblocks M5 w23 hello-room. The full readback
-// gate is covered by `pnpm --filter @forgeax/hello-room smoke` (300 frames pixel
+// gate is covered by `pnpm --filter @forgeax/hello-room smoke` (60 frames pixel
 // readback ε ≤ 0.05); this dawn-tier gate isolates the host-side derivation
 // + GPU-resource accounting that feeds the record stage.
 

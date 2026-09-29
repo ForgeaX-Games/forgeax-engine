@@ -20,4 +20,5 @@ await verifyDemoCapture({
   liveHook: '__captureBloom',
   rtIdx: 0,
   appDir: dirname(here),
+  waitForPackIndex: true,
 });

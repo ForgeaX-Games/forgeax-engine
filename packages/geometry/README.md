@@ -7,16 +7,21 @@ forgeax-engine. A **leaf** package: depends on `@forgeax/engine-ecs` (`Result`),
 
 ## 30-second self-introduction
 
-- **Surface**: 7 Three.js-r184-aligned 3D procedural factories
+- **Surface**: 10 reusable 3D procedural factories
   (`createBoxGeometry` / `createCapsuleGeometry` / `createConeGeometry` /
   `createCylinderGeometry` / `createPlaneGeometry` / `createSphereGeometry` /
-  `createTorusGeometry`),
+  `createTorusGeometry` / `createExtrusionGeometry` / `createSweepGeometry` /
+  `createRevolutionGeometry`),
   each returning `Result<MeshAsset, AssetError>`; the vertex-attribute-layout
   SSOT (`deriveVertexBufferLayout` / `buildMeshAttributeMapForUvSets` /
   `GpuVertexBufferLayoutEntry`); and the tangent + interleave helpers
   (`computeTangentVec4` / `meshFromInterleaved` /
   `PROCEDURAL_FLOATS_PER_VERTEX`). A single entry-point
   `import { ... } from '@forgeax/engine-geometry'`.
+- **Edge conversion**: `createWireframeGeometry(source)` keeps every unique
+  triangle edge, while `createEdgesGeometry(source, thresholdAngleDegrees?)`
+  keeps boundary, non-manifold, and threshold-surviving surface edges. Both
+  return the same `Result<MeshAsset, AssetError>` shape from the public barrel.
 - **2D primitives**: `create2dGeometry` turns the twelve Bevy `2d_shapes` primitive
   definitions into triangle-list or line-list `MeshAsset` values, while
   `create2dRingGeometry` builds the reusable ring variants used by the same gallery.
@@ -25,8 +30,72 @@ forgeax-engine. A **leaf** package: depends on `@forgeax/engine-ecs` (`Result`),
   Caller owns the returned `MeshAsset`; the package never touches GPU or ECS.
 - **Errors**: degenerate parameters (`dim <= 0`, `segments < minimum`, etc.)
   fail-fast with `AssetError({ code: 'asset-parse-failed' })` carrying a
-  human-readable `.detail` string. No silent fallback, no `console.warn`,
+  structured `.detail.field/.value/.reason`. No silent fallback, no `console.warn`,
   no `null` return (charter P3).
+
+The canonical vertex layout is interned by its finite attribute-presence mask.
+Mesh maps and packed masks resolve to the same deeply frozen projection; changing
+an authoring map's attributes derives a different mask without retaining the map
+or its buffers. Layout offsets, formats, and digests still derive from the one
+canonical attribute schema.
+
+## MeshBuilder
+
+`MeshBuilder` is the incremental authoring owner for custom geometry. Append
+canonical position/normal/UV/tangent data and indexed submeshes, then call
+`build()` once to obtain a `Result<MeshAsset, AssetError>`. The builder derives
+the interleaved vertex layout, index width, submesh ranges, and AABB from the
+same attribute-layout and bounds owners used by procedural factories; callers
+do not maintain a second stride, bounds, or layout table. Malformed cardinality,
+non-finite attributes, out-of-range indices, and empty commits fail with the
+existing structured `asset-parse-failed` detail. A rejected build can be
+repaired and retried without publishing a partial mesh.
+
+## Edge conversion factories
+
+Import both operations from the package barrel:
+
+```ts
+import {
+  createEdgesGeometry,
+  createWireframeGeometry,
+} from '@forgeax/engine-geometry';
+
+const wireframe = createWireframeGeometry(source);
+const edges = createEdgesGeometry(source, 30);
+if (!wireframe.ok || !edges.ok) {
+  // Branch on the structured AssetError; do not parse error.message.
+  const failure = !wireframe.ok ? wireframe.error : edges.error;
+  if (failure.code === 'asset-parse-failed') {
+    console.error(failure.detail?.field, failure.detail?.reason);
+  }
+  return;
+}
+```
+
+| Factory | Edge rule | Default | Input contract |
+|:--|:--|:--|:--|
+| `createWireframeGeometry(source)` | Every unique triangle edge, including coplanar diagonals and subdivided-grid edges; exact normalized-f32 endpoint keys are sorted lexicographically. | N/A | Indexed triangle-list submeshes or exactly one complete non-indexed triangle-list submesh. |
+| `createEdgesGeometry(source, thresholdAngleDegrees?)` | Fixed `1e-4` position weld; the minimum exact-f32 representative is selected for each welded endpoint. Boundary and non-manifold edges are kept; two-face edges use `dot(n0, n1) <= cos(thresholdAngleDegrees * pi / 180)`. | `1` degree | The same MeshAsset contract, plus finite `thresholdAngleDegrees` in `[0, 180]`. |
+
+Both factories preflight `attributes.position` as finite `Float32Array` data or a
+4-byte-aligned `ArrayBuffer`, validate triangle cardinality, submesh ranges,
+index storage and index bounds, and skip zero-area faces. Invalid input returns
+`AssetError` with `code === 'asset-parse-failed'` and
+`detail.field/value/reason`; threshold values are rejected rather than clamped.
+
+Successful output is one non-indexed `line-list` submesh with the `Default`
+material slot. `attributes.position` contains the emitted endpoints; `normal`,
+`uv`, and `tangent` are zero fillers with matching cardinality. The existing
+`packInterleavedVertexAttributes` layout owner produces `vertices`, and
+`box3.fromPositions` derives the output AABB from those emitted positions. An
+empty semantic result is valid and carries the inverted-empty AABB.
+
+The operations are pure CPU transformations: they do not mutate or retain the
+source MeshAsset, register handles, or import Render/RHI policy. Canonical edge
+ordering makes repeated calls, default versus explicit threshold `1`, equivalent
+indexed versus non-indexed triangle soups, and triangle/submesh permutations
+produce byte-stable output.
 
 ## Vertex color contract
 
@@ -63,7 +132,13 @@ const sphere = createSphereGeometry(1, 32, 24);
 // then hand the resulting Handle<MeshAsset> to MeshFilter.assetHandle.
 ```
 
-The 7 factories cover the most common procedural primitives. For an imported
+The primitive factories cover the common built-in shapes. For reusable authored
+geometry, `createExtrusionGeometry` ear-clips a simple concave 2D contour and
+adds cap and side normals, `createSweepGeometry` follows a 3D path with a
+circular profile, and `createRevolutionGeometry` turns a `(radius, height)`
+profile around the Y axis. Each operation validates finite input before
+allocating a MeshAsset and returns through the same tangent, layout, and AABB
+owners. For an imported
 glTF mesh, use `@forgeax/engine-gltf`; FBX follows the same source-plus-Meta
 route through `@forgeax/engine-fbx`. Runtime consumption is
 `@forgeax/engine-assets-runtime` after the owning importer has cooked the asset.
@@ -92,7 +167,7 @@ if (!filled.ok || !ring.ok) return;
 
 ## API surface
 
-### 7 procedural geometry factories
+### 10 procedural geometry factories
 
 Each returns `Result<MeshAsset, AssetError>`. Interleaved vertex layout:
 position (3xf32) + normal (3xf32) + uv (2xf32) = 8 floats/vertex at creation
@@ -108,6 +183,9 @@ time; expanded to the 12-float runtime layout (adds tangent vec4) by
 | `createPlaneGeometry` | `(w, h, wSeg?, hSeg?)` | 1 / dim; XY plane, +Z normal |
 | `createSphereGeometry` | `(radius, wSeg?, hSeg?)` | wSeg >= 3, hSeg >= 2 |
 | `createTorusGeometry` | `(radius, tube, radSeg?, tubSeg?)` | radSeg >= 3, tubSeg >= 3 |
+| `createExtrusionGeometry` | `(contour, depth)` | 3+ finite simple contour points, depth > 0 |
+| `createSweepGeometry` | `(path, radius, radialSeg?)` | 2+ distinct finite 3D points, radius > 0, radialSeg >= 3 |
+| `createRevolutionGeometry` | `(profile, radialSeg?)` | 2+ finite non-negative-radius points spanning height, radialSeg >= 3 |
 
 All factories populate `position` / `normal` / `uv` attributes with lowercase
 Three.js-r184 key naming. `VertexAttributeMap` also accepts optional `color`
@@ -142,6 +220,8 @@ produce the normal vec4 or mesh result.
 | `deriveVertexBufferLayout(map, opts?)` | fn | Derives a fixed-order `GpuVertexBufferLayoutEntry[]` from a `VertexAttributeMap`. The canonical 14-key order (position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7 / color) assigns `@location(N)` per key. Absent keys reserve no space; `opts.shaderUvSetCount` enables clamp-to-last alias for UV sets. |
 | `deriveVertexLayoutProjection(map)` | fn | Creates the immutable canonical projection (`schemaVersion`, attributes, mask, stride, digest). `color` is fixed at host location 13 and `float32x4`. |
 | `packInterleavedVertexAttributes(map, vertexCount)` | fn | Packs attribute arrays using that projection and returns `Result<{ projection, vertices }, VertexAttributePackError>`; closed detail reasons identify storage, cardinality, vertex-count, or non-finite failures. |
+| `DEFAULT_VERTEX_ATTRIBUTE_MAP` / `SKIN_VERTEX_ATTRIBUTE_MAP` | const | Canonical presence maps for ordinary and skinned interleaved meshes. Render, recovery, and feature assembly use these maps instead of spelling a fallback layout locally. |
+| `deriveVertexCount(vertices, projection)` | fn | Validates `vertices.byteLength % projection.arrayStride === 0` and derives the integer vertex count shared by upload, LOD, update, morph, and draw-range consumers. |
 | `deriveVertexLayoutProjectionFromMask(mask)` | fn | Reconstructs a wire projection through the same canonical key owner; returns a typed error for empty or unknown mask bits. |
 | `buildMeshAttributeMapForUvSets(uvSetCount)` | fn | Synthesise a `VertexAttributeMap` with empty `Float32Array(0)` placeholders for `uv` + `uv1..uvN-1`. Used by the forward record stage to pre-declare UV-set slots before interleaving. |
 | `GpuVertexBufferLayoutEntry` | type | `{ shaderLocation: number; offset: number; format: GPUVertexFormat }` -- one GPU vertex buffer layout entry. |
@@ -161,9 +241,15 @@ The canonical key order and per-key `GPUVertexFormat` mapping is the SSOT in
 Shader `@location(N)` declarations and naga reflection deep-equal tests keep
 them in sync.
 
+> [!IMPORTANT]
+> Keep vertex bytes and `VertexLayoutProjection` together across every GPU
+> owner. Derive the count with `deriveVertexCount`; a non-divisible payload is
+> rejected before GPU resource construction instead of being truncated into a
+> fractional draw range.
+
 ## Three.js r184 mental alignment
 
-The 6 factory signatures mirror Three.js `BufferGeometry` constructors
+The seven primitive factory signatures mirror Three.js `BufferGeometry` constructors
 byte-for-byte: parameter order, attribute key lowercasing (`position` / `normal`
 / `uv`), and segment-count defaults. AI users migrating from Three.js can swap
 the import path and the return-shape check:
@@ -223,3 +309,145 @@ Cross-vendor reading for contributors:
 ## License
 
 Same as workspace root.
+
+## Mesh decals
+
+`createDecalGeometry(source, { transform, normalThreshold? })` clips receiver
+triangles against a unit box and returns `Result<MeshAsset | null, AssetError>`.
+`transform` maps `[-0.5, 0.5]` into **receiver-local space**. Projector +Z faces
+the receiver normal. `normalThreshold` is a cosine in `[-1, 1]`, default `0`.
+The output retains local positions, interpolates normals, computes tangents and
+bounds, and maps projector X/Y to UV `(x + 0.5, 0.5 - y)`. No intersecting
+projectable triangles returns `null`; malformed geometry or a singular box is
+an error. Input attributes are never modified.
+
+This is a one-time CPU operation, usable inside a Pack generator/cooker or for
+occasional runtime placement. Store the ordinary MeshAsset using the existing
+asset path. Render it with MeshFilter/MeshRenderer and the receiver's transform
+(or an identity ChildOf the receiver); rigid movement then requires no clipping.
+Skin/morph deformation is not copied. Regenerate a pose snapshot explicitly if
+needed. The caller selects receiver meshes; this function does not raycast a
+scene or hide a full-scene triangle scan.
+
+Use an ordinary overlay material with depth testing, disabled depth writes,
+alpha blending and negative `depthBias` / `depthBiasSlopeScale`. Start with
+`-2` for both and tune for the camera's depth precision and surface slope.
+Give a painted marking `ShadowParticipation { cast: false }` and choose its queue/order
+explicitly. A bias is a raster state, not a displacement of every vertex along
+its normal. Excessive bias can show through nearby surfaces.
+
+Reference: Three.js r184 `DecalGeometry` six-plane clipping and the official
+`webgl_decals` example's polygon offset. ForgeaX keeps output receiver-local
+and applies its canonical MeshAsset tangent/layout contract. The alternative
+[GPU projected decal](../render/README.md#projected-decals) reads visible depth.
+
+## Canonical Mesh preparation
+
+`prepareMeshData` owns typed attribute cardinality, scalar storage, finite values,
+morph streams and mesh-binary metadata validation. `packMeshBin` uses that contract
+for ordinary v5 bytes. The shared preparation also checks interleaved vertex
+bytes against the canonical attributes with `validateMeshInterleaving`; contradictory
+CPU and GPU geometry is rejected. `withMeshAabb` derives bounds while preserving
+producer-specified deformation bounds. These pure kernels own no Registry or GPU.
+
+On little-endian hosts, Cook copies the validated interleaved vertex subview into
+the binary body instead of rebuilding the same lanes. The output owns its bytes;
+attribute consistency, non-finite rejection, and v5 wire bytes are unchanged.
+
+## Derived mesh distance fields
+
+`buildMeshDistanceField(positions, indices, { resolution, twoSided })` builds a
+bounded dense local field. Resolution defaults to 24 and accepts 8–64 along the
+longest axis. The default signed-solid policy welds position seams, checks closed
+outward topology and sampled winding, and rejects unresolved thin solids. It
+allows 1,024 triangles and 32 million voxel/triangle sign evaluations.
+
+Explicit `twoSided: true` stores unsigned distance to the actual triangles. It
+admits open/zero-thickness and disconnected surfaces up to 65,536 triangles;
+negative samples and invented interior coverage are invalid. Both policies allow
+1,048,576 source vertices and use a shared closest-point spatial index. Each
+sample receives `floor(32,000,000 / sampleCount)` primitive tests; exhaustion
+returns `distance-field-limit` rather than publishing a partial nearest distance.
+This bounds primitive work, not wall-clock bake duration or BVH node visits.
+The shared spatial index uses a deterministic 12-bin surface-area split and
+at most eight primitives per leaf. Closest-point traversal visits the nearer
+child bound first to avoid spending the sample budget on distant geometry. It still returns `distance-field-limit`
+if the remaining candidates cannot be excluded within that budget; exact output
+samples and the deterministic ray-hit primitive tie rule remain unchanged. Ray slab pruning is widened by
+floating-point roundoff so an equal-distance candidate cannot be skipped;
+triangle tests retain the caller's exact interval. The corrected primitive choice
+can change sidedness votes, so derived-data producer fingerprints advance;
+artifact wire formats do not change.
+
+`policy.errorBound` covers trilinear interpolation plus sample rounding in local units.
+For two-sided fields this bounds **unsigned surface distance**, not thickness,
+material opacity or the sign of a solid. It can over-occlude subvoxel gaps within
+the query's reported band. The signed profile's triangle-centroid check remains
+a diagnostic, not proof of all subvoxel features or self-intersections. Skinned,
+displaced and MASK coverage are not qualified by these geometric policies.
+Never change sidedness automatically to admit a rejected source.
+
+The geometry digest covers canonical f32 positions/u32 topology independently
+of material and transform. `encodeMeshDistanceField` / `decodeMeshDistanceField`
+carry version-3 metadata, the explicit `policy` union, little-endian samples and a
+whole-artifact digest; v1/v2 artifacts must be recooked. Decode validates expected
+geometry, bounds, counts, finiteness and policy-consistent `quality.negativeSamples`.
+The NativeCooker in `engine-import` fingerprints geometry, resolution, sidedness
+and producer version. These derived bytes create no authored asset kind and are
+never built during an ordinary frame.
+
+
+### Approximate sampled visibility
+
+`buildVisibilityDistanceField(positions, indices, { voxelSize, triangleSidedness })`
+prepares open or mixed-sided geometry explicitly. It returns
+`policy.kind: 'sampled-visibility'`, with a separate source digest including each
+triangle's 0/1 sidedness, trace bounds, finite distance band and mostly-two-sided
+hint. It never claims a geometric error bound or a proved solid interior.
+
+| Rule | Contract |
+|:--|:--|
+| Sampling | Closest-point magnitude capped at `4 * sqrt(3) * voxelSize`; 98 deterministic directions, negative only when more than one quarter hit a one-sided backface. Stop voting once the remaining directions cannot change that predicate. This follows UE's visibility construction, with independent sampling and BVH code. |
+| Geometry | Explicit source-unit voxel size; at most 1,048,576 vertices/triangles. Exact zero-area triangles are excluded from queries; original topology and flags remain in source identity. All-degenerate geometry is refused. No automatic alpha or material-ID partitioning. |
+| Bounds | Positive plane extent, mostly-two-sided expansion, then a separate one-voxel gradient border. At most 514 samples per axis and 8,388,608 total (32 MiB of CPU f32 samples); distinct finite f32 sample centers are required. Producer and artifact admission share these limits. Sampled visibility packs as SNORM16 into the query's unchanged 16 MiB aggregate budget; multiple fields still compete for that budget. |
+| Work | Shared per-cook caps of 134,217,728 closest-point and 1,073,741,824 sign-ray primitive tests. Exhaustion refuses the entire result. These are work bounds, not a wall-clock promise. |
+| Difference from UE | Dense samples instead of sparse bricks/mips; a separate RNG; exact-zero degeneracy instead of UE's tolerance; no stochastic transparency or streaming. Unsigned thin sheets can have an interpolation floor; consumers must expose approximation errors. |
+
+`mostlyTwoSided` uses the original triangle count and a 25% threshold. It is a
+trace/coverage hint, not a claim that every surface is two-sided. The sign query
+uses retained primitive flags after degenerate filtering. Saturated nearest-query
+results skip sign rays: their pulled-back segment cannot reach geometry outside
+the distance band. Zero negative samples
+are valid. Cooked data and its policy must travel together; geometric-only
+consumers must reject this policy rather than infer a distance guarantee.
+
+
+## Derived mesh card layouts
+
+`buildMeshCardLayout(positions, indices, { resolution, maxCards, triangleSidedness })`
+prepares local orthographic cards from indexed geometry. It shares a build-time
+triangle spatial index with the SDF closest-point pass. Defaults are resolution
+16 and 24 cards; admitted limits are resolution 8–32, 1–64 cards and 1,048,576
+vertices/triangles. Thirty-two deterministic samples per cell discover multiple
+depth layers; eight hemisphere visibility queries per compacted surfel guide
+coverage weighting. Inside rejection, projection density and a global card
+budget can leave surfaces uncovered. `sampling` reports that evidence; card
+count alone does not establish coverage.
+
+`triangleSidedness` carries one 0/1 value per source triangle (omission means all
+single-sided). Hit orientation and interior votes use that triangle's value,
+including after degenerate-triangle removal. At least one quarter two-sided
+triangles selects simplified outer fitting, following UE's mostly-two-sided hint;
+it does not turn the remaining triangles double-sided. Ordinary meshes search
+inner near planes even when no outer card is valid. Geometry and sidedness have
+separate digests; material values do not change either. Material/texture evaluation
+belongs to the raster capture
+consumer. `encodeMeshCardLayout` / `decodeMeshCardLayout` validate version 2 (version 1 is rejected),
+geometry identity, finite orthographic frames and sampling bounds. Pack/DDC
+retains responsibility for byte integrity. `createMeshCardCooker` in Import
+is a standalone derived-data adapter. The ordinary glTF importer instead stores
+`MeshAsset.cardLayout` for the whole mesh directly in the existing mesh-bin metadata, without another
+GUID or artifact registry. Both mesh decoders validate and preserve it; geometry
+identity is checked by the capture consumer before GPU allocation. This preparation API
+has CPU/codec/cooker tests; representative GPU capture and residency acceptance
+belongs to the ongoing software-representation iteration.

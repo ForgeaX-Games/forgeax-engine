@@ -125,7 +125,7 @@ The topology conclusion has exactly eight statuses:
 7. `partial-roster`
 8. `genuine-failure`
 
-The roster remains the exact 21-context set in the [required-context manifest](./required-ci-checks.json).
+The roster remains the exact 22-context set in the [required-context manifest](./required-ci-checks.json).
 Do not infer completeness from job count, producer count, or payload count.
 
 ## Authoritative fields and clocks
@@ -261,7 +261,7 @@ foreign evidence, or measuring capacity. It is never an instruction that the pro
 itself performs. In particular, a recovery action does not execute `gh`, `fetch`,
 `spawn`, a POST, a rerun, or a rollback.
 
-Ownership stays single-source: the manifest owns the 21-context roster; the required-ci
+Ownership stays single-source: the manifest owns the 22-context roster; the required-ci
 classifier owns topology status; the terminal-SLO module owns
 terminal, delivery, and comparison recovery factories; the admission module combines
 those results; and the contract owns the required envelope fields, actions, and layers.

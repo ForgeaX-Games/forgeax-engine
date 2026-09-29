@@ -1,15 +1,13 @@
-// apps/bevy/shadow-caster-receiver — reproduce Bevy's `shadow_caster_receiver` example.
-// Red sphere casts shadow (default), blue sphere does NOT (castShadow:false), green plane.
-// Thin over Materials.standard({ castShadow: false }).
+// apps/bevy/shadow-caster-receiver — Bevy's `shadow_caster_receiver` example.
+// C toggles shadow casters, R toggles shadow receivers, L swaps the
+// directional light and the point light. The scene lives in scene.mjs so the
+// Dawn smoke falsifies exactly this composition.
 
 import { createApp } from '@forgeax/engine-app';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import type { Handle } from '@forgeax/engine-types';
-import { Transform } from '@forgeax/engine-scene';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { perspective } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
+import { Update } from '@forgeax/engine-ecs';
+import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { spawnCasterReceiverScene, toggleLight, toggleParticipation } from './scene.mjs';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-shadow-caster-receiver: missing <canvas id="app"> in index.html');
@@ -20,49 +18,35 @@ bootstrap(canvas).catch((err: unknown) => {
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
-  if (!appResult.ok) { console.error('[bevy-shadow-caster-receiver] createApp failed:', appResult.error); return; }
+  if (!appResult.ok) {
+    console.error('[bevy-shadow-caster-receiver] createApp failed:', appResult.error);
+    return;
+  }
   const app = appResult.value;
-  const world = app.world;
+  const scene = spawnCasterReceiverScene(app.world, target.width / Math.max(target.height, 1));
+  console.log('Controls:\n  C - toggle shadow casters\n  R - toggle shadow receivers\n  L - switch between directional and point lights');
+  console.log('Using DirectionalLight');
 
-  const redMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.9, 0.2, 0.2, 1], metallic: 0, roughness: 0.5,
-  }));
-  const blueMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.2, 0.2, 0.9, 1], metallic: 0, roughness: 0.5, castShadow: false,
-  }));
-  const greenMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.2, 0.9, 0.2, 1], metallic: 0, roughness: 0.5,
-  }));
-
-  world.spawn(
-    { component: Transform, data: { pos: [0, -1.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.02, 10] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [greenMat] } },
-  );
-
-  world.spawn(
-    { component: Transform, data: { pos: [-1.5, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [redMat] } },
-  );
-
-  world.spawn(
-    { component: Transform, data: { pos: [1.5, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [blueMat] } },
-  );
-
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.8, -0.5], color: [1, 1, 1], intensity: 2 },
+  app.world.addSystem(Update, {
+    name: 'bevy-shadow-caster-receiver-keys',
+    after: [FRAME_START_SCAN_SYSTEM_NAME],
+    queries: [],
+    fn: (world) => {
+      const keyboard = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.keyboard;
+      if (keyboard === undefined) return;
+      if (keyboard.justPressedCode('KeyL')) console.log(`Using ${toggleLight(world, scene)}`);
+      if (keyboard.justPressedCode('KeyC')) {
+        console.log('Toggling casters');
+        toggleParticipation(world, scene, 'cast');
+      }
+      if (keyboard.justPressedCode('KeyR')) {
+        console.log('Toggling receivers');
+        toggleParticipation(world, scene, 'receive');
+      }
+    },
   });
 
-  world.spawn(
-    { component: Transform, data: { pos: [0, 2, 5] } },
-    { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
-  );
-
   const started = app.start();
-  if (!started.ok) { console.error('[bevy-shadow-caster-receiver] app.start() failed:', started.error); return; }
-  console.warn('[bevy-shadow-caster-receiver] running. Red casts shadow, blue does not.');
+  if (!started.ok) console.error('[bevy-shadow-caster-receiver] app.start() failed:', started.error);
+  Object.assign(globalThis, { __bevyShadowCasterReceiverReady: true });
 }

@@ -76,10 +76,49 @@ export interface GpuLike {
   requestAdapter(options?: GPURequestAdapterOptions | undefined): Promise<GpuAdapterLike | null>;
 }
 
-/** The `GPUAdapter` subset accepted at the provider seam — only the `requestDevice` entry is consumed. */
+/** The `GPUAdapter` subset accepted at the provider seam — capability limits plus `requestDevice`. */
 export interface GpuAdapterLike {
+  readonly limits?: GPUSupportedLimits | undefined;
   // forgeax-async-whitelist: dom-native — spec `GPUAdapter.requestDevice()` raw entry
   requestDevice(descriptor?: GPUDeviceDescriptor | undefined): Promise<GpuDeviceLike>;
+}
+
+const DYNAMIC_DEVICE_LIMIT_KEYS = [
+  'maxDynamicUniformBuffersPerPipelineLayout',
+  'maxDynamicStorageBuffersPerPipelineLayout',
+] as const;
+const SYNTHETIC_DAWN_DYNAMIC_LIMIT_DEFAULT = 1_000_000;
+
+/**
+ * Keep browser-native Dawn from synthesizing the 1,000,000 dynamic-buffer
+ * defaults or clamping Dawn's synthetic 1,000,000 request. The adapter's
+ * reported values are the only safe values for omitted/defaulted limits: they
+ * are finite, supported by this adapter, and do not mutate the caller's
+ * descriptor.
+ */
+function normalizeDeviceDescriptor(
+  adapter: { readonly limits?: GPUSupportedLimits | undefined },
+  descriptor?: GPUDeviceDescriptor | undefined,
+): GPUDeviceDescriptor | undefined {
+  const adapterLimits = adapter.limits;
+  if (adapterLimits === undefined || adapterLimits === null) return descriptor;
+
+  const requiredLimits = { ...(descriptor?.requiredLimits ?? {}) };
+  let changed = false;
+  for (const key of DYNAMIC_DEVICE_LIMIT_KEYS) {
+    const value = adapterLimits[key];
+    if (!Number.isFinite(value) || value < 1) continue;
+    const requested = requiredLimits[key];
+    if (
+      requested !== undefined &&
+      (requested <= value || requested !== SYNTHETIC_DAWN_DYNAMIC_LIMIT_DEFAULT)
+    ) {
+      continue;
+    }
+    requiredLimits[key] = value;
+    changed = true;
+  }
+  return changed ? { ...(descriptor ?? {}), requiredLimits } : descriptor;
 }
 
 /**
@@ -196,13 +235,58 @@ export async function requestDevice(
 
   let rawDevice: GpuDeviceLike;
   try {
-    rawDevice = await adapter.requestDevice(opts.deviceDescriptor);
+    rawDevice = await adapter.requestDevice(
+      normalizeDeviceDescriptor(adapter, opts.deviceDescriptor),
+    );
   } catch (e) {
     return classifyRequestDeviceError(e);
   }
 
   const { device } = makeRhiDevice(rawDevice as unknown as GPUDevice);
   return ok(device);
+}
+
+function createRawShaderModule(
+  device: RhiDevice,
+  desc: { label?: string | undefined; code: string },
+): Result<GPUShaderModule, RhiError> {
+  // In-package reverse lookup of the underlying GPUDevice. The raw handle is
+  // intentionally kept behind this package boundary; render assembly may use
+  // this synchronous step, while public callers use the diagnostic-rich async
+  // entry below.
+  const rawDevice = _internal_getRawDevice(device);
+  if (rawDevice === undefined) {
+    return shaderCompileFailed([
+      {
+        type: 'error',
+        message: 'rhi-webgpu: createShaderModule called with unregistered RhiDevice',
+        lineNum: 0,
+        linePos: 0,
+        offset: 0,
+        length: 0,
+      } as GPUCompilationMessage,
+    ]);
+  }
+  const mirrored: { label?: string; code: string } = { code: desc.code };
+  if ('label' in desc && desc.label !== undefined) mirrored.label = desc.label;
+  try {
+    return ok(rawDevice.createShaderModule(mirrored as GPUShaderModuleDescriptor));
+  } catch (e) {
+    // The synchronous part of a real-device createShaderModule rarely throws
+    // (spec: errors are surfaced asynchronously through getCompilationInfo);
+    // a few mock shapes might throw — preserve the public structured error.
+    const message = e instanceof Error ? e.message : String(e);
+    return shaderCompileFailed([
+      {
+        type: 'error',
+        message,
+        lineNum: 0,
+        linePos: 0,
+        offset: 0,
+        length: 0,
+      } as GPUCompilationMessage,
+    ]);
+  }
 }
 
 /**
@@ -234,49 +318,9 @@ export async function createShaderModule(
   device: RhiDevice,
   desc: { label?: string | undefined; code: string },
 ): Promise<Result<ShaderModule, RhiError>> {
-  // In-package reverse lookup of the underlying GPUDevice. After D-S1 the
-  // function is renamed to `_internal_getRawDevice`; this call is in the
-  // same package as the WeakMap registry so it is allowed by the AC-08
-  // grep gate (the gate only restricts cross-package callers).
-  const rawDevice = _internal_getRawDevice(device);
-  if (rawDevice === undefined) {
-    // Rare: the device was not created by makeRhiDevice (external mock, etc.);
-    // the degraded path returns shader-compile-failed as a fallback so an AI
-    // user's exhaustive switch still matches (proposition 9: graceful
-    // degradation).
-    return shaderCompileFailed([
-      {
-        type: 'error',
-        message: 'rhi-webgpu: createShaderModule called with unregistered RhiDevice',
-        lineNum: 0,
-        linePos: 0,
-        offset: 0,
-        length: 0,
-      } as GPUCompilationMessage,
-    ]);
-  }
-  const mirrored: { label?: string; code: string } = { code: desc.code };
-  if ('label' in desc && desc.label !== undefined) mirrored.label = desc.label;
-  let handle: GPUShaderModule;
-  try {
-    handle = rawDevice.createShaderModule(mirrored as GPUShaderModuleDescriptor);
-  } catch (e) {
-    // The synchronous part of a real-device createShaderModule rarely throws
-    // (spec: errors are surfaced asynchronously through getCompilationInfo);
-    // a few mock shapes might throw — fall back to the
-    // shader-compile-failed path.
-    const message = e instanceof Error ? e.message : String(e);
-    return shaderCompileFailed([
-      {
-        type: 'error',
-        message,
-        lineNum: 0,
-        linePos: 0,
-        offset: 0,
-        length: 0,
-      } as GPUCompilationMessage,
-    ]);
-  }
+  const rawResult = createRawShaderModule(device, desc);
+  if (!rawResult.ok) return rawResult;
+  const handle = rawResult.value;
   const handleWithInfo = handle as GPUShaderModule & {
     // forgeax-async-whitelist: dom-native — spec `GPUShaderModule.getCompilationInfo()`
     getCompilationInfo?: () => Promise<GPUCompilationInfo>;
@@ -303,9 +347,41 @@ export async function createShaderModule(
   }
   const errors = info.messages.filter((m) => m.type === 'error');
   if (errors.length > 0) {
-    return shaderCompileFailed(info.messages);
+    // Keep the public six-field GPUCompilationMessage shape intact while
+    // making browser failures attributable to the shader producer. Dawn's
+    // aggregate output is otherwise indistinguishable when several modules
+    // are created during renderer bootstrap.
+    const sourcePrefix =
+      desc.label === undefined ? '' : ` source=${JSON.stringify(desc.code.slice(0, 24))}`;
+    const labeledMessages = info.messages.map((message) => ({
+      message:
+        desc.label === undefined
+          ? message.message
+          : `[${desc.label}]${sourcePrefix} ${message.message}`,
+      type: message.type,
+      lineNum: message.lineNum,
+      linePos: message.linePos,
+      offset: message.offset,
+      length: message.length,
+    })) as GPUCompilationMessage[];
+    return shaderCompileFailed(labeledMessages);
   }
   return ok(handle as unknown as ShaderModule);
+}
+
+/**
+ * Internal render-path shader creation. WebGPU returns a module handle
+ * synchronously; compiler diagnostics remain owned by the public async
+ * `createShaderModule` entry. Render pipeline creation is the validation point
+ * for this path, so software adapters do not serialize their first frame on
+ * `getCompilationInfo()` for every material.
+ */
+export function createShaderModuleImmediate(
+  device: RhiDevice,
+  desc: { label?: string | undefined; code: string },
+): Result<ShaderModule, RhiError> {
+  const result = createRawShaderModule(device, desc);
+  return result.ok ? ok(result.value as unknown as ShaderModule) : result;
 }
 
 /**
@@ -358,7 +434,7 @@ function makeRhiAdapter(rawAdapter: {
       let rawDevice: GpuDeviceLike;
       try {
         rawDevice = (await rawAdapter.requestDevice(
-          opts as GPUDeviceDescriptor | undefined,
+          normalizeDeviceDescriptor(rawAdapter, opts as GPUDeviceDescriptor | undefined),
         )) as GpuDeviceLike;
       } catch (e) {
         return classifyRequestDeviceError(e);
@@ -486,10 +562,12 @@ export function acquireCanvasContext(
  */
 export const rhi: RhiInstance & {
   createShaderModule: typeof createShaderModule;
+  createShaderModuleImmediate: typeof createShaderModuleImmediate;
   acquireCanvasContext: typeof acquireCanvasContext;
 } = {
   requestAdapter,
   createShaderModule,
+  createShaderModuleImmediate,
   acquireCanvasContext,
 };
 

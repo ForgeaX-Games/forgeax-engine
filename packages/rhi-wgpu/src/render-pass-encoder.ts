@@ -1,30 +1,21 @@
-// packages/rhi-wgpu/src/render-pass-encoder.ts — RhiRenderPassEncoder (w18).
-//
-// Wraps a raw GPURenderPassEncoder / RhiWgpuRenderPassEncoder handle into the
-// forgeax RhiRenderPassEncoder surface. M2 baseline routes each method
-// through best-effort forwarding (no-op when raw handle missing the
-// method); M3 / M4 dawn-node integration (w24) wires the real wgpu plumbing.
-//
-// Surface (mirrors @forgeax/engine-rhi/src/index.ts RhiRenderPassEncoder):
-//   - setPipeline / setVertexBuffer / setIndexBuffer / setBindGroup
-//     (2 overloads)
-//   - draw / drawIndexed / drawIndirect / drawIndexedIndirect
-//   - end / setViewport / setScissorRect / setBlendConstant / setStencilReference
-//   - pushDebugGroup / popDebugGroup / insertDebugMarker (GPUDebugCommandsMixin)
-//   - executeBundles / beginOcclusionQuery / endOcclusionQuery
-//     (Result-wrapped placeholders, see feat-future-rhi-render-bundle)
-//
-// Anchors: plan-strategy §6 M2 + AC-08 surface gate.
+// Render pass and immutable bundle adapters over native wgpu/WASM handles.
+// Shared draw, binding and debug commands use one forwarding surface.
+// Bundle execution and queries report unavailable operations explicitly.
 
 /// <reference types="@webgpu/types" />
 
 import {
   type BindGroup,
   type Buffer,
+  err,
   ok,
+  type RenderBundle,
   type RenderPipeline,
   type Result,
   type RhiError,
+  RhiError as RhiErrorClass,
+  type RhiRenderBundleEncoder,
+  type RhiRenderCommands,
   type RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
@@ -90,8 +81,8 @@ export interface RawRenderPassLike {
   endOcclusionQuery?(): void;
 }
 
-class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
-  private readonly raw: RawRenderPassLike;
+export class RhiWgpuRenderCommands implements RhiRenderCommands {
+  protected readonly raw: RawRenderPassLike;
   constructor(raw: RawRenderPassLike) {
     this.raw = raw;
   }
@@ -208,6 +199,29 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
     );
   }
 
+  pushDebugGroup(groupLabel: string): void {
+    if (this.raw.pushDebugGroup === undefined) return;
+    this.raw.pushDebugGroup.call(this.raw, groupLabel);
+  }
+
+  popDebugGroup(): void {
+    if (this.raw.popDebugGroup === undefined) return;
+    this.raw.popDebugGroup.call(this.raw);
+  }
+
+  insertDebugMarker(markerLabel: string): void {
+    if (this.raw.insertDebugMarker === undefined) return;
+    this.raw.insertDebugMarker.call(this.raw, markerLabel);
+  }
+}
+
+/** wgpu serde accepts the dictionary form of the WebGPU color union. */
+export function colorForWasm(color: GPUColor): GPUColorDict {
+  if (!Array.isArray(color)) return color as GPUColorDict;
+  return { r: color[0] ?? 0, g: color[1] ?? 0, b: color[2] ?? 0, a: color[3] ?? 0 };
+}
+
+class RhiWgpuRenderPassEncoderImpl extends RhiWgpuRenderCommands implements RhiRenderPassEncoder {
   end(): void {
     if (this.raw.end === undefined) return;
     this.raw.end.call(this.raw);
@@ -232,7 +246,7 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
 
   setBlendConstant(color: GPUColor): void {
     if (this.raw.setBlendConstant === undefined) return;
-    this.raw.setBlendConstant.call(this.raw, color);
+    this.raw.setBlendConstant.call(this.raw, colorForWasm(color));
   }
 
   setStencilReference(reference: number): void {
@@ -240,29 +254,14 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
     this.raw.setStencilReference.call(this.raw, reference);
   }
 
-  pushDebugGroup(groupLabel: string): void {
-    if (this.raw.pushDebugGroup === undefined) return;
-    this.raw.pushDebugGroup.call(this.raw, groupLabel);
-  }
-
-  popDebugGroup(): void {
-    if (this.raw.popDebugGroup === undefined) return;
-    this.raw.popDebugGroup.call(this.raw);
-  }
-
-  insertDebugMarker(markerLabel: string): void {
-    if (this.raw.insertDebugMarker === undefined) return;
-    this.raw.insertDebugMarker.call(this.raw, markerLabel);
-  }
-
-  executeBundles(bundles: Iterable<unknown>): Result<void, RhiError> {
-    // feat-future-rhi-render-bundle anchor; M2 baseline returns
-    // webgpuRuntimeError when the raw handle does not expose the method.
+  executeBundles(bundles: Iterable<RenderBundle>): Result<void, RhiError> {
     if (this.raw.executeBundles === undefined) {
-      return webgpuRuntimeError(new Error('executeBundles not implemented at M2 baseline'));
+      return webgpuRuntimeError(
+        new Error('executeBundles unavailable on the loaded WASM artifact'),
+      );
     }
     try {
-      this.raw.executeBundles.call(this.raw, bundles);
+      this.raw.executeBundles.call(this.raw, Array.from(bundles));
       return ok(undefined);
     } catch (e) {
       return webgpuRuntimeError(e);
@@ -271,7 +270,9 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
 
   beginOcclusionQuery(queryIndex: number): Result<void, RhiError> {
     if (this.raw.beginOcclusionQuery === undefined) {
-      return webgpuRuntimeError(new Error('beginOcclusionQuery not implemented at M2 baseline'));
+      return webgpuRuntimeError(
+        new Error('beginOcclusionQuery unavailable on the loaded WASM artifact'),
+      );
     }
     try {
       this.raw.beginOcclusionQuery.call(this.raw, queryIndex);
@@ -283,7 +284,9 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
 
   endOcclusionQuery(): Result<void, RhiError> {
     if (this.raw.endOcclusionQuery === undefined) {
-      return webgpuRuntimeError(new Error('endOcclusionQuery not implemented at M2 baseline'));
+      return webgpuRuntimeError(
+        new Error('endOcclusionQuery unavailable on the loaded WASM artifact'),
+      );
     }
     try {
       this.raw.endOcclusionQuery.call(this.raw);
@@ -292,6 +295,31 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
       return webgpuRuntimeError(e);
     }
   }
+}
+
+export function makeRhiRenderBundleEncoder(
+  raw: RawRenderPassLike & { finish(desc?: unknown): unknown },
+): RhiRenderBundleEncoder {
+  const commands = new RhiWgpuRenderCommands(raw);
+  let finished = false;
+  return Object.assign(commands, {
+    finish(desc?: import('@forgeax/engine-rhi').RenderBundleDescriptor) {
+      if (finished)
+        return err(
+          new RhiErrorClass({
+            code: 'command-encoder-finished',
+            expected: 'an unfinished bundle encoder',
+            hint: 'create a new render bundle encoder',
+          }),
+        );
+      finished = true;
+      try {
+        return ok(raw.finish(desc) as RenderBundle);
+      } catch (cause) {
+        return webgpuRuntimeError(cause);
+      }
+    },
+  });
 }
 
 export function makeRhiRenderPassEncoder(raw: RawRenderPassLike): RhiRenderPassEncoder {

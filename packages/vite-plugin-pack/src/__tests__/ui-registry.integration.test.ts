@@ -49,7 +49,7 @@ describe('pluginPack UI importer registration', () => {
         emptyOutDir: true,
         rollupOptions: { input: { main: join(root, 'main.js') } },
       },
-      plugins: [pluginPack({ roots: [root], importers: [{ key: 'ui', ...createUiImporter() }] })],
+      plugins: [pluginPack({ roots: [root], importers: [createUiImporter()] })],
     });
 
     const files = await readdir(dist, { recursive: true });

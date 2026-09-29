@@ -15,11 +15,33 @@ never the reverse.
   through the camera, walks every renderable archetype, ray-AABB tests each
   pickable mesh's world-space bounding box, and returns the nearest
   `PickHit { entity, point, distance }` (or `undefined` on a miss). AABB
-  granularity (Three.js `Raycaster`-aligned MVP; per-triangle precision is
-  `pickVertex`).
+  granularity is intentional; use `pickTriangle` when exact surface and
+  occlusion ordering are required.
 - **`viewportToWorld(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`**
   — exposes the same camera unprojection as a world-space `Ray` for cursor
   placement, gizmos, and custom plane/triangle queries.
+- **`pickDisplay` / `computeDisplayScreenRay`** — explicit display-space
+  entrypoints. They consume the effective `BarrelDistortionMapping` from the
+  submitted frame, map the displayed physical pixel once, then use the existing
+  unwarped camera math. The submitted mapping is mandatory, including its
+  identity case; absent, retired, lost, or zero-size frame contexts return a
+  miss. Legacy `pick` and `viewportToWorld` remain unwarped APIs.
+- **`pickVertexDisplay` / `pickVertexOnEntityDisplay`** — display-space vertex
+  queries. They project each candidate back through the same scene-to-display
+  inverse before applying the optional physical-pixel radius and sorting, so a
+  nonlinear warp cannot change which vertex is closest merely by correcting the
+  pointer.
+
+> [!WARNING]
+> An omitted `barrelDistortion` field means that no accepted submitted display
+> context is available. Treat it as a miss and wait for a new frame. An
+> identity query is valid only with an explicit submitted mapping whose
+> `strength` is `0`.
+- **`pickTriangle`** — exact static CPU triangle query for a screen ray. It
+  transforms indexed or non-indexed triangle-list vertices into world space,
+  returns the nearest world point, distance, barycentric weights, entity,
+  triangle index, and optional Catalog GUID, or reports `unavailable` when
+  CPU geometry or the current skinned pose cannot be tested.
 - **`pickVertexOnEntity` / `pickVertex`** — per-triangle vertex-level queries
   (editor vertex-snapping workflow). Three-state static-dispatch overload:
   without options -> `VertexHit | undefined`; with `{ limit: N }` -> `VertexHit[]`
@@ -27,7 +49,7 @@ never the reverse.
   walks the whole scene (AABB coarse cull, then per-entity vertex collect).
 - **`pickTile(world, tilemapEntity, worldX, worldY)`** — cell-level Tilemap query:
   converts world coordinates through the full inverse of the propagated
-  `Transform.world` affine matrix, walks child `TileLayer`s in descending
+  `GlobalTransform.world` affine matrix, walks child `TileLayer`s in descending
   `layerOrder`, and returns `Result.ok(PickTileHit { layerEntity, cellX, cellY,
   tileId })` for the topmost non-zero cell, `Result.ok(null)` for empty /
   out-of-bounds, or `Result.err(PickTileError)` for a structural break.
@@ -37,7 +59,7 @@ never the reverse.
   hit nothing" outcomes return `undefined` / `[]` (error channel physically
   separated from the miss channel, charter P3).
 - **`pick-core`** (internal) — the shared skeleton (camera validation ->
-  `view = invert(Transform.world)` -> projection branch -> `screenToRay` ->
+  `view = invert(GlobalTransform.world)` -> projection branch -> `screenToRay` ->
   `readWorldMatrix`) that `pick` and `pickVertex*` both consume. Single source of
   truth (architecture-principles §2); the AI user never imports it directly.
 
@@ -48,7 +70,7 @@ import { pick, type PickHit } from '@forgeax/engine-picking';
 import { MeshRenderer } from '@forgeax/engine-render';
 import { propagateTransforms } from '@forgeax/engine-scene';
 
-// Caller resolves Transform.world for the current frame first (D-9 contract):
+// Caller resolves GlobalTransform.world for the current frame first (D-9 contract):
 propagateTransforms(world);
 
 const hit: PickHit | undefined = pick(
@@ -74,10 +96,40 @@ if (hit) {
 
 `PickHit = { entity: EntityHandle; point: Vec3Like; distance: number }`. No
 `face` / `uv` / `normal` — AABB picking has no triangle resolution, so those
-would be a lie (use `pickVertex` for per-triangle vertices). Both `perspective`
+would be a lie (use `pickTriangle` or `pickVertex` for precise geometry). Both `perspective`
 and `orthographic` camera projections are supported. Reads the resolved
-`Transform.world` mat4 directly (feat-20260601 D-3), so the camera + candidates
+`GlobalTransform.world` mat4 directly (feat-20260601 D-3), so the camera + candidates
 must have propagated transforms for the current frame.
+
+### Display-space interaction
+
+```ts
+import { pickDisplay } from '@forgeax/engine-picking';
+
+const hit = pickDisplay(
+  world,
+  outputPixelX,
+  outputPixelY,
+  submittedReceipt.barrelDistortion,
+  outputWidth,
+  outputHeight,
+);
+```
+
+Coordinates are continuous physical output pixels. The host first converts the
+CSS pointer through the actual canvas/viewport rectangle and output extent; it
+does not add a half-pixel offset. Out-of-viewport and crop misses return
+`undefined` before the math layer's normal screen clamp. Reuse the same receipt
+mapping for labels, crosshairs, and display-space queries so a newer ECS camera
+component cannot disagree with the frame on screen. The App
+`subscribeBrowserFrameSubmitted(canvas, listener)` helper forwards the
+deep-frozen mapping and frame identity from the accepted browser submission;
+unsubscribe it when the canvas or renderer is retired. A lost or zero-size
+context must be discarded and reacquired through the existing App/Renderer
+recovery path. The width and height arguments are an explicit check against
+`mapping.width` and `mapping.height`; a mismatch, an undefined mapping, or an
+identity guess without a submitted mapping returns a miss. Display picking
+never falls back to the live World camera.
 
 ### Screen-to-world (`viewportToWorld`)
 
@@ -114,8 +166,24 @@ Only `triangle-list` submeshes participate; skinned meshes report
 > **`propagateTransforms` precondition (D-9)** — call
 > `propagateTransforms(world)` (exported from `@forgeax/engine-runtime`) for the
 > current frame before `pick` / `pickVertex*`. These functions read
-> `Transform.world` column-major mat4 directly; they never re-propagate. The
+> `GlobalTransform.world` column-major mat4 directly; they never re-propagate. The
 > contract is identical across `pick` and `pickVertex*`.
+
+### Exact triangle (`pickTriangle`)
+
+| Function | Signature | Return |
+|:--|:--|:--|
+| `pickTriangle` | `(world, cameraEntity, screenX, screenY, vpW, vpH, options?)` | `TrianglePickResult` |
+
+`TrianglePickResult` is a closed three-state result: `hit` contains the
+nearest `TriangleHit`; `miss` means every candidate was tested and no triangle
+intersects the ray; `unavailable` names intersecting entities whose CPU
+geometry, current skinned pose, or explicit instance transforms cannot be
+tested. For an entity carrying `Instances`, the picker reads World-owned
+`Instances.transforms`; a hit includes the zero-based `instanceIndex`.
+No Renderer or collection resolver is needed. Pass
+`AssetRegistry.guidOf` as `assetGuidOf` when provenance is needed. The query
+does not mutate the World or own an asset registry.
 
 ### Tile-cell (`pickTile`)
 
@@ -124,7 +192,7 @@ Only `triangle-list` submeshes participate; skinned meshes report
 | `pickTile` | `(world, tilemapEntity, worldX, worldY)` | `Result<PickTileHit \| null, PickTileError>` |
 
 `PickTileHit = { layerEntity, cellX, cellY, tileId }`. Callers propagate the
-World before picking so `Transform.world` is current; an entity without a
+World before picking so `GlobalTransform.world` is current; an entity without a
 Transform retains the origin-default path. `Result.ok(null)` = empty cell or
 out-of-bounds. A dead handle returns `tilemap-not-found`; a live entity without
 `Tilemap` returns `tilemap-component-missing`. `PickTileError` is a closed
@@ -164,5 +232,6 @@ miss returns `undefined`).
 - `src/pick.ts` — `pick` + `PickHit`
 - `src/pick-vertex.ts` — `pickVertex` / `pickVertexOnEntity` + `VertexHit`
 - `src/pick-tile.ts` — `pickTile` + `PickTileHit` / `PickTileError`
+- `src/pick-triangle.ts` — exact triangle/occlusion query + unavailable state
 - `src/pick-errors.ts` — `PickError` / `PickErrorCode` (error SSOT)
 - `src/pick-core.ts` — shared camera->ray skeleton (internal)

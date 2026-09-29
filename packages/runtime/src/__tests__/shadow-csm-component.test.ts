@@ -83,7 +83,11 @@ describe('CSM component schema (w1)', () => {
       error: {
         code?: string;
         hint?: string;
-        detail?: { field?: string; value?: number; min?: number; max?: number };
+        detail?: {
+          field?: string;
+          actual?: number;
+          bound?: { kind?: string; min?: number; max?: number };
+        };
       };
     };
 
@@ -97,7 +101,7 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('cascadeCount');
       expect(r.error.detail?.field).toBe('cascadeCount');
-      expect(r.error.detail?.value).toBe(0);
+      expect(r.error.detail?.actual).toBe(0);
     });
 
     it('cascadeCount=5 -> ShadowInvalidConfigError (max=4)', () => {
@@ -110,8 +114,8 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('cascadeCount');
       expect(r.error.detail?.field).toBe('cascadeCount');
-      expect(r.error.detail?.value).toBe(5);
-      expect(r.error.detail?.max).toBe(4);
+      expect(r.error.detail?.actual).toBe(5);
+      expect(r.error.detail?.bound).toEqual({ kind: 'range', min: 1, max: 4 });
     });
 
     it('splitLambda=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
@@ -124,7 +128,8 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('splitLambda');
       expect(r.error.detail?.field).toBe('splitLambda');
-      expect(r.error.detail?.value).toBeCloseTo(-0.1, 5);
+      expect(r.error.detail?.actual).toBeCloseTo(-0.1, 5);
+      expect(r.error.detail?.bound).toEqual({ kind: 'range', min: 0, max: 1 });
     });
 
     it('splitLambda=1.1 -> ShadowInvalidConfigError (max=1)', () => {
@@ -137,8 +142,8 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('splitLambda');
       expect(r.error.detail?.field).toBe('splitLambda');
-      expect(r.error.detail?.value).toBeCloseTo(1.1, 5);
-      expect(r.error.detail?.max).toBe(1);
+      expect(r.error.detail?.actual).toBeCloseTo(1.1, 5);
+      expect(r.error.detail?.bound).toEqual({ kind: 'range', min: 0, max: 1 });
     });
 
     it('cascadeBlend=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
@@ -151,7 +156,8 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('cascadeBlend');
       expect(r.error.detail?.field).toBe('cascadeBlend');
-      expect(r.error.detail?.value).toBeCloseTo(-0.1, 5);
+      expect(r.error.detail?.actual).toBeCloseTo(-0.1, 5);
+      expect(r.error.detail?.bound).toEqual({ kind: 'range', min: 0, max: 0.5 });
     });
 
     it('cascadeBlend=0.6 -> ShadowInvalidConfigError (max=0.5)', () => {
@@ -164,8 +170,8 @@ describe('CSM component schema (w1)', () => {
       expect(r.error.code).toBe('shadow-invalid-config');
       expect(r.error.hint).toContain('cascadeBlend');
       expect(r.error.detail?.field).toBe('cascadeBlend');
-      expect(r.error.detail?.value).toBeCloseTo(0.6, 5);
-      expect(r.error.detail?.max).toBeCloseTo(0.5, 5);
+      expect(r.error.detail?.actual).toBeCloseTo(0.6, 5);
+      expect(r.error.detail?.bound).toEqual({ kind: 'range', min: 0, max: 0.5 });
     });
 
     it('all three new fields within valid range spawn succeeds', () => {
@@ -180,29 +186,28 @@ describe('CSM component schema (w1)', () => {
 
   // ── w2: ShadowInvalidConfigDetail.max field constructor tests ──────────
 
-  describe('w2: ShadowInvalidConfigDetail.max constructor', () => {
-    it('cascadeCount=5 detail.max=4 via constructor', () => {
+  describe('w2: ShadowInvalidConfigDetail.bound constructor', () => {
+    it('cascadeCount=5 bound.max=4 via constructor', () => {
       // TDD red: max param not yet on constructor.
       const err = new (ShadowInvalidConfigError as any)('cascadeCount', 5, 1, 4);
       expect(err.code).toBe('shadow-invalid-config');
       expect(err.detail.field).toBe('cascadeCount');
-      expect(err.detail.value).toBe(5);
-      expect(err.detail.min).toBe(1);
-      expect(err.detail.max).toBe(4);
+      expect(err.detail.actual).toBe(5);
+      expect(err.detail.bound).toEqual({ kind: 'range', min: 1, max: 4 });
       expect(err.hint).toContain('[1, 4]');
     });
 
-    it('cascadeBlend=0.6 detail.max=0.5 via constructor', () => {
+    it('cascadeBlend=0.6 bound.max=0.5 via constructor', () => {
       const err = new (ShadowInvalidConfigError as any)('cascadeBlend', 0.6, 0, 0.5);
       expect(err.detail.field).toBe('cascadeBlend');
-      expect(err.detail.max).toBeCloseTo(0.5, 5);
+      expect(err.detail.bound).toEqual({ kind: 'range', min: 0, max: 0.5 });
       expect(err.hint).toContain('[0, 0.5]');
     });
 
-    it('splitLambda=1.1 detail.max=1 via constructor', () => {
+    it('splitLambda=1.1 bound.max=1 via constructor', () => {
       const err = new (ShadowInvalidConfigError as any)('splitLambda', 1.1, 0, 1);
       expect(err.detail.field).toBe('splitLambda');
-      expect(err.detail.max).toBe(1);
+      expect(err.detail.bound).toEqual({ kind: 'range', min: 0, max: 1 });
       expect(err.hint).toContain('[0, 1]');
     });
   });
@@ -246,6 +251,42 @@ describe('CSM component schema (w1)', () => {
     });
   });
 
+  describe('contactShadowLength', () => {
+    it('defaults to 0 (contact shadows off)', () => {
+      const world = new World();
+      const e = world
+        .spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } })
+        .unwrap();
+      expect(world.get(e, DirectionalLight).unwrap().contactShadowLength).toBe(0);
+    });
+
+    it.each([-0.1, Number.NaN, Number.POSITIVE_INFINITY])('rejects %s', (value) => {
+      for (const castShadow of [true, false]) {
+        const r = validateDirectionalLightData({
+          direction: [0, -1, 0],
+          castShadow,
+          contactShadowLength: value,
+        });
+        expect(r.ok).toBe(false);
+        if (!r.ok) {
+          expect(r.error.code).toBe('shadow-invalid-config');
+          expect((r.error.detail as { field?: string }).field).toBe('contactShadowLength');
+        }
+      }
+    });
+
+    it.each([0, 0.3])('accepts %s independently of castShadow', (value) => {
+      for (const castShadow of [true, false]) {
+        const r = validateDirectionalLightData({
+          direction: [0, -1, 0],
+          castShadow,
+          contactShadowLength: value,
+        });
+        expect(r.ok).toBe(true);
+      }
+    });
+  });
+
   // ── pre-existing validate (mapSize < 1) still works ─────────────────
 
   describe('pre-existing validate still works', () => {
@@ -260,15 +301,17 @@ describe('CSM component schema (w1)', () => {
         const err = r.error as {
           code?: string;
           hint?: string;
-          detail?: { field?: string; value?: number; min?: number; max?: number };
+          detail?: {
+            field?: string;
+            actual?: number;
+            bound?: { kind?: string; min?: number; max?: number };
+          };
         };
         expect(err.code).toBe('shadow-invalid-config');
         expect(err.hint).toContain('mapSize');
         expect(err.detail?.field).toBe('mapSize');
-        expect(err.detail?.value).toBe(0);
-        expect(err.detail?.min).toBe(1);
-        // mapSize < 1 has no max (lower-bound only), compatible with old callers.
-        expect(err.detail?.max).toBeUndefined();
+        expect(err.detail?.actual).toBe(0);
+        expect(err.detail?.bound).toEqual({ kind: 'lower-bound', operator: '>=', value: 1 });
       }
     });
 

@@ -28,9 +28,18 @@
 const INV_ATAN: vec2<f32> = vec2<f32>(0.1591, 0.3183);
 const PI: f32 = 3.14159265;
 
+// Shared Standard receiver response for diffuse environment and traced D=E/pi.
+// Albedo, radiance and occlusion are applied by the consumer exactly once.
+fn standardDiffuseWeight(cosTheta: f32, f0: vec3<f32>, roughness: f32, metallic: f32) -> vec3<f32> {
+  return (vec3<f32>(1.0) - fresnelSchlickRoughness(cosTheta, f0, roughness)) * (1.0 - metallic);
+}
+
 // Map a direction vector to equirectangular UV.
 fn sampleSphericalMap(v: vec3<f32>) -> vec2<f32> {
-  let uv = vec2<f32>(atan2(v.z, v.x), asin(v.y));
+  // Cube-face rasterization can produce a direction whose normalized Y lane
+  // is a few ulps outside [-1, 1]. `asin` propagates that rounding error as
+  // NaN, poisoning the generated cubemap and every later IBL sample.
+  let uv = vec2<f32>(atan2(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
   return uv * INV_ATAN + 0.5;
 }
 
@@ -87,7 +96,11 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
   let a = roughness * roughness;
 
   let phi = 2.0 * PI * Xi.x;
-  let cosTheta = sqrt(max((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y), 0.0));
+  // The production Hammersley domain is i < N, so Xi.y stays below one.
+  // Retain a finite lower bound for callers that provide an endpoint sample
+  // directly; this is defensive input handling, not the production NaN fix.
+  let denominator = max(1.0 + (a * a - 1.0) * Xi.y, 1e-5);
+  let cosTheta = sqrt(max((1.0 - Xi.y) / denominator, 0.0));
   let sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 
   // GGX half-vector in tangent space.
@@ -114,5 +127,7 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
 // Fresnel-Schlick with roughness dampening for IBL specular.
 fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
   let oneMinusRough = max(vec3<f32>(1.0 - roughness), F0);
-  return F0 + (oneMinusRough - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+  let cosineComplement = clamp(1.0 - cosTheta, 0.0, 1.0);
+  let squared = cosineComplement * cosineComplement;
+  return F0 + (oneMinusRough - F0) * (squared * squared * cosineComplement);
 }

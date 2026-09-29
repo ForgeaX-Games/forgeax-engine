@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +68,24 @@ function makeRgba8x8(): Uint8Array {
 }
 
 describe.skipIf(!pkgBuilt)('basis WASM init smoke (M1)', () => {
+  it('transcoder initializes when dynamic Function construction is unavailable', () => {
+    // A separate process keeps the restricted Function global out of Vitest.
+    // Mini-game runtimes may return a non-callable object from new Function.
+    const source = `
+      let attempts = 0;
+      globalThis.Function = function () { attempts++; return {}; };
+      const factory = (await import(${JSON.stringify(TRANSCODER_GLUE.href)})).default;
+      const mod = await factory({ locateFile: () => ${JSON.stringify(new URL('../../pkg/basis_transcoder.wasm', import.meta.url).href)} });
+      mod.initializeBasis();
+      if (typeof mod.KTX2File !== 'function' || attempts !== 0) {
+        throw new Error('Basis transcoder requires dynamic Function construction');
+      }
+    `;
+    expect(() =>
+      execFileSync(process.execPath, ['--input-type=module', '-e', source]),
+    ).not.toThrow();
+  });
+
   it('transcoder module inits with KTX2File + format enum', async () => {
     const tc = await loadTranscoder();
     expect(tc).not.toBeNull();

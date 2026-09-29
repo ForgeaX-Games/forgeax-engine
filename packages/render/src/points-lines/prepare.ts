@@ -37,6 +37,8 @@ export interface PointsLinesLanePreparationAdapter<Resource> {
     mesh: MeshAsset,
   ): Result<PointsLinesPreparedResource<Resource>, PointsLinesPrepareFailedError>;
   resetForDeviceLoss(): void;
+  /** Drop lost-device handles without calling destroy on the dead device. */
+  abandonForDeviceLoss(): void;
   lastKnownGood(): PointsLinesPreparedResource<Resource> | undefined;
   inspect(): PointsLinesPreparationInspection<Resource>;
 }
@@ -121,6 +123,12 @@ export class PointsLinesPreparation<Resource> {
     this.status = 'rebuild-pending';
   }
 
+  abandonForDeviceLoss(): void {
+    this.live = undefined;
+    this.pendingCandidateBytes = 0;
+    this.status = 'rebuild-pending';
+  }
+
   lastKnownGood(): PointsLinesPreparedResource<Resource> | undefined {
     return this.live;
   }
@@ -171,6 +179,7 @@ export function createPointsLinesLanePreparationAdapter<Resource>(
     contract: createPointsLinesLaneContract(lane, backend),
     prepare: (snapshot, mesh) => preparation.prepare(snapshot, mesh),
     resetForDeviceLoss: () => preparation.resetForDeviceLoss(),
+    abandonForDeviceLoss: () => preparation.abandonForDeviceLoss(),
     lastKnownGood: () => preparation.lastKnownGood(),
     inspect: () => preparation.inspect(),
   };

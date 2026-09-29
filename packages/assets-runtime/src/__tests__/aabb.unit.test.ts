@@ -95,3 +95,13 @@ describe('withMeshAabb', () => {
     expect(mesh.aabb).toBeUndefined();
   });
 });
+
+it.each([false, true])('preserves a finite deformation envelope (frozen=%s)', (frozen) => {
+  const authored = Float32Array.of(-5, -5, -5, 5, 5, 5);
+  const input = { ...meshWith(Float32Array.of(0, 0, 0, 1, 1, 1)), aabb: authored };
+  const out = withMeshAabb(frozen ? Object.freeze(input) : input);
+  expect([...(out.aabb ?? [])]).toEqual([...authored]);
+  const narrow = withMeshAabb({ ...input, aabb: Float32Array.of(0, 0, 0, 0, 0, 0) });
+  expect([...(narrow.aabb ?? [])]).toEqual([0, 0, 0, 1, 1, 1]);
+  expect([...authored]).toEqual([-5, -5, -5, 5, 5, 5]);
+});

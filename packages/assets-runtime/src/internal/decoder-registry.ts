@@ -21,6 +21,9 @@ export interface DecoderRegistryOptions {
 }
 
 export class DecoderRegistry {
+  referencePolicy(kind: string): 'eager' | 'deferred' {
+    return this.dispatch.get(kind)?.decoder.references ?? 'eager';
+  }
   private readonly dispatch = new Map<string, DecoderEntry>();
   private readonly scopeId: string;
   private disposed = false;

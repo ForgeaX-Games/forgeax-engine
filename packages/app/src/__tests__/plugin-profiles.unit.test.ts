@@ -1,9 +1,11 @@
+import type { AssetRegistry, CatalogSource } from '@forgeax/engine-assets-runtime';
 import type { AudioBackend } from '@forgeax/engine-audio';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { type InputBackend, ownedInputBackendPlugin } from '@forgeax/engine-input';
 import { Context, type Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
+import type { AssetRuntimeAssembly } from '../assets-runtime-assembly';
 import { assembledEngineProfile } from '../internal/assembled-engine-profile';
 import { mainEngineProfile } from '../internal/main-engine-profile';
 import { remoteServerPlugin } from '../internal/remote-server-plugin';
@@ -74,13 +76,22 @@ function expectDag(profile: readonly Plugin[], roots: readonly string[]): void {
   expect(visited, 'built-in profile dependency cycle').toBe(profile.length);
 }
 
-const renderer = { assets: {} } as unknown as Renderer;
+const renderer = {} as Renderer;
+const assetAssembly = {
+  registry: {} as AssetRegistry,
+  catalogSource: {} as CatalogSource,
+  fetcher: globalThis.fetch,
+  decoderContributions: [],
+  ownsRegistry: false,
+  dispose() {},
+} as AssetRuntimeAssembly;
 const input = { sample: () => ({}) } as InputBackend;
 const audio = {} as AudioBackend;
 describe('Engine built-in plugin profiles', () => {
   it('keeps browser-main capabilities in one acyclic declared graph', () => {
     const profile = mainEngineProfile({
       renderer,
+      assetAssembly,
       input,
       inputMap: [],
       animationPayloads: () => undefined,
@@ -88,7 +99,7 @@ describe('Engine built-in plugin profiles', () => {
     expect(profile.map((plugin) => metadata(plugin).name)).toEqual([
       'renderer',
       'render-components',
-      'renderer-assets',
+      'asset-registry',
       'assets-world',
       'input-backend',
       'scene',
@@ -105,13 +116,14 @@ describe('Engine built-in plugin profiles', () => {
     expectDag(
       workerEngineProfile({
         renderer,
+        assetAssembly,
         input,
         audio,
         animationPayloads: () => undefined,
       }),
       ['world'],
     );
-    expectDag(assembledEngineProfile({ renderer }), ['world']);
+    expectDag(assembledEngineProfile({ renderer, assetAssembly }), ['world']);
   });
 
   it('closes an App-owned remote server with its Fiber', async () => {

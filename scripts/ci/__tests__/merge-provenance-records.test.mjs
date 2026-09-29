@@ -163,8 +163,8 @@ test('t15b: merges immutable producer records with selected artifact IDs', () =>
     const consumerIds = (name) =>
       githubOutput.match(new RegExp(`^${name}=(.*)$`, 'm'))?.[1]?.split(',') ?? [];
     assert.ok(consumerIds('artifact_ids_primary_pnpm').includes('core-transfer'));
-    assert.equal(consumerIds('artifact_ids_primary_pnpm').length, 2);
-    assert.ok(consumerIds('artifact_ids_smoke_fleet').includes('shared-app-inputs-1-1'));
+    assert.equal(consumerIds('artifact_ids_primary_pnpm').length, 1);
+    assert.ok(!consumerIds('artifact_ids_smoke_fleet').includes('shared-app-inputs-1-1'));
     assert.ok(consumerIds('artifact_ids_smoke_fleet').includes('app-shard-2-1-0'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -419,3 +419,28 @@ test('w18: rejects missing, stale, incompatible, and duplicate shared provenance
     }
   }
 });
+
+for (const missing of ['core-build', 'shared-app-inputs', 'app-shard-1']) {
+  test(`unavailable ${missing} transfer preserves source proof without inventing upload evidence`, () => {
+    const values = records();
+    for (const artifact of values.find((value) => value.producer === missing).artifacts) {
+      artifact.artifactId = '';
+      artifact.upload = null;
+    }
+    const dir = fixture(values);
+    try {
+      const result = run(dir);
+      assert.equal(result.exitCode, 0, result.stdout);
+      const merged = JSON.parse(readFileSync(result.out, 'utf8'));
+      assert.ok(
+        merged.artifacts
+          .filter((artifact) => artifact.producer === missing)
+          .every((artifact) => artifact.artifactId === '' && artifact.upload === null),
+      );
+      if (missing === 'core-build')
+        assert.match(readFileSync(result.githubOutput, 'utf8'), /^artifact_ids_primary_pnpm=$/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

@@ -13,7 +13,9 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../pack" },
     { "path": "../types" },
-    { "path": "../shader-compiler" }
+    { "path": "../shader-compiler" },
+    { "path": "../shader" }
   ]
 }

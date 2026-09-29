@@ -1,4 +1,4 @@
-import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   projectHierarchy,
   type SceneHierarchyDiagnostic,
@@ -45,34 +45,53 @@ export function resolveVisibility(
   world: World,
   hierarchy: SceneHierarchySnapshot = projectHierarchy(world),
 ): VisibilitySnapshot {
-  const query = world.query({ read: [Entity], optional: [Visibility] });
+  // Visibility is an opt-in component. Query only the owning archetypes
+  // instead of walking every Entity row with an optional column; the latter
+  // made a World with no visibility intents pay a full-scene scan on each
+  // extraction. QueryRow.entity is sourced from the essential Entity column,
+  // so the required Visibility read retains the same handle and intent
+  // semantics while keeping the hot path sparse.
+  const query = world.query({ read: [Visibility] });
+  const visitVisibilityRows = (visit: (entity: EntityHandle, rawState: number) => void): void => {
+    if (!query.ok) return;
+    // Dense component spans keep the per-frame summary on typed-array reads
+    // instead of allocating a QueryRow facade for every visibility-bearing
+    // entity. Keep the row path as a defensive fallback if a future storage
+    // mode cannot expose spans.
+    const spans = query.value.spans();
+    if (spans.ok) {
+      for (const span of spans.value) {
+        const states = span.get(Visibility).state;
+        for (let index = 0; index < span.length; index += 1) {
+          visit(span.entities[index] as EntityHandle, states[index] ?? 0);
+        }
+      }
+      return;
+    }
+    for (const row of query.value) {
+      visit(row.entity, row.get(Visibility).state);
+    }
+  };
   let intentCount = 0;
   let hasAnyHiddenIntent = false;
-  if (query.ok) {
-    for (const row of query.value) {
-      const visibility = row.get(Visibility);
-      if (visibility === undefined) continue;
-      intentCount += 1;
-      if (visibility.state === VisibilityStateValue.hidden) {
-        hasAnyHiddenIntent = true;
-      }
+  visitVisibilityRows((_entity, rawState) => {
+    intentCount += 1;
+    if (rawState === VisibilityStateValue.hidden) {
+      hasAnyHiddenIntent = true;
     }
-  }
+  });
 
   let resolveEntity: ((entity: EntityHandle) => ResolutionState | undefined) | undefined;
   let hasIntent: ((entity: EntityHandle) => boolean) | undefined;
   const ensureResolver = (): void => {
     if (resolveEntity !== undefined) return;
     const intentByEntity = new Map<EntityHandle, VisibilityState>();
-    if (query.ok) {
-      for (const row of query.value) {
-        const raw = row.get(Visibility);
-        const intent = raw === undefined ? undefined : visibilityStateFromU32(raw.state);
-        if (intent !== undefined) {
-          intentByEntity.set(row.entity, intent);
-        }
+    visitVisibilityRows((entity, rawState) => {
+      const intent = visibilityStateFromU32(rawState);
+      if (intent !== undefined) {
+        intentByEntity.set(entity, intent);
       }
-    }
+    });
     hasIntent = (entity: EntityHandle): boolean => intentByEntity.has(entity);
     const resolved = new Map<EntityHandle, ResolutionState>();
     const resolving = new Set<EntityHandle>();
@@ -104,7 +123,7 @@ export function resolveVisibility(
     };
   };
 
-  return {
+  const snapshot: VisibilitySnapshot = {
     diagnostics: hierarchy.diagnostics,
     hasAnyIntent: intentCount > 0,
     hasAnyHiddenIntent,
@@ -117,4 +136,5 @@ export function resolveVisibility(
       return resolveEntity?.(entity)?.effective ?? 'visible';
     },
   };
+  return snapshot;
 }

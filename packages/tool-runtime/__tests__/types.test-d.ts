@@ -1,7 +1,7 @@
+import { defineToolCapability } from '../src/index.js';
 import { expectTypeOf } from 'vitest';
 import type {
   ArtifactRef,
-  defineToolCapability,
   SnapshotRef,
   ToolCapabilityResult,
   ToolContribution,
@@ -47,4 +47,8 @@ expectTypeOf<ToolRuntimeError['code']>().toEqualTypeOf<
   | 'tool-catalog-stale'
   | 'tool-cleanup-failed'
   | 'tool-domain-failed'
+  | 'tool-bootstrap-not-clone-safe'
+  | 'tool-migration-live-state'
+  | 'tool-artifact-manifest-invalid'
+  | 'tool-timing-invalid'
 >();

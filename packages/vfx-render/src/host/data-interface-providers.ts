@@ -14,6 +14,8 @@ export type { VfxDataInterfaceProvider } from '@forgeax/engine-vfx';
 
 export interface VfxDataInterfaceAvailabilitySource {
   readonly available: (generation: number) => boolean;
+  readonly sampleCount?: 1 | 4;
+  readonly resource?: (generation: number) => VfxDataInterfaceResource['resource'] | undefined;
 }
 
 export interface VfxDataInterfaceRegistry {
@@ -60,11 +62,26 @@ function availableProvider<K extends VfxDataInterfaceKind>(
           detail: { token, providerId: `${token}-provider` },
         });
       }
+      const prepared = source.resource?.(generation);
+      if (prepared === undefined) {
+        return err({
+          code: 'vfx-data-interface-missing',
+          expected: `a resident ${kind} resource for ${token}`,
+          hint: `provide the generation-owned ${kind} resource before rendering`,
+          detail: {
+            token,
+            providerId: `${token}-provider`,
+            expectedResourceKind: kind === 'camera' ? 'buffer' : 'texture-view',
+          },
+        });
+      }
       const resource: VfxDataInterfaceResource = {
         token,
         kind,
         bindingType,
         generation,
+        ...(source.sampleCount === undefined ? {} : { sampleCount: source.sampleCount }),
+        resource: prepared,
       };
       return ok(resource);
     },
@@ -81,6 +98,12 @@ export function createSceneDepthProvider(
   source: VfxDataInterfaceAvailabilitySource,
 ): VfxDataInterfaceProvider<'scene-depth'> {
   return availableProvider('vfx:scene-depth', 'scene-depth', 'sampled-depth', source);
+}
+
+export function createNoiseProvider(
+  source: VfxDataInterfaceAvailabilitySource,
+): VfxDataInterfaceProvider<'noise'> {
+  return availableProvider('vfx:noise', 'noise', 'sampled-float', source);
 }
 
 export function createVfxDataInterfaceRegistry(

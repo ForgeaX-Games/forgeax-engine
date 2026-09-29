@@ -105,7 +105,7 @@ describe('real glTF morph import through Pack and AssetRegistry', () => {
     expect(loadedAnimation.ok).toBe(true);
     if (!loadedMesh.ok || !loadedScene.ok || !loadedAnimation.ok) return;
     expect(Array.from(loadedMesh.value.morphWeights ?? [])).toEqual([0, 0]);
-    const sceneEntity = loadedScene.value.entities[0];
+    const sceneEntity = Object.values(loadedScene.value.entities)[0];
     expect(sceneEntity?.components.MorphWeights?.weights).toEqual([0, 0]);
     expect(loadedAnimation.value.channels[0]?.property).toBe('weights');
     expect(Array.from(loadedAnimation.value.channels[0]?.sampler.output ?? [])).toEqual([

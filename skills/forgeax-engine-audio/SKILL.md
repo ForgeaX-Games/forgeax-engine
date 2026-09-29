@@ -72,13 +72,15 @@ Add `AudioListener` to the camera entity for spatial audio. The plugin runs list
 
 ## Clip and async safety
 
-`AudioClipAsset` is POD: `{ kind: 'audio', sourceKey: string, bytes: Uint8Array }`. The Host caches the decode Promise by `sourceKey`. Each entity play/stop advances an epoch; late decode completion checks that epoch before creating a source, so a replaced or stopped entity cannot be resurrected.
+`AudioClipAsset` is POD: `{ kind: 'audio', sourceKey: string, bytes: Uint8Array }`. The Host caches the decode Promise by `sourceKey`. Only pending plays retain per-entity options. Late decode completion checks the current pending play and source publication before creating a source; stop, replacement and disposal invalidate that identity. Volume changes during decode update those pending options.
 
-Inspect decode failure through `backend.getState().lastError` or `app.execution.report().audio.lastError`. Consume `.code`, `.expected`, `.hint`, and `.detail`; do not parse the message.
+Set Host cache budgets with `createHostAudioConsumer(engine, options)` when the defaults do not fit the project; units and rejection behavior are defined in `packages/audio-webaudio/README.md`. Bus settings apply even before the first context is created.
+
+Inspect decode or context-resume failure through `backend.getState().lastError` or `app.execution.report().audio.lastError`. Consume `.code`, `.expected`, `.hint`, and `.detail`; do not parse the message.
 
 ## Cleanup
 
-`app.stop()` only stops frame scheduling. `app.dispose()` drains the Cordis realm and disposes the Host consumer exactly once: stop sources, disconnect nodes, clear decode and entity-epoch maps, remove gesture listeners, and close the context. A poisoned World does not keep producing intents. Explicit Worker rebuild creates a fresh Host consumer so old async decode tasks cannot affect the new World identity.
+`app.stop()` only stops frame scheduling. `app.dispose()` drains the Cordis realm and disposes the Host consumer exactly once: stop sources, disconnect nodes, clear source and pending-play maps, remove gesture listeners, and close the context. A poisoned World does not keep producing intents. Explicit Worker rebuild creates a fresh Host consumer so old async decode tasks cannot affect the new World identity.
 
 ## Sources of truth
 
